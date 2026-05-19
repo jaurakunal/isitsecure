@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+
+# Test / coverage
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# Playwright browsers (installed at runtime)
+playwright-browsers/
+
+# Node (UI dev)
+ui/node_modules/
+ui/.next/
+ui/out/
+
+# Scan data (user-generated)
+~/.isitsecure/
+*.scan.json
+
+# SQLite local storage
+*.db
+*.db-journal
