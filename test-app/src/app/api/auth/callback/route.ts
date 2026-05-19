@@ -8,5 +8,13 @@ export async function GET(request: Request) {
   const redirectTo = searchParams.get("redirect_to") || "/"
 
   // VULNERABILITY: Redirects to any URL without validation
-  return NextResponse.redirect(redirectTo)
+  try {
+    // If it's an absolute URL, redirect directly
+    new URL(redirectTo)
+    return NextResponse.redirect(redirectTo)
+  } catch {
+    // Relative path — make it absolute
+    const base = new URL(request.url)
+    return NextResponse.redirect(new URL(redirectTo, base.origin).toString())
+  }
 }

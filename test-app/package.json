@@ -3,26 +3,22 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --port 4000",
     "build": "next build",
-    "start": "next start"
+    "start": "next start --port 4000"
   },
   "dependencies": {
-    "next": "13.0.0",
+    "next": "13.4.0",
     "react": "18.2.0",
     "react-dom": "18.2.0",
     "@supabase/supabase-js": "2.38.0",
     "drizzle-orm": "0.29.0",
     "jsonwebtoken": "8.5.1",
-    "multer": "1.4.4",
-    "graphql": "16.6.0",
-    "graphql-yoga": "4.0.0",
     "postgres": "3.3.0"
   },
   "devDependencies": {
-    "typescript": "5.2.0",
+    "typescript": "5.2.2",
     "@types/node": "20.0.0",
-    "@types/react": "18.2.0",
-    "drizzle-kit": "0.20.0"
+    "@types/react": "18.2.0"
   }
 }
