@@ -38,10 +38,12 @@ coverage.xml
 # Playwright browsers (installed at runtime)
 playwright-browsers/
 
-# Node (UI dev)
-ui/node_modules/
-ui/.next/
-ui/out/
+# Node
+node_modules/
+.next/
+out/
+next-env.d.ts
+package-lock.json
 
 # Scan data (user-generated)
 ~/.isitsecure/
