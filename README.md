@@ -2,24 +2,29 @@
 
 AI-powered security scanner for modern web apps. SAST + DAST + LLM code review in a single scan.
 
-Built for **vibe coders** shipping Next.js, Supabase, and Firebase apps who need to know if their code is secure — without becoming security experts.
+Built for developers and **vibe coders** shipping web apps who need to know if their code is secure — without becoming security experts.
+
+**Supports:** TypeScript/JavaScript (Next.js, Express, tRPC), Python (Django, FastAPI, Flask), Java/Kotlin (Spring Boot) — and any HTTP API for DAST.
 
 ---
 
 ## What It Does
 
-isitsecure runs **29 security scanners** against your web app in a single command. It combines three approaches that commercial tools sell separately:
+isitsecure runs **29+ security scanners** against your web app in a single command. It combines four approaches that commercial tools sell separately:
 
 - **SAST (Static Analysis)** — scans your source code for vulnerabilities without running it
 - **DAST (Dynamic Analysis)** — tests your live app by sending real HTTP requests
 - **LLM Code Review** — uses AI to find business logic flaws that pattern matchers can't detect
+- **AI Fix Generation** — generates code patches with unified diffs for every finding
 
-The unique part: **SAST findings automatically generate targeted DAST tests**. If the code shows a route has no auth check, the scanner doesn't just report it — it sends an unauthenticated request and confirms the vulnerability is exploitable.
+The unique parts:
+1. **SAST findings automatically generate targeted DAST tests**. Code shows no auth check → scanner sends an unauthenticated request and confirms it's exploitable.
+2. **AI generates fixes, not just reports**. `--output fixes` produces a Markdown fix plan you can paste into Cursor or Claude Code.
 
 ```
-Code → SAST → Findings → Guide DAST → Test → Cross-Reference → LLM Triage → Report
-  ↑                                                                              |
-  └──────────────── LSP validates / suppresses false positives ─────────────────┘
+Code → SAST → Findings → Guide DAST → Test → Cross-Reference → LLM Triage → Report → Fixes
+  ↑                                                                                       |
+  └──────────────── LSP validates / suppresses false positives ───────────────────────────┘
 ```
 
 ## Quick Start
@@ -39,6 +44,12 @@ isitsecure scan --repo https://github.com/you/your-app --mode code-only
 
 # Full scan (SAST + DAST + LLM review)
 isitsecure scan https://your-app.com --repo https://github.com/you/your-app --mode full
+
+# Generate AI-powered fixes for all findings
+isitsecure scan --repo https://github.com/you/your-app --output fixes
+
+# Export for GitHub Code Scanning
+isitsecure scan --repo https://github.com/you/your-app --output sarif
 
 # Open the web UI (for non-CLI users)
 isitsecure launch
@@ -104,12 +115,12 @@ Without an API key, you still get 23 rule-based scanners. The LLM adds business 
 | DOM XSS Scanner | Playwright-based sink hooking (innerHTML, eval, location.assign) |
 | Body Param Fuzzer | Prototype pollution, type confusion, injection via JSON body fields |
 
-### SAST Scanners (14) — Analyzes Your Code
+### SAST Scanners (16) — Analyzes Your Code
 
 | Scanner | What It Finds |
 |---|---|
 | Git Secret Scanner | API keys, tokens, and credentials in git history (not just HEAD) |
-| Route Auth Analyzer | Next.js/Express routes missing authentication or input validation |
+| Route Auth Analyzer | Next.js/Express/Django/FastAPI/Spring routes missing authentication |
 | RLS Policy Analyzer | Supabase tables without Row Level Security enabled |
 | Middleware Analyzer | Incomplete middleware coverage (protects pages but not API routes) |
 | Express Middleware Analyzer | Express-specific auth middleware gaps |
@@ -118,7 +129,9 @@ Without an API key, you still get 23 rule-based scanners. The LLM adds business 
 | IaC Scanner | Terraform/CloudFormation misconfigurations (public S3, no encryption) |
 | Docker Scanner | Running as root, exposed ports, .env copied into image |
 | Shell Script Scanner | Command injection in deploy scripts |
-| Dependency Scanner | Known CVEs in package.json dependencies |
+| Dependency Scanner (npm) | Known CVEs in package.json dependencies |
+| Python Dependency Scanner | Known CVEs in requirements.txt / pyproject.toml (Django, Flask, FastAPI, PyJWT, etc.) |
+| Java Dependency Scanner | Known CVEs in pom.xml / build.gradle (Log4Shell, Spring, Struts, Jackson, etc.) |
 | Firebase Rules Analyzer | Overly permissive Firestore/RTDB security rules |
 | OpenAPI Scanner | Internal endpoints exposed in API specifications |
 | K8s Scanner | Privileged containers, no resource limits, hostPath mounts |
@@ -131,6 +144,7 @@ Without an API key, you still get 23 rule-based scanners. The LLM adds business 
 | Semantic Rule Verifier | Logical errors in RLS policies and Firebase rules (wrong column references, tenant isolation bugs) |
 | LLM Business Logic Scanner | Attack planning: price manipulation, double-spend, privilege escalation via application logic |
 | LLM Triage Service | Deduplicates findings, assigns priority, generates plain-language owner summary with A–F grade |
+| AI Fix Generator | Generates code patches (unified diffs) for each finding — paste into Cursor/Claude Code to fix |
 
 ### Cross-Referencing + Guided DAST
 
@@ -141,17 +155,36 @@ Without an API key, you still get 23 rule-based scanners. The LLM adds business 
 | Import Graph Centrality | Identifies shared utility files imported by many risky routes for LLM review |
 | LSP Auth Flow Tracing | Uses TypeScript Language Server to verify auth middleware is genuinely applied |
 
+## Language Support
+
+| Language | Route Mapping | Auth Detection | Dependency Scan | DAST |
+|---|---|---|---|---|
+| **TypeScript/JavaScript** (Next.js, Express, tRPC, GraphQL) | Yes | Yes | Yes (npm) | Yes |
+| **Python** (Django, FastAPI, Flask) | Yes | Yes | Yes (pip) | Yes |
+| **Java/Kotlin** (Spring Boot) | Yes | Yes | Yes (Maven, Gradle) | Yes |
+| **Go, Ruby, Rust, etc.** | No | No | No | Yes (DAST works against any HTTP API) |
+
+DAST scanners test live HTTP endpoints regardless of backend language. SAST route mapping, auth detection, and dependency scanning are language-specific.
+
+## Output Formats
+
+```bash
+isitsecure scan URL --output table   # Terminal table (default)
+isitsecure scan URL --output json    # Full JSON report
+isitsecure scan URL --output html    # Self-contained HTML report
+isitsecure scan URL --output sarif   # SARIF 2.1.0 for GitHub Code Scanning
+isitsecure scan URL --output fixes   # AI-generated fix plan (Markdown with diffs)
+```
+
 ## What It Does NOT Cover
 
-Be honest about the limitations:
-
-- **Language support** — Optimized for TypeScript/JavaScript. Python, Go, Java, Ruby backends are not analyzed by SAST scanners (DAST works against any HTTP API)
 - **Formal taint analysis** — No intermediate representation or dataflow tracking. Injection detection uses regex + LLM reasoning, not compiler-level analysis
-- **WAF evasion** — Payload lists don't include advanced WAF bypass techniques. If your app is behind Cloudflare with aggressive rules, some DAST tests may be blocked
+- **WAF evasion** — Payload lists don't include advanced WAF bypass techniques
 - **Compliance mapping** — No OWASP Top 10, CWE, or PCI-DSS tagging on findings (yet)
 - **Authenticated testing beyond Supabase/Firebase** — Custom auth systems need the `token` provider with a manually obtained JWT
 - **Network-level scanning** — No port scanning, TLS configuration analysis, or infrastructure enumeration
 - **Mobile apps** — Web APIs only
+- **Go/Ruby/Rust SAST** — Route mapping and dependency scanning not yet implemented (DAST still works)
 
 ## Configuration
 
@@ -222,7 +255,7 @@ Options:
   -b, --branch TEXT      Git branch [default: main]
   -m, --mode TEXT        Scan mode: auto|url-only|code-only|authenticated|full
   --llm TEXT             LLM provider: anthropic|google|none [default: anthropic]
-  -o, --output TEXT      Output format: table|json|html|sarif [default: table]
+  -o, --output TEXT      Output format: table|json|html|sarif|fixes [default: table]
   -f, --output-file TEXT Write report to file
   --auth-email TEXT      Auth email for authenticated scanning
   --auth-password TEXT   Auth password

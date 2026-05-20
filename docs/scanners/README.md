@@ -42,7 +42,9 @@ These scanners analyze your source code without running it.
 - [Route Auth Analyzer](./route-auth-analyzer.md) — Routes missing authentication
 - [RLS Policy Analyzer](./rls-policy-analyzer.md) — Missing Supabase Row Level Security
 - [Middleware Analyzer](./middleware-analyzer.md) — Incomplete middleware coverage
-- [Dependency Scanner](./dependency-scanner.md) — Known CVEs in dependencies
+- [Dependency Scanner (npm)](./dependency-scanner.md) — Known CVEs in package.json
+- [Python Dependency Scanner](./python-dependency-scanner.md) — Known CVEs in requirements.txt / pyproject.toml
+- [Java Dependency Scanner](./java-dependency-scanner.md) — Known CVEs in pom.xml / build.gradle
 - [Docker Scanner](./docker-scanner.md) — Dockerfile security issues
 - [Drizzle Schema Analyzer](./drizzle-schema-analyzer.md) — Schema-level vulnerabilities
 - [IaC Scanner](./iac-scanner.md) — Infrastructure as Code misconfigurations
@@ -53,3 +55,4 @@ These use AI for analysis that pattern matchers cannot perform.
 
 - [LLM Code Reviewer](./llm-code-reviewer.md) — Business logic vulnerability detection
 - [Semantic Rule Verifier](./semantic-rule-verifier.md) — Logical errors in security rules
+- [AI Fix Generator](./fix-generator.md) — Generates code patches for findings

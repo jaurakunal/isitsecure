@@ -17,7 +17,7 @@ Phase 5.5: Probe Analysis        ─── Cross-scanner pattern detection on HT
 Phase 5.6: OOB Collection        ─── Poll for blind vulnerability callbacks
 Phase 6:  Repo Ingestion         ─── Clone + index repository
 Phase 6.5: LSP Initialization    ─── Start TypeScript Language Server
-Phase 7:  SAST Scanners          ─── 14 scanners run in parallel
+Phase 7:  SAST Scanners          ─── 16 scanners run in parallel
 Phase 7.5: LSP Validation        ─── Trace auth flows, suppress false positives
 Phase 8:  LLM Code Review        ─── AI analyzes high-risk routes
 Phase 9:  Cross-Reference        ─── Match DAST findings to SAST findings
@@ -25,6 +25,7 @@ Phase 9.1: SAST-Guided DAST     ─── Generate targeted tests from code find
 Phase 9.2: LLM Business Logic    ─── AI plans business logic attacks
 Phase 9.5: LLM Triage           ─── Deduplicate, enrich, prioritize, theme
 Phase 10: Report                 ─── Build DeepScanReport
+Phase 11: Fix Generation         ─── AI generates code patches (optional, --output fixes)
 ```
 
 ## How Each Phase Works
@@ -180,6 +181,35 @@ The triage service processes all findings through four stages:
 - Assigns A–F grade
 - Lists top 5 key risks in plain English
 - Provides phased remediation plan
+
+### Phase 11: AI Fix Generation (Optional)
+
+When `--output fixes` is used, the scanner generates code patches:
+
+1. For each critical/high finding with a code location, read the full source file
+2. Send the finding details + file content to the LLM with a security-aware system prompt
+3. Parse the LLM response to extract the fixed code
+4. Generate a unified diff between original and fixed code
+5. Export as a Markdown fix plan with diffs and explanations
+
+The fix plan is designed to be pasted directly into Cursor or Claude Code:
+> "Apply all the security fixes in this document"
+
+### Language-Specific Route Mapping
+
+The repo ingestion phase uses framework-specific route mappers:
+
+| Mapper | Framework | What It Parses |
+|---|---|---|
+| `NextJSRouteMapper` | Next.js App Router | `app/api/**/route.ts` |
+| `ExpressRouteMapper` | Express.js | `app.get('/path', handler)` |
+| `TRPCRouteMapper` | tRPC | `router.query/mutation` |
+| `GraphQLRouteMapper` | GraphQL | Schema types |
+| `DjangoRouteMapper` | Django/DRF | `urls.py`, `path()`, `router.register()` |
+| `FastAPIRouteMapper` | FastAPI/Flask | `@app.get()`, `@app.route()` |
+| `SpringRouteMapper` | Spring Boot | `@GetMapping`, `@RequestMapping` |
+
+All mappers implement `RouteMapperProtocol` and are registered in `factory.py`. Adding a new language requires implementing one mapper — no changes to existing code.
 
 ## Design Principles
 
