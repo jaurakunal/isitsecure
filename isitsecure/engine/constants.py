@@ -509,6 +509,15 @@ class RepoIngestionConfig:
         "swagger.json",
         "Chart.yaml",
         "values.yaml",
+        # Python projects
+        "requirements.txt",
+        "pyproject.toml",
+        "setup.py",
+        "setup.cfg",
+        "manage.py",
+        "urls.py",
+        "settings.py",
+        "wsgi.py",
     )
 
     # Directories to skip during indexing
@@ -521,6 +530,11 @@ class RepoIngestionConfig:
         ".vercel",
         ".netlify",
         "__pycache__",
+        ".venv",
+        "venv",
+        "env",
+        ".mypy_cache",
+        ".pytest_cache",
         ".turbo",
         "coverage",
         ".nyc_output",
@@ -531,6 +545,7 @@ class RepoIngestionConfig:
         ".ts", ".tsx", ".js", ".jsx", ".mjs", ".sql",
         ".tf", ".tfvars", ".sh", ".prisma",
         ".graphql", ".gql",
+        ".py",  # Python support
     )
 
     ERROR_CLONE_FAILED = "Failed to clone repository: {error}"

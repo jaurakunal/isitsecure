@@ -165,6 +165,9 @@ class FrameworkType(str, Enum):
     NUXT = "nuxt"
     ASTRO = "astro"
     EXPRESS = "express"
+    DJANGO = "django"
+    FASTAPI = "fastapi"
+    FLASK = "flask"
     UNKNOWN = "unknown"
 
 
