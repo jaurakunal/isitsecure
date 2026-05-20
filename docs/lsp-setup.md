@@ -22,13 +22,13 @@ Route file: app/api/tasks/[id]/route.ts
 
 ## Current LSP Support
 
-| Language | LSP Status | Auth Tracing | Notes |
+| Language | LSP Server | Install Command | Auth Tracing |
 |---|---|---|---|
-| **TypeScript/JavaScript** | Supported | Full trace via tsserver | Traces through imports, middleware, decorators |
-| **Python** | Not yet | Regex-only | `@login_required`, `Depends(get_current_user)` detected by pattern |
-| **Java/Kotlin** | Not yet | Regex-only | `@PreAuthorize`, `@Secured` detected by pattern |
+| **TypeScript/JavaScript** | typescript-language-server | `npm install -g typescript-language-server typescript` | Full trace via go-to-definition |
+| **Python** | pylsp or pyright | `pip install python-lsp-server` or `pip install pyright` | Traces Depends(), decorators |
+| **Java/Kotlin** | jdtls | See [jdtls install guide](https://github.com/eclipse-jdtls/eclipse.jdt.ls#installation) | Traces @PreAuthorize, SecurityConfig |
 
-Python and Java LSP support is planned. The regex-based detection works well for these languages because their auth patterns are more explicit (decorators/annotations) than TypeScript's (middleware chains, higher-order functions).
+isitsecure auto-detects which LSP servers are installed and uses the first available one. If none are installed, regex-based auth detection is used (still effective, slightly higher false positive rate).
 
 ## TypeScript LSP Setup
 
@@ -142,29 +142,110 @@ cd your-project && npm install
 
 The route may use a pattern the tracer doesn't recognize yet. The scan falls back to regex analysis for that route. File an issue with the route code and we'll add support.
 
-## Future: Python LSP
+## Python LSP Setup
 
-When implemented, Python LSP will use `pylsp` or `pyright` to trace:
+### Install pylsp (recommended)
+
+```bash
+pip install python-lsp-server
+
+# Verify
+pylsp --help
+```
+
+### Or install pyright
+
+```bash
+pip install pyright
+# or
+npm install -g pyright
+
+# Verify
+pyright-langserver --version
+```
+
+### What Gets Traced
 
 ```python
 # Does Depends(get_current_user) actually verify the token?
 @app.get("/tasks")
 async def list_tasks(user=Depends(get_current_user)):
-    # LSP would trace: get_current_user → verify_token → jwt.decode()
+    # LSP traces: get_current_user → verify_token → jwt.decode()
 ```
 
-For now, the regex-based detection catches `Depends(get_current_user)`, `@login_required`, and other standard patterns reliably.
+```python
+# Does @login_required actually check the session?
+@login_required
+def profile(request):
+    # LSP traces: login_required → django.contrib.auth → session check
+```
 
-## Future: Java LSP
+### Virtual Environment Detection
 
-When implemented, Java LSP will use `jdtls` (Eclipse JDT Language Server) to trace:
+The Python LSP client auto-detects virtual environments at `.venv/`, `venv/`, or `env/` in your project root for proper import resolution.
+
+## Java LSP Setup
+
+### Install jdtls
+
+The Eclipse JDT Language Server is the standard Java LSP:
+
+```bash
+# macOS (Homebrew)
+brew install jdtls
+
+# Linux — download from GitHub releases:
+# https://github.com/eclipse-jdtls/eclipse.jdt.ls/releases
+# Extract and add to PATH
+
+# Verify
+jdtls --version
+```
+
+### Or install kotlin-language-server (for Kotlin projects)
+
+```bash
+# https://github.com/fwcd/kotlin-language-server/releases
+# Download, extract, add to PATH
+
+kotlin-language-server --version
+```
+
+### What Gets Traced
 
 ```java
 // Does @PreAuthorize actually check the right role?
 @PreAuthorize("hasRole('ADMIN')")
 @GetMapping("/admin/users")
 public List<User> getUsers() {}
-// LSP would trace: hasRole → SecurityConfig → role hierarchy
+// LSP traces: hasRole → SecurityConfig → role hierarchy
 ```
 
-For now, `@PreAuthorize`, `@Secured`, and `@RolesAllowed` annotations are detected by regex.
+```java
+// Does the SecurityFilterChain apply to this endpoint?
+@Bean
+public SecurityFilterChain filterChain(HttpSecurity http) {
+    http.authorizeHttpRequests(auth -> auth
+        .requestMatchers("/api/admin/**").hasRole("ADMIN")
+    );
+}
+// LSP traces: filterChain → matcher → role check
+```
+
+### Prerequisites
+
+- **Java 17+** — required for jdtls
+- **Maven or Gradle** — jdtls needs a build tool to resolve dependencies
+
+## How Auto-Detection Works
+
+isitsecure tries LSP servers in this order:
+
+1. **TypeScript** — if `typescript-language-server` or `npx` is available
+2. **Python** — if `pylsp` or `pyright-langserver` is available
+3. **Java** — if `java` runtime + `jdtls` is available
+4. **NoOp** — fallback, regex-only analysis
+
+The first available server is used. If your project is Python but you have TypeScript LSP installed, the TS LSP will be initialized — but it won't find any routes and auth flow tracing will be skipped. The regex-based Python auth detection still works regardless of which LSP is active.
+
+To force a specific LSP, install only the server for your language.
