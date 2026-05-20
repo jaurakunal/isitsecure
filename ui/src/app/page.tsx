@@ -58,7 +58,7 @@ export default function Home() {
     : scanMode === "full" && apiKey ? "~$10-15"
     : apiKey ? "~$5-15" : "$0";
 
-  const inputClass = "w-full bg-bg-input border border-border rounded-lg px-4 py-2.5 text-text placeholder:text-text-muted/40 focus:outline-none focus:border-border-hover transition-colors";
+  const inputClass = "input-glass";
 
   return (
     <div className="max-w-2xl mx-auto px-6 py-12">
@@ -83,7 +83,7 @@ export default function Home() {
           <label className="block text-sm text-text-muted mb-2">Scan Mode</label>
           <div className="grid grid-cols-2 gap-2">
             {SCAN_MODES.map(mode => (
-              <button key={mode.id} onClick={() => setScanMode(mode.id)} className={`border rounded-lg p-3 text-left transition-colors ${scanMode === mode.id ? "border-primary bg-primary/10 text-text-accent" : "border-border bg-bg-card text-text-muted hover:border-border-hover"}`}>
+              <button key={mode.id} onClick={() => setScanMode(mode.id)} className={`border rounded-lg p-3 text-left transition-colors ${scanMode === mode.id ? "border-primary bg-primary/10 text-text-accent" : "border-border bg-bg-card text-text-muted hover:border-primary/40"}`}>
                 <div className="text-sm font-medium">{mode.label}</div>
                 <div className="text-xs text-text-muted/70 mt-0.5">{mode.description}</div>
               </button>
@@ -95,7 +95,7 @@ export default function Home() {
           <label className="block text-sm text-text-muted mb-1.5">AI Provider <span className="text-text-muted/60">(for business logic review)</span></label>
           <div className="flex gap-2 mb-2">
             {["anthropic", "google", "none"].map(p => (
-              <button key={p} onClick={() => setLlmProvider(p)} className={`border rounded-lg px-4 py-2 text-sm transition-colors ${llmProvider === p ? "border-primary bg-primary/10 text-text-accent" : "border-border bg-bg-card text-text-muted hover:border-border-hover"}`}>
+              <button key={p} onClick={() => setLlmProvider(p)} className={`border rounded-lg px-4 py-2 text-sm transition-colors ${llmProvider === p ? "border-primary bg-primary/10 text-text-accent" : "border-border bg-bg-card text-text-muted hover:border-primary/40"}`}>
                 {p === "none" ? "None (free)" : p === "anthropic" ? "Anthropic" : "Google"}
               </button>
             ))}
@@ -125,7 +125,7 @@ export default function Home() {
 
         <div className="flex items-center justify-between pt-2">
           <span className="text-sm text-text-muted">Estimated cost: <span className="text-text-accent font-medium">{estimatedCost}</span></span>
-          <button onClick={handleScan} disabled={loading} className="bg-primary hover:bg-primary-hover disabled:opacity-50 text-white font-medium px-8 py-2.5 rounded-lg transition-colors">
+          <button onClick={handleScan} disabled={loading} className="btn-primary">
             {loading ? "Starting..." : "Start Scan"}
           </button>
         </div>

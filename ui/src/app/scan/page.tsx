@@ -75,24 +75,24 @@ function ScanContent() {
 
   return (
     <div className="max-w-3xl mx-auto px-6 py-12">
-      <h1 className="text-2xl font-bold text-text-accent mb-2">Scanning...</h1>
-      <p className="text-text-muted text-sm mb-8">Scan ID: {scanId}</p>
+      <h1 className="text-2xl font-bold text-white mb-2">Scanning...</h1>
+      <p className="text-text-muted text-sm mb-8 font-mono">Scan ID: {scanId}</p>
 
       <div className="mb-6">
-        <div className="flex justify-between text-sm text-text-muted mb-1">
+        <div className="flex justify-between text-sm text-text-muted mb-2">
           <span className="capitalize">{phaseLabel}</span>
-          <span>{Math.round(progress)}%</span>
+          <span className="font-mono">{Math.round(progress)}%</span>
         </div>
-        <div className="w-full bg-bg-input rounded-full h-3 border border-border">
-          <div className="bg-primary h-full rounded-full transition-all duration-500" style={{ width: `${Math.min(progress, 100)}%` }} />
+        <div className="w-full bg-bg-card rounded-full h-3 border border-border overflow-hidden">
+          <div className="progress-fill h-full rounded-full" style={{ width: `${Math.min(progress, 100)}%` }} />
         </div>
-        {message && <p className="text-xs text-text-muted mt-1.5">{message}</p>}
+        {message && <p className="text-xs text-text-muted mt-2">{message}</p>}
       </div>
 
-      {error && <div className="p-4 rounded-lg bg-critical/10 border border-critical/30 text-critical text-sm mb-6">{error}</div>}
+      {error && <div className="glass-card p-4 text-critical text-sm mb-6" style={{ borderColor: "rgba(220, 38, 38, 0.3)" }}>{error}</div>}
 
-      <div className="border border-border rounded-xl bg-bg-card overflow-hidden">
-        <div className="px-4 py-2 border-b border-border text-xs text-text-muted font-medium">Scanner Log</div>
+      <div className="glass-card overflow-hidden">
+        <div className="px-4 py-2.5 border-b border-border text-xs text-text-muted font-semibold uppercase tracking-wider">Scanner Log</div>
         <div className="max-h-96 overflow-y-auto p-4 space-y-1 text-xs font-mono">
           {logs.map((log, i) => (
             <div key={i} className="flex gap-2">
@@ -108,7 +108,7 @@ function ScanContent() {
 
       {done && (
         <div className="mt-6 text-center">
-          <button onClick={() => router.push(`/report/?id=${scanId}`)} className="bg-primary hover:bg-primary-hover text-white font-medium px-8 py-2.5 rounded-lg transition-colors">
+          <button onClick={() => router.push(`/report/?id=${scanId}`)} className="btn-primary">
             View Report
           </button>
         </div>

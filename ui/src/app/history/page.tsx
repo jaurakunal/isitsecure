@@ -19,11 +19,11 @@ export default function History() {
       </p>
 
       {history.length === 0 ? (
-        <div className="border border-border rounded-xl bg-bg-card p-12 text-center">
+        <div className="glass-card p-12 text-center">
           <p className="text-text-muted mb-4">No scans yet.</p>
           <a
             href="/"
-            className="bg-primary hover:bg-primary-hover text-white font-medium px-6 py-2 rounded-lg transition-colors inline-block"
+            className="btn-primary inline-block"
           >
             Start Your First Scan
           </a>
@@ -34,7 +34,7 @@ export default function History() {
             <a
               key={entry.scan_id}
               href={`/report/?id=${entry.scan_id}`}
-              className="border border-border rounded-xl bg-bg-card hover:border-border-hover transition-colors p-4 flex items-center gap-4 block"
+              className="glass-card p-4 flex items-center gap-4 block"
             >
               <GradeBadge grade={entry.grade || "?"} size="sm" />
               <div className="flex-1 min-w-0">

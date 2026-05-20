@@ -13,19 +13,16 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className="h-full antialiased">
-      <body className="min-h-full flex flex-col bg-bg text-text">
-        <nav className="border-b border-border px-6 py-3 flex items-center justify-between">
-          <a href="/" className="text-lg font-bold text-text-accent">
+      <body className="min-h-full flex flex-col">
+        <nav className="sticky top-0 z-50 border-b border-border backdrop-blur-xl bg-bg/80 px-6 py-3 flex items-center justify-between">
+          <a href="/" className="text-lg font-semibold text-white tracking-tight">
             isitsecure
           </a>
-          <div className="flex gap-4 text-sm text-text-muted">
-            <a href="/" className="hover:text-text-accent transition-colors">
+          <div className="flex gap-5 text-sm">
+            <a href="/" className="text-text-muted hover:text-white transition-colors">
               New Scan
             </a>
-            <a
-              href="/history/"
-              className="hover:text-text-accent transition-colors"
-            >
+            <a href="/history/" className="text-text-muted hover:text-white transition-colors">
               History
             </a>
           </div>

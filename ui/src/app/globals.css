@@ -1,26 +1,136 @@
 @import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap');
 
 @theme inline {
-  --color-bg: #0c0a1a;
-  --color-bg-card: #141028;
-  --color-bg-input: #1a1533;
-  --color-border: #2d2650;
-  --color-border-hover: #7c3aed;
-  --color-primary: #7c3aed;
-  --color-primary-hover: #6d28d9;
-  --color-text: #e2e0f0;
-  --color-text-muted: #a09cc0;
+  /* Backgrounds — deep purple-black matching isitsecure.ai */
+  --color-bg: #030115;
+  --color-bg-secondary: #0a0825;
+  --color-bg-card: rgba(255, 255, 255, 0.05);
+  --color-bg-card-hover: rgba(255, 255, 255, 0.08);
+  --color-bg-input: rgba(255, 255, 255, 0.05);
+
+  /* Borders — subtle glass edges */
+  --color-border: rgba(255, 255, 255, 0.08);
+  --color-border-hover: rgba(124, 58, 237, 0.5);
+
+  /* Primary accent */
+  --color-primary: #7C3AED;
+  --color-primary-hover: #A855F7;
+  --color-primary-glow: rgba(124, 58, 237, 0.3);
+
+  /* Text */
+  --color-text: #ffffff;
+  --color-text-muted: rgba(255, 255, 255, 0.5);
   --color-text-accent: #c4b5fd;
-  --color-critical: #ef4444;
-  --color-high: #f97316;
-  --color-medium: #eab308;
-  --color-low: #3b82f6;
-  --color-info: #6b7280;
-  --color-success: #22c55e;
+
+  /* Severity colors — matching isitsecure.ai */
+  --color-critical: #DC2626;
+  --color-high: #EA580C;
+  --color-medium: #CA8A04;
+  --color-low: #16A34A;
+  --color-info: #2563EB;
+  --color-success: #16A34A;
+
+  /* Gold accent for grade */
+  --color-gold: #F59E0B;
+}
+
+* {
+  box-sizing: border-box;
 }
 
 body {
   background-color: var(--color-bg);
   color: var(--color-text);
-  font-family: system-ui, -apple-system, sans-serif;
+  font-family: 'Poppins', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+/* Glass card effect */
+.glass-card {
+  background: var(--color-bg-card);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.glass-card:hover {
+  border-color: var(--color-border-hover);
+  background: var(--color-bg-card-hover);
+}
+
+/* Glow button */
+.btn-primary {
+  background: var(--color-primary);
+  color: white;
+  font-weight: 600;
+  padding: 12px 32px;
+  border-radius: 12px;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 0 20px var(--color-primary-glow);
+}
+
+.btn-primary:hover {
+  background: var(--color-primary-hover);
+  box-shadow: 0 0 30px var(--color-primary-glow);
+  transform: translateY(-1px);
+}
+
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* Input styling */
+.input-glass {
+  width: 100%;
+  background: var(--color-bg-input);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  padding: 12px 16px;
+  color: var(--color-text);
+  font-family: 'Poppins', sans-serif;
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.2s ease;
+}
+
+.input-glass::placeholder {
+  color: var(--color-text-muted);
+}
+
+.input-glass:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-primary-glow);
+}
+
+/* Progress bar glow */
+.progress-fill {
+  background: linear-gradient(90deg, var(--color-primary), var(--color-primary-hover));
+  box-shadow: 0 0 12px var(--color-primary-glow);
+  transition: width 0.5s ease;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
 }

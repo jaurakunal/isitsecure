@@ -51,7 +51,7 @@ function ReportContent() {
       <div className="flex items-start gap-6 mb-8">
         <GradeBadge grade={grade} />
         <div className="flex-1">
-          <h1 className="text-2xl font-bold text-text-accent">Scan Report</h1>
+          <h1 className="text-2xl font-bold text-white">Scan Report</h1>
           <p className="text-text-muted text-sm mt-1">
             {report.target_url && <span>{report.target_url} | </span>}
             {report.repo_url && <span>{report.repo_url} | </span>}
@@ -74,7 +74,7 @@ function ReportContent() {
           { label: "Medium", value: mediums, color: "text-medium" },
           { label: "Low", value: lows, color: "text-low" },
         ].map(s => (
-          <div key={s.label} className="border border-border rounded-xl bg-bg-card p-4 text-center">
+          <div key={s.label} className="glass-card p-4 text-center">
             <div className={`text-2xl font-bold ${s.color}`}>{s.value}</div>
             <div className="text-xs text-text-muted mt-1">{s.label}</div>
           </div>
@@ -83,7 +83,7 @@ function ReportContent() {
 
       {/* Key Risks */}
       {report.owner_summary?.key_risks && report.owner_summary.key_risks.length > 0 && (
-        <div className="border border-border rounded-xl bg-bg-card p-5 mb-8">
+        <div className="glass-card p-5 mb-8">
           <h2 className="text-sm font-medium text-text-accent mb-3">Key Risks</h2>
           <ul className="space-y-2">
             {report.owner_summary.key_risks.map((risk, i) => (
@@ -97,7 +97,7 @@ function ReportContent() {
 
       {/* Remediation */}
       {report.owner_summary?.remediation_phases && report.owner_summary.remediation_phases.length > 0 && (
-        <div className="border border-border rounded-xl bg-bg-card p-5 mb-8">
+        <div className="glass-card p-5 mb-8">
           <h2 className="text-sm font-medium text-text-accent mb-3">Remediation Plan</h2>
           <div className="space-y-3">
             {report.owner_summary.remediation_phases.map(phase => (
@@ -124,7 +124,7 @@ function ReportContent() {
               </button>
             ))}
           </div>
-          <select value={scannerFilter} onChange={e => setScannerFilter(e.target.value)} className="bg-bg-input border border-border rounded-lg px-3 py-1.5 text-xs text-text focus:outline-none focus:border-border-hover">
+          <select value={scannerFilter} onChange={e => setScannerFilter(e.target.value)} className="input-glass text-xs !py-1.5 !px-3">
             <option value="all">All scanners</option>
             {scanners.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
