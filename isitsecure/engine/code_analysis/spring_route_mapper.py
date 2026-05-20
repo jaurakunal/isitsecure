@@ -12,6 +12,11 @@ import re
 from pathlib import Path
 
 from isitsecure.engine.code_analysis.protocols import RouteEntry
+from isitsecure.engine.code_analysis.shared_utils import (
+    has_auth_patterns,
+    normalize_route_pattern,
+    should_skip_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -68,8 +73,6 @@ class SpringRouteMapper:
         "WebSecurityConfigurerAdapter",
     )
 
-    # Directories to skip
-    SKIP_DIRS = ("node_modules", ".gradle", "build", "target", ".idea", "test", "tests")
 
     # File extensions
     JAVA_EXTENSIONS = (".java", ".kt")
@@ -81,7 +84,7 @@ class SpringRouteMapper:
 
         for ext in self.JAVA_EXTENSIONS:
             for file_path in root.rglob(f"*{ext}"):
-                if any(skip in file_path.parts for skip in self.SKIP_DIRS):
+                if should_skip_path(file_path, frozenset({"test", "tests"})):
                     continue
 
                 try:
@@ -109,7 +112,7 @@ class SpringRouteMapper:
         if class_match:
             class_prefix = class_match.group(1)
 
-        has_auth = self._has_auth_check(content)
+        has_auth = has_auth_patterns(content, self.AUTH_PATTERNS)
 
         # Method-level mappings with path
         for match in self.METHOD_MAPPING_PATTERN.finditer(content):
@@ -117,7 +120,7 @@ class SpringRouteMapper:
             path = match.group(2)
             method = self._annotation_to_method(annotation)
             full_path = self._combine_paths(class_prefix, path)
-            full_path = self._normalize_pattern(full_path)
+            full_path = normalize_route_pattern(full_path)
 
             routes.append(RouteEntry(
                 file_path=file_path,
@@ -131,7 +134,7 @@ class SpringRouteMapper:
         for match in self.METHOD_MAPPING_NO_PATH.finditer(content):
             annotation = match.group(1)
             method = self._annotation_to_method(annotation)
-            full_path = self._normalize_pattern(class_prefix or "/")
+            full_path = normalize_route_pattern(class_prefix or "/")
 
             routes.append(RouteEntry(
                 file_path=file_path,
@@ -173,15 +176,6 @@ class SpringRouteMapper:
         return f"{prefix}{path}"
 
     @staticmethod
-    def _normalize_pattern(pattern: str) -> str:
-        """Normalize Spring path variables to standard :param format."""
-        if not pattern.startswith("/"):
-            pattern = f"/{pattern}"
-        # Convert {paramName} to :paramName
-        pattern = re.sub(r"\{(\w+)(?::[^}]*)?\}", r":\1", pattern)
-        return pattern
-
-    @staticmethod
     def _is_controller_file(content: str) -> bool:
         """Check if file contains Spring controller annotations."""
         return any(marker in content for marker in (
@@ -192,6 +186,3 @@ class SpringRouteMapper:
             "@PostMapping",
         ))
 
-    def _has_auth_check(self, content: str) -> bool:
-        """Check if the controller has security annotations."""
-        return any(pattern in content for pattern in self.AUTH_PATTERNS)

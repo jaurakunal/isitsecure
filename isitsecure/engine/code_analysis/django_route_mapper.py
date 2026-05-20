@@ -12,6 +12,11 @@ import re
 from pathlib import Path
 
 from isitsecure.engine.code_analysis.protocols import RouteEntry
+from isitsecure.engine.code_analysis.shared_utils import (
+    has_auth_patterns,
+    normalize_route_pattern,
+    should_skip_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +81,7 @@ class DjangoRouteMapper:
         urls_files.extend(root.rglob("**/urls/*.py"))
 
         for file_path in urls_files:
-            if "node_modules" in str(file_path) or ".venv" in str(file_path):
+            if should_skip_path(file_path):
                 continue
             try:
                 content = file_path.read_text(errors="replace")
@@ -93,9 +98,9 @@ class DjangoRouteMapper:
             # Detect path() routes
             for match in self.PATH_PATTERN.finditer(content):
                 pattern, view = match.group(1), match.group(2)
-                route_pattern = self._normalize_pattern(pattern)
+                route_pattern = normalize_route_pattern(pattern)
                 methods = self._detect_methods(content, view)
-                has_auth = self._has_auth_check(content)
+                has_auth = has_auth_patterns(content, self.AUTH_PATTERNS)
 
                 routes.append(RouteEntry(
                     file_path=relative,
@@ -113,23 +118,12 @@ class DjangoRouteMapper:
                     file_path=relative,
                     http_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
                     route_pattern=route_pattern,
-                    has_auth_check=self._has_auth_check(content),
+                    has_auth_check=has_auth_patterns(content, self.AUTH_PATTERNS),
                     content=content,
                 ))
 
         logger.info("Django route mapper found %d routes", len(routes))
         return routes
-
-    @staticmethod
-    def _normalize_pattern(pattern: str) -> str:
-        """Normalize Django URL pattern to a standard format."""
-        if not pattern.startswith("/"):
-            pattern = f"/{pattern}"
-        # Convert <int:pk> to :pk, <str:slug> to :slug
-        pattern = re.sub(r"<\w+:(\w+)>", r":\1", pattern)
-        # Convert <pk> to :pk
-        pattern = re.sub(r"<(\w+)>", r":\1", pattern)
-        return pattern
 
     def _detect_methods(self, content: str, view_name: str) -> list[str]:
         """Detect HTTP methods from view definitions."""
@@ -149,6 +143,3 @@ class DjangoRouteMapper:
 
         return methods or ["GET"]
 
-    def _has_auth_check(self, content: str) -> bool:
-        """Check if the file contains auth decorators or permission checks."""
-        return any(pattern in content for pattern in self.AUTH_PATTERNS)

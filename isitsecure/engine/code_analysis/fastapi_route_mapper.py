@@ -12,6 +12,11 @@ import re
 from pathlib import Path
 
 from isitsecure.engine.code_analysis.protocols import RouteEntry
+from isitsecure.engine.code_analysis.shared_utils import (
+    has_auth_patterns,
+    normalize_route_pattern,
+    should_skip_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -60,11 +65,6 @@ class FastAPIRouteMapper:
         "Security(",
     )
 
-    # Python source file extensions
-    PY_EXTENSIONS = (".py",)
-
-    # Directories to skip
-    SKIP_DIRS = ("node_modules", ".venv", "venv", "__pycache__", ".git", "migrations")
 
     def map_routes(self, clone_path: str) -> list[RouteEntry]:
         """Scan for FastAPI/Flask route definitions."""
@@ -72,7 +72,7 @@ class FastAPIRouteMapper:
         routes: list[RouteEntry] = []
 
         for file_path in root.rglob("*.py"):
-            if any(skip in file_path.parts for skip in self.SKIP_DIRS):
+            if should_skip_path(file_path):
                 continue
 
             try:
@@ -96,13 +96,13 @@ class FastAPIRouteMapper:
             for match in self.DECORATOR_PATTERN.finditer(content):
                 method, path = match.group(1).upper(), match.group(2)
                 route_pattern = prefix + path if not path.startswith(prefix) else path
-                route_pattern = self._normalize_pattern(route_pattern)
+                route_pattern = normalize_route_pattern(route_pattern)
 
                 routes.append(RouteEntry(
                     file_path=relative,
                     http_methods=[method],
                     route_pattern=route_pattern,
-                    has_auth_check=self._has_auth_in_handler(content, match.start()),
+                    has_auth_check=self._has_auth_near_position(content, match.start()),
                     content=content,
                 ))
 
@@ -111,29 +111,18 @@ class FastAPIRouteMapper:
                 path = match.group(1)
                 methods_str = match.group(2) or "'GET'"
                 methods = [m.strip().strip("'\"").upper() for m in methods_str.split(",")]
-                route_pattern = self._normalize_pattern(path)
+                route_pattern = normalize_route_pattern(path)
 
                 routes.append(RouteEntry(
                     file_path=relative,
                     http_methods=methods,
                     route_pattern=route_pattern,
-                    has_auth_check=self._has_auth_in_handler(content, match.start()),
+                    has_auth_check=self._has_auth_near_position(content, match.start()),
                     content=content,
                 ))
 
         logger.info("FastAPI/Flask route mapper found %d routes", len(routes))
         return routes
-
-    @staticmethod
-    def _normalize_pattern(pattern: str) -> str:
-        """Normalize Python path parameters to standard format."""
-        if not pattern.startswith("/"):
-            pattern = f"/{pattern}"
-        # Convert {param_name} to :param_name
-        pattern = re.sub(r"\{(\w+)\}", r":\1", pattern)
-        # Convert <param_name> to :param_name (Flask)
-        pattern = re.sub(r"<(?:\w+:)?(\w+)>", r":\1", pattern)
-        return pattern
 
     @staticmethod
     def _is_route_file(content: str) -> bool:
@@ -144,8 +133,7 @@ class FastAPIRouteMapper:
         )
         return any(indicator in content for indicator in route_indicators)
 
-    def _has_auth_in_handler(self, content: str, decorator_pos: int) -> bool:
+    def _has_auth_near_position(self, content: str, decorator_pos: int) -> bool:
         """Check if the handler near this decorator position has auth."""
-        # Look at ~500 chars around the decorator for auth patterns
         context = content[max(0, decorator_pos - 200):decorator_pos + 500]
-        return any(pattern in context for pattern in self.AUTH_PATTERNS)
+        return has_auth_patterns(context, self.AUTH_PATTERNS)

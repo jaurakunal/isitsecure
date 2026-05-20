@@ -12,6 +12,7 @@ from pathlib import Path
 
 from isitsecure.engine.code_analysis.models import CodeFinding
 from isitsecure.engine.code_analysis.protocols import RepoSnapshot
+from isitsecure.engine.code_analysis.shared_utils import is_version_vulnerable
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
 
 logger = logging.getLogger(__name__)
@@ -130,7 +131,7 @@ class PythonDependencyScanner:
             for pkg_name, vulns in self.KNOWN_VULNERABILITIES.items():
                 if package == self._normalize_package_name(pkg_name):
                     for vuln_range, severity, description in vulns:
-                        if self._is_vulnerable(version, vuln_range):
+                        if is_version_vulnerable(version, vuln_range):
                             findings.append(CodeFinding(
                                 scanner_name=self.SCANNER_NAME,
                                 severity=severity,
@@ -174,7 +175,7 @@ class PythonDependencyScanner:
                     for pkg_name, vulns in self.KNOWN_VULNERABILITIES.items():
                         if normalized == self._normalize_package_name(pkg_name):
                             for vuln_range, severity, description in vulns:
-                                if version and self._is_vulnerable(version, vuln_range):
+                                if version and is_version_vulnerable(version, vuln_range):
                                     findings.append(CodeFinding(
                                         scanner_name=self.SCANNER_NAME,
                                         severity=severity,
@@ -204,20 +205,3 @@ class PythonDependencyScanner:
             or (name.startswith("requirements") and name.endswith(".txt"))
         )
 
-    @staticmethod
-    def _is_vulnerable(installed: str, vuln_range: str) -> bool:
-        """Simple version comparison. Returns True if installed < threshold."""
-        if not vuln_range.startswith("<"):
-            return False
-        threshold = vuln_range.lstrip("<").strip()
-        try:
-            inst_parts = [int(x) for x in installed.split(".")[:3]]
-            thresh_parts = [int(x) for x in threshold.split(".")[:3]]
-            # Pad to equal length
-            while len(inst_parts) < 3:
-                inst_parts.append(0)
-            while len(thresh_parts) < 3:
-                thresh_parts.append(0)
-            return inst_parts < thresh_parts
-        except (ValueError, IndexError):
-            return False

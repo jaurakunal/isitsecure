@@ -92,14 +92,17 @@ public class RootController {
 
 
 class TestPathVariables:
-    def test_converts_simple_path_variable(self, mapper):
-        assert SpringRouteMapper._normalize_pattern("/{id}") == "/:id"
+    def test_converts_simple_path_variable(self):
+        from isitsecure.engine.code_analysis.shared_utils import normalize_route_pattern
+        assert normalize_route_pattern("/{id}") == "/:id"
 
-    def test_converts_typed_path_variable(self, mapper):
-        assert SpringRouteMapper._normalize_pattern("/{id:\\d+}") == "/:id"
+    def test_converts_typed_path_variable(self):
+        from isitsecure.engine.code_analysis.shared_utils import normalize_route_pattern
+        assert normalize_route_pattern("/{id:\\d+}") == "/:id"
 
-    def test_multiple_variables(self, mapper):
-        assert SpringRouteMapper._normalize_pattern("/users/{userId}/tasks/{taskId}") == "/users/:userId/tasks/:taskId"
+    def test_multiple_variables(self):
+        from isitsecure.engine.code_analysis.shared_utils import normalize_route_pattern
+        assert normalize_route_pattern("/users/{userId}/tasks/{taskId}") == "/users/:userId/tasks/:taskId"
 
 
 class TestAuthDetection:

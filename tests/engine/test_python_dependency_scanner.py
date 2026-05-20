@@ -97,20 +97,27 @@ dependencies = [
 
 
 class TestVersionComparison:
+    """Version comparison tests (shared utility)."""
+
     def test_vulnerable_version(self):
-        assert PythonDependencyScanner._is_vulnerable("3.2.0", "<3.2.23") is True
+        from isitsecure.engine.code_analysis.shared_utils import is_version_vulnerable
+        assert is_version_vulnerable("3.2.0", "<3.2.23") is True
 
     def test_safe_version(self):
-        assert PythonDependencyScanner._is_vulnerable("5.0.0", "<4.2.8") is False
+        from isitsecure.engine.code_analysis.shared_utils import is_version_vulnerable
+        assert is_version_vulnerable("5.0.0", "<4.2.8") is False
 
     def test_exact_threshold(self):
-        assert PythonDependencyScanner._is_vulnerable("4.2.8", "<4.2.8") is False
+        from isitsecure.engine.code_analysis.shared_utils import is_version_vulnerable
+        assert is_version_vulnerable("4.2.8", "<4.2.8") is False
 
     def test_handles_short_versions(self):
-        assert PythonDependencyScanner._is_vulnerable("2.0", "<2.3.2") is True
+        from isitsecure.engine.code_analysis.shared_utils import is_version_vulnerable
+        assert is_version_vulnerable("2.0", "<2.3.2") is True
 
     def test_handles_invalid_version(self):
-        assert PythonDependencyScanner._is_vulnerable("abc", "<2.0") is False
+        from isitsecure.engine.code_analysis.shared_utils import is_version_vulnerable
+        assert is_version_vulnerable("abc", "<2.0") is False
 
 
 class TestPackageNormalization:

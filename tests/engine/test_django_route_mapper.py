@@ -121,10 +121,13 @@ class TestSkipDirs:
 
 class TestNormalization:
     def test_adds_leading_slash(self):
-        assert DjangoRouteMapper._normalize_pattern("tasks/") == "/tasks/"
+        from isitsecure.engine.code_analysis.shared_utils import normalize_route_pattern
+        assert normalize_route_pattern("tasks/") == "/tasks/"
 
     def test_converts_typed_param(self):
-        assert DjangoRouteMapper._normalize_pattern("<int:pk>") == "/:pk"
+        from isitsecure.engine.code_analysis.shared_utils import normalize_route_pattern
+        assert normalize_route_pattern("<int:pk>") == "/:pk"
 
     def test_converts_untyped_param(self):
-        assert DjangoRouteMapper._normalize_pattern("<slug>") == "/:slug"
+        from isitsecure.engine.code_analysis.shared_utils import normalize_route_pattern
+        assert normalize_route_pattern("<slug>") == "/:slug"

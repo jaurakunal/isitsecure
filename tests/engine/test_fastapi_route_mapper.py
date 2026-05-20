@@ -144,10 +144,13 @@ class TestSkipDirs:
 
 class TestNormalization:
     def test_adds_leading_slash(self):
-        assert FastAPIRouteMapper._normalize_pattern("tasks") == "/tasks"
+        from isitsecure.engine.code_analysis.shared_utils import normalize_route_pattern
+        assert normalize_route_pattern("tasks") == "/tasks"
 
     def test_converts_curly_params(self):
-        assert FastAPIRouteMapper._normalize_pattern("/users/{id}") == "/users/:id"
+        from isitsecure.engine.code_analysis.shared_utils import normalize_route_pattern
+        assert normalize_route_pattern("/users/{id}") == "/users/:id"
 
     def test_converts_flask_params(self):
-        assert FastAPIRouteMapper._normalize_pattern("/users/<int:id>") == "/users/:id"
+        from isitsecure.engine.code_analysis.shared_utils import normalize_route_pattern
+        assert normalize_route_pattern("/users/<int:id>") == "/users/:id"

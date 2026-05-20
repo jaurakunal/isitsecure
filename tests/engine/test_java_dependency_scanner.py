@@ -124,14 +124,20 @@ dependencies {
 
 
 class TestVersionComparison:
+    """Version comparison tests (shared utility)."""
+
     def test_vulnerable(self):
-        assert JavaDependencyScanner._is_vulnerable("2.14.0", "<2.17.1") is True
+        from isitsecure.engine.code_analysis.shared_utils import is_version_vulnerable
+        assert is_version_vulnerable("2.14.0", "<2.17.1") is True
 
     def test_safe(self):
-        assert JavaDependencyScanner._is_vulnerable("2.21.0", "<2.17.1") is False
+        from isitsecure.engine.code_analysis.shared_utils import is_version_vulnerable
+        assert is_version_vulnerable("2.21.0", "<2.17.1") is False
 
     def test_exact(self):
-        assert JavaDependencyScanner._is_vulnerable("2.17.1", "<2.17.1") is False
+        from isitsecure.engine.code_analysis.shared_utils import is_version_vulnerable
+        assert is_version_vulnerable("2.17.1", "<2.17.1") is False
 
     def test_invalid(self):
-        assert JavaDependencyScanner._is_vulnerable("RELEASE", "<2.0") is False
+        from isitsecure.engine.code_analysis.shared_utils import is_version_vulnerable
+        assert is_version_vulnerable("RELEASE", "<2.0") is False
