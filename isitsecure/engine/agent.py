@@ -1185,12 +1185,14 @@ class DeepSecurityScanAgent:
 
     # Pricing per million tokens (USD) — keyed by model name prefix
     _MODEL_PRICING = {
+        "claude-opus-4-7":   {"input": 5.0,  "output": 25.0},
+        "claude-sonnet-4-6": {"input": 3.0,  "output": 15.0},
         "claude-sonnet-4":   {"input": 3.0,  "output": 15.0},
         "claude-haiku-4":    {"input": 0.80, "output": 4.0},
-        "claude-opus-4":     {"input": 5.0, "output": 25.0},
-        "gemini-3.1-pro":    {"input": 2.0,  "output": 12.0},
+        "claude-opus-4":     {"input": 5.0,  "output": 25.0},
         "gemini-3.1-pro-preview":    {"input": 2.0,  "output": 12.0},
         "gemini-3-flash-preview":    {"input": 0.5,  "output": 3.0},
+        "gemini-3.1-pro":    {"input": 2.0,  "output": 12.0},
         "gemini-2.5-pro":    {"input": 1.25, "output": 10.0},
         "gemini-2.5-flash":  {"input": 0.15, "output": 0.60},
     }

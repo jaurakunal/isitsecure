@@ -12,11 +12,19 @@ from isitsecure.llm.protocol import LLMClientProtocol
 
 logger = logging.getLogger(__name__)
 
-# Model defaults
-ANTHROPIC_MODEL = "claude-sonnet-4-20250514"
-ANTHROPIC_JUDGMENT_MODEL = "claude-sonnet-4-20250514"
-GOOGLE_MODEL = "gemini-2.5-pro-preview-05-06"
-GOOGLE_JUDGMENT_MODEL = "gemini-2.5-flash-preview-04-17"
+# Model roles:
+#   planning  — code analysis, attack planning, SAST review, fix generation (most capable)
+#   judgment  — triage, result judgment, enrichment (faster/cheaper)
+MODEL_ROLES = {
+    "anthropic": {
+        "planning": "claude-opus-4-7",
+        "judgment": "claude-sonnet-4-6",
+    },
+    "google": {
+        "planning": "gemini-3.1-pro-preview",
+        "judgment": "gemini-3-flash-preview",
+    },
+}
 
 
 def create_llm_client(
@@ -34,20 +42,22 @@ def create_llm_client(
     Returns:
         An LLM client implementing LLMClientProtocol
     """
-    if provider == "anthropic":
-        model = ANTHROPIC_JUDGMENT_MODEL if judgment else ANTHROPIC_MODEL
-        return AnthropicAdapter(api_key=api_key, model=model)
-    elif provider == "google":
-        model = GOOGLE_JUDGMENT_MODEL if judgment else GOOGLE_MODEL
-        return GoogleAdapter(api_key=api_key, model=model)
-    else:
+    if provider not in MODEL_ROLES:
         raise ValueError(f"Unknown LLM provider: {provider}. Use 'anthropic' or 'google'.")
+
+    role = "judgment" if judgment else "planning"
+    model = MODEL_ROLES[provider][role]
+
+    if provider == "anthropic":
+        return AnthropicAdapter(api_key=api_key, model=model)
+    else:  # google
+        return GoogleAdapter(api_key=api_key, model=model)
 
 
 class AnthropicAdapter:
     """Adapter for Anthropic's Claude API. Implements LLMClientProtocol."""
 
-    def __init__(self, api_key: str, model: str = ANTHROPIC_MODEL) -> None:
+    def __init__(self, api_key: str, model: str = "claude-opus-4-7") -> None:
         try:
             import anthropic
         except ImportError:
@@ -97,7 +107,7 @@ class AnthropicAdapter:
 class GoogleAdapter:
     """Adapter for Google's Gemini API. Implements LLMClientProtocol."""
 
-    def __init__(self, api_key: str, model: str = GOOGLE_MODEL) -> None:
+    def __init__(self, api_key: str, model: str = "gemini-3.1-pro-preview") -> None:
         try:
             from google import genai
         except ImportError:
