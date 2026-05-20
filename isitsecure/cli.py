@@ -96,7 +96,7 @@ def scan(
     auth_password: Optional[str] = typer.Option(None, "--auth-password", help="Auth password"),
     auth_provider: str = typer.Option("supabase", "--auth-provider", help="Auth provider: supabase|firebase|browser|token"),
     llm_provider: str = typer.Option("anthropic", "--llm", help="LLM provider: anthropic|google|none"),
-    output: str = typer.Option("table", "--output", "-o", help="Output format: table|json|html|sarif"),
+    output: str = typer.Option("table", "--output", "-o", help="Output format: table|json|html|sarif|fixes"),
     output_file: Optional[str] = typer.Option(None, "--output-file", "-f", help="Write report to file"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
@@ -199,6 +199,17 @@ def scan(
             "[dim]Upload to GitHub: gh api repos/OWNER/REPO/code-scanning/sarifs "
             f"-f 'sarif=@{out_path}' -f commit_sha=$(git rev-parse HEAD)[/dim]"
         )
+    elif output == "fixes":
+        if not llm_client:
+            console.print("[red]Fix generation requires an LLM API key. Set ANTHROPIC_API_KEY or use --llm anthropic.[/red]")
+            raise typer.Exit(1)
+        _print_report_table(report)
+        console.print("\n[bold]Generating fixes...[/bold]")
+        fix_md = asyncio.run(_generate_fixes(report, llm_client, repo))
+        out_path = output_file or "isitsecure-fixes.md"
+        Path(out_path).write_text(fix_md)
+        console.print(f"\n[green]Fix plan written to {out_path}[/green]")
+        console.print("[dim]Paste into Cursor or Claude Code: 'Apply all the security fixes in this document'[/dim]")
     elif output == "table":
         _print_report_table(report)
         if output_file:
@@ -207,6 +218,52 @@ def scan(
     else:
         console.print(f"[yellow]Output format '{output}' not yet implemented. Using table.[/yellow]")
         _print_report_table(report)
+
+
+async def _generate_fixes(report, llm_client, repo_url: str | None) -> str:
+    """Generate LLM-powered fixes for critical and high findings."""
+    from isitsecure.engine.fixes.fix_generator import FixGenerator
+    from isitsecure.engine.fixes.markdown_exporter import FixPlanMarkdownExporter
+
+    # Filter to fixable findings (SAST with code locations)
+    fixable = [
+        f for f in report.findings
+        if f.code_location and f.code_location.file_path
+        and f.severity.value in ("critical", "high")
+    ]
+
+    if not fixable:
+        return "# isitsecure Fix Plan\n\nNo critical or high findings with source code locations to fix."
+
+    # Build file content map from the report's findings
+    # If we have a local repo, read the files directly
+    file_contents: dict[str, str] = {}
+    if repo_url and repo_url.startswith("file://"):
+        import os
+        repo_path = repo_url.replace("file://", "").rstrip("/")
+        for finding in fixable:
+            fp = finding.code_location.file_path
+            if fp not in file_contents:
+                full_path = os.path.join(repo_path, fp)
+                if os.path.isfile(full_path):
+                    try:
+                        file_contents[fp] = open(full_path).read()
+                    except Exception:
+                        pass
+
+    # Fall back to code snippets from findings if we can't read files
+    for finding in fixable:
+        fp = finding.code_location.file_path
+        if fp not in file_contents and finding.code_location.code_snippet:
+            file_contents[fp] = finding.code_location.code_snippet
+
+    console.print(f"  Generating fixes for {len(fixable)} findings across {len(file_contents)} files...")
+
+    generator = FixGenerator(llm_client)
+    plan = await generator.generate_fix_plan(fixable, file_contents)
+
+    exporter = FixPlanMarkdownExporter()
+    return exporter.export(plan)
 
 
 def _generate_sarif_report(report) -> str:

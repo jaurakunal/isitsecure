@@ -146,6 +146,49 @@ async def get_report_html(scan_id: str):
     return HTMLResponse(html, headers={"Content-Type": "text/html; charset=utf-8"})
 
 
+class FixRequest(BaseModel):
+    finding_id: str
+    file_content: str
+    llm_provider: str = "anthropic"
+    api_key: str
+
+
+@app.post("/api/fix")
+async def generate_fix(request: FixRequest):
+    """Generate an AI-powered fix for a single finding."""
+    # Find the scan that contains this finding
+    finding_data = None
+    for scan in _scans.values():
+        if not scan.get("report"):
+            continue
+        for f in scan["report"].get("findings", []):
+            if f.get("id") == request.finding_id:
+                finding_data = f
+                break
+        if finding_data:
+            break
+
+    if not finding_data:
+        raise HTTPException(status_code=404, detail="Finding not found")
+
+    from isitsecure.engine.models import DeepFinding
+    from isitsecure.engine.fixes.fix_generator import FixGenerator
+    from isitsecure.llm.adapters import create_llm_client
+
+    llm_client = create_llm_client(request.llm_provider, request.api_key)
+    generator = FixGenerator(llm_client)
+
+    finding = DeepFinding.model_validate(finding_data)
+    result = await generator.generate_fix(finding, request.file_content)
+
+    return {
+        "success": result.success,
+        "diff": result.diff,
+        "explanation": result.explanation,
+        "error": result.error,
+    }
+
+
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "version": __version__}
