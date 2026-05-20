@@ -124,6 +124,28 @@ async def get_report(scan_id: str):
     return scan["report"]
 
 
+@app.get("/api/scan/{scan_id}/report.html")
+async def get_report_html(scan_id: str):
+    """Get the completed scan report as a self-contained HTML document."""
+    scan = _scans.get(scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    if not scan["report"]:
+        raise HTTPException(status_code=202, detail="Scan still in progress")
+
+    from isitsecure.engine.models import DeepScanReport
+    from isitsecure.engine.reporting.report_generator import ReportGenerator
+    from isitsecure.engine.reporting.html_renderer import HTMLReportRenderer
+
+    report_model = DeepScanReport.model_validate(scan["report"])
+    generator = ReportGenerator()
+    renderer = HTMLReportRenderer()
+    report_data = generator.generate(report_model)
+    html = renderer.render(report_data)
+
+    return HTMLResponse(html, headers={"Content-Type": "text/html; charset=utf-8"})
+
+
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "version": __version__}

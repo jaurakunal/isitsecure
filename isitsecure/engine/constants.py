@@ -748,7 +748,7 @@ class ReportConfig:
         "F": "Critical — Immediate action required",
     }
 
-    REPORT_TITLE = "Deep Security Scan Report"
+    REPORT_TITLE = "isitsecure — Security Scan Report"
     SECTION_EXECUTIVE_SUMMARY = "Executive Summary"
     SECTION_CRITICAL_FINDINGS = "Critical & High Findings"
     SECTION_DAST_RESULTS = "Dynamic Testing (DAST) Results"
@@ -787,7 +787,7 @@ class ReportConfig:
     )
 
     # HTML rendering constants
-    HTML_TITLE = "Deep Security Scan Report"
+    HTML_TITLE = "isitsecure — Security Scan Report"
     HTML_GRADE_COLORS = {
         "A": "#22c55e",
         "B": "#84cc16",

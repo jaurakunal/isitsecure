@@ -185,6 +185,11 @@ def scan(
             console.print(f"[green]Report written to {output_file}[/green]")
         else:
             console.print(result_json)
+    elif output == "html":
+        html_content = _generate_html_report(report)
+        out_path = output_file or "isitsecure-report.html"
+        Path(out_path).write_text(html_content)
+        console.print(f"[green]HTML report written to {out_path}[/green]")
     elif output == "table":
         _print_report_table(report)
         if output_file:
@@ -193,6 +198,17 @@ def scan(
     else:
         console.print(f"[yellow]Output format '{output}' not yet implemented. Using table.[/yellow]")
         _print_report_table(report)
+
+
+def _generate_html_report(report) -> str:
+    """Generate a self-contained HTML report from a DeepScanReport."""
+    from isitsecure.engine.reporting.report_generator import ReportGenerator
+    from isitsecure.engine.reporting.html_renderer import HTMLReportRenderer
+
+    generator = ReportGenerator()
+    renderer = HTMLReportRenderer()
+    report_data = generator.generate(report)
+    return renderer.render(report_data)
 
 
 async def _run_scan(agent, **kwargs):

@@ -1,0 +1,1462 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Deep Security Scan Report</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #111827; background: #ffffff; margin: 0; padding: 20px; font-size: 14px; line-height: 1.6; }
+    h1 { font-size: 24px; margin-bottom: 4px; }
+    h2 { font-size: 18px; border-bottom: 2px solid #e5e7eb; padding-bottom: 6px; margin-top: 32px; }
+    .grade-badge { display: inline-block; font-size: 48px; font-weight: bold; width: 80px; height: 80px; line-height: 80px; text-align: center; border-radius: 12px; color: white; }
+    .summary { background: #f9fafb; border-left: 4px solid #e5e7eb; padding: 12px 16px; margin: 16px 0; }
+    table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+    th, td { border: 1px solid #e5e7eb; padding: 8px 12px; text-align: left; }
+    th { background: #f3f4f6; font-weight: 600; }
+    .severity-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; color: white; font-size: 12px; font-weight: 600; }
+    .finding-card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 16px; margin: 8px 0; }
+    .code-snippet { background: #1e1e1e; color: #d4d4d4; padding: 8px 12px; border-radius: 4px; font-family: 'Courier New', monospace; font-size: 12px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; }
+    .muted { color: #6b7280; }
+    .counts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; margin: 16px 0; }
+    .count-card { text-align: center; padding: 12px; border-radius: 8px; border: 1px solid #e5e7eb; }
+    .count-number { font-size: 28px; font-weight: bold; }
+    .count-label { font-size: 12px; color: #6b7280; }
+  </style>
+</head>
+<body>
+<h1>Deep Security Scan Report</h1>
+<div style="display: flex; align-items: center; gap: 16px; margin: 16px 0;">
+  <div class="grade-badge" style="background: #ef4444;">F</div>
+  <div>
+    <div style="font-size: 16px; font-weight: 600;">Critical — Immediate action required</div>
+    <div class="muted">Target: </div>
+    <div class="muted">Mode: code_only | Duration: 18.7s | Scanners: git_secret_scanner, route_auth_analyzer, rls_policy_analyzer, middleware_analyzer, express_middleware_analyzer, drizzle_schema_analyzer, prisma_schema_analyzer, iac_scanner, docker_scanner, shell_script_scanner, dependency_scanner, firebase_rules_analyzer, openapi_scanner, k8s_scanner, lsp_validator</div>
+  </div>
+</div>
+<h2>Executive Summary</h2>
+<div class="summary">The deep security scan of file://./test-app identified 7 critical and 45 high-severity vulnerabilities. 59 total findings were identified across 15 scanners. Immediate remediation is required to prevent potential exploitation.</div>
+<div class="counts-grid"><div class="count-card"><div class="count-number" style="color: #111827;">59</div><div class="count-label">Total</div></div><div class="count-card"><div class="count-number" style="color: #ef4444;">7</div><div class="count-label">Critical</div></div><div class="count-card"><div class="count-number" style="color: #f97316;">45</div><div class="count-label">High</div></div><div class="count-card"><div class="count-number" style="color: #eab308;">5</div><div class="count-label">Medium</div></div><div class="count-card"><div class="count-number" style="color: #111827;">0</div><div class="count-label">DAST</div></div><div class="count-card"><div class="count-number" style="color: #111827;">59</div><div class="count-label">SAST</div></div><div class="count-card"><div class="count-number" style="color: #111827;">0</div><div class="count-label">Cross-Ref</div></div></div>
+<h2>Critical &amp; High Findings</h2>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #ef4444;">CRITICAL</span>
+    <strong>Supabase service role key (bypasses RLS) found in src/lib/supabase.ts</strong>
+    <span class="muted" style="margin-left: auto;">git_secret_scanner (sast_code) | conf: 90%</span>
+  </div>
+  <p>A supabase service role key (bypasses rls) was found in &#x27;src/lib/supabase.ts&#x27;. This secret is currently in the codebase.</p>
+  <p class="muted">Location: src/lib/supabase.ts:7</p>
+  <div class="code-snippet">eyJhbGci***ting</div>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #ef4444;">CRITICAL</span>
+    <strong>Supabase service role key (bypasses RLS) found in src/lib/supabase.ts</strong>
+    <span class="muted" style="margin-left: auto;">git_secret_scanner (sast_code) | conf: 90%</span>
+  </div>
+  <p>A supabase service role key (bypasses rls) was found in &#x27;src/lib/supabase.ts&#x27;. This secret is currently in the codebase.</p>
+  <p class="muted">Location: src/lib/supabase.ts:12</p>
+  <div class="code-snippet">eyJhbGci***ting</div>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #ef4444;">CRITICAL</span>
+    <strong>Supabase service role key (bypasses RLS) found in src/lib/supabase.ts</strong>
+    <span class="muted" style="margin-left: auto;">git_secret_scanner (sast_code) | conf: 90%</span>
+  </div>
+  <p>A supabase service role key (bypasses rls) was found in &#x27;src/lib/supabase.ts&#x27;. This secret is currently in the codebase.</p>
+  <p class="muted">Location: src/lib/supabase.ts:7</p>
+  <div class="code-snippet">eyJhbGci***ting</div>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #ef4444;">CRITICAL</span>
+    <strong>Supabase service role key (bypasses RLS) found in src/lib/supabase.ts</strong>
+    <span class="muted" style="margin-left: auto;">git_secret_scanner (sast_code) | conf: 90%</span>
+  </div>
+  <p>A supabase service role key (bypasses rls) was found in &#x27;src/lib/supabase.ts&#x27;. This secret is currently in the codebase.</p>
+  <p class="muted">Location: src/lib/supabase.ts:12</p>
+  <div class="code-snippet">eyJhbGci***ting</div>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #ef4444;">CRITICAL</span>
+    <strong>Table &#x27;credits&#x27; does not have Row Level Security enabled</strong>
+    <span class="muted" style="margin-left: auto;">rls_policy_analyzer (sast_code) | conf: 95%</span>
+  </div>
+  <p>The table &#x27;credits&#x27; in migration file &#x27;supabase/migrations/001_create_tables.sql&#x27; does not have Row Level Security (RLS) enabled. Without RLS, any authenticated user with the anon key can read/write all rows.</p>
+  <p class="muted">Location: supabase/migrations/001_create_tables.sql</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #ef4444;">CRITICAL</span>
+    <strong>Table &#x27;profiles&#x27; does not have Row Level Security enabled</strong>
+    <span class="muted" style="margin-left: auto;">rls_policy_analyzer (sast_code) | conf: 95%</span>
+  </div>
+  <p>The table &#x27;profiles&#x27; in migration file &#x27;supabase/migrations/001_create_tables.sql&#x27; does not have Row Level Security (RLS) enabled. Without RLS, any authenticated user with the anon key can read/write all rows.</p>
+  <p class="muted">Location: supabase/migrations/001_create_tables.sql</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #ef4444;">CRITICAL</span>
+    <strong>Table &#x27;settings&#x27; does not have Row Level Security enabled</strong>
+    <span class="muted" style="margin-left: auto;">rls_policy_analyzer (sast_code) | conf: 95%</span>
+  </div>
+  <p>The table &#x27;settings&#x27; in migration file &#x27;supabase/migrations/001_create_tables.sql&#x27; does not have Row Level Security (RLS) enabled. Without RLS, any authenticated user with the anon key can read/write all rows.</p>
+  <p class="muted">Location: supabase/migrations/001_create_tables.sql</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>API route missing authentication check</strong>
+    <span class="muted" style="margin-left: auto;">route_auth_analyzer (sast_code) | conf: 85%</span>
+  </div>
+  <p>The API route /api/settings (PATCH) does not appear to check authentication. Any unauthenticated request can access this endpoint.</p>
+  <p class="muted">Location: src/app/api/settings/route.ts:8</p>
+  <div class="code-snippet"> 1 | import { NextResponse } from &quot;next/server&quot;
+ 2 | import { getUserFromRequest } from &quot;@/lib/auth&quot;
+ 3 | import { updateRow, getById } from &quot;@/lib/db&quot;
+ 4 | 
+ 5 | // VULNERABILITY: Prototype pollution via JSON body
+ 6 | // Scanner: body_param_fuzzer (#23)
+ 7 | 
+ 8 &gt;&gt;&gt; export async function PATCH(request: Request) {
+ 9 |   const user = getUserFromRequest(request)
+10 |   if (!user) {
+11 |     return NextResponse.json({ error: &quot;Unauthorized&quot; }, { status: 401 })
+12 |   }
+13 | 
+14 |   const body = aw</div>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>API route missing authentication check</strong>
+    <span class="muted" style="margin-left: auto;">route_auth_analyzer (sast_code) | conf: 85%</span>
+  </div>
+  <p>The API route /api/tasks (GET, POST) does not appear to check authentication. Any unauthenticated request can access this endpoint.</p>
+  <p class="muted">Location: src/app/api/tasks/route.ts:7</p>
+  <div class="code-snippet"> 1 | import { NextResponse } from &quot;next/server&quot;
+ 2 | import { query, insertRow } from &quot;@/lib/db&quot;
+ 3 | 
+ 4 | // VULNERABILITY: No authentication check on task endpoints
+ 5 | // Scanner: route_auth_analyzer (#26)
+ 6 | 
+ 7 &gt;&gt;&gt; export async function GET(request: Request) {
+ 8 |   const { searchParams } = new URL(request.url)
+ 9 |   const status = searchParams.get(&quot;status&quot;)
+10 | 
+11 |   // VULNERABILITY: Raw SQL injection via status parameter
+12 |   // Scanner: active_injection_scanner (#2)
+13 |   co</div>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>API route missing authentication check</strong>
+    <span class="muted" style="margin-left: auto;">route_auth_analyzer (sast_code) | conf: 85%</span>
+  </div>
+  <p>The API route /api/checkout (POST) does not appear to check authentication. Any unauthenticated request can access this endpoint.</p>
+  <p class="muted">Location: src/app/api/checkout/route.ts:9</p>
+  <div class="code-snippet"> 1 | import { NextResponse } from &quot;next/server&quot;
+ 2 | import { getUserFromRequest } from &quot;@/lib/auth&quot;
+ 3 | import { query, insertRow } from &quot;@/lib/db&quot;
+ 4 | 
+ 5 | // VULNERABILITY: Price manipulation, no idempotency
+ 6 | // Scanner: llm_code_reviewer (#39), financial_operation trigger (#50)
+ 7 | // Scanner: llm_business_logic_scanner (#41)
+ 8 | 
+ 9 &gt;&gt;&gt; export async function POST(request: Request) {
+10 |   const user = getUserFromRequest(request)
+11 |   if (!user) {
+12 |     return NextResponse.jso</div>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>API route missing authentication check</strong>
+    <span class="muted" style="margin-left: auto;">route_auth_analyzer (sast_code) | conf: 85%</span>
+  </div>
+  <p>The API route /api/graphql (POST) does not appear to check authentication. Any unauthenticated request can access this endpoint.</p>
+  <p class="muted">Location: src/app/api/graphql/route.ts:33</p>
+  <div class="code-snippet">25 |   type User {
+26 |     id: ID!
+27 |     email: String
+28 |     tasks: [Task]
+29 |     role: String
+30 |   }
+31 | `
+32 | 
+33 &gt;&gt;&gt; export async function POST(request: Request) {
+34 |   const { query: gqlQuery, variables } = await request.json()
+35 | 
+36 |   // VULNERABILITY: Introspection query fully allowed
+37 |   if (gqlQuery?.includes(&quot;__schema&quot;) || gqlQuery?.includes(&quot;__type&quot;)) {
+38 |     return NextResponse.json({
+39 |       data: {
+40 |         __schema: {
+41 |           types: [</div>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>API route missing authentication check</strong>
+    <span class="muted" style="margin-left: auto;">route_auth_analyzer (sast_code) | conf: 85%</span>
+  </div>
+  <p>The API route /api/avatar (GET) does not appear to check authentication. Any unauthenticated request can access this endpoint.</p>
+  <p class="muted">Location: src/app/api/avatar/route.ts:6</p>
+  <div class="code-snippet"> 1 | import { NextResponse } from &quot;next/server&quot;
+ 2 | 
+ 3 | // VULNERABILITY: SSRF — fetches arbitrary URLs server-side
+ 4 | // Scanner: ssrf_scanner (#7)
+ 5 | 
+ 6 &gt;&gt;&gt; export async function GET(request: Request) {
+ 7 |   const { searchParams } = new URL(request.url)
+ 8 |   const url = searchParams.get(&quot;url&quot;)
+ 9 | 
+10 |   if (!url) {
+11 |     return NextResponse.json({ error: &quot;URL required&quot; }, { status: 400 })
+12 |   }
+13 | 
+14 |   // VULNERABILITY: No URL validation — can fetch internal IPs, AWS </div>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>API route missing authentication check</strong>
+    <span class="muted" style="margin-left: auto;">route_auth_analyzer (sast_code) | conf: 85%</span>
+  </div>
+  <p>The API route /api/upload (POST) does not appear to check authentication. Any unauthenticated request can access this endpoint.</p>
+  <p class="muted">Location: src/app/api/upload/route.ts:8</p>
+  <div class="code-snippet"> 1 | import { NextResponse } from &quot;next/server&quot;
+ 2 | import { writeFile, mkdir } from &quot;fs/promises&quot;
+ 3 | import path from &quot;path&quot;
+ 4 | 
+ 5 | // VULNERABILITY: No file extension validation, no content-type check
+ 6 | // Scanner: file_upload_scanner (#8)
+ 7 | 
+ 8 &gt;&gt;&gt; export async function POST(request: Request) {
+ 9 |   const formData = await request.formData()
+10 |   const file = formData.get(&quot;file&quot;) as File
+11 | 
+12 |   if (!file) {
+13 |     return NextResponse.json({ error: &quot;No file provided&quot; },</div>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>API route missing authentication check</strong>
+    <span class="muted" style="margin-left: auto;">route_auth_analyzer (sast_code) | conf: 85%</span>
+  </div>
+  <p>The API route /api/tasks/search (GET) does not appear to check authentication. Any unauthenticated request can access this endpoint.</p>
+  <p class="muted">Location: src/app/api/tasks/search/route.ts:7</p>
+  <div class="code-snippet"> 1 | import { NextResponse } from &quot;next/server&quot;
+ 2 | import { query } from &quot;@/lib/db&quot;
+ 3 | 
+ 4 | // VULNERABILITY: Reflected XSS — search query echoed unescaped in HTML response
+ 5 | // Scanner: xss_scanner (#1)
+ 6 | 
+ 7 &gt;&gt;&gt; export async function GET(request: Request) {
+ 8 |   const { searchParams } = new URL(request.url)
+ 9 |   const q = searchParams.get(&quot;q&quot;) || &quot;&quot;
+10 | 
+11 |   const tasks = await query(&quot;tasks&quot;, `title ILIKE &#x27;%${q}%&#x27;`)
+12 | 
+13 |   // VULNERABILITY: Query reflected in HTML with</div>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>API route missing authentication check</strong>
+    <span class="muted" style="margin-left: auto;">route_auth_analyzer (sast_code) | conf: 85%</span>
+  </div>
+  <p>The API route /api/tasks/:id (GET, PUT, DELETE) does not appear to check authentication. Any unauthenticated request can access this endpoint.</p>
+  <p class="muted">Location: src/app/api/tasks/[id]/route.ts:9</p>
+  <div class="code-snippet"> 1 | import { NextResponse } from &quot;next/server&quot;
+ 2 | import { getById, updateRow, deleteRow } from &quot;@/lib/db&quot;
+ 3 | 
+ 4 | // VULNERABILITY: No auth, no ownership check — classic IDOR
+ 5 | // Scanner: idor_scanner (#16), route_auth_analyzer (#26)
+ 6 | // Guided DAST: auth_bypass (#44), idor_targeted (#45)
+ 7 | // Cross-reference: DAST IDOR + SAST missing auth = confirmed (#43)
+ 8 | 
+ 9 &gt;&gt;&gt; export async function GET(
+10 |   request: Request,
+11 |   { params }: { params: { id: string } }
+12 | ) {
+13</div>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>API route missing authentication check</strong>
+    <span class="muted" style="margin-left: auto;">route_auth_analyzer (sast_code) | conf: 85%</span>
+  </div>
+  <p>The API route /api/auth/reset (POST) does not appear to check authentication. Any unauthenticated request can access this endpoint.</p>
+  <p class="muted">Location: src/app/api/auth/reset/route.ts:8</p>
+  <div class="code-snippet"> 1 | import { NextResponse } from &quot;next/server&quot;
+ 2 | import { query } from &quot;@/lib/db&quot;
+ 3 | import crypto from &quot;crypto&quot;
+ 4 | 
+ 5 | // VULNERABILITY: Reset token leaked in response, no rate limiting
+ 6 | // Scanner: password_reset_scanner (#15)
+ 7 | 
+ 8 &gt;&gt;&gt; export async function POST(request: Request) {
+ 9 |   const { email } = await request.json()
+10 | 
+11 |   const users = await query(&quot;profiles&quot;, `email = &#x27;${email}&#x27;`)
+12 | 
+13 |   // VULNERABILITY: Different response for valid vs invalid email
+1</div>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>API route missing authentication check</strong>
+    <span class="muted" style="margin-left: auto;">route_auth_analyzer (sast_code) | conf: 85%</span>
+  </div>
+  <p>The API route /api/auth/callback (GET) does not appear to check authentication. Any unauthenticated request can access this endpoint.</p>
+  <p class="muted">Location: src/app/api/auth/callback/route.ts:6</p>
+  <div class="code-snippet"> 1 | import { NextResponse } from &quot;next/server&quot;
+ 2 | 
+ 3 | // VULNERABILITY: Open redirect — redirect_to parameter not validated
+ 4 | // Scanner: open_redirect_scanner (#12)
+ 5 | 
+ 6 &gt;&gt;&gt; export async function GET(request: Request) {
+ 7 |   const { searchParams } = new URL(request.url)
+ 8 |   const redirectTo = searchParams.get(&quot;redirect_to&quot;) || &quot;/&quot;
+ 9 | 
+10 |   // VULNERABILITY: Redirects to any URL without validation
+11 |   try {
+12 |     // If it&#x27;s an absolute URL, redirect directly
+13 |     n</div>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>API route missing authentication check</strong>
+    <span class="muted" style="margin-left: auto;">route_auth_analyzer (sast_code) | conf: 85%</span>
+  </div>
+  <p>The API route /api/auth/login (POST) does not appear to check authentication. Any unauthenticated request can access this endpoint.</p>
+  <p class="muted">Location: src/app/api/auth/login/route.ts:8</p>
+  <div class="code-snippet"> 1 | import { NextResponse } from &quot;next/server&quot;
+ 2 | import { query } from &quot;@/lib/db&quot;
+ 3 | import { signToken } from &quot;@/lib/auth&quot;
+ 4 | 
+ 5 | // VULNERABILITY: Username enumeration, no rate limiting, default credentials
+ 6 | // Scanner: auth_bypass_scanner (#13), rate_limit_scanner (#4)
+ 7 | 
+ 8 &gt;&gt;&gt; export async function POST(request: Request) {
+ 9 |   const { email, password } = await request.json()
+10 | 
+11 |   const users = await query(&quot;profiles&quot;, `email = &#x27;${email}&#x27;`)
+12 | 
+13 |   // VULNERAB</div>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>API route missing authentication check</strong>
+    <span class="muted" style="margin-left: auto;">route_auth_analyzer (sast_code) | conf: 85%</span>
+  </div>
+  <p>The API route /api/admin/users (GET, PATCH) does not appear to check authentication. Any unauthenticated request can access this endpoint.</p>
+  <p class="muted">Location: src/app/api/admin/users/route.ts:7</p>
+  <div class="code-snippet"> 1 | import { NextResponse } from &quot;next/server&quot;
+ 2 | import { query, updateRow } from &quot;@/lib/db&quot;
+ 3 | 
+ 4 | // VULNERABILITY: No authentication check — any user can access admin endpoints
+ 5 | // Scanner: privilege_escalation_scanner (#19), route_auth_analyzer (#26)
+ 6 | 
+ 7 &gt;&gt;&gt; export async function GET(request: Request) {
+ 8 |   // Should check for admin role but doesn&#x27;t
+ 9 |   const users = await query(&quot;profiles&quot;)
+10 | 
+11 |   return NextResponse.json(users)
+12 | }
+13 | 
+14 | export async fun</div>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>API route missing authentication check</strong>
+    <span class="muted" style="margin-left: auto;">route_auth_analyzer (sast_code) | conf: 85%</span>
+  </div>
+  <p>The API route /api/users/profile (GET, PATCH) does not appear to check authentication. Any unauthenticated request can access this endpoint.</p>
+  <p class="muted">Location: src/app/api/users/profile/route.ts:8</p>
+  <div class="code-snippet"> 1 | import { NextResponse } from &quot;next/server&quot;
+ 2 | import { getById, updateRow } from &quot;@/lib/db&quot;
+ 3 | import { getUserFromRequest } from &quot;@/lib/auth&quot;
+ 4 | 
+ 5 | // VULNERABILITY: Mass assignment — accepts role and isAdmin in body
+ 6 | // Scanner: mass_assignment_scanner (#9), guided_dast: mass_assignment (#47)
+ 7 | 
+ 8 &gt;&gt;&gt; export async function GET(request: Request) {
+ 9 |   const user = getUserFromRequest(request)
+10 |   if (!user) {
+11 |     return NextResponse.json({ error: &quot;Unauthorized&quot; }</div>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>API route missing authentication check</strong>
+    <span class="muted" style="margin-left: auto;">route_auth_analyzer (sast_code) | conf: 85%</span>
+  </div>
+  <p>The API route /api/credits/redeem (POST) does not appear to check authentication. Any unauthenticated request can access this endpoint.</p>
+  <p class="muted">Location: src/app/api/credits/redeem/route.ts:9</p>
+  <div class="code-snippet"> 1 | import { NextResponse } from &quot;next/server&quot;
+ 2 | import { getUserFromRequest } from &quot;@/lib/auth&quot;
+ 3 | import { query, updateRow } from &quot;@/lib/db&quot;
+ 4 | 
+ 5 | // VULNERABILITY: Race condition — no mutex on balance check + deduction
+ 6 | // Scanner: race_condition_scanner (#21), guided_dast: race_condition (#48)
+ 7 | // Scanner: llm_code_reviewer via financial_operation trigger (#50)
+ 8 | 
+ 9 &gt;&gt;&gt; export async function POST(request: Request) {
+10 |   const user = getUserFromRequest(request)
+11 |</div>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Table &#x27;tasks&#x27; has RLS enabled but no policies defined</strong>
+    <span class="muted" style="margin-left: auto;">rls_policy_analyzer (sast_code) | conf: 90%</span>
+  </div>
+  <p>The table &#x27;tasks&#x27; has RLS enabled but no policies are defined. This effectively blocks ALL access including the app itself. If the app works, it&#x27;s likely using service_role to bypass RLS, which means RLS is not providing any protection.</p>
+  <p class="muted">Location: supabase/migrations/001_create_tables.sql</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-36qx-fr4f-26g5. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-3g8h-86w9-wvmq. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-3h52-269p-cp9r. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-3x4c-7xq6-9pq8. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-4342-x723-ch2f. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-5j59-xgg2-r9c4. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-77r5-gw3j-2mpf. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-7gfc-8cq8-jh5f. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-7m27-7ghc-44w9. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-8h8q-6873-q5fj. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-9g9p-9gw9-jx7f. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-c59h-r6p8-q9wc. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-f82v-jwr5-mffw. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-ffhc-5mcf-pf4q. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-fq54-2j52-jc42. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-fr5h-rqp8-mj6g. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-g5qg-72qw-gw5v. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-g77x-44xx-532m. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-ggv3-7p47-pfv8. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-gx5p-jg67-6x7h. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-h25m-26qc-wcjf. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-h64f-5h5j-jqjh. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-mwv6-3258-q52c. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-q4gf-8mx6-v5v3. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-qpjv-v59x-3qc4. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-xv57-4mr9-wg8v. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: drizzle-orm@0.29.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;drizzle-orm&#x27; at version 0.29.0 has a known vulnerability: GHSA-gpj5-g38j-94v9. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: jsonwebtoken@8.5.1</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;jsonwebtoken&#x27; at version 8.5.1 has a known vulnerability: GHSA-8cf7-32gw-wr33. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: jsonwebtoken@8.5.1</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;jsonwebtoken&#x27; at version 8.5.1 has a known vulnerability: GHSA-hjrf-2m68-5959. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: jsonwebtoken@8.5.1</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;jsonwebtoken&#x27; at version 8.5.1 has a known vulnerability: GHSA-qwph-4952-7xr6. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<h2>Dynamic Testing (DAST) Results</h2>
+<p class="muted">No findings in this category.</p>
+<h2>Code Analysis (SAST) Results</h2>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #ef4444;">CRITICAL</span>
+    <strong>Supabase service role key (bypasses RLS) found in src/lib/supabase.ts</strong>
+    <span class="muted" style="margin-left: auto;">git_secret_scanner (sast_code) | conf: 90%</span>
+  </div>
+  <p>A supabase service role key (bypasses rls) was found in &#x27;src/lib/supabase.ts&#x27;. This secret is currently in the codebase.</p>
+  <p class="muted">Location: src/lib/supabase.ts:7</p>
+  <div class="code-snippet">eyJhbGci***ting</div>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #ef4444;">CRITICAL</span>
+    <strong>Supabase service role key (bypasses RLS) found in src/lib/supabase.ts</strong>
+    <span class="muted" style="margin-left: auto;">git_secret_scanner (sast_code) | conf: 90%</span>
+  </div>
+  <p>A supabase service role key (bypasses rls) was found in &#x27;src/lib/supabase.ts&#x27;. This secret is currently in the codebase.</p>
+  <p class="muted">Location: src/lib/supabase.ts:12</p>
+  <div class="code-snippet">eyJhbGci***ting</div>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #ef4444;">CRITICAL</span>
+    <strong>Supabase service role key (bypasses RLS) found in src/lib/supabase.ts</strong>
+    <span class="muted" style="margin-left: auto;">git_secret_scanner (sast_code) | conf: 90%</span>
+  </div>
+  <p>A supabase service role key (bypasses rls) was found in &#x27;src/lib/supabase.ts&#x27;. This secret is currently in the codebase.</p>
+  <p class="muted">Location: src/lib/supabase.ts:7</p>
+  <div class="code-snippet">eyJhbGci***ting</div>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #ef4444;">CRITICAL</span>
+    <strong>Supabase service role key (bypasses RLS) found in src/lib/supabase.ts</strong>
+    <span class="muted" style="margin-left: auto;">git_secret_scanner (sast_code) | conf: 90%</span>
+  </div>
+  <p>A supabase service role key (bypasses rls) was found in &#x27;src/lib/supabase.ts&#x27;. This secret is currently in the codebase.</p>
+  <p class="muted">Location: src/lib/supabase.ts:12</p>
+  <div class="code-snippet">eyJhbGci***ting</div>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #ef4444;">CRITICAL</span>
+    <strong>Table &#x27;credits&#x27; does not have Row Level Security enabled</strong>
+    <span class="muted" style="margin-left: auto;">rls_policy_analyzer (sast_code) | conf: 95%</span>
+  </div>
+  <p>The table &#x27;credits&#x27; in migration file &#x27;supabase/migrations/001_create_tables.sql&#x27; does not have Row Level Security (RLS) enabled. Without RLS, any authenticated user with the anon key can read/write all rows.</p>
+  <p class="muted">Location: supabase/migrations/001_create_tables.sql</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #ef4444;">CRITICAL</span>
+    <strong>Table &#x27;profiles&#x27; does not have Row Level Security enabled</strong>
+    <span class="muted" style="margin-left: auto;">rls_policy_analyzer (sast_code) | conf: 95%</span>
+  </div>
+  <p>The table &#x27;profiles&#x27; in migration file &#x27;supabase/migrations/001_create_tables.sql&#x27; does not have Row Level Security (RLS) enabled. Without RLS, any authenticated user with the anon key can read/write all rows.</p>
+  <p class="muted">Location: supabase/migrations/001_create_tables.sql</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #ef4444;">CRITICAL</span>
+    <strong>Table &#x27;settings&#x27; does not have Row Level Security enabled</strong>
+    <span class="muted" style="margin-left: auto;">rls_policy_analyzer (sast_code) | conf: 95%</span>
+  </div>
+  <p>The table &#x27;settings&#x27; in migration file &#x27;supabase/migrations/001_create_tables.sql&#x27; does not have Row Level Security (RLS) enabled. Without RLS, any authenticated user with the anon key can read/write all rows.</p>
+  <p class="muted">Location: supabase/migrations/001_create_tables.sql</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>API route missing authentication check</strong>
+    <span class="muted" style="margin-left: auto;">route_auth_analyzer (sast_code) | conf: 85%</span>
+  </div>
+  <p>The API route /api/settings (PATCH) does not appear to check authentication. Any unauthenticated request can access this endpoint.</p>
+  <p class="muted">Location: src/app/api/settings/route.ts:8</p>
+  <div class="code-snippet"> 1 | import { NextResponse } from &quot;next/server&quot;
+ 2 | import { getUserFromRequest } from &quot;@/lib/auth&quot;
+ 3 | import { updateRow, getById } from &quot;@/lib/db&quot;
+ 4 | 
+ 5 | // VULNERABILITY: Prototype pollution via JSON body
+ 6 | // Scanner: body_param_fuzzer (#23)
+ 7 | 
+ 8 &gt;&gt;&gt; export async function PATCH(request: Request) {
+ 9 |   const user = getUserFromRequest(request)
+10 |   if (!user) {
+11 |     return NextResponse.json({ error: &quot;Unauthorized&quot; }, { status: 401 })
+12 |   }
+13 | 
+14 |   const body = aw</div>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>API route missing authentication check</strong>
+    <span class="muted" style="margin-left: auto;">route_auth_analyzer (sast_code) | conf: 85%</span>
+  </div>
+  <p>The API route /api/tasks (GET, POST) does not appear to check authentication. Any unauthenticated request can access this endpoint.</p>
+  <p class="muted">Location: src/app/api/tasks/route.ts:7</p>
+  <div class="code-snippet"> 1 | import { NextResponse } from &quot;next/server&quot;
+ 2 | import { query, insertRow } from &quot;@/lib/db&quot;
+ 3 | 
+ 4 | // VULNERABILITY: No authentication check on task endpoints
+ 5 | // Scanner: route_auth_analyzer (#26)
+ 6 | 
+ 7 &gt;&gt;&gt; export async function GET(request: Request) {
+ 8 |   const { searchParams } = new URL(request.url)
+ 9 |   const status = searchParams.get(&quot;status&quot;)
+10 | 
+11 |   // VULNERABILITY: Raw SQL injection via status parameter
+12 |   // Scanner: active_injection_scanner (#2)
+13 |   co</div>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>API route missing authentication check</strong>
+    <span class="muted" style="margin-left: auto;">route_auth_analyzer (sast_code) | conf: 85%</span>
+  </div>
+  <p>The API route /api/checkout (POST) does not appear to check authentication. Any unauthenticated request can access this endpoint.</p>
+  <p class="muted">Location: src/app/api/checkout/route.ts:9</p>
+  <div class="code-snippet"> 1 | import { NextResponse } from &quot;next/server&quot;
+ 2 | import { getUserFromRequest } from &quot;@/lib/auth&quot;
+ 3 | import { query, insertRow } from &quot;@/lib/db&quot;
+ 4 | 
+ 5 | // VULNERABILITY: Price manipulation, no idempotency
+ 6 | // Scanner: llm_code_reviewer (#39), financial_operation trigger (#50)
+ 7 | // Scanner: llm_business_logic_scanner (#41)
+ 8 | 
+ 9 &gt;&gt;&gt; export async function POST(request: Request) {
+10 |   const user = getUserFromRequest(request)
+11 |   if (!user) {
+12 |     return NextResponse.jso</div>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>API route missing authentication check</strong>
+    <span class="muted" style="margin-left: auto;">route_auth_analyzer (sast_code) | conf: 85%</span>
+  </div>
+  <p>The API route /api/graphql (POST) does not appear to check authentication. Any unauthenticated request can access this endpoint.</p>
+  <p class="muted">Location: src/app/api/graphql/route.ts:33</p>
+  <div class="code-snippet">25 |   type User {
+26 |     id: ID!
+27 |     email: String
+28 |     tasks: [Task]
+29 |     role: String
+30 |   }
+31 | `
+32 | 
+33 &gt;&gt;&gt; export async function POST(request: Request) {
+34 |   const { query: gqlQuery, variables } = await request.json()
+35 | 
+36 |   // VULNERABILITY: Introspection query fully allowed
+37 |   if (gqlQuery?.includes(&quot;__schema&quot;) || gqlQuery?.includes(&quot;__type&quot;)) {
+38 |     return NextResponse.json({
+39 |       data: {
+40 |         __schema: {
+41 |           types: [</div>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>API route missing authentication check</strong>
+    <span class="muted" style="margin-left: auto;">route_auth_analyzer (sast_code) | conf: 85%</span>
+  </div>
+  <p>The API route /api/avatar (GET) does not appear to check authentication. Any unauthenticated request can access this endpoint.</p>
+  <p class="muted">Location: src/app/api/avatar/route.ts:6</p>
+  <div class="code-snippet"> 1 | import { NextResponse } from &quot;next/server&quot;
+ 2 | 
+ 3 | // VULNERABILITY: SSRF — fetches arbitrary URLs server-side
+ 4 | // Scanner: ssrf_scanner (#7)
+ 5 | 
+ 6 &gt;&gt;&gt; export async function GET(request: Request) {
+ 7 |   const { searchParams } = new URL(request.url)
+ 8 |   const url = searchParams.get(&quot;url&quot;)
+ 9 | 
+10 |   if (!url) {
+11 |     return NextResponse.json({ error: &quot;URL required&quot; }, { status: 400 })
+12 |   }
+13 | 
+14 |   // VULNERABILITY: No URL validation — can fetch internal IPs, AWS </div>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>API route missing authentication check</strong>
+    <span class="muted" style="margin-left: auto;">route_auth_analyzer (sast_code) | conf: 85%</span>
+  </div>
+  <p>The API route /api/upload (POST) does not appear to check authentication. Any unauthenticated request can access this endpoint.</p>
+  <p class="muted">Location: src/app/api/upload/route.ts:8</p>
+  <div class="code-snippet"> 1 | import { NextResponse } from &quot;next/server&quot;
+ 2 | import { writeFile, mkdir } from &quot;fs/promises&quot;
+ 3 | import path from &quot;path&quot;
+ 4 | 
+ 5 | // VULNERABILITY: No file extension validation, no content-type check
+ 6 | // Scanner: file_upload_scanner (#8)
+ 7 | 
+ 8 &gt;&gt;&gt; export async function POST(request: Request) {
+ 9 |   const formData = await request.formData()
+10 |   const file = formData.get(&quot;file&quot;) as File
+11 | 
+12 |   if (!file) {
+13 |     return NextResponse.json({ error: &quot;No file provided&quot; },</div>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>API route missing authentication check</strong>
+    <span class="muted" style="margin-left: auto;">route_auth_analyzer (sast_code) | conf: 85%</span>
+  </div>
+  <p>The API route /api/tasks/search (GET) does not appear to check authentication. Any unauthenticated request can access this endpoint.</p>
+  <p class="muted">Location: src/app/api/tasks/search/route.ts:7</p>
+  <div class="code-snippet"> 1 | import { NextResponse } from &quot;next/server&quot;
+ 2 | import { query } from &quot;@/lib/db&quot;
+ 3 | 
+ 4 | // VULNERABILITY: Reflected XSS — search query echoed unescaped in HTML response
+ 5 | // Scanner: xss_scanner (#1)
+ 6 | 
+ 7 &gt;&gt;&gt; export async function GET(request: Request) {
+ 8 |   const { searchParams } = new URL(request.url)
+ 9 |   const q = searchParams.get(&quot;q&quot;) || &quot;&quot;
+10 | 
+11 |   const tasks = await query(&quot;tasks&quot;, `title ILIKE &#x27;%${q}%&#x27;`)
+12 | 
+13 |   // VULNERABILITY: Query reflected in HTML with</div>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>API route missing authentication check</strong>
+    <span class="muted" style="margin-left: auto;">route_auth_analyzer (sast_code) | conf: 85%</span>
+  </div>
+  <p>The API route /api/tasks/:id (GET, PUT, DELETE) does not appear to check authentication. Any unauthenticated request can access this endpoint.</p>
+  <p class="muted">Location: src/app/api/tasks/[id]/route.ts:9</p>
+  <div class="code-snippet"> 1 | import { NextResponse } from &quot;next/server&quot;
+ 2 | import { getById, updateRow, deleteRow } from &quot;@/lib/db&quot;
+ 3 | 
+ 4 | // VULNERABILITY: No auth, no ownership check — classic IDOR
+ 5 | // Scanner: idor_scanner (#16), route_auth_analyzer (#26)
+ 6 | // Guided DAST: auth_bypass (#44), idor_targeted (#45)
+ 7 | // Cross-reference: DAST IDOR + SAST missing auth = confirmed (#43)
+ 8 | 
+ 9 &gt;&gt;&gt; export async function GET(
+10 |   request: Request,
+11 |   { params }: { params: { id: string } }
+12 | ) {
+13</div>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>API route missing authentication check</strong>
+    <span class="muted" style="margin-left: auto;">route_auth_analyzer (sast_code) | conf: 85%</span>
+  </div>
+  <p>The API route /api/auth/reset (POST) does not appear to check authentication. Any unauthenticated request can access this endpoint.</p>
+  <p class="muted">Location: src/app/api/auth/reset/route.ts:8</p>
+  <div class="code-snippet"> 1 | import { NextResponse } from &quot;next/server&quot;
+ 2 | import { query } from &quot;@/lib/db&quot;
+ 3 | import crypto from &quot;crypto&quot;
+ 4 | 
+ 5 | // VULNERABILITY: Reset token leaked in response, no rate limiting
+ 6 | // Scanner: password_reset_scanner (#15)
+ 7 | 
+ 8 &gt;&gt;&gt; export async function POST(request: Request) {
+ 9 |   const { email } = await request.json()
+10 | 
+11 |   const users = await query(&quot;profiles&quot;, `email = &#x27;${email}&#x27;`)
+12 | 
+13 |   // VULNERABILITY: Different response for valid vs invalid email
+1</div>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>API route missing authentication check</strong>
+    <span class="muted" style="margin-left: auto;">route_auth_analyzer (sast_code) | conf: 85%</span>
+  </div>
+  <p>The API route /api/auth/callback (GET) does not appear to check authentication. Any unauthenticated request can access this endpoint.</p>
+  <p class="muted">Location: src/app/api/auth/callback/route.ts:6</p>
+  <div class="code-snippet"> 1 | import { NextResponse } from &quot;next/server&quot;
+ 2 | 
+ 3 | // VULNERABILITY: Open redirect — redirect_to parameter not validated
+ 4 | // Scanner: open_redirect_scanner (#12)
+ 5 | 
+ 6 &gt;&gt;&gt; export async function GET(request: Request) {
+ 7 |   const { searchParams } = new URL(request.url)
+ 8 |   const redirectTo = searchParams.get(&quot;redirect_to&quot;) || &quot;/&quot;
+ 9 | 
+10 |   // VULNERABILITY: Redirects to any URL without validation
+11 |   try {
+12 |     // If it&#x27;s an absolute URL, redirect directly
+13 |     n</div>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>API route missing authentication check</strong>
+    <span class="muted" style="margin-left: auto;">route_auth_analyzer (sast_code) | conf: 85%</span>
+  </div>
+  <p>The API route /api/auth/login (POST) does not appear to check authentication. Any unauthenticated request can access this endpoint.</p>
+  <p class="muted">Location: src/app/api/auth/login/route.ts:8</p>
+  <div class="code-snippet"> 1 | import { NextResponse } from &quot;next/server&quot;
+ 2 | import { query } from &quot;@/lib/db&quot;
+ 3 | import { signToken } from &quot;@/lib/auth&quot;
+ 4 | 
+ 5 | // VULNERABILITY: Username enumeration, no rate limiting, default credentials
+ 6 | // Scanner: auth_bypass_scanner (#13), rate_limit_scanner (#4)
+ 7 | 
+ 8 &gt;&gt;&gt; export async function POST(request: Request) {
+ 9 |   const { email, password } = await request.json()
+10 | 
+11 |   const users = await query(&quot;profiles&quot;, `email = &#x27;${email}&#x27;`)
+12 | 
+13 |   // VULNERAB</div>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>API route missing authentication check</strong>
+    <span class="muted" style="margin-left: auto;">route_auth_analyzer (sast_code) | conf: 85%</span>
+  </div>
+  <p>The API route /api/admin/users (GET, PATCH) does not appear to check authentication. Any unauthenticated request can access this endpoint.</p>
+  <p class="muted">Location: src/app/api/admin/users/route.ts:7</p>
+  <div class="code-snippet"> 1 | import { NextResponse } from &quot;next/server&quot;
+ 2 | import { query, updateRow } from &quot;@/lib/db&quot;
+ 3 | 
+ 4 | // VULNERABILITY: No authentication check — any user can access admin endpoints
+ 5 | // Scanner: privilege_escalation_scanner (#19), route_auth_analyzer (#26)
+ 6 | 
+ 7 &gt;&gt;&gt; export async function GET(request: Request) {
+ 8 |   // Should check for admin role but doesn&#x27;t
+ 9 |   const users = await query(&quot;profiles&quot;)
+10 | 
+11 |   return NextResponse.json(users)
+12 | }
+13 | 
+14 | export async fun</div>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>API route missing authentication check</strong>
+    <span class="muted" style="margin-left: auto;">route_auth_analyzer (sast_code) | conf: 85%</span>
+  </div>
+  <p>The API route /api/users/profile (GET, PATCH) does not appear to check authentication. Any unauthenticated request can access this endpoint.</p>
+  <p class="muted">Location: src/app/api/users/profile/route.ts:8</p>
+  <div class="code-snippet"> 1 | import { NextResponse } from &quot;next/server&quot;
+ 2 | import { getById, updateRow } from &quot;@/lib/db&quot;
+ 3 | import { getUserFromRequest } from &quot;@/lib/auth&quot;
+ 4 | 
+ 5 | // VULNERABILITY: Mass assignment — accepts role and isAdmin in body
+ 6 | // Scanner: mass_assignment_scanner (#9), guided_dast: mass_assignment (#47)
+ 7 | 
+ 8 &gt;&gt;&gt; export async function GET(request: Request) {
+ 9 |   const user = getUserFromRequest(request)
+10 |   if (!user) {
+11 |     return NextResponse.json({ error: &quot;Unauthorized&quot; }</div>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>API route missing authentication check</strong>
+    <span class="muted" style="margin-left: auto;">route_auth_analyzer (sast_code) | conf: 85%</span>
+  </div>
+  <p>The API route /api/credits/redeem (POST) does not appear to check authentication. Any unauthenticated request can access this endpoint.</p>
+  <p class="muted">Location: src/app/api/credits/redeem/route.ts:9</p>
+  <div class="code-snippet"> 1 | import { NextResponse } from &quot;next/server&quot;
+ 2 | import { getUserFromRequest } from &quot;@/lib/auth&quot;
+ 3 | import { query, updateRow } from &quot;@/lib/db&quot;
+ 4 | 
+ 5 | // VULNERABILITY: Race condition — no mutex on balance check + deduction
+ 6 | // Scanner: race_condition_scanner (#21), guided_dast: race_condition (#48)
+ 7 | // Scanner: llm_code_reviewer via financial_operation trigger (#50)
+ 8 | 
+ 9 &gt;&gt;&gt; export async function POST(request: Request) {
+10 |   const user = getUserFromRequest(request)
+11 |</div>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Table &#x27;tasks&#x27; has RLS enabled but no policies defined</strong>
+    <span class="muted" style="margin-left: auto;">rls_policy_analyzer (sast_code) | conf: 90%</span>
+  </div>
+  <p>The table &#x27;tasks&#x27; has RLS enabled but no policies are defined. This effectively blocks ALL access including the app itself. If the app works, it&#x27;s likely using service_role to bypass RLS, which means RLS is not providing any protection.</p>
+  <p class="muted">Location: supabase/migrations/001_create_tables.sql</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-36qx-fr4f-26g5. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-3g8h-86w9-wvmq. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-3h52-269p-cp9r. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-3x4c-7xq6-9pq8. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-4342-x723-ch2f. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-5j59-xgg2-r9c4. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-77r5-gw3j-2mpf. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-7gfc-8cq8-jh5f. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-7m27-7ghc-44w9. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-8h8q-6873-q5fj. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-9g9p-9gw9-jx7f. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-c59h-r6p8-q9wc. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-f82v-jwr5-mffw. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-ffhc-5mcf-pf4q. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-fq54-2j52-jc42. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-fr5h-rqp8-mj6g. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-g5qg-72qw-gw5v. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-g77x-44xx-532m. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-ggv3-7p47-pfv8. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-gx5p-jg67-6x7h. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-h25m-26qc-wcjf. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-h64f-5h5j-jqjh. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-mwv6-3258-q52c. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-q4gf-8mx6-v5v3. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-qpjv-v59x-3qc4. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: next@13.4.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;next&#x27; at version 13.4.0 has a known vulnerability: GHSA-xv57-4mr9-wg8v. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: drizzle-orm@0.29.0</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;drizzle-orm&#x27; at version 0.29.0 has a known vulnerability: GHSA-gpj5-g38j-94v9. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: jsonwebtoken@8.5.1</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;jsonwebtoken&#x27; at version 8.5.1 has a known vulnerability: GHSA-8cf7-32gw-wr33. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: jsonwebtoken@8.5.1</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;jsonwebtoken&#x27; at version 8.5.1 has a known vulnerability: GHSA-hjrf-2m68-5959. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #f97316;">HIGH</span>
+    <strong>Vulnerable dependency: jsonwebtoken@8.5.1</strong>
+    <span class="muted" style="margin-left: auto;">dependency_scanner (sast_code) | conf: 95%</span>
+  </div>
+  <p>The package &#x27;jsonwebtoken&#x27; at version 8.5.1 has a known vulnerability: GHSA-qwph-4952-7xr6. Severity: high. Update to a patched version to fix this issue.</p>
+  <p class="muted">Location: package.json</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #eab308;">MEDIUM</span>
+    <strong>API route missing input validation</strong>
+    <span class="muted" style="margin-left: auto;">route_auth_analyzer (sast_code) | conf: 85%</span>
+  </div>
+  <p>The file src/app/api/tasks/route.ts accepts user input but does not appear to validate it with zod, yup, joi, or similar. Routes: /api/tasks</p>
+  <p class="muted">Location: src/app/api/tasks/route.ts:7</p>
+  <div class="code-snippet"> 1 | import { NextResponse } from &quot;next/server&quot;
+ 2 | import { query, insertRow } from &quot;@/lib/db&quot;
+ 3 | 
+ 4 | // VULNERABILITY: No authentication check on task endpoints
+ 5 | // Scanner: route_auth_analyzer (#26)
+ 6 | 
+ 7 &gt;&gt;&gt; export async function GET(request: Request) {
+ 8 |   const { searchParams } = new URL(request.url)
+ 9 |   const status = searchParams.get(&quot;status&quot;)
+10 | 
+11 |   // VULNERABILITY: Raw SQL injection via status parameter
+12 |   // Scanner: active_injection_scanner (#2)
+13 |   co</div>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #eab308;">MEDIUM</span>
+    <strong>API route missing input validation</strong>
+    <span class="muted" style="margin-left: auto;">route_auth_analyzer (sast_code) | conf: 85%</span>
+  </div>
+  <p>The file src/app/api/tasks/[id]/route.ts accepts user input but does not appear to validate it with zod, yup, joi, or similar. Routes: /api/tasks/:id</p>
+  <p class="muted">Location: src/app/api/tasks/[id]/route.ts:9</p>
+  <div class="code-snippet"> 1 | import { NextResponse } from &quot;next/server&quot;
+ 2 | import { getById, updateRow, deleteRow } from &quot;@/lib/db&quot;
+ 3 | 
+ 4 | // VULNERABILITY: No auth, no ownership check — classic IDOR
+ 5 | // Scanner: idor_scanner (#16), route_auth_analyzer (#26)
+ 6 | // Guided DAST: auth_bypass (#44), idor_targeted (#45)
+ 7 | // Cross-reference: DAST IDOR + SAST missing auth = confirmed (#43)
+ 8 | 
+ 9 &gt;&gt;&gt; export async function GET(
+10 |   request: Request,
+11 |   { params }: { params: { id: string } }
+12 | ) {
+13</div>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #eab308;">MEDIUM</span>
+    <strong>PII column without encryption: &#x27;email&#x27; in table &#x27;profiles&#x27;</strong>
+    <span class="muted" style="margin-left: auto;">drizzle_schema_analyzer (sast_code) | conf: 80%</span>
+  </div>
+  <p>The column &#x27;email&#x27; in table &#x27;profiles&#x27; (drizzle/schema.ts) contains PII but has no corresponding encrypted column (e.g., &#x27;email_encrypted&#x27;). Consider encrypting PII at rest to comply with GDPR/CCPA and reduce impact of a database breach.</p>
+  <p class="muted">Location: drizzle/schema.ts</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #eab308;">MEDIUM</span>
+    <strong>Dockerfile runs as root (no USER directive)</strong>
+    <span class="muted" style="margin-left: auto;">docker_scanner (sast_code) | conf: 85%</span>
+  </div>
+  <p>The Dockerfile &#x27;Dockerfile&#x27; does not include a USER directive. The container will run as root, which means a container escape vulnerability gives the attacker root access to the host. Add a non-root USER directive.</p>
+  <p class="muted">Location: Dockerfile</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #eab308;">MEDIUM</span>
+    <strong>Dockerfile exposes sensitive port 5432 (PostgreSQL)</strong>
+    <span class="muted" style="margin-left: auto;">docker_scanner (sast_code) | conf: 80%</span>
+  </div>
+  <p>The Dockerfile &#x27;Dockerfile&#x27; exposes port 5432 (PostgreSQL). Database and service ports should not be exposed from the application container. Use Docker networking instead.</p>
+  <p class="muted">Location: Dockerfile</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #3b82f6;">LOW</span>
+    <strong>Dockerfile uses &#x27;:latest&#x27; or untagged base image</strong>
+    <span class="muted" style="margin-left: auto;">docker_scanner (sast_code) | conf: 70%</span>
+  </div>
+  <p>The Dockerfile &#x27;Dockerfile&#x27; uses &#x27;(latest tag)&#x27; without a specific version tag. This means builds are not reproducible and a compromised upstream image could be pulled. Pin to a specific version (e.g., node:20-alpine).</p>
+  <p class="muted">Location: Dockerfile</p>
+</div>
+<div class="finding-card">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+    <span class="severity-badge" style="background: #3b82f6;">LOW</span>
+    <strong>Dockerfile has no HEALTHCHECK instruction</strong>
+    <span class="muted" style="margin-left: auto;">docker_scanner (sast_code) | conf: 60%</span>
+  </div>
+  <p>The Dockerfile &#x27;Dockerfile&#x27; does not include a HEALTHCHECK instruction. Without health checks, orchestrators cannot detect unhealthy containers for automatic restart.</p>
+  <p class="muted">Location: Dockerfile</p>
+</div>
+<h2>Cross-Referenced Insights</h2>
+<p class="muted">No findings in this category.</p>
+<h2>Remediation Checklist</h2>
+<table>
+<tr><th>#</th><th>Severity</th><th>Category</th><th>Action</th><th>Findings</th><th>Fix Available</th></tr>
+<tr><td>1</td><td><span class="severity-badge" style="background: #ef4444;">CRITICAL</span></td><td>exposed_secrets</td><td>Supabase service role key (bypasses RLS) found in src/lib/supabase.ts</td><td>4</td><td>No</td></tr>
+<tr><td>2</td><td><span class="severity-badge" style="background: #ef4444;">CRITICAL</span></td><td>rls_misconfiguration</td><td>Table &#x27;credits&#x27; does not have Row Level Security enabled</td><td>4</td><td>No</td></tr>
+<tr><td>3</td><td><span class="severity-badge" style="background: #f97316;">HIGH</span></td><td>auth_weakness</td><td>API route missing authentication check</td><td>15</td><td>No</td></tr>
+<tr><td>4</td><td><span class="severity-badge" style="background: #f97316;">HIGH</span></td><td>dependency_vuln</td><td>Vulnerable dependency: next@13.4.0</td><td>30</td><td>No</td></tr>
+<tr><td>5</td><td><span class="severity-badge" style="background: #eab308;">MEDIUM</span></td><td>injection_risk</td><td>API route missing input validation</td><td>2</td><td>No</td></tr>
+<tr><td>6</td><td><span class="severity-badge" style="background: #eab308;">MEDIUM</span></td><td>unencrypted_pii</td><td>PII column without encryption: &#x27;email&#x27; in table &#x27;profiles&#x27;</td><td>1</td><td>No</td></tr>
+<tr><td>7</td><td><span class="severity-badge" style="background: #eab308;">MEDIUM</span></td><td>exposed_api_endpoint</td><td>Dockerfile exposes sensitive port 5432 (PostgreSQL)</td><td>1</td><td>No</td></tr>
+<tr><td>8</td><td><span class="severity-badge" style="background: #3b82f6;">LOW</span></td><td>info_disclosure</td><td>Dockerfile uses &#x27;:latest&#x27; or untagged base image</td><td>2</td><td>No</td></tr>
+</table>
+<hr style="margin-top: 32px; border: none; border-top: 1px solid #e5e7eb;">
+<p class="muted" style="font-size: 12px;">Endpoints discovered: 0 | Generated by isitsecure — https://isitsecure.ai</p>
+</body>
+</html>
