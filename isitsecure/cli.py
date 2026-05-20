@@ -190,6 +190,15 @@ def scan(
         out_path = output_file or "isitsecure-report.html"
         Path(out_path).write_text(html_content)
         console.print(f"[green]HTML report written to {out_path}[/green]")
+    elif output == "sarif":
+        sarif_content = _generate_sarif_report(report)
+        out_path = output_file or "isitsecure-results.sarif"
+        Path(out_path).write_text(sarif_content)
+        console.print(f"[green]SARIF report written to {out_path}[/green]")
+        console.print(
+            "[dim]Upload to GitHub: gh api repos/OWNER/REPO/code-scanning/sarifs "
+            f"-f 'sarif=@{out_path}' -f commit_sha=$(git rev-parse HEAD)[/dim]"
+        )
     elif output == "table":
         _print_report_table(report)
         if output_file:
@@ -198,6 +207,14 @@ def scan(
     else:
         console.print(f"[yellow]Output format '{output}' not yet implemented. Using table.[/yellow]")
         _print_report_table(report)
+
+
+def _generate_sarif_report(report) -> str:
+    """Generate a SARIF 2.1.0 report from a DeepScanReport."""
+    from isitsecure.engine.reporting.sarif_renderer import SARIFRenderer
+
+    renderer = SARIFRenderer()
+    return renderer.render(report)
 
 
 def _generate_html_report(report) -> str:

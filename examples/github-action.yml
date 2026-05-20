@@ -1,0 +1,43 @@
+# Example GitHub Action: run isitsecure on every push and upload findings
+# to GitHub Code Scanning (appears in the Security tab + inline on PRs)
+#
+# Copy this to .github/workflows/security-scan.yml in your repo
+
+name: Security Scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write  # Required for uploading SARIF
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install isitsecure
+        run: pip install isitsecure
+
+      - name: Run security scan (SAST)
+        run: |
+          isitsecure scan \
+            --repo file://. \
+            --mode code-only \
+            --llm none \
+            --output sarif \
+            -f results.sarif
+
+      - name: Upload SARIF to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
+        if: always()  # Upload even if scan found critical issues
