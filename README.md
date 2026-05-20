@@ -45,8 +45,14 @@ isitsecure scan --repo https://github.com/you/your-app --mode code-only
 # Full scan (SAST + DAST + LLM review)
 isitsecure scan https://your-app.com --repo https://github.com/you/your-app --mode full
 
-# Generate AI-powered fixes for all findings
-isitsecure scan --repo https://github.com/you/your-app --output fixes
+# One command: scan + fix everything (the magic)
+isitsecure fix --repo ./your-app
+
+# Or dry-run first to preview fixes
+isitsecure fix --repo ./your-app --dry-run
+
+# Generate a security badge for your README
+isitsecure badge --repo ./your-app
 
 # Export for GitHub Code Scanning
 isitsecure scan --repo https://github.com/you/your-app --output sarif
@@ -175,6 +181,43 @@ isitsecure scan URL --output html    # Self-contained HTML report
 isitsecure scan URL --output sarif   # SARIF 2.1.0 for GitHub Code Scanning
 isitsecure scan URL --output fixes   # AI-generated fix plan (Markdown with diffs)
 ```
+
+## Auto-Fix: One Command to Fix Your App
+
+```bash
+# Scan your code and apply AI-generated fixes automatically
+isitsecure fix --repo ./my-app
+
+# Preview fixes without applying (dry run)
+isitsecure fix --repo ./my-app --dry-run
+
+# Only fix critical issues
+isitsecure fix --repo ./my-app --severity critical
+```
+
+What it does:
+1. Scans your repo with all SAST scanners
+2. For each critical/high finding with a code location, sends the file to the LLM
+3. Generates a fixed version of the file
+4. Writes the fixed code directly to your files
+5. Shows a summary of what changed
+
+After running, check `git diff` to review the changes, run your tests, and commit.
+
+## Security Badge
+
+Add a security grade badge to your README:
+
+```bash
+isitsecure badge --repo ./my-app -o badge.svg
+```
+
+Then add to your README:
+```markdown
+![Security Grade](./badge.svg)
+```
+
+The badge shows your grade (A–F) and total finding count, styled like a shields.io badge.
 
 ## What It Does NOT Cover
 

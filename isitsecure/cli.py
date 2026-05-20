@@ -415,6 +415,247 @@ def launch(
 
 
 # ---------------------------------------------------------------------------
+# fix command — scan + generate fixes + apply them
+# ---------------------------------------------------------------------------
+
+@app.command()
+def fix(
+    repo: str = typer.Option(..., "--repo", "-r", help="Path to local repo to fix"),
+    llm_provider: str = typer.Option("anthropic", "--llm", help="LLM provider: anthropic|google"),
+    api_key: Optional[str] = typer.Option(None, "--api-key", envvar="ANTHROPIC_API_KEY"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show fixes without applying them"),
+    severity: str = typer.Option("critical,high", "--severity", help="Severities to fix: critical,high,medium"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Scan, generate AI fixes, and apply them to your code in one command."""
+    if verbose:
+        logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.WARNING)
+
+    # Resolve API key
+    resolved_key = api_key or _load_api_key(llm_provider)
+    if not resolved_key:
+        console.print(
+            f"[red]Fix generation requires an API key. "
+            f"Set {llm_provider.upper()}_API_KEY or pass --api-key.[/red]"
+        )
+        raise typer.Exit(1)
+
+    from isitsecure.llm.adapters import create_llm_client
+    llm_client = create_llm_client(llm_provider, resolved_key)
+
+    # Resolve repo path
+    import os
+    repo_path = os.path.abspath(repo.replace("file://", ""))
+    if not os.path.isdir(repo_path):
+        console.print(f"[red]Repository path not found: {repo_path}[/red]")
+        raise typer.Exit(1)
+
+    repo_url = f"file://{repo_path}"
+
+    # Step 1: Scan
+    console.print(Panel(
+        f"[bold]isitsecure fix[/bold]\n"
+        f"Repo: {repo_path}  |  LLM: {llm_provider}  |  {'Dry run' if dry_run else 'Will apply fixes'}",
+        title="Auto-Fix",
+        border_style="bright_magenta",
+    ))
+
+    from isitsecure.engine.factory import create_deep_security_scan_agent, create_repo_ingestion_service
+    repo_service = create_repo_ingestion_service()
+    agent = create_deep_security_scan_agent(
+        llm_client=llm_client,
+        judgment_llm_client=llm_client,
+        repo_ingestion_service=repo_service,
+    )
+
+    console.print("\n[bold]Step 1/3:[/bold] Scanning for vulnerabilities...")
+    report = asyncio.run(_run_scan(agent=agent, repo_url=repo_url, scan_mode=None))
+    _print_report_table(report)
+
+    # Step 2: Generate fixes
+    target_severities = {s.strip().lower() for s in severity.split(",")}
+    fixable = [
+        f for f in report.findings
+        if f.code_location and f.code_location.file_path
+        and (f.severity.value if hasattr(f.severity, "value") else str(f.severity)) in target_severities
+    ]
+
+    if not fixable:
+        console.print("\n[green]No fixable findings at the selected severity levels.[/green]")
+        raise typer.Exit(0)
+
+    console.print(f"\n[bold]Step 2/3:[/bold] Generating fixes for {len(fixable)} findings...")
+
+    # Read file contents
+    file_contents: dict[str, str] = {}
+    for finding in fixable:
+        fp = finding.code_location.file_path
+        if fp not in file_contents:
+            full_path = os.path.join(repo_path, fp)
+            if os.path.isfile(full_path):
+                try:
+                    file_contents[fp] = open(full_path).read()
+                except Exception:
+                    pass
+
+    fix_plan = asyncio.run(_run_fix_generation(llm_client, fixable, file_contents))
+
+    if fix_plan.fixed_count == 0:
+        console.print("\n[yellow]No fixes could be generated.[/yellow]")
+        if fix_plan.skipped:
+            for reason in fix_plan.skipped:
+                console.print(f"  [dim]Skipped: {reason}[/dim]")
+        raise typer.Exit(0)
+
+    # Step 3: Apply fixes
+    console.print(f"\n[bold]Step 3/3:[/bold] {'Previewing' if dry_run else 'Applying'} {fix_plan.fixed_count} fixes...")
+
+    applied = 0
+    failed = 0
+    for fix_result in fix_plan.fixes:
+        if not fix_result.success:
+            continue
+
+        console.print(f"\n  [bold]{fix_result.file_path}[/bold]")
+        if fix_result.explanation:
+            console.print(f"  [dim]{fix_result.explanation[:100]}[/dim]")
+
+        if dry_run:
+            # Show diff
+            console.print(f"  [dim]{fix_result.diff[:500]}[/dim]")
+            applied += 1
+        else:
+            # Apply the fix by writing the fixed code
+            full_path = os.path.join(repo_path, fix_result.file_path)
+            try:
+                with open(full_path, "w") as f:
+                    f.write(fix_result.fixed_code)
+                console.print(f"  [green]Applied[/green]")
+                applied += 1
+            except Exception as e:
+                console.print(f"  [red]Failed to write: {e}[/red]")
+                failed += 1
+
+    # Summary
+    console.print()
+    action = "previewed" if dry_run else "applied"
+    console.print(Panel(
+        f"[bold]{applied} fixes {action}[/bold]  |  "
+        f"{failed} failed  |  "
+        f"{len(fix_plan.skipped)} skipped  |  "
+        f"{fix_plan.total_findings} total findings",
+        title="Fix Summary",
+        border_style="green" if failed == 0 else "yellow",
+    ))
+
+    if not dry_run and applied > 0:
+        console.print("\n[bold]Next steps:[/bold]")
+        console.print("  1. Review changes: [dim]git diff[/dim]")
+        console.print("  2. Run your tests: [dim]npm test[/dim]")
+        console.print("  3. Re-scan to verify: [dim]isitsecure scan --repo . --mode code-only[/dim]")
+    elif dry_run:
+        console.print(f"\n[dim]Run without --dry-run to apply fixes: isitsecure fix --repo {repo}[/dim]")
+
+
+async def _run_fix_generation(llm_client, findings, file_contents):
+    """Run fix generation with progress display."""
+    from isitsecure.engine.fixes.fix_generator import FixGenerator
+
+    generator = FixGenerator(llm_client)
+    return await generator.generate_fix_plan(findings, file_contents)
+
+
+# ---------------------------------------------------------------------------
+# badge command — generate security grade badge SVG
+# ---------------------------------------------------------------------------
+
+@app.command()
+def badge(
+    repo: str = typer.Option(..., "--repo", "-r", help="Path to local repo to scan"),
+    output_file: str = typer.Option("isitsecure-badge.svg", "--output", "-o", help="Output SVG file"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Generate a security grade badge SVG from a scan."""
+    if verbose:
+        logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.WARNING)
+
+    import os
+    repo_path = os.path.abspath(repo.replace("file://", ""))
+    repo_url = f"file://{repo_path}"
+
+    from isitsecure.engine.factory import create_deep_security_scan_agent, create_repo_ingestion_service
+    repo_service = create_repo_ingestion_service()
+    agent = create_deep_security_scan_agent(
+        llm_client=None,
+        judgment_llm_client=None,
+        repo_ingestion_service=repo_service,
+    )
+
+    console.print("[bold]Scanning for security grade...[/bold]")
+    report = asyncio.run(_run_scan(agent=agent, repo_url=repo_url, scan_mode=None))
+
+    # Calculate grade
+    from isitsecure.engine.reporting.report_generator import ReportGenerator
+    gen = ReportGenerator()
+    grade = gen._calculate_grade(report)
+
+    svg = _generate_badge_svg(grade, report.critical_count, report.high_count, len(report.findings))
+    Path(output_file).write_text(svg)
+
+    console.print(f"[green]Badge written to {output_file}[/green]")
+    console.print(f"Grade: [bold]{grade}[/bold]  |  {len(report.findings)} findings")
+    console.print(f"\nAdd to your README:")
+    console.print(f'  [dim]![Security: {grade}](./{output_file})[/dim]')
+
+
+def _generate_badge_svg(grade: str, critical: int, high: int, total: int) -> str:
+    """Generate a shields.io-style SVG badge for the security grade."""
+    GRADE_COLORS = {
+        "A": "#4c1",      # Green
+        "B": "#97ca00",   # Yellow-green
+        "C": "#dfb317",   # Yellow
+        "D": "#fe7d37",   # Orange
+        "F": "#e05d44",   # Red
+    }
+    color = GRADE_COLORS.get(grade, "#9f9f9f")
+
+    label = "security"
+    value = grade
+    if total > 0:
+        value = f"{grade} ({total} findings)"
+
+    label_width = len(label) * 6.5 + 10
+    value_width = len(value) * 6.5 + 10
+    total_width = label_width + value_width
+
+    return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{total_width}" height="20" role="img" aria-label="{label}: {value}">
+  <title>{label}: {value}</title>
+  <linearGradient id="s" x2="0" y2="100%">
+    <stop offset="0" stop-color="#bbb" stop-opacity=".1"/>
+    <stop offset="1" stop-opacity=".1"/>
+  </linearGradient>
+  <clipPath id="r">
+    <rect width="{total_width}" height="20" rx="3" fill="#fff"/>
+  </clipPath>
+  <g clip-path="url(#r)">
+    <rect width="{label_width}" height="20" fill="#555"/>
+    <rect x="{label_width}" width="{value_width}" height="20" fill="{color}"/>
+    <rect width="{total_width}" height="20" fill="url(#s)"/>
+  </g>
+  <g fill="#fff" text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" text-rendering="geometricPrecision" font-size="11">
+    <text aria-hidden="true" x="{label_width/2}" y="15" fill="#010101" fill-opacity=".3">{label}</text>
+    <text x="{label_width/2}" y="14">{label}</text>
+    <text aria-hidden="true" x="{label_width + value_width/2}" y="15" fill="#010101" fill-opacity=".3">{value}</text>
+    <text x="{label_width + value_width/2}" y="14">{value}</text>
+  </g>
+</svg>'''
+
+
+# ---------------------------------------------------------------------------
 # version command
 # ---------------------------------------------------------------------------
 
