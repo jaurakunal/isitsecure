@@ -18,7 +18,7 @@ from isitsecure.engine.scanners.protocols import DASTScannerProtocol
 # Expected DAST scanner count based on factory.py dast_scanners list
 EXPECTED_DAST_SCANNER_COUNT = 15
 # Expected SAST scanner count based on factory.py sast_scanners list (without LLM)
-EXPECTED_SAST_SCANNER_COUNT = 15
+EXPECTED_SAST_SCANNER_COUNT = 16
 
 
 class TestFactory:
@@ -104,10 +104,10 @@ class TestRepoIngestionFactory:
         svc = create_repo_ingestion_service()
         assert svc._workspace_detector is not None
 
-    def test_has_six_route_mappers(self):
-        """Should have NextJS + Express + tRPC + GraphQL + Django + FastAPI route mappers."""
+    def test_has_seven_route_mappers(self):
+        """Should have NextJS + Express + tRPC + GraphQL + Django + FastAPI + Spring route mappers."""
         svc = create_repo_ingestion_service()
-        assert len(svc._route_mappers) == 6
+        assert len(svc._route_mappers) == 7
 
     def test_route_mapper_types(self):
         """Route mappers should be the expected types."""

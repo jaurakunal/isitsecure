@@ -24,6 +24,9 @@ from isitsecure.engine.code_analysis.dependency_scanner import (
 from isitsecure.engine.code_analysis.python_dependency_scanner import (
     PythonDependencyScanner,
 )
+from isitsecure.engine.code_analysis.java_dependency_scanner import (
+    JavaDependencyScanner,
+)
 from isitsecure.engine.code_analysis.docker_scanner import (
     DockerScanner,
 )
@@ -168,6 +171,9 @@ def create_repo_ingestion_service():
     from isitsecure.engine.code_analysis.fastapi_route_mapper import (
         FastAPIRouteMapper,
     )
+    from isitsecure.engine.code_analysis.spring_route_mapper import (
+        SpringRouteMapper,
+    )
     from isitsecure.engine.code_analysis.workspace_detector import (
         WorkspaceDetector,
     )
@@ -182,6 +188,7 @@ def create_repo_ingestion_service():
         GraphQLRouteMapper(),
         DjangoRouteMapper(),
         FastAPIRouteMapper(),
+        SpringRouteMapper(),
     ]
 
     workspace_detector = WorkspaceDetector(
@@ -267,6 +274,7 @@ def create_deep_security_scan_agent(
         ShellScriptScanner(),
         DependencyScanner(),
         PythonDependencyScanner(),
+        JavaDependencyScanner(),
         FirebaseRulesAnalyzer(),
         OpenAPIScanner(),
         K8sScanner(),

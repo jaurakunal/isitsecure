@@ -518,6 +518,12 @@ class RepoIngestionConfig:
         "urls.py",
         "settings.py",
         "wsgi.py",
+        # Java/Kotlin projects
+        "pom.xml",
+        "build.gradle",
+        "build.gradle.kts",
+        "application.properties",
+        "application.yml",
     )
 
     # Directories to skip during indexing
@@ -535,6 +541,8 @@ class RepoIngestionConfig:
         "env",
         ".mypy_cache",
         ".pytest_cache",
+        ".gradle",
+        "target",
         ".turbo",
         "coverage",
         ".nyc_output",
@@ -546,6 +554,7 @@ class RepoIngestionConfig:
         ".tf", ".tfvars", ".sh", ".prisma",
         ".graphql", ".gql",
         ".py",  # Python support
+        ".java", ".kt",  # Java/Kotlin support
     )
 
     ERROR_CLONE_FAILED = "Failed to clone repository: {error}"

@@ -168,6 +168,7 @@ class FrameworkType(str, Enum):
     DJANGO = "django"
     FASTAPI = "fastapi"
     FLASK = "flask"
+    SPRING = "spring"
     UNKNOWN = "unknown"
 
 
