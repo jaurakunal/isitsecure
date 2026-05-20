@@ -18,7 +18,7 @@ from isitsecure.engine.scanners.protocols import DASTScannerProtocol
 # Expected DAST scanner count based on factory.py dast_scanners list
 EXPECTED_DAST_SCANNER_COUNT = 15
 # Expected SAST scanner count based on factory.py sast_scanners list (without LLM)
-EXPECTED_SAST_SCANNER_COUNT = 16
+EXPECTED_SAST_SCANNER_COUNT = 17
 
 
 class TestFactory:

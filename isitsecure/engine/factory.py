@@ -27,6 +27,9 @@ from isitsecure.engine.code_analysis.python_dependency_scanner import (
 from isitsecure.engine.code_analysis.java_dependency_scanner import (
     JavaDependencyScanner,
 )
+from isitsecure.engine.code_analysis.osv_dependency_scanner import (
+    OSVDependencyScanner,
+)
 from isitsecure.engine.code_analysis.docker_scanner import (
     DockerScanner,
 )
@@ -275,6 +278,7 @@ def create_deep_security_scan_agent(
         DependencyScanner(),
         PythonDependencyScanner(),
         JavaDependencyScanner(),
+        OSVDependencyScanner(),
         FirebaseRulesAnalyzer(),
         OpenAPIScanner(),
         K8sScanner(),
