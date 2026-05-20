@@ -219,15 +219,49 @@ Then add to your README:
 
 The badge shows your grade (A–F) and total finding count, styled like a shields.io badge.
 
+## How We Compare
+
+isitsecure is not a replacement for enterprise security platforms. It's designed to be the **one tool a solo developer or small team needs** — combining capabilities that otherwise require 4-5 separate tools.
+
+### What only isitsecure does (no other OSS tool)
+
+- SAST findings automatically generate targeted DAST tests (closed feedback loop)
+- LLM reviews business logic (race conditions, price manipulation, ownership checks)
+- One command scans + generates + applies AI fixes (`isitsecure fix`)
+- Cross-references DAST + SAST findings for confirmed vulnerabilities
+- LSP traces auth flows through call chains (TypeScript, Python, Java)
+
+### Where specialized tools go deeper
+
+| Need | Best specialized tool | How isitsecure compares |
+|---|---|---|
+| Deep SAST (30+ languages) | [Semgrep](https://semgrep.dev) | We cover 3 languages with regex+LLM (no taint analysis) |
+| DAST with advanced exploitation | [OWASP ZAP](https://zaproxy.org) / [Burp Suite](https://portswigger.net) | Our DAST is simpler — fewer payloads, no WAF evasion |
+| Secret scanning (800+ patterns) | [TruffleHog](https://github.com/trufflesecurity/trufflehog) / [Gitleaks](https://github.com/gitleaks/gitleaks) | Our git scanner covers common patterns, not exhaustive |
+| Container + IaC scanning | [Trivy](https://github.com/aquasecurity/trivy) / [Checkov](https://github.com/bridgecrewio/checkov) | Our IaC/Docker scanners are basic — use Trivy for depth |
+| Enterprise compliance (SOC2, PCI) | [Snyk](https://snyk.io) / [Checkmarx](https://checkmarx.com) | No compliance mapping (yet) |
+| Template-based vuln scanning | [Nuclei](https://github.com/projectdiscovery/nuclei) (28K+ stars) | Not template-based — different approach |
+
+### Who should use what
+
+| You are | Use this |
+|---|---|
+| Solo dev / vibe coder shipping a web app | **isitsecure** — one tool, one command |
+| Team with $25K+ security budget | Snyk + GitHub Advanced Security |
+| Enterprise with compliance requirements | Checkmarx / Veracode |
+| Pentester doing deep exploitation | Burp Suite Pro + Nuclei |
+| DevOps focused on containers/IaC | Trivy + Checkov + Gitleaks |
+
+isitsecure works well alongside other tools. Run `isitsecure scan` for the combined SAST+DAST+LLM view, and use specialized tools where you need deeper coverage.
+
 ## What It Does NOT Cover
 
-- **Formal taint analysis** — No intermediate representation or dataflow tracking. Injection detection uses regex + LLM reasoning, not compiler-level analysis
-- **WAF evasion** — Payload lists don't include advanced WAF bypass techniques
-- **Compliance mapping** — No OWASP Top 10, CWE, or PCI-DSS tagging on findings (yet)
-- **Authenticated testing beyond Supabase/Firebase** — Custom auth systems need the `token` provider with a manually obtained JWT
-- **Network-level scanning** — No port scanning, TLS configuration analysis, or infrastructure enumeration
+- **Formal taint analysis** — No dataflow tracking across function boundaries. Uses regex + LLM reasoning instead
+- **WAF evasion** — DAST payloads don't include advanced bypass techniques
+- **Compliance mapping** — No OWASP Top 10, CWE, or PCI-DSS tagging (yet)
+- **Network-level scanning** — No port scanning, TLS analysis, or infrastructure enumeration
 - **Mobile apps** — Web APIs only
-- **Go/Ruby/Rust SAST** — Route mapping and dependency scanning not yet implemented (DAST still works)
+- **Go/Ruby/Rust SAST** — Route mapping not yet implemented (DAST and dependency scanning via OSV still work)
 
 ## Configuration
 
