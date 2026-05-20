@@ -104,8 +104,7 @@ class PythonDependencyScanner:
             if not match:
                 continue
 
-            package = match.group(1).lower().replace("-", "").replace("_", "")
-            operator = match.group(2) or ""
+            package = self._normalize_package_name(match.group(1))
             version = match.group(3) or ""
 
             # Check for unpinned dependencies
@@ -128,9 +127,8 @@ class PythonDependencyScanner:
                 continue
 
             # Check known vulnerabilities
-            normalized = package.replace("-", "").replace("_", "")
             for pkg_name, vulns in self.KNOWN_VULNERABILITIES.items():
-                if normalized == pkg_name.replace("-", "").replace("_", ""):
+                if package == self._normalize_package_name(pkg_name):
                     for vuln_range, severity, description in vulns:
                         if self._is_vulnerable(version, vuln_range):
                             findings.append(CodeFinding(
@@ -172,9 +170,9 @@ class PythonDependencyScanner:
                     package = match.group(1).lower()
                     version = match.group(3) or ""
 
-                    normalized = package.replace("-", "").replace("_", "")
+                    normalized = self._normalize_package_name(package)
                     for pkg_name, vulns in self.KNOWN_VULNERABILITIES.items():
-                        if normalized == pkg_name.replace("-", "").replace("_", ""):
+                        if normalized == self._normalize_package_name(pkg_name):
                             for vuln_range, severity, description in vulns:
                                 if version and self._is_vulnerable(version, vuln_range):
                                     findings.append(CodeFinding(
@@ -193,13 +191,17 @@ class PythonDependencyScanner:
         return findings
 
     @staticmethod
+    def _normalize_package_name(name: str) -> str:
+        """Normalize package name for comparison (lowercase, no dashes/underscores)."""
+        return name.lower().replace("-", "").replace("_", "")
+
+    @staticmethod
     def _is_requirements_file(file_path: str) -> bool:
         """Check if this is a Python requirements file."""
         name = Path(file_path).name.lower()
         return (
             name == "requirements.txt"
-            or name.startswith("requirements")
-            and name.endswith(".txt")
+            or (name.startswith("requirements") and name.endswith(".txt"))
         )
 
     @staticmethod
