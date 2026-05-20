@@ -19,6 +19,10 @@ Browser → /dashboard (protected by middleware) → OK
 curl → /api/tasks (NOT protected by middleware) → Data leak
 ```
 
+## Real-World Context
+
+**Optus (2022)** — The catastrophic breach that exposed 9.8 million records was caused by an API endpoint with no authentication. The middleware (or equivalent) protected user-facing pages but not the API — exactly the pattern this scanner detects.
+
 ## How to Fix
 
 ```typescript

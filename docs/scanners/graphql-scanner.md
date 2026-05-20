@@ -12,6 +12,15 @@ Tests GraphQL endpoints for three issues:
 
 3. **Batch query support** — sends arrays of queries in a single POST. Batch queries can bypass rate limiting (1 HTTP request = 1000 queries).
 
+## Why It Matters
+
+GraphQL gives clients flexible query power — which is also its security risk:
+
+- **Full API discovery** — introspection returns your entire schema, including internal types, admin mutations, and deprecated fields with sensitive data
+- **Denial of service** — deeply nested queries (`{ user { friends { friends { friends { ... } } } }`) cause exponential database joins
+- **Rate limit bypass** — batching 1000 queries in one POST request bypasses per-request rate limits
+- **Data exfiltration** — once attackers know the schema, they craft queries to extract all data
+
 ## Real-World Breaches
 
 **GitLab (2019)** — GraphQL introspection was enabled by default, allowing researchers to enumerate private project information and user data. GitLab subsequently restricted introspection in production.

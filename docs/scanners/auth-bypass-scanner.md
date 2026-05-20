@@ -16,6 +16,14 @@ Tests authentication mechanisms for five weaknesses:
 
 5. **Auth header bypass** — sends requests with no auth, empty Bearer token, and Basic auth tricks to check for bypass paths.
 
+## Why It Matters
+
+Authentication is the front door. If attackers can enumerate valid usernames, there's no lockout, and default credentials work:
+
+- **Targeted attacks** — knowing which emails have accounts lets attackers focus phishing or credential stuffing
+- **Brute force** — without lockout, automated tools try thousands of passwords per minute
+- **Instant access** — default credentials (`admin/admin`) give immediate admin access with zero effort
+
 ## Real-World Breaches
 
 **iCloud (2014)** — No account lockout on the Find My iPhone API allowed brute-force password attacks against celebrity accounts.

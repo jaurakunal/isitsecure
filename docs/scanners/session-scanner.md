@@ -19,6 +19,10 @@ Analyzes session management for three issues:
 - **Missing Secure** — token sent over HTTP, interceptable on public WiFi
 - **Long-lived tokens** — a stolen token works for days/weeks instead of minutes
 
+## Real-World Context
+
+Token theft via XSS is one of the most common attack chains in modern web apps. If tokens are stored in `localStorage`, any XSS vulnerability — even a minor reflected XSS — becomes a full account takeover. The 2018 British Airways breach demonstrated this: injected JavaScript could access client-side storage, enabling exfiltration of payment data and session tokens.
+
 ## How to Fix
 
 ```typescript

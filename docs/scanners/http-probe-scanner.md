@@ -20,6 +20,10 @@ These issues individually seem low-risk but chain together dangerously:
 - Stack traces → reveal framework version, file paths, query structure
 - TRACE method → reflects auth cookies in response body (cross-site tracing)
 
+## Real-World Context
+
+Exposed `.env` files and `.git` directories are among the most common findings in bug bounty programs. Automated scanners continuously probe the internet for these paths, and thousands of production sites have leaked database credentials and API keys through exposed `.env` files.
+
 ## How to Fix
 
 ```typescript

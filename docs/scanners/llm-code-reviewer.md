@@ -59,6 +59,35 @@ And produces:
 
 No pattern matcher would flag `amount: price` as a vulnerability. The LLM understands that in a checkout flow, prices should be server-authoritative.
 
+## Real-World Context
+
+**Starbucks (2015)** — A race condition in the gift card balance transfer flow allowed double-spending. This is exactly the type of business logic flaw that only reasoning about the code can detect — there's no regex for "this balance check isn't atomic."
+
+**Multiple e-commerce platforms** — Price manipulation via client-controlled price fields is a common finding in bug bounty programs. The pattern is always the same: the API accepts `price` from the request body instead of looking it up server-side.
+
+## How to Fix
+
+Business logic fixes are app-specific, but common patterns:
+
+```typescript
+// FIX: Price manipulation — look up price server-side
+const PLAN_PRICES = { starter: 9, pro: 29, enterprise: 99 }
+const amount = PLAN_PRICES[plan]
+if (!amount) return error("Invalid plan")
+
+// FIX: Race condition — use atomic database operations
+await db.query(
+  `UPDATE credits SET balance = balance - $1
+   WHERE user_id = $2 AND balance >= $1 RETURNING balance`,
+  [amount, userId]
+)
+
+// FIX: Missing ownership — always filter by authenticated user
+const task = await db.query(
+  `SELECT * FROM tasks WHERE id = $1 AND user_id = $2`, [taskId, userId]
+)
+```
+
 ## Configuration
 
 Requires an LLM API key:

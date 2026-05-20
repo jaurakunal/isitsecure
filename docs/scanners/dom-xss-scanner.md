@@ -12,6 +12,16 @@ Uses **Playwright** (real browser) to detect DOM-based XSS by hooking dangerous 
 
 Unlike the static XSS scanner, this runs code in a real browser — catching dynamic patterns where user input flows through framework abstractions, event handlers, or async code paths before reaching a sink.
 
+## Why It Matters
+
+DOM XSS is harder to detect than reflected XSS because the payload never touches the server — it flows entirely within the browser's JavaScript. This means:
+
+- **WAFs can't block it** — the payload is in the URL fragment (`#`) which isn't sent to the server
+- **Server-side sanitization doesn't help** — the vulnerability is in client-side code
+- **Same impact as reflected XSS** — full token theft, session hijacking, defacement
+
+Modern SPAs (React, Next.js, Vue) are especially vulnerable because they read URL parameters and render them dynamically.
+
 ## Real-World Breaches
 
 **Google Search (2019)** — A DOM XSS vulnerability where URL fragment input was unsafely injected into the DOM. Google patched it and awarded a bounty.

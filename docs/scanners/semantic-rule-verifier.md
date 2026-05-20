@@ -30,6 +30,28 @@ CREATE POLICY "Users view own tasks" ON tasks
 
 A regex-based scanner would see "RLS policy exists" and report no issues. The LLM reads the SQL, understands the schema, and catches the column mismatch.
 
+## Real-World Context
+
+Wrong-column-reference bugs in access control are common and catastrophic. **Facebook (2013)** — the ability to delete any photo was caused by the API checking if the photo ID existed rather than if the requester owned it. An RLS policy checking `auth.uid() = id` instead of `auth.uid() = user_id` is the same class of bug.
+
+## How to Fix
+
+The LLM provides specific fix suggestions for each finding. Common patterns:
+
+```sql
+-- WRONG: Compares user UUID to row's primary key
+CREATE POLICY "view own" ON tasks USING (auth.uid() = id);
+
+-- CORRECT: Compares user UUID to the foreign key column
+CREATE POLICY "view own" ON tasks USING (auth.uid() = user_id);
+
+-- WRONG: Missing operation coverage (SELECT only, no INSERT/UPDATE/DELETE)
+-- CORRECT: Cover all operations
+CREATE POLICY "crud own" ON tasks
+  FOR ALL USING (auth.uid() = user_id)
+  WITH CHECK (auth.uid() = user_id);
+```
+
 ## Configuration
 
 Requires an LLM API key. Runs automatically as part of the SAST phase when RLS policies or Firebase rules files are detected.

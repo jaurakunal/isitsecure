@@ -10,6 +10,14 @@ Tests password reset flows for three issues:
 2. **Rate limiting bypass** — sends 10+ rapid reset requests. No rate limit means an attacker can flood a user's inbox or brute-force tokens.
 3. **Token leakage in response** — checks if the reset token appears in the HTTP response body (it should only be sent via email).
 
+## Why It Matters
+
+Password reset is often the weakest link in authentication:
+
+- **Account takeover** — if the reset token is predictable or leaked in the response, attackers can reset any account's password
+- **Account enumeration** — different responses for "email found" vs "not found" let attackers build a list of valid accounts
+- **Inbox flooding** — without rate limiting, attackers trigger thousands of reset emails, causing DoS for the user and overwhelming email infrastructure
+
 ## Real-World Breaches
 
 **Snapchat (2014)** — The password reset flow allowed enumeration and confirmation of phone numbers linked to accounts, enabling targeted attacks.

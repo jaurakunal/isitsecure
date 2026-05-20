@@ -22,6 +22,10 @@ In Supabase, the anon key is **public** — it's in your frontend JavaScript. RL
 - **Anyone can write data** — create fake accounts, modify records, delete data
 - **Cross-user data access** — users can see each other's private data
 
+## Real-World Context
+
+**Clubhouse (2021)** — Broken access controls (functionally equivalent to missing RLS) allowed bulk scraping of 1.3 million user profiles. In Supabase apps, missing RLS is the most common path to the same outcome — the anon key is public, and without RLS policies, the entire database is exposed.
+
 ## How to Fix
 
 See [RLS Policy Analyzer](./rls-policy-analyzer.md) for detailed fix examples with proper Supabase RLS policies.

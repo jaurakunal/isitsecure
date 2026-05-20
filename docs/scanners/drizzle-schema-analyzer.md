@@ -18,6 +18,10 @@ Schema design decisions have security implications:
 - PII stored in plaintext is a breach liability — if the database leaks, all personal data is immediately readable
 - Hard deletes without audit trails make incident response impossible
 
+## Real-World Context
+
+**GitHub (2012)** — A mass assignment vulnerability in Rails allowed an attacker to add his SSH key to the Rails core repository by exploiting a `user_id` field that was directly on the model (not a separate association table). Schema design directly enabled the attack.
+
 ## How to Fix
 
 ```typescript

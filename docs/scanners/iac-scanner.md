@@ -19,6 +19,10 @@ Infrastructure misconfigurations are the root cause of most cloud data breaches:
 - Overly permissive IAM roles let attackers escalate from one compromised service to full account control
 - Missing encryption means stolen backups or snapshots expose all data
 
+## Real-World Breaches
+
+Public S3 buckets have exposed data from hundreds of companies. Notable examples include **Twitch (2021)** — an AWS misconfiguration contributed to the leak of Twitch's entire source code and payout data. **Accenture (2017)** — four AWS S3 buckets were left public, exposing secret API data, authentication credentials, and decryption keys.
+
 ## How to Fix
 
 ```hcl
