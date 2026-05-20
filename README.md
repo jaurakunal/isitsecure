@@ -322,6 +322,10 @@ See [docs/architecture.md](docs/architecture.md) for the full pipeline design, i
 
 See [docs/scanners/](docs/scanners/) for detailed documentation on every scanner — what it detects, why it matters, real-world breach examples, and how to fix the vulnerabilities it finds.
 
+## LSP Setup (Optional, Reduces False Positives)
+
+See [docs/lsp-setup.md](docs/lsp-setup.md) for instructions on setting up the TypeScript Language Server for auth flow tracing. This is optional — scans work without it using regex-based detection.
+
 ## Contributing
 
 isitsecure is built on protocols and the strategy pattern. Adding a new scanner is straightforward:
