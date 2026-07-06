@@ -66,6 +66,9 @@ class AnthropicAdapter:
             )
         self._client = anthropic.AsyncAnthropic(api_key=api_key)
         self._model = model
+        # Read by the orchestrator's _collect_token_usage() for cost reporting.
+        self._model_name = model
+        self.token_usage = {"input_tokens": 0, "output_tokens": 0, "llm_calls": 0}
 
     @property
     def model_name(self) -> str:
@@ -74,6 +77,18 @@ class AnthropicAdapter:
     @property
     def llm(self):
         return self._client
+
+    def _record_usage(self, response) -> None:
+        """Accumulate token usage from a response. Best-effort — never raises."""
+        try:
+            usage = getattr(response, "usage", None)
+            if usage is None:
+                return
+            self.token_usage["input_tokens"] += getattr(usage, "input_tokens", 0) or 0
+            self.token_usage["output_tokens"] += getattr(usage, "output_tokens", 0) or 0
+            self.token_usage["llm_calls"] += 1
+        except Exception:
+            pass
 
     async def generate(
         self,
@@ -87,6 +102,7 @@ class AnthropicAdapter:
             temperature=temperature,
             messages=[{"role": "user", "content": prompt}],
         )
+        self._record_usage(response)
         return response.content[0].text
 
     async def generate_with_system(
@@ -101,6 +117,7 @@ class AnthropicAdapter:
             system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}],
         )
+        self._record_usage(response)
         return response.content[0].text
 
 
@@ -116,6 +133,9 @@ class GoogleAdapter:
             )
         self._client = genai.Client(api_key=api_key)
         self._model = model
+        # Read by the orchestrator's _collect_token_usage() for cost reporting.
+        self._model_name = model
+        self.token_usage = {"input_tokens": 0, "output_tokens": 0, "llm_calls": 0}
 
     @property
     def model_name(self) -> str:
@@ -124,6 +144,20 @@ class GoogleAdapter:
     @property
     def llm(self):
         return self._client
+
+    def _record_usage(self, response) -> None:
+        """Accumulate token usage from a response. Best-effort — never raises."""
+        try:
+            meta = getattr(response, "usage_metadata", None)
+            if meta is None:
+                return
+            self.token_usage["input_tokens"] += getattr(meta, "prompt_token_count", 0) or 0
+            self.token_usage["output_tokens"] += (
+                getattr(meta, "candidates_token_count", 0) or 0
+            )
+            self.token_usage["llm_calls"] += 1
+        except Exception:
+            pass
 
     async def generate(
         self,
@@ -141,6 +175,7 @@ class GoogleAdapter:
                 temperature=temperature,
             ),
         )
+        self._record_usage(response)
         return response.text
 
     async def generate_with_system(
@@ -159,4 +194,5 @@ class GoogleAdapter:
                 system_instruction=system_prompt,
             ),
         )
+        self._record_usage(response)
         return response.text
