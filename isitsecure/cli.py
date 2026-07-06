@@ -524,10 +524,35 @@ def fix(
     ))
 
     if not dry_run and applied > 0:
+        # Re-scan the fixed code to confirm the findings are actually gone.
+        from isitsecure.engine.fixes.verifier import verify_findings_resolved
+        fixed_ids = {r.finding_id for r in fix_plan.fixes if r.success}
+        fixed_findings = [f for f in fixable if f.id in fixed_ids]
+        console.print("\n[bold]Verifying fixes (re-scanning)...[/bold]")
+        vr = asyncio.run(verify_findings_resolved(repo_path, fixed_findings))
+        if vr.checked:
+            console.print(
+                f"  [green]{vr.resolved} of {vr.checked} findings confirmed resolved "
+                f"by re-scan[/green]"
+            )
+            if vr.still_present:
+                console.print(
+                    f"  [yellow]{vr.still_present} still flagged — this can be a partial "
+                    f"fix, or a valid fix the scanner can't confirm. Review the diff:[/yellow]"
+                )
+                for t in vr.still_present_titles:
+                    console.print(f"    [yellow]• {t}[/yellow]")
+        if vr.unverifiable:
+            console.print(
+                f"  [dim]{vr.unverifiable} finding(s) can't be auto-verified "
+                f"(business-logic/DAST) — review manually[/dim]"
+            )
+
         console.print("\n[bold]Next steps:[/bold]")
         console.print("  1. Review changes: [dim]git diff[/dim]")
-        console.print("  2. Run your tests: [dim]npm test[/dim]")
-        console.print("  3. Re-scan to verify: [dim]isitsecure scan --repo . --mode code-only[/dim]")
+        console.print("  2. Run your tests")
+        console.print("  3. Add isitsecure to CI so it can't regress "
+                      "([dim]see examples/github-action.yml[/dim])")
     elif dry_run:
         console.print(f"\n[dim]Run without --dry-run to apply fixes: isitsecure fix --repo {repo}[/dim]")
 

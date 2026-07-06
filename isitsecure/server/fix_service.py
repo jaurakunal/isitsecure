@@ -234,6 +234,7 @@ async def run_fix_all(
         await emit({"type": "progress", "message": f"Committing to {branch}…",
                     "current": len(final), "total": len(final)})
 
+        verification = None
         code, _, err = await _git(local_repo, "checkout", "-b", branch)
         if code != 0:
             raise RuntimeError(f"Could not create branch: {err}")
@@ -246,6 +247,18 @@ async def run_fix_all(
             code, _, err = await _git(local_repo, "commit", "-m", msg)
             if code != 0:
                 raise RuntimeError(f"Commit failed: {err}")
+
+            # Re-scan the fixed working tree to confirm the findings are gone.
+            try:
+                await emit({"type": "progress", "message": "Verifying fixes…",
+                            "current": len(final), "total": len(final)})
+                from isitsecure.engine.fixes.verifier import verify_findings_resolved
+                fixed_findings = [
+                    f for f in findings if f.code_location.file_path in final
+                ]
+                verification = (await verify_findings_resolved(local_repo, fixed_findings)).to_dict()
+            except Exception as e:
+                logger.warning("Fix verification skipped: %s", e)
         finally:
             # Return the user to their original branch no matter what.
             await _git(local_repo, "checkout", "--force", base_branch)
@@ -258,6 +271,7 @@ async def run_fix_all(
             "files_changed": sorted(final.keys()),
             "fixed_count": fixed_count,
             "skipped": skipped,
+            "verification": verification,
         }
 
     # ---- PLAN MODE: no local files (URL / remote repo) or dirty tree ----

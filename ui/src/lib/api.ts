@@ -164,6 +164,15 @@ export async function generateFix(
   return res.json();
 }
 
+export interface FixVerification {
+  resolved: number;
+  still_present: number;
+  unverifiable: number;
+  checked: number;
+  still_present_titles: string[];
+  error: string;
+}
+
 export interface FixAllResult {
   mode: "applied" | "plan" | "none";
   applied?: boolean;
@@ -175,6 +184,7 @@ export interface FixAllResult {
   markdown?: string;
   reason?: string;
   message?: string;
+  verification?: FixVerification | null;
 }
 
 export interface FixAllEvent {

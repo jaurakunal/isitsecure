@@ -160,6 +160,15 @@ function ReportContent() {
                     Review the branch in your editor, or push it to open a pull request:
                   </p>
                   <pre className="bg-bg-secondary border border-border rounded-lg p-2 font-mono text-text-muted overflow-x-auto">git push -u origin {fixResult.branch}</pre>
+                  {fixResult.verification && fixResult.verification.checked > 0 && (
+                    <p className={fixResult.verification.still_present > 0 ? "text-medium" : "text-low"}>
+                      Re-scan confirmed {fixResult.verification.resolved} of {fixResult.verification.checked} findings resolved.
+                      {fixResult.verification.still_present > 0 && ` ${fixResult.verification.still_present} still flagged — could be a partial fix or one the scanner can't confirm; review the branch.`}
+                      {fixResult.verification.unverifiable > 0 && (
+                        <span className="text-text-muted"> ({fixResult.verification.unverifiable} need manual review.)</span>
+                      )}
+                    </p>
+                  )}
                   {fixResult.files_changed && fixResult.files_changed.length > 0 && (
                     <ul className="text-text-muted font-mono space-y-0.5">
                       {fixResult.files_changed.map(f => <li key={f}>• {f}</li>)}
