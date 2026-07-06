@@ -309,8 +309,12 @@ async def _run_scan(agent, **kwargs):
                 description = description[:57] + "..."
             progress.update(task, completed=pct, description=description)
 
-            if data and hasattr(data, "findings"):
-                report = data
+            # The final COMPLETE event carries the report as a JSON dict
+            # under data["report"]; reconstruct the model from it.
+            if isinstance(data, dict) and "report" in data:
+                from isitsecure.engine.models import DeepScanReport
+
+                report = DeepScanReport.model_validate(data["report"])
 
     if report is None:
         console.print("[red]Scan completed but no report was generated.[/red]")

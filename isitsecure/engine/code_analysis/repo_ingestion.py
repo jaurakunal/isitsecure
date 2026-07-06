@@ -39,6 +39,14 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Heavy or generated directories that should never be scanned when copying a
+# local tree (git clone excludes these naturally via .gitignore / the index).
+_LOCAL_COPY_IGNORE = shutil.ignore_patterns(
+    "node_modules", ".next", "dist", "build", "out", "target",
+    ".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache",
+    ".ruff_cache", ".DS_Store", "*.pyc",
+)
+
 
 class RepoIngestionService:
     """Clones a GitHub repo and builds a RepoSnapshot.
@@ -313,7 +321,25 @@ class RepoIngestionService:
         github_token: str | None,
         full_history: bool,
     ) -> None:
-        """Execute git clone with timeout."""
+        """Fetch the repo into ``clone_path``.
+
+        Remote URLs are ``git clone``d.  Local directories (a ``file://`` URL
+        or a filesystem path to an existing directory) are copied instead, so
+        that non-git folders and uncommitted working-tree changes can be
+        scanned. The ``.git`` directory is preserved when present so git
+        history secret scanning still works.
+        """
+        local_path = self._resolve_local_path(repo_url)
+        if local_path is not None:
+            shutil.copytree(
+                local_path,
+                clone_path,
+                ignore=_LOCAL_COPY_IGNORE,
+                dirs_exist_ok=True,
+                symlinks=True,
+            )
+            return
+
         url = repo_url
         if github_token and url.startswith("https://"):
             # Inject token for private repository access
@@ -355,6 +381,25 @@ class RepoIngestionService:
                     timeout=RepoIngestionConfig.CLONE_TIMEOUT_SECONDS
                 )
             )
+
+    @staticmethod
+    def _resolve_local_path(repo_url: str) -> str | None:
+        """Return an absolute path if ``repo_url`` refers to a local directory.
+
+        Handles ``file://`` URLs and bare filesystem paths. Returns ``None``
+        for remote URLs (anything containing a ``://`` scheme other than
+        ``file``) so they fall through to ``git clone``.
+        """
+        candidate = repo_url
+        if candidate.startswith("file://"):
+            candidate = candidate[len("file://"):]
+        elif "://" in candidate:
+            return None
+
+        path = Path(candidate).expanduser()
+        if path.is_dir():
+            return str(path.resolve())
+        return None
 
     @staticmethod
     async def _get_commit_hash(clone_path: str) -> str:

@@ -27,15 +27,42 @@ Code → SAST → Findings → Guide DAST → Test → Cross-Reference → LLM T
   └──────────────── LSP validates / suppresses false positives ───────────────────────────┘
 ```
 
+## Install
+
+isitsecure is not yet on PyPI (the `isitsecure` name there belongs to an unrelated project — don't `pip install` it). Install from source:
+
+**Requirements:** Python 3.11+ and `git`. No Node.js needed for the CLI.
+
+```bash
+# 1. Clone the repo
+git clone https://github.com/jaurakunal/isitsecure.git
+cd isitsecure
+
+# 2. Install into a virtual environment (recommended)
+python3 -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+
+# 3. Install with all features (browser DAST, LLM review, OOB detection)
+pip install -e ".[all]"
+
+# 4. First-time setup — installs the Chromium browser, optionally saves an API key
+isitsecure setup
+```
+
+`pip install -e ".[all]"` is the recommended install and enables every scanner. If you want a lighter footprint, the extras are opt-in:
+
+| Install | What works |
+|---|---|
+| `pip install -e .` | SAST / code-only scans only (`--mode code-only`) |
+| `pip install -e ".[browser]"` | Adds DAST / live-URL scanning (requires `isitsecure setup` to install Chromium) |
+| `pip install -e ".[llm]"` | Adds LLM code review, triage, and AI fixes (requires an API key) |
+| `pip install -e ".[all]"` | Everything |
+
+URL/DAST scanning needs the `[browser]` extra — without it, `isitsecure scan <url>` exits with a message telling you to install it.
+
 ## Quick Start
 
 ```bash
-# Install
-pip install isitsecure
-
-# First-time setup (API keys + browser install)
-isitsecure setup
-
 # Scan a live URL (DAST only, no API key needed)
 isitsecure scan https://your-app.com
 
@@ -367,22 +394,24 @@ The UI provides:
 
 ## Try It on the Test App
 
-The repo includes **VibeTasks** — an intentionally vulnerable Next.js + Supabase app with 50 security issues:
+The repo includes **VibeTasks** — an intentionally vulnerable Next.js + Supabase app with ~50 security issues. All commands below are run from the repo root.
 
 ```bash
-# Start the vulnerable app
-cd test-app
-npm install
-npm run dev   # runs on port 4000
-
-# Scan it (SAST only — fast, no API key needed)
-isitsecure scan --repo file://./test-app --mode code-only
-
-# Full scan (SAST + DAST)
-isitsecure scan http://localhost:4000 --repo file://./test-app --mode full
+# Scan the bundled app's source (SAST only — fast, no API key needed)
+isitsecure scan --repo ./test-app --mode code-only
 ```
 
-See `examples/sample-report.json` for what a scan produces.
+To also run the live-app (DAST) scanners, start the app first, then scan its URL:
+
+```bash
+# In one terminal: start the vulnerable app
+cd test-app && npm install && npm run dev   # serves on port 4000
+
+# In another terminal, from the repo root: full scan (SAST + DAST)
+isitsecure scan http://localhost:4000 --repo ./test-app --mode full
+```
+
+`--repo` accepts a local directory (scanned in place, including uncommitted changes) or a remote git URL like `https://github.com/you/your-app`. See `examples/sample-report.json` for what a scan produces.
 
 ## Privacy
 
@@ -408,10 +437,10 @@ See [docs/lsp-setup.md](docs/lsp-setup.md) for instructions on setting up the Ty
 isitsecure is built on protocols and the strategy pattern. Adding a new scanner is straightforward:
 
 1. Implement `DASTScannerProtocol` or `CodeScannerProtocol`
-2. Add it to the scanner list in `factory.py`
-3. Add tests
+2. Add it to the scanner list in `isitsecure/engine/factory.py`
+3. Add tests under `tests/`
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+Set up a dev environment with `pip install -e ".[all,dev]"`, then run the suite with `pytest`. Issues and pull requests welcome at [github.com/jaurakunal/isitsecure](https://github.com/jaurakunal/isitsecure).
 
 ## License
 

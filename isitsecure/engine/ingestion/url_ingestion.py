@@ -7,7 +7,6 @@ from typing import Optional
 from urllib.parse import urljoin
 
 import httpx
-from playwright.async_api import async_playwright
 
 from isitsecure.engine.ingestion.constants import ScanConfig
 from isitsecure.engine.ingestion.snapshot import (
@@ -40,6 +39,15 @@ class URLIngestionService:
     async def ingest(self, url: str) -> CodebaseSnapshot:
         """Ingest a web application from its URL."""
         start_time = time.monotonic()
+
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError as exc:
+            raise RuntimeError(
+                "URL/DAST scanning requires Playwright. Install it with "
+                "'pip install -e \".[browser]\"' (or '.[all]') and run "
+                "'isitsecure setup' to install the browser."
+            ) from exc
 
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
