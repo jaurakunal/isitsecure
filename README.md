@@ -377,7 +377,7 @@ isitsecure version        Show version
 
 ## Web UI
 
-For non-CLI users, `isitsecure launch` opens a local web interface:
+Prefer a GUI? `isitsecure launch` starts a local web interface backed by the same scan engine — no CLI flags to remember:
 
 ```bash
 isitsecure launch
@@ -385,12 +385,15 @@ isitsecure launch
 ```
 
 The UI provides:
-- Visual scan configuration (no CLI flags to remember)
-- Real-time scan progress with scanner status cards
-- Finding browser with severity filtering and search
-- Plain-language risk summary with A–F grade
-- One-click fix code snippets
-- JSON and HTML report export
+- **Visual scan configuration** — target URL, repo, scan mode, AI provider, and optional login credentials
+- **Live scan progress** — a progress bar and a streaming scanner log
+- **Finding browser** — filter by severity or scanner, plus full-text search, with each finding expandable for evidence, technical detail, and remediation
+- **Plain-language risk summary** — an A–F grade, key risks, and a phased remediation plan
+- **One-click AI fixes** — a "Generate Fix" button on any finding produces a unified diff inline (one finding at a time)
+- **Report export** — download JSON, or open the self-contained HTML report in a new tab
+- **Scan history** — recent scans are remembered locally in your browser
+
+The web server resolves your LLM API key the same way the CLI does (`ANTHROPIC_API_KEY`, a `.env` file, or `isitsecure setup`), so scans and fixes work without pasting a key into the browser. You can still enter one in the scan form to override it.
 
 ## Try It on the Test App
 
