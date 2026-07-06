@@ -14,10 +14,11 @@ without modifying data.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import time
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote_plus, urlparse
 
 import httpx
 
@@ -155,6 +156,34 @@ class ActiveInjectionScanner:
     # Error-based SQL injection
     # ------------------------------------------------------------------
 
+    async def _probe(
+        self,
+        client: RateLimitedClient,
+        endpoint: DiscoveredEndpoint,
+        param_name: str,
+        payload: str,
+    ):
+        """Send `payload` in `param_name` the right way for the endpoint method.
+
+        GET → query string; POST/PUT/PATCH → JSON body. Returns the httpx
+        response (or None on error), so body-based injection (e.g. a login
+        SQLi in a JSON `email` field) is reachable, not just query params.
+        """
+        method = endpoint.method.value
+        try:
+            if method == "GET":
+                return await client.get(
+                    inject_query_param(endpoint.url, param_name, payload)
+                )
+            return await client.request(
+                method,
+                endpoint.url,
+                content=json.dumps({param_name: payload}),
+                headers={"Content-Type": "application/json"},
+            )
+        except Exception:
+            return None
+
     async def _test_error_based_sqli(
         self,
         client: RateLimitedClient,
@@ -163,18 +192,16 @@ class ActiveInjectionScanner:
     ) -> DeepFinding | None:
         """Inject SQL error payloads and check for SQL error messages in response."""
         for payload in InjectionConfig.SQLI_ERROR_PAYLOADS:
-            injected_url = inject_query_param(endpoint.url, param_name, payload)
-            try:
-                response = await client.get(injected_url)
-                body = response.text
-            except (httpx.HTTPError, Exception):
+            response = await self._probe(client, endpoint, param_name, payload)
+            if response is None:
                 continue
+            body = response.text
 
             matched_pattern = self._response_has_sql_error(body)
             if matched_pattern:
                 capture = build_probe_capture(
-                    method="GET",
-                    url=injected_url,
+                    method=endpoint.method.value,
+                    url=endpoint.url,
                     headers=dict(response.request.headers),
                     body="",
                     response_status=response.status_code,
@@ -284,7 +311,13 @@ class ActiveInjectionScanner:
             except (httpx.HTTPError, Exception):
                 continue
 
-            if InjectionConfig.COMMAND_INJECTION_CANARY in body:
+            # Require the canary to appear WITHOUT the un-executed "echo <canary>"
+            # form — otherwise an app that merely reflects the payload (very
+            # common in error pages, often URL-encoded) is a false positive,
+            # not real command execution. Decode first so echo%20canary counts.
+            canary = InjectionConfig.COMMAND_INJECTION_CANARY
+            decoded = unquote_plus(body)
+            if canary in decoded and f"echo {canary}" not in decoded:
                 capture = build_probe_capture(
                     method="GET",
                     url=injected_url,
@@ -632,10 +665,8 @@ class ActiveInjectionScanner:
         """
         for payload, expected, engine in TemplateInjectionConfig.SSTI_PAYLOADS:
             try:
-                url = self._inject_param(endpoint.url, param_name, payload)
-                resp = await client.get(url)
-
-                if resp.status_code >= 500:
+                resp = await self._probe(client, endpoint, param_name, payload)
+                if resp is None or resp.status_code >= 500:
                     continue
 
                 body = resp.text
@@ -643,11 +674,10 @@ class ActiveInjectionScanner:
                     # Verify: the expected output should NOT appear when we
                     # send a non-template value (avoid false positives from
                     # pages that naturally contain "49")
-                    safe_url = self._inject_param(
-                        endpoint.url, param_name, "harmless_test_value",
+                    safe_resp = await self._probe(
+                        client, endpoint, param_name, "harmless_test_value",
                     )
-                    safe_resp = await client.get(safe_url)
-                    if expected in safe_resp.text:
+                    if safe_resp is None or expected in safe_resp.text:
                         continue  # "49" appears naturally — not SSTI
 
                     capture = build_probe_capture(

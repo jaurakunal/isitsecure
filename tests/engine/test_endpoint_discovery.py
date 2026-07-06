@@ -213,8 +213,11 @@ class TestEndpointDiscoveryScanner:
     def test_resolve_bare_path_returns_none(
         self, scanner: EndpointDiscoveryScanner
     ):
-        """Paths not starting with / or http should return None."""
-        assert scanner._resolve_url("api/users", BASE_URL) is None
+        """Bare non-API relative paths should return None; API-ish relative
+        paths (Angular-style, e.g. "rest/..." / "api/...") are now resolved."""
+        assert scanner._resolve_url("something/else", BASE_URL) is None
+        resolved = scanner._resolve_url("api/users", BASE_URL)
+        assert resolved is not None and resolved.endswith("/api/users")
 
     # --- Filtering ---
 

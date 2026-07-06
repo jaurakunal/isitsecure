@@ -104,7 +104,10 @@ class EndpointDiscoveryConfig:
     )
 
     # Generic API path literals: "/api/...", "/v1/...", "/v2/..."
-    API_PATH_PATTERN = r'["\'](/(?:api|v[0-9]+)/[a-zA-Z0-9_/\-]+)["\']'
+    API_PATH_PATTERN = r'["\'](/?(?:api|rest|graphql|v[0-9]+)/[a-zA-Z0-9_/\-]+)(?:\?[^"\']*)?["\']'
+    # Interpolated / template-literal API paths, e.g. `${server}/rest/products/search?q=${e}`.
+    # Matches a /api|/rest|... path that follows a template-interpolation `}` or a backtick.
+    TEMPLATE_API_PATH_PATTERN = r'[`}](/(?:api|rest|graphql|v[0-9]+)/[a-zA-Z0-9_\-/]+)'
 
     # Supabase RPC / REST calls: .from("table") or .rpc("function")
     SUPABASE_FROM_PATTERN = r'\.from\s*\(\s*["\']([a-zA-Z_][a-zA-Z0-9_]*)["\']'
@@ -1404,7 +1407,7 @@ class InjectionConfig:
     COMMAND_INJECTION_CANARY = "xss_cmd_test"
 
     # Default params to fuzz when endpoint has no known query params
-    DEFAULT_FUZZ_PARAMS = ("id", "q", "search")
+    DEFAULT_FUZZ_PARAMS = ("id", "q", "search", "query", "email", "username", "name")
 
     # Finding titles
     TITLE_SQLI_ERROR = "SQL injection vulnerability (error-based)"

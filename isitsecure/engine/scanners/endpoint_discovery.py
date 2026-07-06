@@ -107,6 +107,13 @@ class EndpointDiscoveryScanner:
             self._detect_parameters(endpoint)
             self._categorize_endpoint(endpoint)
 
+        # Generate /{id} variants for REST collection endpoints so IDOR and
+        # per-param injection have object-level targets to test (e.g.
+        # /api/Products -> /api/Products/1).
+        for variant in self._build_id_variants(endpoints, raw_endpoints):
+            self._categorize_endpoint(variant)
+            endpoints.append(variant)
+
         logger.info(
             "EndpointDiscovery complete: %d unique endpoints from %d bytes of content",
             len(endpoints),
@@ -184,13 +191,21 @@ class EndpointDiscoveryScanner:
         base_url: str,
         endpoints: dict[str, DiscoveredEndpoint],
     ) -> None:
-        """Extract generic /api/... and /v1/... path literals."""
+        """Extract generic /api/..., /rest/..., /v1/... path literals, including
+        interpolated template-literal URLs like `${server}/rest/products/search`."""
         for match in re.finditer(
             EndpointDiscoveryConfig.API_PATH_PATTERN, content
         ):
             url = match.group(1)
             self._add_endpoint(
                 endpoints, url, base_url, EndpointMethod.GET, "api_path"
+            )
+        for match in re.finditer(
+            EndpointDiscoveryConfig.TEMPLATE_API_PATH_PATTERN, content
+        ):
+            url = match.group(1)
+            self._add_endpoint(
+                endpoints, url, base_url, EndpointMethod.GET, "template_api_path"
             )
 
     def _extract_supabase_endpoints(
@@ -475,6 +490,10 @@ class EndpointDiscoveryScanner:
         if url.startswith("/"):
             return urljoin(base_url, url)
 
+        # Relative API-ish paths (e.g. Angular's "rest/products/search")
+        if re.match(r"^(?:api|rest|graphql|v[0-9]+)/", url):
+            return urljoin(base_url.rstrip("/") + "/", url)
+
         return None
 
     def _should_include(self, url: str, base_url: str) -> bool:
@@ -523,6 +542,46 @@ class EndpointDiscoveryScanner:
             return True
 
         return False
+
+    def _build_id_variants(
+        self,
+        endpoints: list[DiscoveredEndpoint],
+        seen: dict[str, DiscoveredEndpoint],
+    ) -> list[DiscoveredEndpoint]:
+        """Create `/collection/1` object-level endpoints for REST collections.
+
+        A GET endpoint whose last path segment is an alphabetic resource name
+        (e.g. `/api/Products`, `/rest/basket`) and that has no path params is a
+        collection; probing `/<collection>/1` gives IDOR and injection scanners
+        an object-level target with a real ID parameter.
+        """
+        variants: list[DiscoveredEndpoint] = []
+        for ep in endpoints:
+            if ep.method != EndpointMethod.GET or ep.has_path_params:
+                continue
+            parsed = urlparse(ep.url)
+            if parsed.query:
+                continue
+            segments = [s for s in parsed.path.split("/") if s]
+            if not segments:
+                continue
+            if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", segments[-1]):
+                continue
+            variant_url = ep.url.rstrip("/") + "/1"
+            key = f"GET:{variant_url}"
+            if key in seen:
+                continue
+            seen[key] = None  # reserve so we don't duplicate across variants
+            variants.append(
+                DiscoveredEndpoint(
+                    url=variant_url,
+                    method=EndpointMethod.GET,
+                    source_pattern="id_variant",
+                    has_path_params=True,
+                    path_param_names=["id"],
+                )
+            )
+        return variants
 
     def _detect_parameters(self, endpoint: DiscoveredEndpoint) -> None:
         """Detect path and query parameters in the endpoint URL."""

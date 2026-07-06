@@ -448,7 +448,9 @@ class TestHelpers:
         """Should use default fuzz params when no params are known."""
         endpoint = _make_endpoint(url="https://example.com/api")
         params = self.scanner._get_testable_params(endpoint)
-        assert params == list(InjectionConfig.DEFAULT_FUZZ_PARAMS)
+        assert params == list(InjectionConfig.DEFAULT_FUZZ_PARAMS)[
+            : InjectionConfig.MAX_PARAMS_PER_ENDPOINT
+        ]
 
     def test_get_testable_params_no_duplicates(self) -> None:
         """Should not duplicate params present in both URL and model."""
