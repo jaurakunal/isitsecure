@@ -120,9 +120,11 @@ function ReportContent() {
             <div className="flex-1 min-w-[240px]">
               <h2 className="text-sm font-medium text-text-accent mb-1">One-click fixes</h2>
               <p className="text-xs text-text-muted leading-relaxed">
-                Generate AI fixes for the {criticals + highs} critical &amp; high findings. If this scan
-                targeted a local git repo, they&rsquo;re committed to a new branch &mdash; your current
-                branch and files stay untouched. Otherwise you get a downloadable fix plan.
+                Generate AI fixes for the {criticals + highs} critical &amp; high findings. Unlike the
+                security scan, fixes use AI &mdash; they&rsquo;ll use API tokens on your key (usually a
+                few cents per finding). If this scan targeted a local git repo, they&rsquo;re committed
+                to a new branch &mdash; your current branch and files stay untouched. Otherwise you get
+                a downloadable fix plan.
               </p>
             </div>
             {fixState === "idle" && (
