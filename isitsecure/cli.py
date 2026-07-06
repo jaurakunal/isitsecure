@@ -475,36 +475,39 @@ def fix(
 
     fix_plan = asyncio.run(_run_fix_generation(llm_client, fixable, file_contents))
 
-    if fix_plan.fixed_count == 0:
+    if not fix_plan.files:
         console.print("\n[yellow]No fixes could be generated.[/yellow]")
         if fix_plan.skipped:
             for reason in fix_plan.skipped:
                 console.print(f"  [dim]Skipped: {reason}[/dim]")
         raise typer.Exit(0)
 
-    # Step 3: Apply fixes
-    console.print(f"\n[bold]Step 3/3:[/bold] {'Previewing' if dry_run else 'Applying'} {fix_plan.fixed_count} fixes...")
+    # Step 3: Apply fixes — one final version per file. Multiple findings in
+    # the same file are chained into a single rewrite (no clobbering).
+    from difflib import unified_diff
+    n_files = len(fix_plan.files)
+    console.print(
+        f"\n[bold]Step 3/3:[/bold] {'Previewing' if dry_run else 'Applying'} "
+        f"fixes for {fix_plan.fixed_count} findings across {n_files} file(s)..."
+    )
 
     applied = 0
     failed = 0
-    for fix_result in fix_plan.fixes:
-        if not fix_result.success:
-            continue
-
-        console.print(f"\n  [bold]{fix_result.file_path}[/bold]")
-        if fix_result.explanation:
-            console.print(f"  [dim]{fix_result.explanation[:100]}[/dim]")
-
+    for path, fixed_content in fix_plan.files.items():
+        console.print(f"\n  [bold]{path}[/bold]")
         if dry_run:
-            # Show diff
-            console.print(f"  [dim]{fix_result.diff[:500]}[/dim]")
+            original = file_contents.get(path, "")
+            diff = "\n".join(unified_diff(
+                original.splitlines(), fixed_content.splitlines(),
+                fromfile=f"a/{path}", tofile=f"b/{path}", lineterm="",
+            ))
+            console.print(f"  [dim]{diff[:800]}[/dim]")
             applied += 1
         else:
-            # Apply the fix by writing the fixed code
-            full_path = os.path.join(repo_path, fix_result.file_path)
+            full_path = os.path.join(repo_path, path)
             try:
                 with open(full_path, "w") as f:
-                    f.write(fix_result.fixed_code)
+                    f.write(fixed_content)
                 console.print(f"  [green]Applied[/green]")
                 applied += 1
             except Exception as e:
@@ -515,7 +518,7 @@ def fix(
     console.print()
     action = "previewed" if dry_run else "applied"
     console.print(Panel(
-        f"[bold]{applied} fixes {action}[/bold]  |  "
+        f"[bold]{fix_plan.fixed_count} findings fixed across {applied} file(s) {action}[/bold]  |  "
         f"{failed} failed  |  "
         f"{len(fix_plan.skipped)} skipped  |  "
         f"{fix_plan.total_findings} total findings",
@@ -526,8 +529,10 @@ def fix(
     if not dry_run and applied > 0:
         # Re-scan the fixed code to confirm the findings are actually gone.
         from isitsecure.engine.fixes.verifier import verify_findings_resolved
-        fixed_ids = {r.finding_id for r in fix_plan.fixes if r.success}
-        fixed_findings = [f for f in fixable if f.id in fixed_ids]
+        fixed_findings = [
+            f for f in fixable
+            if f.code_location and f.code_location.file_path in fix_plan.files
+        ]
         console.print("\n[bold]Verifying fixes (re-scanning)...[/bold]")
         vr = asyncio.run(verify_findings_resolved(repo_path, fixed_findings))
         if vr.checked:
@@ -558,11 +563,11 @@ def fix(
 
 
 async def _run_fix_generation(llm_client, findings, file_contents):
-    """Run fix generation with progress display."""
+    """Run fix generation, chaining multiple findings per file (no clobbering)."""
     from isitsecure.engine.fixes.fix_generator import FixGenerator
 
     generator = FixGenerator(llm_client)
-    return await generator.generate_fix_plan(findings, file_contents)
+    return await generator.generate_file_fixes(findings, file_contents)
 
 
 # ---------------------------------------------------------------------------

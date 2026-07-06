@@ -54,6 +54,25 @@ class FixPlan:
         return sum(1 for f in self.fixes if not f.success)
 
 
+@dataclass
+class FileFixPlan:
+    """Fixes chained per file — one final content per changed file.
+
+    Unlike FixPlan (independent per-finding rewrites of the same file, where
+    applying more than one clobbers the others), this chains all findings in
+    a file so every fix accumulates into a single final version.
+    """
+
+    files: dict[str, str] = field(default_factory=dict)  # file_path -> fixed content
+    results: list[FixResult] = field(default_factory=list)  # per-finding results
+    skipped: list[str] = field(default_factory=list)
+    total_findings: int = 0
+
+    @property
+    def fixed_count(self) -> int:
+        return sum(1 for r in self.results if r.success)
+
+
 class FixGenerator:
     """Generates code fixes for security findings using LLM.
 
@@ -167,6 +186,69 @@ class FixGenerator:
             elif isinstance(result, Exception):
                 logger.warning("Fix generation error: %s", result)
 
+        return plan
+
+    async def generate_file_fixes(
+        self,
+        findings: list[DeepFinding],
+        file_contents: dict[str, str],
+        on_file_done=None,
+    ) -> FileFixPlan:
+        """Generate fixes grouped by file, CHAINING multiple findings per file.
+
+        For each file, findings are fixed sequentially — each fix is applied to
+        the previous fix's output — so every finding's fix survives in one final
+        version (no clobbering). Files are processed concurrently.
+
+        Args:
+            findings: Findings to fix.
+            file_contents: Mapping of file_path → original content.
+            on_file_done: Optional callback(done, total, path). May be sync or
+                async; awaited if it returns a coroutine.
+        """
+        import asyncio
+        from collections import defaultdict
+
+        plan = FileFixPlan(total_findings=len(findings))
+
+        by_file: dict[str, list[DeepFinding]] = defaultdict(list)
+        for finding in findings:
+            fp = finding.code_location.file_path if finding.code_location else ""
+            if fp:
+                by_file[fp].append(finding)
+            else:
+                plan.skipped.append(f"{finding.title} — no source file (DAST-only finding)")
+
+        total = len(by_file)
+        done = 0
+        lock = asyncio.Lock()
+        sem = asyncio.Semaphore(self.MAX_CONCURRENT_FIXES)
+
+        async def _fix_file(path: str, group: list[DeepFinding]) -> None:
+            nonlocal done
+            content = file_contents.get(path, "")
+            if not content:
+                plan.skipped.append(f"{path} — source not available")
+            else:
+                async with sem:
+                    current = content
+                    changed = False
+                    for finding in group:
+                        res = await self.generate_fix(finding, current)
+                        plan.results.append(res)
+                        if res.success and res.fixed_code:
+                            current = res.fixed_code
+                            changed = True
+                    if changed:
+                        plan.files[path] = current
+            async with lock:
+                done += 1
+                if on_file_done is not None:
+                    r = on_file_done(done, total, path)
+                    if asyncio.iscoroutine(r):
+                        await r
+
+        await asyncio.gather(*[_fix_file(p, g) for p, g in by_file.items()])
         return plan
 
     def _parse_response(

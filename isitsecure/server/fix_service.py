@@ -17,11 +17,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from collections import defaultdict
 from typing import Awaitable, Callable
 
 from isitsecure.config import load_api_key
-from isitsecure.engine.fixes.fix_generator import FixGenerator, FixPlan, FixResult
+from isitsecure.engine.fixes.fix_generator import FixGenerator, FixPlan
 from isitsecure.engine.fixes.markdown_exporter import FixPlanMarkdownExporter
 from isitsecure.engine.models import DeepFinding
 
@@ -30,7 +29,6 @@ logger = logging.getLogger(__name__)
 Emit = Callable[[dict], Awaitable[None]]
 
 DEFAULT_SEVERITIES = ("critical", "high")
-MAX_CONCURRENT_FILES = 3
 
 
 # ---------------------------------------------------------------------------
@@ -112,59 +110,6 @@ def _select_findings(report: dict, severities: tuple[str, ...]) -> list[DeepFind
     return out
 
 
-async def _fix_files(
-    generator: FixGenerator,
-    findings: list[DeepFinding],
-    file_contents: dict[str, str],
-    emit: Emit,
-) -> tuple[dict[str, str], list[FixResult], list[str]]:
-    """Generate fixes grouped by file, chaining multiple findings per file.
-
-    Returns (final_content_by_path, fix_results, skipped_messages).
-    """
-    by_file: dict[str, list[DeepFinding]] = defaultdict(list)
-    for fnd in findings:
-        by_file[fnd.code_location.file_path].append(fnd)
-
-    total = len(by_file)
-    done = 0
-    lock = asyncio.Lock()
-    sem = asyncio.Semaphore(MAX_CONCURRENT_FILES)
-    final: dict[str, str] = {}
-    results: list[FixResult] = []
-    skipped: list[str] = []
-
-    async def _fix_one_file(path: str, group: list[DeepFinding]) -> None:
-        nonlocal done
-        content = file_contents.get(path, "")
-        if not content:
-            skipped.append(f"{path} — source not available")
-            return
-        async with sem:
-            current = content
-            file_changed = False
-            for fnd in group:
-                res = await generator.generate_fix(fnd, current)
-                results.append(res)
-                if res.success and res.fixed_code:
-                    current = res.fixed_code
-                    file_changed = True
-            if file_changed:
-                final[path] = current
-        async with lock:
-            done += 1
-            await emit({
-                "type": "progress",
-                "message": f"Fixed {path}",
-                "current": done,
-                "total": total,
-            })
-
-    await emit({"type": "progress", "message": "Generating fixes…", "current": 0, "total": total})
-    await asyncio.gather(*[_fix_one_file(p, g) for p, g in by_file.items()])
-    return final, results, skipped
-
-
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -221,8 +166,16 @@ async def run_fix_all(
                 except Exception:
                     pass
 
-        final, results, skipped = await _fix_files(generator, findings, contents, emit)
-        fixed_count = sum(1 for r in results if r.success)
+        await emit({"type": "progress", "message": "Generating fixes…",
+                    "current": 0, "total": len(contents)})
+
+        async def _on_file(done: int, total: int, path: str) -> None:
+            await emit({"type": "progress", "message": f"Fixed {path}",
+                        "current": done, "total": total})
+
+        plan = await generator.generate_file_fixes(findings, contents, on_file_done=_on_file)
+        final, skipped = plan.files, plan.skipped
+        fixed_count = plan.fixed_count
 
         if not final:
             return {"mode": "applied", "applied": False, "fixed_count": 0,
