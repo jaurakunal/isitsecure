@@ -23,6 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from isitsecure import __version__
+from isitsecure.config import load_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -150,12 +151,23 @@ class FixRequest(BaseModel):
     finding_id: str
     file_content: str
     llm_provider: str = "anthropic"
-    api_key: str
+    api_key: Optional[str] = None
 
 
 @app.post("/api/fix")
 async def generate_fix(request: FixRequest):
     """Generate an AI-powered fix for a single finding."""
+    # Resolve the API key: request wins, else server environment/config.
+    api_key = request.api_key or load_api_key(request.llm_provider)
+    if not api_key:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"No API key found for {request.llm_provider}. Set "
+                f"{request.llm_provider.upper()}_API_KEY or run 'isitsecure setup'."
+            ),
+        )
+
     # Find the scan that contains this finding
     finding_data = None
     for scan in _scans.values():
@@ -175,7 +187,7 @@ async def generate_fix(request: FixRequest):
     from isitsecure.engine.fixes.fix_generator import FixGenerator
     from isitsecure.llm.adapters import create_llm_client
 
-    llm_client = create_llm_client(request.llm_provider, request.api_key)
+    llm_client = create_llm_client(request.llm_provider, api_key)
     generator = FixGenerator(llm_client)
 
     finding = DeepFinding.model_validate(finding_data)
@@ -241,14 +253,17 @@ async def _run_scan_background(scan_id: str, request: ScanRequest) -> None:
     try:
         _scans[scan_id]["status"] = "running"
 
-        # Build LLM client
+        # Build LLM client. The key comes from the request if provided,
+        # otherwise from the server environment/config (env var, .env, or
+        # ~/.isitsecure/config.toml) — same resolution the CLI uses.
         llm_client = None
         judgment_llm_client = None
-        if request.llm_provider != "none" and request.api_key:
+        api_key = request.api_key or load_api_key(request.llm_provider)
+        if request.llm_provider != "none" and api_key:
             from isitsecure.llm.adapters import create_llm_client
-            llm_client = create_llm_client(request.llm_provider, request.api_key)
+            llm_client = create_llm_client(request.llm_provider, api_key)
             judgment_llm_client = create_llm_client(
-                request.llm_provider, request.api_key, judgment=True
+                request.llm_provider, api_key, judgment=True
             )
 
         from isitsecure.engine.factory import (
@@ -286,7 +301,7 @@ async def _run_scan_background(scan_id: str, request: ScanRequest) -> None:
             }
             scan_mode = mode_map.get(request.scan_mode)
 
-        report = None
+        report_json = None
         async for event in agent.scan(
             target_url=request.target_url,
             repo_url=request.repo_url,
@@ -306,11 +321,13 @@ async def _run_scan_background(scan_id: str, request: ScanRequest) -> None:
                 "progress": progress,
             })
 
-            if data and hasattr(data, "findings"):
-                report = data
+            # The final COMPLETE event carries the report as a JSON-ready dict
+            # under data["report"].
+            if isinstance(data, dict) and "report" in data:
+                report_json = data["report"]
 
-        if report:
-            _scans[scan_id]["report"] = json.loads(report.model_dump_json())
+        if report_json:
+            _scans[scan_id]["report"] = report_json
         _scans[scan_id]["status"] = "complete"
 
     except Exception as e:

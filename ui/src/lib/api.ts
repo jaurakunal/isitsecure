@@ -125,3 +125,41 @@ export async function getReport(scanId: string): Promise<ScanReport> {
 export function reportHtmlUrl(scanId: string): string {
   return `${API_BASE}/api/scan/${scanId}/report.html`;
 }
+
+export interface FixResult {
+  success: boolean;
+  diff: string;
+  explanation: string;
+  error: string | null;
+}
+
+/**
+ * Ask the backend to generate an AI fix for a finding. The API key is
+ * resolved server-side (env/config), so none is sent from the browser.
+ */
+export async function generateFix(
+  findingId: string,
+  fileContent: string,
+  llmProvider = "anthropic"
+): Promise<FixResult> {
+  const res = await fetch(`${API_BASE}/api/fix`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      finding_id: findingId,
+      file_content: fileContent,
+      llm_provider: llmProvider,
+    }),
+  });
+  if (!res.ok) {
+    let msg = res.statusText;
+    try {
+      const j = await res.json();
+      if (j?.detail) msg = j.detail;
+    } catch {
+      // keep statusText
+    }
+    throw new Error(msg);
+  }
+  return res.json();
+}

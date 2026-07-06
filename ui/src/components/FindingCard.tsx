@@ -1,11 +1,31 @@
 "use client";
 
-import { useState } from "react";
-import type { Finding } from "@/lib/api";
+import { useState, type MouseEvent } from "react";
+import { generateFix, type Finding, type FixResult } from "@/lib/api";
 import { SeverityBadge } from "./SeverityBadge";
 
 export function FindingCard({ finding, index }: { finding: Finding; index: number }) {
   const [expanded, setExpanded] = useState(false);
+  const [fixLoading, setFixLoading] = useState(false);
+  const [fix, setFix] = useState<FixResult | null>(null);
+  const [fixError, setFixError] = useState("");
+
+  const handleFix = async (e: MouseEvent) => {
+    e.stopPropagation();
+    if (fixLoading) return;
+    setFixError("");
+    setFixLoading(true);
+    try {
+      const snippet = finding.code_location?.code_snippet || "";
+      const result = await generateFix(finding.id, snippet);
+      setFix(result);
+      if (!result.success && result.error) setFixError(result.error);
+    } catch (err) {
+      setFixError(err instanceof Error ? err.message : "Fix generation failed");
+    } finally {
+      setFixLoading(false);
+    }
+  };
 
   return (
     <div
@@ -73,6 +93,33 @@ export function FindingCard({ finding, index }: { finding: Finding; index: numbe
               <pre className="bg-bg-secondary border border-border rounded-xl p-3 text-xs overflow-x-auto font-mono text-text-muted">
                 {finding.code_location.code_snippet}
               </pre>
+            </div>
+          )}
+          {finding.code_location?.code_snippet && (
+            <div>
+              <h4 className="text-text-accent text-xs font-semibold mb-1 uppercase tracking-wider">AI Fix</h4>
+              {!fix?.success && (
+                <button
+                  onClick={handleFix}
+                  disabled={fixLoading}
+                  className="border border-primary/40 bg-primary/10 text-text-accent hover:bg-primary/20 px-3 py-1.5 rounded-lg text-xs transition-colors disabled:opacity-50"
+                >
+                  {fixLoading ? "Generating fix…" : "Generate Fix"}
+                </button>
+              )}
+              {fixError && <p className="text-critical text-xs mt-2 whitespace-pre-wrap">{fixError}</p>}
+              {fix?.success && (
+                <div className="space-y-2">
+                  {fix.explanation && (
+                    <p className="text-text-muted text-xs leading-relaxed whitespace-pre-wrap">{fix.explanation}</p>
+                  )}
+                  {fix.diff && (
+                    <pre className="bg-bg-secondary border border-border rounded-xl p-3 text-xs overflow-x-auto font-mono text-text-muted whitespace-pre">
+                      {fix.diff}
+                    </pre>
+                  )}
+                </div>
+              )}
             </div>
           )}
           <div className="flex gap-4 text-xs text-text-muted pt-1">

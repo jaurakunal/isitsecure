@@ -37,8 +37,7 @@ console = Console()
 # Config management
 # ---------------------------------------------------------------------------
 
-CONFIG_DIR = Path.home() / ".isitsecure"
-CONFIG_FILE = CONFIG_DIR / "config.toml"
+from isitsecure.config import CONFIG_DIR, CONFIG_FILE, load_api_key
 
 
 def _ensure_config_dir() -> Path:
@@ -47,38 +46,8 @@ def _ensure_config_dir() -> Path:
 
 
 def _load_api_key(provider: str) -> str | None:
-    """Load API key from env, .env file, or config."""
-    import os
-
-    # 1. Environment variable
-    env_keys = {
-        "anthropic": "ANTHROPIC_API_KEY",
-        "google": "GOOGLE_API_KEY",
-    }
-    env_key = env_keys.get(provider, "")
-    val = os.environ.get(env_key)
-    if val:
-        return val
-
-    # 2. .env file in current directory
-    env_file = Path.cwd() / ".env"
-    if env_file.exists():
-        for line in env_file.read_text().splitlines():
-            line = line.strip()
-            if line.startswith(f"{env_key}="):
-                return line.split("=", 1)[1].strip().strip("\"'")
-
-    # 3. Config file
-    if CONFIG_FILE.exists():
-        try:
-            import tomllib
-            with open(CONFIG_FILE, "rb") as f:
-                config = tomllib.load(f)
-            return config.get("llm", {}).get(f"{provider}_api_key")
-        except Exception:
-            pass
-
-    return None
+    """Load API key from env, .env file, or config (see isitsecure.config)."""
+    return load_api_key(provider)
 
 
 # ---------------------------------------------------------------------------
