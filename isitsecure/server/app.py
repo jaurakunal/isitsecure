@@ -42,6 +42,8 @@ app.add_middleware(
 
 # In-memory scan storage (per-process, not persistent yet)
 _scans: dict[str, dict] = {}
+# In-memory "fix all" job storage
+_fix_jobs: dict[str, dict] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -73,7 +75,12 @@ class FindingStatusUpdate(BaseModel):
 async def start_scan(request: ScanRequest):
     """Start a new security scan. Returns scan_id for SSE streaming."""
     scan_id = str(uuid.uuid4())[:8]
-    _scans[scan_id] = {"status": "pending", "report": None, "events": []}
+    _scans[scan_id] = {
+        "status": "pending",
+        "report": None,
+        "events": [],
+        "llm_provider": request.llm_provider,
+    }
 
     # Launch scan in background
     asyncio.create_task(_run_scan_background(scan_id, request))
@@ -199,6 +206,88 @@ async def generate_fix(request: FixRequest):
         "explanation": result.explanation,
         "error": result.error,
     }
+
+
+class FixAllRequest(BaseModel):
+    scan_id: str
+    severities: Optional[list[str]] = None
+
+
+@app.post("/api/fix-all")
+async def start_fix_all(request: FixAllRequest):
+    """Start a batch fix job for a scan's findings. Returns job_id for SSE."""
+    scan = _scans.get(request.scan_id)
+    if not scan or not scan.get("report"):
+        raise HTTPException(status_code=404, detail="Scan report not found")
+
+    from isitsecure.server.fix_service import DEFAULT_SEVERITIES
+
+    job_id = str(uuid.uuid4())[:8]
+    _fix_jobs[job_id] = {"status": "running", "events": [], "result": None}
+    severities = tuple(request.severities) if request.severities else DEFAULT_SEVERITIES
+    # Fixes always need an LLM. If the scan ran without one ("none"), default
+    # to anthropic and let the server-side key resolution handle it.
+    provider = scan.get("llm_provider") or "anthropic"
+    if provider == "none":
+        provider = "anthropic"
+
+    asyncio.create_task(
+        _run_fix_all_job(job_id, scan["report"], provider, severities)
+    )
+    return {"job_id": job_id}
+
+
+@app.get("/api/fix-all/{job_id}/stream")
+async def stream_fix_all(job_id: str):
+    """SSE endpoint for real-time fix-all progress and the final result."""
+    if job_id not in _fix_jobs:
+        raise HTTPException(status_code=404, detail="Fix job not found")
+
+    async def event_generator():
+        last_idx = 0
+        while True:
+            job = _fix_jobs.get(job_id)
+            if not job:
+                break
+            events = job["events"]
+            while last_idx < len(events):
+                yield f"data: {json.dumps(events[last_idx])}\n\n"
+                last_idx += 1
+            if job["status"] in ("complete", "failed"):
+                if job["result"] is not None:
+                    yield f"data: {json.dumps({'type': 'done', 'result': job['result']})}\n\n"
+                else:
+                    yield f"data: {json.dumps({'type': 'error', 'message': job.get('error', 'Fix failed')})}\n\n"
+                break
+            await asyncio.sleep(0.3)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+async def _run_fix_all_job(job_id, report, provider, severities):
+    """Run the batch fix service, streaming progress into the job store."""
+    from isitsecure.server.fix_service import run_fix_all
+
+    async def emit(event: dict) -> None:
+        _fix_jobs[job_id]["events"].append(event)
+
+    try:
+        result = await run_fix_all(
+            report=report,
+            llm_provider=provider,
+            severities=severities,
+            emit=emit,
+        )
+        _fix_jobs[job_id]["result"] = result
+        _fix_jobs[job_id]["status"] = "complete"
+    except Exception as e:
+        logger.exception(f"Fix-all job {job_id} failed")
+        _fix_jobs[job_id]["error"] = str(e)
+        _fix_jobs[job_id]["status"] = "failed"
 
 
 @app.get("/api/health")

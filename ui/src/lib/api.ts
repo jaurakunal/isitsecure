@@ -163,3 +163,65 @@ export async function generateFix(
   }
   return res.json();
 }
+
+export interface FixAllResult {
+  mode: "applied" | "plan" | "none";
+  applied?: boolean;
+  branch?: string;
+  base_branch?: string;
+  files_changed?: string[];
+  fixed_count: number;
+  skipped?: string[];
+  markdown?: string;
+  reason?: string;
+  message?: string;
+}
+
+export interface FixAllEvent {
+  type: "progress" | "done" | "error";
+  message?: string;
+  current?: number;
+  total?: number;
+  result?: FixAllResult;
+}
+
+/** Start a batch fix job for a scan's findings. Returns a job id for streaming. */
+export async function startFixAll(
+  scanId: string,
+  severities?: string[]
+): Promise<{ job_id: string }> {
+  const res = await fetch(`${API_BASE}/api/fix-all`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ scan_id: scanId, severities }),
+  });
+  if (!res.ok) {
+    let msg = res.statusText;
+    try { const j = await res.json(); if (j?.detail) msg = j.detail; } catch {}
+    throw new Error(msg);
+  }
+  return res.json();
+}
+
+/** Stream progress + final result of a fix-all job. Returns a cleanup fn. */
+export function streamFixAll(
+  jobId: string,
+  onEvent: (event: FixAllEvent) => void,
+  onDone: () => void
+) {
+  const es = new EventSource(`${API_BASE}/api/fix-all/${jobId}/stream`);
+  es.onmessage = (e) => {
+    try {
+      const event: FixAllEvent = JSON.parse(e.data);
+      onEvent(event);
+      if (event.type === "done" || event.type === "error") {
+        es.close();
+        onDone();
+      }
+    } catch {
+      // ignore parse errors
+    }
+  };
+  es.onerror = () => { es.close(); onDone(); };
+  return () => es.close();
+}
