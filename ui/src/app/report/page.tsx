@@ -2,7 +2,7 @@
 
 import { useEffect, useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
-import { getReport, type ScanReport } from "@/lib/api";
+import { getReport, reportHtmlUrl, type ScanReport } from "@/lib/api";
 import { GradeBadge } from "@/components/GradeBadge";
 import { FindingCard } from "@/components/FindingCard";
 
@@ -139,7 +139,15 @@ function ReportContent() {
       </div>
 
       {/* Export */}
-      <div className="mt-8 flex justify-end">
+      <div className="mt-8 flex justify-end gap-3">
+        <a
+          href={reportHtmlUrl(scanId)}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="border border-border text-text-muted hover:text-text-accent hover:border-border-hover px-4 py-2 rounded-lg text-sm transition-colors"
+        >
+          Export HTML
+        </a>
         <button onClick={() => {
           const blob = new Blob([JSON.stringify(report, null, 2)], { type: "application/json" });
           const url = URL.createObjectURL(blob);

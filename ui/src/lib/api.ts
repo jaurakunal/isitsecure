@@ -120,3 +120,8 @@ export async function getReport(scanId: string): Promise<ScanReport> {
   if (!res.ok) throw new Error(`Report not ready: ${res.statusText}`);
   return res.json();
 }
+
+/** URL of the self-contained HTML report for a scan (served by the backend). */
+export function reportHtmlUrl(scanId: string): string {
+  return `${API_BASE}/api/scan/${scanId}/report.html`;
+}
