@@ -627,10 +627,33 @@ class ActiveInjectionScanner:
     def _get_testable_endpoints(
         self, endpoints: list[DiscoveredEndpoint],
     ) -> list[DiscoveredEndpoint]:
-        """Filter to endpoints worth testing for injection."""
-        return [
+        """Filter to injection-testable endpoints, most-promising first.
+
+        Injection testing is capped by time budget, so order matters on large
+        apps: endpoints that carry parameters or look like query/search routes
+        are the likely injection points and are tested before boring
+        collections, so they aren't cut off by the scanner timeout.
+        """
+        testable = [
             ep for ep in endpoints if ep.method.value in self._TESTABLE_METHODS
         ]
+
+        def _score(ep: DiscoveredEndpoint) -> int:
+            score = 0
+            if ep.query_param_names:
+                score += 3
+            if ep.has_path_params:
+                score += 2
+            parsed = urlparse(ep.url)
+            if parsed.query:
+                score += 2
+            path = parsed.path.lower()
+            if any(hint in path for hint in InjectionConfig.INJECTABLE_PATH_HINTS):
+                score += 3
+            return score
+
+        # Stable sort: preserves discovery order among equally-scored endpoints.
+        return sorted(testable, key=_score, reverse=True)
 
     def _get_testable_params(self, endpoint: DiscoveredEndpoint) -> list[str]:
         """Extract parameters to test from an endpoint.
