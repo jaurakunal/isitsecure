@@ -23,6 +23,7 @@ from isitsecure.engine.models import (
     DiscoveredEndpoint,
     FindingSource,
 )
+from isitsecure.engine.shared.endpoint_prioritizer import PriorityDimension, rank
 from isitsecure.engine.shared.rate_limited_client import (
     RateLimitedClient,
 )
@@ -65,7 +66,7 @@ class HTTPProbeScanner:
             return []
 
         # Select representative endpoints (up to 5)
-        test_endpoints = endpoints[: HTTPProbeConfig.MAX_ENDPOINTS_TO_TEST]
+        test_endpoints = rank(endpoints, PriorityDimension.CSRF)[: HTTPProbeConfig.MAX_ENDPOINTS_TO_TEST]
 
         async with RateLimitedClient(
             max_concurrent=HTTPProbeConfig.MAX_CONCURRENT,
@@ -113,7 +114,7 @@ class HTTPProbeScanner:
         findings: list[DeepFinding] = []
         tested: set[str] = set()
 
-        for ep in endpoints[: HTTPProbeConfig.MAX_METHOD_TEST_ENDPOINTS]:
+        for ep in rank(endpoints, PriorityDimension.CSRF)[: HTTPProbeConfig.MAX_METHOD_TEST_ENDPOINTS]:
             if ep.url in tested:
                 continue
             tested.add(ep.url)
@@ -356,7 +357,7 @@ class HTTPProbeScanner:
         """
         findings: list[DeepFinding] = []
 
-        for ep in endpoints[:HTTPProbeConfig.MAX_METHOD_TEST_ENDPOINTS]:
+        for ep in rank(endpoints, PriorityDimension.CSRF)[:HTTPProbeConfig.MAX_METHOD_TEST_ENDPOINTS]:
             for param in HTTPProbeConfig.CRLF_PARAM_NAMES:
                 for payload in HTTPProbeConfig.CRLF_PAYLOADS:
                     try:

@@ -28,6 +28,7 @@ from isitsecure.engine.models import (
     DiscoveredEndpoint,
     FindingSource,
 )
+from isitsecure.engine.shared.endpoint_prioritizer import PriorityDimension, rank
 from isitsecure.engine.shared.probe_capture import build_probe_capture
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
 from isitsecure.engine.ingestion.snapshot import CodebaseSnapshot
@@ -121,7 +122,7 @@ class AuthBypassScanner:
                 await asyncio.sleep(AuthBypassConfig.PROBE_DELAY_SECONDS)
 
             # Phase 5: Auth header bypass
-            for ep in auth_required_endpoints[:AuthBypassConfig.MAX_AUTH_BYPASS_ENDPOINTS]:
+            for ep in rank(auth_required_endpoints, PriorityDimension.AUTH)[:AuthBypassConfig.MAX_AUTH_BYPASS_ENDPOINTS]:
                 bypass_findings = await self._test_auth_header_bypass(client, ep)
                 findings.extend(bypass_findings)
                 await asyncio.sleep(AuthBypassConfig.PROBE_DELAY_SECONDS)

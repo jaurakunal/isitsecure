@@ -34,6 +34,8 @@ from isitsecure.engine.models import (
 )
 from isitsecure.engine.shared.endpoint_prioritizer import PriorityDimension, rank
 from isitsecure.engine.shared.probe_capture import build_probe_capture
+from isitsecure.engine.shared.scanner_runner import ScannerTimeouts
+from isitsecure.engine.shared.time_budget import TimeBudget
 from isitsecure.engine.shared.rate_limited_client import RateLimitedClient
 from isitsecure.engine.shared.url_utils import inject_query_param
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
@@ -77,6 +79,8 @@ class ActiveInjectionScanner:
         """
         findings: list[DeepFinding] = []
         testable = self._get_testable_endpoints(endpoints)
+        budget = TimeBudget(ScannerTimeouts.INJECTION_ACTIVE_SECONDS)
+        candidates = testable[: InjectionConfig.MAX_ENDPOINTS_TO_TEST]
 
         async with RateLimitedClient(
             max_concurrent=InjectionConfig.MAX_CONCURRENT,
@@ -84,7 +88,16 @@ class ActiveInjectionScanner:
             timeout_seconds=InjectionConfig.HTTP_TIMEOUT_SECONDS,
             user_agent=DeepScanConfig.USER_AGENT,
         ) as client:
-            for ep in testable[: InjectionConfig.MAX_ENDPOINTS_TO_TEST]:
+            for tested, ep in enumerate(candidates):
+                # Stop cooperatively before the external hard timeout cancels
+                # us (which would discard every finding so far). Endpoints are
+                # ranked, so anything skipped is the lowest-priority tail.
+                if budget.expired():
+                    logger.info(
+                        "ActiveInjectionScanner: time budget reached, tested "
+                        "%d/%d endpoints", tested, len(candidates),
+                    )
+                    break
                 params = self._get_testable_params(ep)
                 for param in params[: InjectionConfig.MAX_PARAMS_PER_ENDPOINT]:
                     try:

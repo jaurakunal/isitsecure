@@ -36,6 +36,7 @@ from isitsecure.engine.models import (
     IDORProbeResult,
     IDORTestResult,
 )
+from isitsecure.engine.shared.endpoint_prioritizer import PriorityDimension, rank
 from isitsecure.engine.shared.rate_limited_client import RateLimitedClient
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
 
@@ -136,18 +137,9 @@ class IDORScanner:
             ):
                 testable.append(ep)
 
-        # Sort: user_data and admin first
-        priority = {
-            EndpointCategory.ADMIN: 0,
-            EndpointCategory.USER_DATA: 1,
-            EndpointCategory.PAYMENT: 2,
-            EndpointCategory.FILE_ACCESS: 3,
-            EndpointCategory.RESOURCE_CRUD: 4,
-        }
-        testable.sort(
-            key=lambda ep: priority.get(ep.category, 99)
-        )
-        return testable
+        # Rank by IDOR likelihood (id params + sensitive category + auth'd)
+        # via the shared prioritizer.
+        return rank(testable, PriorityDimension.IDOR)
 
     async def _test_endpoint(
         self, client: RateLimitedClient, endpoint: DiscoveredEndpoint

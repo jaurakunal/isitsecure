@@ -18,6 +18,7 @@ from isitsecure.engine.models import (
     DiscoveredEndpoint,
     FindingSource,
 )
+from isitsecure.engine.shared.endpoint_prioritizer import PriorityDimension, rank
 from isitsecure.engine.shared.rate_limited_client import RateLimitedClient
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
 from isitsecure.engine.ingestion.snapshot import CodebaseSnapshot
@@ -103,7 +104,7 @@ class CSRFScanner:
             timeout_seconds=CSRFConfig.HTTP_TIMEOUT_SECONDS,
             user_agent=DeepScanConfig.USER_AGENT,
         ) as client:
-            for ep in endpoints[: CSRFConfig.MAX_ENDPOINTS_TO_TEST]:
+            for ep in rank(endpoints, PriorityDimension.CSRF)[: CSRFConfig.MAX_ENDPOINTS_TO_TEST]:
                 finding = await self._test_forged_origin(client, ep)
                 if finding:
                     findings.append(finding)
