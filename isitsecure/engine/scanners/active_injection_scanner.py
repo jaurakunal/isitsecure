@@ -279,6 +279,22 @@ class ActiveInjectionScanner:
 
             delta = injected_time - baseline_time
             if delta >= InjectionConfig.TIME_BASED_DELAY_THRESHOLD:
+                # Confirm with an independent re-measurement. A real time-based
+                # SQLi reproduces the delay; a one-off slow response (load, GC,
+                # network jitter — common on DBs that don't even honor the sleep
+                # payload) does not. This kills time-based false positives.
+                baseline_confirm = await self._measure_response_time(
+                    client, endpoint.url, param_name, "1"
+                )
+                injected_confirm = await self._measure_response_time(
+                    client, endpoint.url, param_name, payload
+                )
+                if baseline_confirm is None or injected_confirm is None:
+                    continue
+                confirm_delta = injected_confirm - baseline_confirm
+                if confirm_delta < InjectionConfig.TIME_BASED_DELAY_THRESHOLD:
+                    continue  # did not reproduce → timing noise, not injection
+                delta = min(delta, confirm_delta)
                 capture = build_probe_capture(
                     method="GET",
                     url=inject_query_param(endpoint.url, param_name, payload),

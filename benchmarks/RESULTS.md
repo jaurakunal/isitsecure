@@ -54,15 +54,22 @@ spec-based discovery is what makes it testable at all.
 
 | Build | Findings | Result |
 |---|---|---|
-| `vulnerable=1` | 14 | Recall **3/3** — SQL injection ✓, IDOR ✓, missing headers ✓ |
-| `vulnerable=0` | 13 | **2 false positives** (IDOR), 0 SQLi FPs |
+| `vulnerable=1` | 14–16 | Recall **3/3** — SQL injection ✓, IDOR ✓, missing headers ✓ |
+| `vulnerable=0` | 13–15 | **2 false positives** (IDOR) |
 
 Before OpenAPI discovery, recall here was **1/3** (0 endpoints found beyond the
 homepage). Spec parsing took it to **19 endpoints** and **3/3**.
 
 The 2 IDOR false positives on the secure build are inherent to *unauthenticated*
 IDOR: with no second identity, a public id-bearing endpoint is indistinguishable
-from a broken-access one.
+from a broken-access one (authenticated mode resolves them — see below).
+
+A **transient 3rd false positive** (a time-based SQL injection) appeared on one
+`vulnerable=0` run executed under heavy concurrent load. It was traced to
+*single-shot* time-based detection: one slow response (system contention — and
+VAmPI is SQLite, which never honors the `SLEEP()` payload) crossed the delay
+threshold. Fixed by requiring the delay to **reproduce on an independent
+re-measurement** before flagging; it does not recur.
 
 ### VAmPI — `authenticated` (cross-user IDOR / BOLA)
 

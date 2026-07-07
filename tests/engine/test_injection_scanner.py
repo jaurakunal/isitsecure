@@ -271,12 +271,15 @@ class TestTimeBasedSQLi:
         mock_client = _make_mock_client()
         mock_client.get = mock_get
 
-        # Mock time.monotonic to simulate delay on injected requests
-        # Call sequence: baseline_start, baseline_end, payload1_start, payload1_end, ...
-        # Baseline: 0.1s, First payload: 3.5s (above threshold)
+        # Mock time.monotonic to simulate delay on injected requests.
+        # Each _measure_response_time call consumes a (start, end) pair. A hit
+        # is now CONFIRMED with a second baseline+injected measurement, so the
+        # delay must reproduce.
         time_values = iter([
             100.0, 100.1,   # baseline: 0.1s
             200.0, 203.5,   # first time payload: 3.5s -> delta = 3.4s
+            300.0, 300.1,   # confirm baseline: 0.1s
+            400.0, 403.5,   # confirm payload: 3.5s -> reproduces
         ])
 
         with patch("isitsecure.engine.scanners.active_injection_scanner.time") as mock_time:
@@ -290,6 +293,33 @@ class TestTimeBasedSQLi:
         assert finding.title == InjectionConfig.TITLE_SQLI_TIME
         assert finding.severity == SeverityLevel.CRITICAL
         assert finding.confidence == InjectionConfig.CONFIDENCE_TIME_BASED
+
+    async def test_time_based_noise_not_flagged(self) -> None:
+        """A one-off slow response that does NOT reproduce is not flagged."""
+        endpoint = _make_endpoint(query_param_names=["id"])
+
+        async def mock_get(url: str, **kwargs: object) -> httpx.Response:
+            return _make_response(text="ok")
+
+        mock_client = _make_mock_client()
+        mock_client.get = mock_get
+
+        # First injected measurement is slow (noise), but the confirmation
+        # re-measurement is fast -> must be rejected as a false positive.
+        time_values = iter([
+            100.0, 100.1,   # baseline: 0.1s
+            200.0, 203.5,   # injected: 3.5s -> crosses threshold (noise spike)
+            300.0, 300.1,   # confirm baseline: 0.1s
+            400.0, 400.2,   # confirm injected: 0.2s -> did NOT reproduce
+        ])
+
+        with patch("isitsecure.engine.scanners.active_injection_scanner.time") as mock_time:
+            mock_time.monotonic = lambda: next(time_values)
+            finding = await self.scanner._test_time_based_sqli(
+                mock_client, endpoint, "id"
+            )
+
+        assert finding is None
 
     @pytest.mark.asyncio
     async def test_no_time_finding_for_fast_response(self) -> None:
