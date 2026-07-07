@@ -93,6 +93,7 @@ class EndpointDiscoveryScanner:
         )
 
         await self._probe_api_base_urls(api_base_urls, raw_endpoints)
+        await self._probe_openapi_specs(api_base_urls, raw_endpoints)
         anon_key = self._discover_supabase_anon_key(all_content)
         await self._probe_supabase_urls(
             supabase_urls, raw_endpoints, anon_key
@@ -339,6 +340,121 @@ class EndpointDiscoveryScanner:
                                 )
                     except httpx.HTTPError:
                         continue
+
+    async def _probe_openapi_specs(
+        self,
+        api_base_urls: set[str],
+        endpoints: dict[str, DiscoveredEndpoint],
+    ) -> None:
+        """Probe for an OpenAPI/Swagger spec and extract every endpoint.
+
+        For APIs with no browsable frontend, the JS-bundle heuristics find
+        nothing — but the published spec lists every path, method, and
+        parameter. This is the highest-signal discovery source for APIs.
+        """
+        async with RateLimitedClient(
+            max_concurrent=SharedPatterns.DEFAULT_MAX_CONCURRENT,
+            delay_seconds=SharedPatterns.DEFAULT_PROBE_DELAY,
+            timeout_seconds=DeepScanConfig.HTTP_TIMEOUT_SECONDS,
+            user_agent=DeepScanConfig.USER_AGENT,
+        ) as client:
+            for base_url in api_base_urls:
+                for path in EndpointDiscoveryConfig.OPENAPI_SPEC_PATHS:
+                    probe_url = f"{base_url.rstrip('/')}{path}"
+                    try:
+                        resp = await client.get(probe_url)
+                    except httpx.HTTPError:
+                        continue
+                    if resp.status_code != 200:
+                        continue
+                    spec = self._try_parse_spec(resp.text)
+                    if not spec or not isinstance(spec.get("paths"), dict):
+                        continue
+                    n = self._parse_openapi_spec(spec, probe_url, endpoints)
+                    if n:
+                        logger.info(
+                            "Discovered %d endpoints from OpenAPI spec at %s",
+                            n, probe_url,
+                        )
+                        break  # found this host's spec; move to the next host
+
+    @staticmethod
+    def _try_parse_spec(text: str) -> dict | None:
+        """Parse an OpenAPI/Swagger document (JSON)."""
+        import json
+        try:
+            data = json.loads(text)
+            return data if isinstance(data, dict) else None
+        except Exception:
+            return None
+
+    def _openapi_api_base(self, spec: dict, spec_url: str) -> str:
+        """Resolve the base URL that the spec's paths are relative to."""
+        parsed = urlparse(spec_url)
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+
+        # OpenAPI 3: servers[].url (may be absolute, root-relative, or empty)
+        servers = spec.get("servers")
+        if isinstance(servers, list) and servers and isinstance(servers[0], dict):
+            u = (servers[0].get("url") or "").strip()
+            if u.startswith("http"):
+                return u.rstrip("/")
+            if u.startswith("/"):
+                return origin + u.rstrip("/")
+            return origin
+
+        # Swagger 2: host + basePath
+        host = spec.get("host")
+        base_path = (spec.get("basePath") or "").rstrip("/")
+        if host:
+            scheme = (spec.get("schemes") or ["https"])[0]
+            return f"{scheme}://{host}{base_path}"
+        return origin + base_path
+
+    def _parse_openapi_spec(
+        self,
+        spec: dict,
+        spec_url: str,
+        endpoints: dict[str, DiscoveredEndpoint],
+    ) -> int:
+        """Turn an OpenAPI/Swagger `paths` object into DiscoveredEndpoints."""
+        api_base = self._openapi_api_base(spec, spec_url)
+        count = 0
+        for path, item in spec.get("paths", {}).items():
+            if not isinstance(item, dict):
+                continue
+            shared_params = item.get("parameters", []) or []
+            for method, op in item.items():
+                m = self._METHOD_MAP.get(method.lower())
+                if not m or not isinstance(op, dict):
+                    continue
+                params = shared_params + (op.get("parameters", []) or [])
+                path_params = [
+                    p["name"] for p in params
+                    if isinstance(p, dict) and p.get("in") == "path" and p.get("name")
+                ]
+                # Also catch {templated} segments not declared in parameters.
+                for seg in re.findall(r"\{([^}]+)\}", path):
+                    if seg not in path_params:
+                        path_params.append(seg)
+                query_params = [
+                    p["name"] for p in params
+                    if isinstance(p, dict) and p.get("in") == "query" and p.get("name")
+                ]
+                full = f"{api_base.rstrip('/')}/{path.lstrip('/')}"
+                key = f"{m.value}:{full}"
+                if key in endpoints:
+                    continue
+                endpoints[key] = DiscoveredEndpoint(
+                    url=full,
+                    method=m,
+                    source_pattern="openapi",
+                    has_path_params=bool(path_params),
+                    path_param_names=path_params,
+                    query_param_names=query_params,
+                )
+                count += 1
+        return count
 
     async def _probe_supabase_urls(
         self,

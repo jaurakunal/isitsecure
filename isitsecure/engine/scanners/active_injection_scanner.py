@@ -18,7 +18,7 @@ import json
 import logging
 import re
 import time
-from urllib.parse import parse_qs, unquote_plus, urlparse
+from urllib.parse import parse_qs, quote, unquote_plus, urlparse
 
 import httpx
 
@@ -179,12 +179,19 @@ class ActiveInjectionScanner:
     ):
         """Send `payload` in `param_name` the right way for the endpoint method.
 
-        GET → query string; POST/PUT/PATCH → JSON body. Returns the httpx
-        response (or None on error), so body-based injection (e.g. a login
-        SQLi in a JSON `email` field) is reachable, not just query params.
+        Templated path param → substituted into the URL; else GET → query
+        string; POST/PUT/PATCH → JSON body. Returns the httpx response (or
+        None on error), so path-, query-, and body-based injection are all
+        reachable (e.g. a SQLi in `/users/{name}`, `?q=`, or a JSON field).
         """
         method = endpoint.method.value
+        placeholder = "{" + param_name + "}"
         try:
+            if placeholder in endpoint.url:
+                url = endpoint.url.replace(placeholder, quote(str(payload), safe=""))
+                if method == "GET":
+                    return await client.get(url)
+                return await client.request(method, url)
             if method == "GET":
                 return await client.get(
                     inject_query_param(endpoint.url, param_name, payload)
@@ -660,10 +667,10 @@ class ActiveInjectionScanner:
         """
         parsed = urlparse(endpoint.url)
         params = list(parse_qs(parsed.query).keys())
-        if endpoint.query_param_names:
-            for name in endpoint.query_param_names:
-                if name not in params:
-                    params.append(name)
+        # Known path + query params from discovery (e.g. an OpenAPI spec).
+        for name in list(endpoint.path_param_names) + list(endpoint.query_param_names):
+            if name and name not in params:
+                params.append(name)
         if not params:
             params = list(InjectionConfig.DEFAULT_FUZZ_PARAMS)
         return params[: InjectionConfig.MAX_PARAMS_PER_ENDPOINT]

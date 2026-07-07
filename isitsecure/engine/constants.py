@@ -176,6 +176,24 @@ class EndpointDiscoveryConfig:
         "/.well-known/openapi",
     )
 
+    # Common locations that serve an OpenAPI / Swagger spec. Parsing the spec
+    # yields every endpoint + its real parameters — critical for APIs with no
+    # browsable frontend (where JS-bundle discovery finds nothing).
+    OPENAPI_SPEC_PATHS = (
+        "/openapi.json",
+        "/swagger.json",
+        "/api-docs",
+        "/api-docs.json",
+        "/v3/api-docs",
+        "/v2/api-docs",
+        "/swagger/v1/swagger.json",
+        "/api/openapi.json",
+        "/api/swagger.json",
+        "/openapi",
+        "/swagger/doc.json",
+        "/.well-known/openapi.json",
+    )
+
     # Supabase anon key pattern (full JWT: header.payload.signature)
     SUPABASE_ANON_KEY_PATTERN = (
         r'(eyJ[a-zA-Z0-9_\-]+\.eyJ[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+)'
@@ -1343,6 +1361,12 @@ class InjectionConfig:
         r"PDOException",
         r"PostgreSQL.*ERROR",
         r"MySQL.*Error",
+        # ORM / DB-driver error leaks (SQLAlchemy, sqlite3, psycopg, etc.)
+        r"OperationalError",
+        r"ProgrammingError",
+        r"unrecognized token",
+        r"sqlalchemy",
+        r"psycopg2",
     )
 
     # NoSQL injection payloads (JSON body format)

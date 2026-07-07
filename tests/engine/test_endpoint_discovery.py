@@ -779,3 +779,65 @@ class TestEndpointDiscoveryScanner:
                 {"https://abc.supabase.co"}, endpoints
             )
             assert len(endpoints) == 0
+
+
+# --- OpenAPI / Swagger spec discovery ---
+
+
+class TestOpenAPISpecParsing:
+    """Parsing an OpenAPI/Swagger spec into DiscoveredEndpoints."""
+
+    def test_openapi3_paths_methods_and_params(self, scanner):
+        spec = {
+            "openapi": "3.0.1",
+            "servers": [{"url": ""}],
+            "paths": {
+                "/users/v1/{username}": {
+                    "get": {"parameters": [
+                        {"name": "username", "in": "path"}]},
+                    "delete": {},
+                },
+                "/search": {
+                    "get": {"parameters": [{"name": "q", "in": "query"}]},
+                },
+            },
+        }
+        endpoints: dict[str, DiscoveredEndpoint] = {}
+        n = scanner._parse_openapi_spec(
+            spec, "http://api.local/openapi.json", endpoints)
+        assert n == 3
+        by_url = {(e.method.value, e.url): e for e in endpoints.values()}
+        get_user = by_url[("GET", "http://api.local/users/v1/{username}")]
+        assert get_user.has_path_params
+        assert get_user.path_param_names == ["username"]
+        assert get_user.source_pattern == "openapi"
+        search = by_url[("GET", "http://api.local/search")]
+        assert search.query_param_names == ["q"]
+
+    def test_templated_segment_without_declared_param(self, scanner):
+        spec = {"openapi": "3.0.0", "servers": [{"url": ""}],
+                "paths": {"/books/{id}": {"get": {}}}}
+        endpoints: dict[str, DiscoveredEndpoint] = {}
+        scanner._parse_openapi_spec(spec, "http://x/openapi.json", endpoints)
+        ep = next(iter(endpoints.values()))
+        assert ep.has_path_params and ep.path_param_names == ["id"]
+
+    def test_swagger2_host_and_basepath(self, scanner):
+        spec = {"swagger": "2.0", "host": "api.example.com",
+                "basePath": "/v2", "schemes": ["https"],
+                "paths": {"/pets": {"get": {}}}}
+        endpoints: dict[str, DiscoveredEndpoint] = {}
+        scanner._parse_openapi_spec(spec, "http://ignored/swagger.json", endpoints)
+        ep = next(iter(endpoints.values()))
+        assert ep.url == "https://api.example.com/v2/pets"
+
+    def test_empty_servers_falls_back_to_spec_origin(self, scanner):
+        spec = {"openapi": "3.0.0", "servers": [{"url": ""}],
+                "paths": {"/ping": {"get": {}}}}
+        endpoints: dict[str, DiscoveredEndpoint] = {}
+        scanner._parse_openapi_spec(spec, "http://host:5001/openapi.json", endpoints)
+        ep = next(iter(endpoints.values()))
+        assert ep.url == "http://host:5001/ping"
+
+    def test_non_json_spec_returns_none(self, scanner):
+        assert scanner._try_parse_spec("<html>not json</html>") is None
