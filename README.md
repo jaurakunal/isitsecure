@@ -109,7 +109,7 @@ Without an API key, you still get 23 rule-based scanners. The LLM adds business 
 |---|---|---|
 | `url-only` | DAST scanners against a live URL | Target URL |
 | `code-only` | SAST scanners against source code | GitHub repo URL |
-| `authenticated` | DAST with login credentials (IDOR, RLS, privilege escalation) | URL + credentials |
+| `authenticated` | DAST with login credentials (IDOR, cross-user BOLA, RLS, privilege escalation) | URL + credentials (add a second account for cross-user tests) |
 | `full` | Everything: SAST + DAST + authenticated + LLM review + cross-referencing | URL + repo + credentials + API key |
 | `auto` (default) | Detects mode from what you provide | Whatever you give it |
 
@@ -120,7 +120,7 @@ Without an API key, you still get 23 rule-based scanners. The LLM adds business 
 | Scanner | What It Finds |
 |---|---|
 | XSS Scanner | Reflected, POST body, and DOM-based cross-site scripting |
-| Active Injection Scanner | SQL injection (error + time-based), command injection, NoSQL injection, XXE, SSTI |
+| Active Injection Scanner | SQL injection (error + time-based, incl. SQLAlchemy/sqlite3/psycopg errors), command injection, NoSQL injection, XXE, SSTI — injects query, body, and path parameters |
 | CSRF Scanner | Cross-site request forgery on state-changing endpoints |
 | Rate Limit Scanner | Missing or bypassable rate limiting on auth endpoints |
 | Session Scanner | Insecure token storage (localStorage), missing cookie flags, long-lived JWTs |
@@ -139,7 +139,7 @@ Without an API key, you still get 23 rule-based scanners. The LLM adds business 
 
 | Scanner | What It Finds |
 |---|---|
-| IDOR Scanner | Insecure direct object references with ID swapping and cross-user testing |
+| IDOR Scanner | Insecure direct object references via ID swapping, plus authenticated cross-user (BOLA) testing with two accounts and an anonymous-access false-positive guard |
 | JWT Scanner | Algorithm none bypass, weak secrets, key confusion attacks |
 | RLS Deep Scanner | Supabase Row Level Security bypass via anon key and cross-user queries |
 | Privilege Escalation Scanner | Admin route access, role self-elevation, object-level write bypass |
@@ -183,6 +183,8 @@ Without an API key, you still get 23 rule-based scanners. The LLM adds business 
 
 | Feature | What It Does |
 |---|---|
+| OpenAPI/Swagger Discovery | Probes `/openapi.json`, `/swagger.json`, `/v3/api-docs` and parses the spec into testable endpoints — finds attack surface on APIs with no crawlable frontend |
+| Endpoint Prioritizer + Time Budget | Ranks likely-vulnerable endpoints first and tests within a per-scanner time budget, so high-risk paths get covered before the clock runs out |
 | SAST→DAST Feedback Loop | SAST findings generate targeted DAST tests (6 strategies: auth bypass, IDOR, injection, mass assignment, race condition, RLS bypass) |
 | Cross-Referencer | Matches DAST + SAST findings for high-confidence confirmed vulnerabilities |
 | Import Graph Centrality | Identifies shared utility files imported by many risky routes for LLM review |
@@ -346,6 +348,25 @@ isitsecure scan https://your-app.com \
   --auth-token "eyJ..."
 ```
 
+**Cross-user IDOR / BOLA** — supply a *second* account and isitsecure logs in as both users and checks whether one user can read or mutate another user's objects (broken object-level authorization). An anonymous-access guard suppresses false positives from endpoints that are simply public.
+
+```bash
+isitsecure scan https://your-app.com \
+  --auth-email  alice@example.com --auth-password alicepass \
+  --auth-email-b bob@example.com  --auth-password-b bobpass \
+  --mode authenticated
+```
+
+**Frontend-less / plain REST APIs** — use `--auth-provider token`, which logs in against a generic REST login endpoint (auto-discovered, or pass it explicitly with `--login-url`):
+
+```bash
+isitsecure scan https://api.your-app.com \
+  --auth-provider token \
+  --auth-email alice@example.com --auth-password alicepass \
+  --auth-email-b bob@example.com --auth-password-b bobpass \
+  --login-url https://api.your-app.com/login
+```
+
 ## CLI Reference
 
 ```
@@ -361,9 +382,13 @@ Options:
   --llm TEXT             LLM provider: anthropic|google|none [default: anthropic]
   -o, --output TEXT      Output format: table|json|html|sarif|fixes [default: table]
   -f, --output-file TEXT Write report to file
-  --auth-email TEXT      Auth email for authenticated scanning
-  --auth-password TEXT   Auth password
+  --auth-email TEXT      Auth email/username for authenticated scanning (user A)
+  --auth-password TEXT   Auth password (user A)
   --auth-provider TEXT   Auth provider: supabase|firebase|browser|token
+                         (use token for a plain REST login)
+  --auth-email-b TEXT    Second user's email — enables cross-user IDOR/BOLA testing
+  --auth-password-b TEXT Second user's password (paired with --auth-email-b)
+  --login-url TEXT       Explicit login endpoint (else auto-discovered)
   --github-token TEXT    GitHub token for private repos
   -v, --verbose          Enable debug logging
 
@@ -415,6 +440,17 @@ isitsecure scan http://localhost:4000 --repo ./test-app --mode full
 ```
 
 `--repo` accepts a local directory (scanned in place, including uncommitted changes) or a remote git URL like `https://github.com/you/your-app`. See `examples/sample-report.json` for what a scan produces.
+
+## Benchmarks
+
+isitsecure ships a repeatable benchmark harness that scores **recall** (of the vulnerability classes an app is known to have, how many we catch) and **false positives** (findings that must not appear against a hardened build) on public, deliberately-vulnerable apps.
+
+```bash
+python benchmarks/run_benchmarks.py          # VAmPI (vulnerable + secure builds)
+python benchmarks/run_benchmarks.py --all    # + NodeGoat + crAPI (heavy)
+```
+
+Each run spins the target up in Docker, runs a DAST scan, scores against a known ground truth, and tears it down (requires Docker). Measured results are tracked in [benchmarks/RESULTS.md](benchmarks/RESULTS.md); see [benchmarks/README.md](benchmarks/README.md) for targets and how scoring works.
 
 ## Privacy
 
