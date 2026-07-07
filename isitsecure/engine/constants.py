@@ -1305,10 +1305,6 @@ class InjectionConfig:
     HTTP_TIMEOUT_SECONDS = 15
     MAX_CONCURRENT = SharedPatterns.DEFAULT_MAX_CONCURRENT
     PROBE_DELAY = 0.25  # Pacing between injection probes
-    # Generic hints that an endpoint is worth injection-testing first (so the
-    # likely-vulnerable ones fall within the scanner's time budget on large
-    # apps). Not app-specific — these are common query-endpoint conventions.
-    INJECTABLE_PATH_HINTS = ("search", "query", "find", "filter", "lookup", "lookup")
     TIME_BASED_DELAY_THRESHOLD = 2.5  # seconds
 
     CONFIDENCE_ERROR_BASED = 0.90

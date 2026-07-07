@@ -22,6 +22,7 @@ from isitsecure.engine.models import (
     DiscoveredEndpoint,
     FindingSource,
 )
+from isitsecure.engine.shared.endpoint_prioritizer import PriorityDimension, rank
 from isitsecure.engine.shared.probe_capture import build_probe_capture
 from isitsecure.engine.shared.rate_limited_client import RateLimitedClient
 from isitsecure.engine.shared.url_utils import inject_query_param
@@ -97,7 +98,7 @@ class XSSScanner:
             timeout_seconds=XSSConfig.HTTP_TIMEOUT_SECONDS,
             user_agent=DeepScanConfig.USER_AGENT,
         ) as client:
-            for endpoint in testable[: XSSConfig.MAX_ENDPOINTS_TO_TEST]:
+            for endpoint in rank(testable, PriorityDimension.XSS)[: XSSConfig.MAX_ENDPOINTS_TO_TEST]:
                 params = self._get_testable_params(endpoint)
                 for param in params[: XSSConfig.MAX_PARAMS_PER_ENDPOINT]:
                     finding = await self._test_param_reflection(
@@ -259,7 +260,7 @@ class XSSScanner:
             timeout_seconds=XSSConfig.HTTP_TIMEOUT_SECONDS,
             user_agent=DeepScanConfig.USER_AGENT,
         ) as client:
-            for endpoint in post_endpoints[: XSSConfig.MAX_POST_ENDPOINTS_TO_TEST]:
+            for endpoint in rank(post_endpoints, PriorityDimension.XSS)[: XSSConfig.MAX_POST_ENDPOINTS_TO_TEST]:
                 finding = await self._test_single_post_body(client, endpoint)
                 if finding:
                     findings.append(finding)
