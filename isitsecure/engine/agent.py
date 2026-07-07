@@ -405,6 +405,28 @@ class DeepSecurityScanAgent:
                     OrchestratorConfig.MSG_AUTH_FAILED.format(error=str(e)),
                 )
 
+        # Generic REST login fallback (plain APIs, --auth-provider token).
+        # Logs in both users directly against the API's login endpoint so
+        # cross-user IDOR works without a Supabase project or a browser crawl.
+        if (
+            not session_a
+            and credentials_a
+            and target_url
+            and mode in (ScanMode.AUTHENTICATED, ScanMode.FULL)
+        ):
+            from isitsecure.engine.enums import AuthProvider
+            if credentials_a.provider == AuthProvider.TOKEN:
+                try:
+                    from isitsecure.engine.auth.rest_login_auth import (
+                        RestLoginAuthProvider,
+                    )
+                    rest_auth = RestLoginAuthProvider(target_url)
+                    session_a = await rest_auth.authenticate(credentials_a)
+                    if credentials_b:
+                        session_b = await rest_auth.authenticate(credentials_b)
+                except Exception as e:
+                    logger.warning("REST login failed: %s", e)
+
         # Wire auth session into JWT scanner (fallback path — API auth)
         if session_a and self._jwt_scanner and not self._jwt_scanner._auth_session:
             self._jwt_scanner._auth_session = session_a
@@ -1092,6 +1114,19 @@ class DeepSecurityScanAgent:
             all_findings.extend(cross_user_findings)
             names.append("idor_cross_user")
 
+        # REST cross-user IDOR: two logged-in users vs. discovered id-bearing
+        # endpoints (no Supabase project or crawler-found resources needed).
+        if (
+            self._idor_scanner and session_a and session_b and endpoints
+            and not owned_resources
+        ):
+            rest_cu_findings = await self._run_rest_cross_user_idor(
+                session_a, session_b, endpoints,
+            )
+            all_findings.extend(rest_cu_findings)
+            if rest_cu_findings:
+                names.append("idor_cross_user_api")
+
         # Body parameter fuzzing (fuzz JSON fields from intercepted requests)
         if crawl_result and crawl_result.intercepted_requests:
             from isitsecure.engine.scanners.body_param_fuzzer import (
@@ -1549,6 +1584,60 @@ class DeepSecurityScanAgent:
                     ))
         except Exception as e:
             logger.warning("Cross-user IDOR scan failed: %s", e)
+
+        return findings
+
+    async def _run_rest_cross_user_idor(
+        self,
+        session_a: "AuthSession",
+        session_b: "AuthSession",
+        endpoints: list[DiscoveredEndpoint],
+    ) -> list[DeepFinding]:
+        """Convert REST cross-user IDOR results into findings.
+
+        Reaches a resource that a *different* authenticated user can touch but
+        an anonymous request cannot — i.e. broken object-level authorization.
+        """
+        from isitsecure.engine.enums import (
+            FindingCategory,
+            IDORRiskLevel,
+            SeverityLevel,
+        )
+
+        findings: list[DeepFinding] = []
+        try:
+            results = await run_scanner_safe(
+                "idor_cross_user_api",
+                self._idor_scanner.scan_cross_user_api(
+                    session_a, session_b, endpoints),
+                ScannerTimeouts.IDOR_CROSS_USER_SECONDS,
+            )
+            for result in results:
+                if result.risk_level == IDORRiskLevel.SAFE:
+                    continue
+                access = "modify" if result.write_accessible else "read"
+                severity = (
+                    SeverityLevel.CRITICAL if result.write_accessible
+                    else SeverityLevel.HIGH
+                )
+                findings.append(DeepFinding(
+                    source=FindingSource.DAST_AUTHENTICATED,
+                    category=FindingCategory.IDOR,
+                    severity=severity,
+                    title=f"Cross-user IDOR on {result.table_or_endpoint}",
+                    description=(
+                        f"An authenticated user ('{result.attacker_user_id}') can "
+                        f"{access} another user's ('{result.owner_user_id}') "
+                        f"resource at {result.table_or_endpoint}. An anonymous "
+                        f"request is rejected, so this is broken object-level "
+                        f"authorization (BOLA), not a public endpoint."
+                    ),
+                    confidence=result.confidence,
+                    scanner_name="idor_cross_user_api",
+                    endpoint_url=result.table_or_endpoint,
+                ))
+        except Exception as e:
+            logger.warning("REST cross-user IDOR scan failed: %s", e)
 
         return findings
 

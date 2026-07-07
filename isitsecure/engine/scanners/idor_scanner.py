@@ -39,6 +39,7 @@ from isitsecure.engine.models import (
 from isitsecure.engine.shared.endpoint_prioritizer import PriorityDimension, rank
 from isitsecure.engine.shared.rate_limited_client import RateLimitedClient
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
+from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
 
@@ -724,6 +725,135 @@ class IDORScanner:
             confirmed,
         )
         return results
+
+    # ------------------------------------------------------------------
+    # Cross-user IDOR on a plain REST API (no Supabase / crawler needed)
+    # ------------------------------------------------------------------
+
+    async def scan_cross_user_api(
+        self,
+        session_a: AuthSession,
+        session_b: AuthSession,
+        endpoints: list[DiscoveredEndpoint],
+    ) -> list[CrossUserIDORResult]:
+        """Cross-user IDOR against a REST API using two logged-in users.
+
+        For each id-bearing endpoint, substitute user A's OWN identifier into
+        the path and check whether user B (a *different* authenticated user)
+        can reach A's resource that an anonymous request cannot.
+
+        The anonymous probe is the false-positive guard: an intentionally
+        public endpoint (reachable with no auth) is NOT reported as IDOR — only
+        a resource that requires auth yet accepts the *wrong* user's token is.
+        """
+        owner_ids = [v for v in (session_a.user_id, session_a.user_email) if v]
+        if not owner_ids:
+            return []
+
+        results: list[CrossUserIDORResult] = []
+        seen: set[str] = set()
+        async with RateLimitedClient(
+            max_concurrent=IDORConfig.MAX_CONCURRENT_PROBES,
+            delay_seconds=CrossUserIDORConfig.PROBE_DELAY_SECONDS,
+            timeout_seconds=CrossUserIDORConfig.HTTP_TIMEOUT_SECONDS,
+            user_agent=DeepScanConfig.USER_AGENT,
+        ) as client:
+            for ep in endpoints:
+                method = ep.method.value
+                # GET = read IDOR; PUT/PATCH = write IDOR. DELETE is destructive
+                # and POST is creation, so neither is probed cross-user.
+                if method not in ("GET", "PUT", "PATCH") or not ep.has_path_params:
+                    continue
+                for pname in ep.path_param_names:
+                    placeholder = "{" + pname + "}"
+                    if placeholder not in ep.url:
+                        continue
+                    for owner_id in owner_ids:
+                        url = ep.url.replace(
+                            placeholder, quote(str(owner_id), safe=""))
+                        if url in seen:
+                            continue
+                        seen.add(url)
+                        res = await self._probe_cross_user_api(
+                            client, ep, url, owner_id, session_a, session_b)
+                        if res is not None:
+                            results.append(res)
+                        if len(results) >= CrossUserIDORConfig.MAX_RESOURCES_TO_TEST:
+                            return results
+        return results
+
+    async def _probe_cross_user_api(
+        self,
+        client: RateLimitedClient,
+        endpoint: DiscoveredEndpoint,
+        url: str,
+        owner_id: str,
+        session_a: AuthSession,
+        session_b: AuthSession,
+    ) -> CrossUserIDORResult | None:
+        """Run the owner / anonymous / attacker probes for one resource."""
+        method = endpoint.method.value
+        is_write = method in ("PUT", "PATCH", "POST", "DELETE")
+        body = CrossUserIDORConfig.SAFE_PATCH_BODY if is_write else None
+
+        # 1. Baseline: the owner must be able to reach their own resource.
+        owner = await self._authed_request(client, method, url, session_a, body)
+        if owner is None or owner.status_code in (401, 403, 404):
+            return None
+
+        # 2. Anonymous guard: if no-auth reaches it, it's public — not IDOR.
+        anon = await self._authed_request(client, method, url, None, body)
+        if anon is not None and anon.status_code not in (401, 403):
+            return None
+
+        # 3. Attacker: a DIFFERENT user's token reaching A's resource = IDOR.
+        attacker = await self._authed_request(client, method, url, session_b, body)
+        if attacker is None or attacker.status_code in (401, 403):
+            return None  # properly blocked
+
+        probe = IDORProbeResult(
+            original_url=url,
+            probed_url=url,
+            test_type=(IDORTestType.CROSS_USER_WRITE if is_write
+                       else IDORTestType.CROSS_USER_READ),
+            probed_status=attacker.status_code,
+            probed_body_preview=attacker.text[:IDORConfig.MAX_RESPONSE_BODY_LOG],
+            data_returned=200 <= attacker.status_code < 300,
+            error=None,
+        )
+        result = CrossUserIDORResult(
+            table_or_endpoint=endpoint.url,
+            resource_id=str(owner_id),
+            owner_user_id=session_a.user_id,
+            attacker_user_id=session_b.user_id,
+            evidence=[probe],
+        )
+        succeeded = 200 <= attacker.status_code < 300
+        if is_write:
+            result.write_accessible = True
+            # 2xx = the write went through; a non-auth 4xx (e.g. 400 invalid
+            # body) still proves B got PAST access control to A's resource.
+            result.risk_level = (IDORRiskLevel.CONFIRMED if succeeded
+                                 else IDORRiskLevel.LIKELY)
+            result.confidence = (CrossUserIDORConfig.CONFIDENCE_CONFIRMED_WRITE
+                                 if succeeded else 0.80)
+        else:
+            result.read_accessible = True
+            result.risk_level = IDORRiskLevel.CONFIRMED
+            result.confidence = CrossUserIDORConfig.CONFIDENCE_CONFIRMED_READ
+        return result
+
+    @staticmethod
+    async def _authed_request(client, method, url, session, body):
+        """HTTP request applying a session's auth headers (or none for anon)."""
+        headers = dict(session.headers) if session else {}
+        try:
+            if body is not None:
+                headers.setdefault("Content-Type", "application/json")
+                return await client.request(method, url, headers=headers, content=body)
+            return await client.request(method, url, headers=headers)
+        except Exception:
+            return None
 
     async def _test_cross_user_resource(
         self,

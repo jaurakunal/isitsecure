@@ -1,0 +1,177 @@
+"""Tests for REST cross-user IDOR (BOLA) and the generic REST login provider."""
+
+from __future__ import annotations
+
+import pytest
+
+from isitsecure.engine.auth.protocols import AuthSession
+from isitsecure.engine.auth.rest_login_auth import RestLoginAuthProvider
+from isitsecure.engine.enums import (
+    AuthProvider,
+    EndpointMethod,
+    IDORRiskLevel,
+)
+from isitsecure.engine.models import DiscoveredEndpoint
+from isitsecure.engine.scanners.idor_scanner import IDORScanner
+
+
+class _Resp:
+    def __init__(self, status: int, text: str = "") -> None:
+        self.status_code = status
+        self.text = text
+
+
+class _FakeClient:
+    """Returns canned responses keyed on the request's auth identity."""
+
+    def __init__(self, responder) -> None:
+        self._responder = responder
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def request(self, method, url, headers=None, content=None):
+        auth = (headers or {}).get("Authorization", "")
+        who = "anon"
+        if "tokA" in auth:
+            who = "A"
+        elif "tokB" in auth:
+            who = "B"
+        return self._responder(method, who)
+
+
+def _sessions():
+    a = AuthSession(user_id="alice", access_token="tokA",
+                    headers={"Authorization": "Bearer tokA"},
+                    provider=AuthProvider.TOKEN)
+    b = AuthSession(user_id="bob", access_token="tokB",
+                    headers={"Authorization": "Bearer tokB"},
+                    provider=AuthProvider.TOKEN)
+    return a, b
+
+
+def _write_ep():
+    return DiscoveredEndpoint(
+        url="http://api/users/v1/{username}/email", method=EndpointMethod.PUT,
+        has_path_params=True, path_param_names=["username"])
+
+
+def _read_ep():
+    return DiscoveredEndpoint(
+        url="http://api/users/v1/{username}", method=EndpointMethod.GET,
+        has_path_params=True, path_param_names=["username"])
+
+
+class TestProbeCrossUserApi:
+    async def _probe(self, endpoint, responder):
+        a, b = _sessions()
+        client = _FakeClient(responder)
+        return await IDORScanner()._probe_cross_user_api(
+            client, endpoint, endpoint.url.replace("{username}", "alice"),
+            "alice", a, b)
+
+    async def test_write_bola_detected_even_on_body_error(self):
+        # anon denied, owner 400 (past auth), attacker 400 (past auth) => LIKELY
+        def r(method, who):
+            return _Resp(401) if who == "anon" else _Resp(400)
+        result = await self._probe(_write_ep(), r)
+        assert result is not None
+        assert result.write_accessible
+        assert result.risk_level == IDORRiskLevel.LIKELY
+
+    async def test_write_bola_confirmed_on_2xx(self):
+        def r(method, who):
+            return _Resp(401) if who == "anon" else _Resp(200)
+        result = await self._probe(_write_ep(), r)
+        assert result.write_accessible
+        assert result.risk_level == IDORRiskLevel.CONFIRMED
+
+    async def test_public_endpoint_is_not_flagged(self):
+        # anonymous request succeeds => public, must NOT be reported (FP guard)
+        def r(method, who):
+            return _Resp(200)
+        assert await self._probe(_read_ep(), r) is None
+
+    async def test_properly_protected_is_not_flagged(self):
+        # anon denied, owner ok, attacker denied => safe
+        def r(method, who):
+            if who == "anon":
+                return _Resp(401)
+            if who == "A":
+                return _Resp(200)
+            return _Resp(403)
+        assert await self._probe(_read_ep(), r) is None
+
+    async def test_read_idor_confirmed(self):
+        def r(method, who):
+            if who == "anon":
+                return _Resp(401)
+            return _Resp(200)
+        result = await self._probe(_read_ep(), r)
+        assert result.read_accessible
+        assert result.risk_level == IDORRiskLevel.CONFIRMED
+
+    async def test_owner_cannot_reach_returns_none(self):
+        # owner gets 404 => not A's resource
+        def r(method, who):
+            return _Resp(404)
+        assert await self._probe(_read_ep(), r) is None
+
+
+class TestRestLoginProvider:
+    def test_find_key_nested(self):
+        data = {"data": {"session": {"auth_token": "xyz"}}}
+        assert RestLoginAuthProvider._find_key(data, "auth_token") == "xyz"
+
+    def test_extract_token_from_known_key(self):
+        prov = RestLoginAuthProvider("http://api")
+        resp = _Resp(200)
+        resp.json = lambda: {"auth_token": "the-token"}
+        assert prov._extract_token(resp) == "the-token"
+
+    def test_extract_token_jwt_regex_fallback(self):
+        prov = RestLoginAuthProvider("http://api")
+        jwt = "eyJhbGc.eyJzdWIiOiJhIn0.sig"
+        resp = _Resp(200, text=f'{{"weird_field": "{jwt}"}}')
+        resp.json = lambda: {"weird_field": jwt}  # not a known token key
+        assert prov._extract_token(resp) == jwt
+
+    def test_jwt_subject_decoded(self):
+        # {"sub": "alice"} base64url payload
+        token = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhbGljZSJ9.sig"
+        assert RestLoginAuthProvider._jwt_subject(token) == "alice"
+
+    def test_jwt_subject_bad_token_none(self):
+        assert RestLoginAuthProvider._jwt_subject("not-a-jwt") is None
+
+    def test_build_session_uses_jwt_sub(self):
+        prov = RestLoginAuthProvider("http://api")
+        token = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhbGljZSJ9.sig"
+        sess = prov._build_session(token, "alice@x.com")
+        assert sess.user_id == "alice"
+        assert sess.headers["Authorization"] == f"Bearer {token}"
+
+
+@pytest.mark.parametrize("method,expected", [
+    ("GET", True), ("PUT", True), ("PATCH", True),
+    ("DELETE", False), ("POST", False),
+])
+async def test_scan_cross_user_api_method_filter(method, expected):
+    """Only GET/PUT/PATCH are probed; DELETE/POST are skipped."""
+    a, b = _sessions()
+    ep = DiscoveredEndpoint(
+        url="http://api/r/{id}", method=EndpointMethod(method),
+        has_path_params=True, path_param_names=["id"])
+    probed = {"called": False}
+
+    async def fake_probe(*args, **kwargs):
+        probed["called"] = True
+        return None
+
+    scanner = IDORScanner()
+    scanner._probe_cross_user_api = fake_probe
+    await scanner.scan_cross_user_api(a, b, [ep])
+    assert probed["called"] == expected

@@ -491,6 +491,42 @@ class TokenAuthConfig:
     BEARER_PREFIX = SharedPatterns.BEARER_PREFIX
 
 
+class RestLoginConfig:
+    """Generic REST login: username/password -> bearer token.
+
+    Lets isitsecure authenticate against an arbitrary JSON REST API (not just
+    Supabase), which is what cross-user IDOR needs on frontend-less APIs.
+    """
+
+    # Common login endpoints to try when no explicit login_url is given.
+    LOGIN_PROBE_PATHS = (
+        "/login",
+        "/auth/login",
+        "/api/login",
+        "/api/auth/login",
+        "/users/login",
+        "/users/v1/login",
+        "/rest/user/login",
+        "/signin",
+        "/session",
+        "/token",
+        "/oauth/token",
+    )
+    # Payload keys to try for the identifier (APIs use email OR username).
+    IDENTIFIER_KEYS = ("email", "username")
+    # Response fields that commonly carry the token.
+    TOKEN_RESPONSE_KEYS = (
+        "auth_token", "access_token", "accessToken", "token",
+        "jwt", "id_token", "idToken", "authToken",
+    )
+    JWT_REGEX = r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*"
+    HTTP_TIMEOUT_SECONDS = 20
+    CONTENT_TYPE_JSON = "application/json"
+    JWT_CLAIM_SUB = "sub"
+    JWT_CLAIM_USER_ID = "user_id"
+    ERROR_LOGIN_FAILED = "REST login failed (tried {count} endpoint(s)): {error}"
+
+
 class RepoIngestionConfig:
     """Configuration for repository ingestion."""
 

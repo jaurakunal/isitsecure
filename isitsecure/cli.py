@@ -61,9 +61,12 @@ def scan(
     branch: str = typer.Option("main", "--branch", "-b", help="Git branch"),
     github_token: Optional[str] = typer.Option(None, "--github-token", envvar="GITHUB_TOKEN"),
     mode: str = typer.Option("auto", "--mode", "-m", help="Scan mode: auto|url-only|code-only|authenticated|full"),
-    auth_email: Optional[str] = typer.Option(None, "--auth-email", help="Auth email for authenticated scanning"),
-    auth_password: Optional[str] = typer.Option(None, "--auth-password", help="Auth password"),
-    auth_provider: str = typer.Option("supabase", "--auth-provider", help="Auth provider: supabase|firebase|browser|token"),
+    auth_email: Optional[str] = typer.Option(None, "--auth-email", help="Auth email/username for authenticated scanning (user A)"),
+    auth_password: Optional[str] = typer.Option(None, "--auth-password", help="Auth password (user A)"),
+    auth_email_b: Optional[str] = typer.Option(None, "--auth-email-b", help="Second user's email/username — enables cross-user IDOR testing"),
+    auth_password_b: Optional[str] = typer.Option(None, "--auth-password-b", help="Second user's password"),
+    auth_provider: str = typer.Option("supabase", "--auth-provider", help="Auth provider: supabase|firebase|browser|token (use token for a plain REST login)"),
+    login_url: Optional[str] = typer.Option(None, "--login-url", help="Explicit login endpoint (else auto-discovered)"),
     llm_provider: str = typer.Option("anthropic", "--llm", help="LLM provider: anthropic|google|none"),
     output: str = typer.Option("table", "--output", "-o", help="Output format: table|json|html|sarif|fixes"),
     output_file: Optional[str] = typer.Option(None, "--output-file", "-f", help="Write report to file"),
@@ -110,6 +113,7 @@ def scan(
 
     # Build credentials
     credentials_a = None
+    credentials_b = None
     if auth_email and auth_password:
         from isitsecure.engine.auth.protocols import AuthCredentials
         from isitsecure.engine.enums import AuthProvider as AuthProviderEnum
@@ -117,7 +121,15 @@ def scan(
             provider=AuthProviderEnum(auth_provider),
             email=auth_email,
             password=auth_password,
+            login_url=login_url,
         )
+        if auth_email_b and auth_password_b:
+            credentials_b = AuthCredentials(
+                provider=AuthProviderEnum(auth_provider),
+                email=auth_email_b,
+                password=auth_password_b,
+                login_url=login_url,
+            )
 
     # Resolve scan mode
     from isitsecure.engine.enums import ScanMode
@@ -143,6 +155,7 @@ def scan(
         repo_url=repo,
         github_token=github_token,
         credentials_a=credentials_a,
+        credentials_b=credentials_b,
         scan_mode=resolved_mode,
     ))
 

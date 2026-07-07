@@ -47,6 +47,27 @@ category, and/or a title substring — coarse but honest, and easy to extend as
 detection improves. It scores at the *vulnerability-class* level (did we find a
 SQLi at all?), not exact endpoints, so it isn't brittle to app version changes.
 
+## Authenticated cross-user IDOR (BOLA)
+
+Unauthenticated scanning can't tell a *public* id-bearing endpoint from a
+broken-access one, so url-only IDOR is inherently false-positive-prone. Real
+object-level authorization is tested with **two users**:
+
+```bash
+isitsecure scan http://localhost:5001 --mode authenticated --auth-provider token \
+  --auth-email alice --auth-password pw \
+  --auth-email-b bob   --auth-password-b pw
+```
+
+For each id-bearing endpoint the scanner substitutes user A's own identifier
+and checks whether user B (a *different* logged-in user) can reach it while an
+**anonymous** request cannot — that anonymous probe is the false-positive
+guard, so intentionally-public endpoints are not reported.
+
+> Note: VAmPI exposes a `/createdb` endpoint that resets its database, which a
+> full scan can trigger and wipe your test users mid-run. Re-register the users
+> immediately before scanning, or use a target that doesn't self-reset.
+
 ## Adding a target
 
 Append a `Target(...)` to `TARGETS`: the docker `up_cmd`/`down_cmd`, the URL to
