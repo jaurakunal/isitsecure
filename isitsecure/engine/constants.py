@@ -776,6 +776,11 @@ class CrossUserIDORConfig:
 
     MAX_RESOURCES_TO_TEST = 30
     MAX_TABLES_TO_TEST = 20
+    # Owned-resource-id harvesting: candidate ids tested per endpoint (A's
+    # identity + ids read from the parent collection), and the max harvested
+    # from a single collection response.
+    MAX_IDS_PER_ENDPOINT = 8
+    MAX_HARVEST_VALUES = 50
     PROBE_DELAY_SECONDS = 0.5
     HTTP_TIMEOUT_SECONDS = SharedPatterns.DEFAULT_HTTP_TIMEOUT_SECONDS
 

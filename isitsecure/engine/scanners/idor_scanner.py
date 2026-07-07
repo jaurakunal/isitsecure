@@ -745,13 +745,16 @@ class IDORScanner:
         The anonymous probe is the false-positive guard: an intentionally
         public endpoint (reachable with no auth) is NOT reported as IDOR — only
         a resource that requires auth yet accepts the *wrong* user's token is.
+
+        Resource ids are often NOT the user's identity (e.g. an opaque numeric
+        basket id). For those, user A's real ids are harvested by reading the
+        parent collection as A, then tested for cross-user access.
         """
-        owner_ids = [v for v in (session_a.user_id, session_a.user_email) if v]
-        if not owner_ids:
-            return []
+        identity_ids = [v for v in (session_a.user_id, session_a.user_email) if v]
 
         results: list[CrossUserIDORResult] = []
         seen: set[str] = set()
+        harvest_cache: dict[tuple[str, str], list[str]] = {}
         async with RateLimitedClient(
             max_concurrent=IDORConfig.MAX_CONCURRENT_PROBES,
             delay_seconds=CrossUserIDORConfig.PROBE_DELAY_SECONDS,
@@ -764,23 +767,103 @@ class IDORScanner:
                 # and POST is creation, so neither is probed cross-user.
                 if method not in ("GET", "PUT", "PATCH") or not ep.has_path_params:
                     continue
-                for pname in ep.path_param_names:
-                    placeholder = "{" + pname + "}"
-                    if placeholder not in ep.url:
+                # Locate the id slot and its parent collection. Two shapes:
+                #  - a {templated} segment (OpenAPI discovery), or
+                #  - the concrete last segment of an id-variant URL like
+                #    /collection/1 (JS-bundle discovery emits these).
+                templated = re.search(r"\{([^}]+)\}", ep.url)
+                numeric_slot = False
+                if templated:
+                    placeholder: str | None = templated.group(0)
+                    pname = templated.group(1)
+                    collection = ep.url.split(placeholder)[0].rstrip("/")
+                else:
+                    base, sep, last = ep.url.rpartition("/")
+                    if not sep or not last:
                         continue
-                    for owner_id in owner_ids:
-                        url = ep.url.replace(
-                            placeholder, quote(str(owner_id), safe=""))
-                        if url in seen:
-                            continue
-                        seen.add(url)
-                        res = await self._probe_cross_user_api(
-                            client, ep, url, owner_id, session_a, session_b)
-                        if res is not None:
-                            results.append(res)
-                        if len(results) >= CrossUserIDORConfig.MAX_RESOURCES_TO_TEST:
-                            return results
+                    placeholder = None
+                    pname = (ep.path_param_names or ["id"])[0]
+                    collection = base
+                    numeric_slot = last.isdigit()
+
+                # Harvest A's real ids from the parent collection (covers opaque
+                # basket/order-style ids), cached per collection+param.
+                cache_key = (collection, pname)
+                if cache_key not in harvest_cache:
+                    harvest_cache[cache_key] = await self._harvest_ids(
+                        client, session_a, collection, pname)
+                # A's identity first (covers id==identity apps), then harvested.
+                candidate_ids = list(dict.fromkeys(
+                    identity_ids + harvest_cache[cache_key]
+                ))[: CrossUserIDORConfig.MAX_IDS_PER_ENDPOINT]
+                # A numeric id slot only accepts numeric candidates — never a
+                # string identity (email), which would be a nonsense request.
+                if numeric_slot:
+                    candidate_ids = [c for c in candidate_ids if str(c).isdigit()]
+                for owner_id in candidate_ids:
+                    enc = quote(str(owner_id), safe="")
+                    url = (ep.url.replace(placeholder, enc) if placeholder
+                           else f"{collection}/{enc}")
+                    if url in seen:
+                        continue
+                    seen.add(url)
+                    res = await self._probe_cross_user_api(
+                        client, ep, url, owner_id, session_a, session_b)
+                    if res is not None:
+                        results.append(res)
+                    if len(results) >= CrossUserIDORConfig.MAX_RESOURCES_TO_TEST:
+                        return results
         return results
+
+    async def _harvest_ids(
+        self,
+        client: RateLimitedClient,
+        session_a: AuthSession,
+        collection_url: str,
+        param_name: str,
+    ) -> list[str]:
+        """Read A's parent collection to learn real resource ids for a param."""
+        if not collection_url:
+            return []
+        resp = await self._authed_request(
+            client, "GET", collection_url, session_a, None)
+        if resp is None or not (200 <= resp.status_code < 300):
+            return []
+        return self._extract_field_values(resp.text, param_name)
+
+    @staticmethod
+    def _extract_field_values(body: str, field: str) -> list[str]:
+        """Pull candidate id values from a JSON body.
+
+        Prefers values whose key matches the path parameter name (e.g. `id`,
+        `username`), falling back to generic id keys. Bounded and sanitized so a
+        huge or hostile response can't blow up the probe budget.
+        """
+        try:
+            data = json.loads(body)
+        except (ValueError, json.JSONDecodeError):
+            return []
+        f = field.lower()
+        target_keys = {f, "id", "_id", f + "id", f + "_id"}
+        values: list[str] = []
+
+        def walk(obj: object) -> None:
+            if len(values) >= CrossUserIDORConfig.MAX_HARVEST_VALUES:
+                return
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    if (isinstance(k, str) and k.lower() in target_keys
+                            and isinstance(v, (str, int)) and not isinstance(v, bool)):
+                        s = str(v).strip()
+                        if s and len(s) <= 64:
+                            values.append(s)
+                    walk(v)
+            elif isinstance(obj, list):
+                for item in obj:
+                    walk(item)
+
+        walk(data)
+        return list(dict.fromkeys(values))[: CrossUserIDORConfig.MAX_HARVEST_VALUES]
 
     async def _probe_cross_user_api(
         self,
@@ -796,9 +879,16 @@ class IDORScanner:
         is_write = method in ("PUT", "PATCH", "POST", "DELETE")
         body = CrossUserIDORConfig.SAFE_PATCH_BODY if is_write else None
 
-        # 1. Baseline: the owner must be able to reach their own resource.
+        # 1. Baseline: the owner must be able to reach their own resource. A
+        # read must actually return data (2xx); a write need only get PAST
+        # access control (a 400 for a bad body still proves auth was accepted).
         owner = await self._authed_request(client, method, url, session_a, body)
-        if owner is None or owner.status_code in (401, 403, 404):
+        if owner is None:
+            return None
+        if is_write:
+            if owner.status_code in (401, 403, 404):
+                return None
+        elif not (200 <= owner.status_code < 300):
             return None
 
         # 2. Anonymous guard: if no-auth reaches it, it's public — not IDOR.
@@ -807,9 +897,21 @@ class IDORScanner:
             return None
 
         # 3. Attacker: a DIFFERENT user's token reaching A's resource = IDOR.
+        # Reads must succeed (2xx = real data); writes need only pass auth.
         attacker = await self._authed_request(client, method, url, session_b, body)
-        if attacker is None or attacker.status_code in (401, 403):
-            return None  # properly blocked
+        if attacker is None:
+            return None
+        if is_write:
+            if attacker.status_code in (401, 403):
+                return None
+        else:
+            if not (200 <= attacker.status_code < 300):
+                return None
+            # The attacker must see the SAME resource the owner sees. If the
+            # bodies differ, the id was ignored/coerced to the attacker's own
+            # data (endpoint is caller-scoped) — not cross-user access.
+            if owner.text != attacker.text:
+                return None
 
         probe = IDORProbeResult(
             original_url=url,

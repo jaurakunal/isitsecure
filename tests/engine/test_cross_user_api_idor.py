@@ -175,3 +175,70 @@ async def test_scan_cross_user_api_method_filter(method, expected):
     scanner._probe_cross_user_api = fake_probe
     await scanner.scan_cross_user_api(a, b, [ep])
     assert probed["called"] == expected
+
+
+class TestHarvestingAndGuards:
+    async def _probe(self, endpoint, responder):
+        a, b = _sessions()
+        client = _FakeClient(responder)
+        return await IDORScanner()._probe_cross_user_api(
+            client, endpoint, endpoint.url.replace("{username}", "alice"),
+            "alice", a, b)
+
+    async def test_read_content_mismatch_not_flagged(self):
+        # attacker sees different (own) data -> id ignored/coerced, not IDOR
+        def r(method, who):
+            if who == "anon":
+                return _Resp(401)
+            if who == "A":
+                return _Resp(200, "A-private-data")
+            return _Resp(200, "B-own-data")
+        assert await self._probe(_read_ep(), r) is None
+
+    async def test_read_content_match_flagged(self):
+        # attacker sees the SAME resource the owner sees -> real read IDOR
+        def r(method, who):
+            return _Resp(401) if who == "anon" else _Resp(200, "same-data")
+        res = await self._probe(_read_ep(), r)
+        assert res is not None and res.read_accessible
+
+    async def test_read_attacker_non_2xx_not_flagged(self):
+        # attacker gets 400 (not 401/403 but not success) -> no real access
+        def r(method, who):
+            if who == "anon":
+                return _Resp(401)
+            if who == "A":
+                return _Resp(200, "data")
+            return _Resp(400)
+        assert await self._probe(_read_ep(), r) is None
+
+    def test_extract_field_values(self):
+        ev = IDORScanner._extract_field_values
+        assert ev('{"data":[{"id":42},{"id":7}]}', "id") == ["42", "7"]
+        assert ev('{"users":[{"username":"alice"}]}', "username") == ["alice"]
+        assert ev('{"id":true}', "id") == []          # bool excluded
+        assert ev("<html>", "id") == []               # non-json
+
+    async def test_numeric_slot_does_not_substitute_string_identity(self):
+        # A numeric id-variant (/items/1) must not get the email substituted.
+        scanner = IDORScanner()
+        probed: list[str] = []
+
+        async def rec(client, method, url, session, body):
+            probed.append(url)
+            return _Resp(404)
+
+        async def no_harvest(*a, **k):
+            return []
+
+        scanner._authed_request = rec
+        scanner._harvest_ids = no_harvest
+        a = AuthSession(user_id="alice@x.com", access_token="t",
+                        provider=AuthProvider.TOKEN)
+        b = AuthSession(user_id="bob@x.com", access_token="t2",
+                        provider=AuthProvider.TOKEN)
+        ep = DiscoveredEndpoint(url="http://api/items/1",
+                                method=EndpointMethod.GET, has_path_params=True,
+                                path_param_names=["id"])
+        await scanner.scan_cross_user_api(a, b, [ep])
+        assert not any("alice" in u for u in probed)
