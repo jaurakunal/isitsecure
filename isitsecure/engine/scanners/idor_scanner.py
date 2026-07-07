@@ -772,7 +772,6 @@ class IDORScanner:
                 #  - the concrete last segment of an id-variant URL like
                 #    /collection/1 (JS-bundle discovery emits these).
                 templated = re.search(r"\{([^}]+)\}", ep.url)
-                numeric_slot = False
                 if templated:
                     placeholder: str | None = templated.group(0)
                     pname = templated.group(1)
@@ -784,22 +783,28 @@ class IDORScanner:
                     placeholder = None
                     pname = (ep.path_param_names or ["id"])[0]
                     collection = base
-                    numeric_slot = last.isdigit()
 
-                # Harvest A's real ids from the parent collection (covers opaque
-                # basket/order-style ids), cached per collection+param.
+                # Harvest A's REAL ids from the parent collection. These are the
+                # ground truth for the slot's id shape (numeric, UUID, slug, ...)
+                # — unlike the synthetic "/1" a discovery id-variant carries, so
+                # UUID/alphanumeric ids are no longer dropped.
                 cache_key = (collection, pname)
                 if cache_key not in harvest_cache:
                     harvest_cache[cache_key] = await self._harvest_ids(
                         client, session_a, collection, pname)
-                # A's identity first (covers id==identity apps), then harvested.
-                candidate_ids = list(dict.fromkeys(
-                    identity_ids + harvest_cache[cache_key]
-                ))[: CrossUserIDORConfig.MAX_IDS_PER_ENDPOINT]
-                # A numeric id slot only accepts numeric candidates — never a
-                # string identity (email), which would be a nonsense request.
-                if numeric_slot:
+                harvested = harvest_cache[cache_key]
+
+                # Candidates: the harvested real ids always; A's string identity
+                # (email/user_id) only for an identity-named slot, so it's never
+                # injected into an opaque object-id slot. If the real ids are all
+                # numeric, keep only numeric candidates.
+                candidate_ids = list(harvested)
+                if self._param_is_identity(pname):
+                    candidate_ids = identity_ids + candidate_ids
+                if harvested and all(str(h).isdigit() for h in harvested):
                     candidate_ids = [c for c in candidate_ids if str(c).isdigit()]
+                candidate_ids = list(dict.fromkeys(candidate_ids))[
+                    : CrossUserIDORConfig.MAX_IDS_PER_ENDPOINT]
                 for owner_id in candidate_ids:
                     enc = quote(str(owner_id), safe="")
                     url = (ep.url.replace(placeholder, enc) if placeholder
@@ -814,6 +819,18 @@ class IDORScanner:
                     if len(results) >= CrossUserIDORConfig.MAX_RESOURCES_TO_TEST:
                         return results
         return results
+
+    # Path-param names that denote a *user identity* (so A's email/user_id is a
+    # sensible value) rather than an opaque object id.
+    _IDENTITY_PARAM_HINTS = (
+        "user", "username", "email", "owner", "account", "login",
+        "member", "profile", "handle",
+    )
+
+    @classmethod
+    def _param_is_identity(cls, param_name: str) -> bool:
+        p = (param_name or "").lower()
+        return any(hint in p for hint in cls._IDENTITY_PARAM_HINTS)
 
     async def _harvest_ids(
         self,

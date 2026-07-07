@@ -171,8 +171,12 @@ async def test_scan_cross_user_api_method_filter(method, expected):
         probed["called"] = True
         return None
 
+    async def harvest(*a, **k):
+        return ["1"]  # a real id so testable methods have a candidate
+
     scanner = IDORScanner()
     scanner._probe_cross_user_api = fake_probe
+    scanner._harvest_ids = harvest
     await scanner.scan_cross_user_api(a, b, [ep])
     assert probed["called"] == expected
 
@@ -241,4 +245,56 @@ class TestHarvestingAndGuards:
                                 method=EndpointMethod.GET, has_path_params=True,
                                 path_param_names=["id"])
         await scanner.scan_cross_user_api(a, b, [ep])
+        assert not any("alice" in u for u in probed)
+
+
+class TestIdShapeAndIdentityGating:
+    async def _run(self, ep, harvest_return, id_a="alice@x.com"):
+        scanner = IDORScanner()
+        probed: list[str] = []
+
+        async def rec(client, method, url, session, body):
+            probed.append(url)
+            return _Resp(404)
+
+        async def harvest(*a, **k):
+            return harvest_return
+
+        scanner._authed_request = rec
+        scanner._harvest_ids = harvest
+        a = AuthSession(user_id=id_a, access_token="t", provider=AuthProvider.TOKEN)
+        b = AuthSession(user_id="bob@x.com", access_token="t2",
+                        provider=AuthProvider.TOKEN)
+        await scanner.scan_cross_user_api(a, b, [ep])
+        return probed
+
+    async def test_uuid_ids_not_filtered_out(self):
+        # /things/1 variant but real ids are UUIDs: the UUID must be probed
+        # (fixes the false negative from keying off the synthetic "/1"), and
+        # the string identity must NOT be injected into the opaque slot.
+        uuid = "550e8400-e29b-41d4-a716-446655440000"
+        ep = DiscoveredEndpoint(url="http://api/things/1",
+                                method=EndpointMethod.GET, has_path_params=True,
+                                path_param_names=["id"])
+        probed = await self._run(ep, [uuid])
+        assert any(uuid in u for u in probed)
+        assert not any("alice" in u for u in probed)
+
+    async def test_identity_param_substitutes_identity(self):
+        # An identity-named slot ({username}) does get A's identity probed,
+        # even when the collection harvest is empty.
+        ep = DiscoveredEndpoint(url="http://api/users/{username}",
+                                method=EndpointMethod.GET, has_path_params=True,
+                                path_param_names=["username"])
+        probed = await self._run(ep, [], id_a="alice")
+        assert any("alice" in u for u in probed)
+
+    async def test_numeric_ids_drop_stray_identity(self):
+        # Identity-named slot but the real ids are numeric -> the email is
+        # dropped (kept only for genuinely identity-shaped ids).
+        ep = DiscoveredEndpoint(url="http://api/users/{user_id}",
+                                method=EndpointMethod.GET, has_path_params=True,
+                                path_param_names=["user_id"])
+        probed = await self._run(ep, ["1", "2"])
+        assert any("/users/1" in u for u in probed)
         assert not any("alice" in u for u in probed)

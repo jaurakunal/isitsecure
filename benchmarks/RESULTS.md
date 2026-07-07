@@ -16,7 +16,7 @@ _Run: 2026-07-07 · isitsecure commit `0c0dc5f` · mode `url-only` unless noted 
 | Target | Type | Recall | False positives | Notes |
 |---|---|---|---|---|
 | OWASP Juice Shop v20.1.1 | SPA + REST (Angular) | SQLi ✓, IDOR ✓ | command-inj **0** | 56 endpoints; SQLi + IDOR caught end-to-end |
-| Juice Shop (authenticated) | SPA + REST, two users | **7 BOLA** | **0** | basket BOLA via owned-resource-id harvesting |
+| Juice Shop (authenticated) | SPA + REST, two users | **8 BOLA** | **0** | basket BOLA via owned-resource-id harvesting |
 | VAmPI (vulnerable) | REST API, no frontend | **3/3** | — | OpenAPI discovery: 0→19 endpoints |
 | VAmPI (secure) | REST API, no frontend | — | **2** (IDOR) | unauth heuristic can't tell public from broken-access |
 | VAmPI (authenticated) | REST API, two users | **2/2 BOLA** | **0** | cross-user IDOR; anon guard clears the 2 FPs above |
@@ -41,15 +41,16 @@ SQLi and IDOR — are caught end-to-end by the real pipeline (discover → prior
 **Authenticated cross-user (BOLA):** the two-user flow logs in successfully
 (generic REST login against Juice Shop's `/rest/user/login`, token read from the
 nested `authentication.token`) and, with **owned-resource-id harvesting**, finds
-**7 confirmed cross-user read IDOR** on `/api/BasketItems/{id}` — Juice Shop's
+**8 confirmed cross-user read IDOR** on `/api/BasketItems/{id}` — Juice Shop's
 real "view another user's basket" BOLA — with **0 false positives**.
 
 Juice Shop's resources use **opaque numeric object ids** that aren't derivable
 from a user's identity, so the scanner first reads the parent collection
 (`/api/BasketItems`) as user A to learn the real ids, then tests each as user B.
 Three false-positive guards keep it honest: the **anonymous** probe drops public
-endpoints, a **numeric-slot filter** refuses to substitute a string identity
-(email) into a numeric id, and a **content-match** check requires user B to see
+endpoints, the id **shape is inferred from the harvested real ids** (so a string
+identity is never injected into an opaque object-id slot, and UUID ids are
+not dropped), and a **content-match** check requires user B to see
 the *same resource* user A sees (not their own data via a coerced id).
 
 ### VAmPI — `url-only` (recall) and `vulnerable=0` (false positives)
@@ -104,7 +105,7 @@ server-rendered HTML — the fix is HTML form/link crawling for endpoint discove
   spec-publishing APIs (VAmPI). SQLi/IDOR are caught end-to-end.
 - **Authenticated cross-user IDOR works** and is false-positive-resistant on
   both identity-based ids (VAmPI: 2 real BOLAs, 0 FPs) and **opaque object ids**
-  via owned-resource-id harvesting (Juice Shop: 7 basket BOLAs, 0 FPs).
+  via owned-resource-id harvesting (Juice Shop: 8 basket BOLAs, 0 FPs).
 - **Known gaps, each surfaced by a benchmark:**
   1. Server-rendered apps (NodeGoat) — discovery needs HTML crawling.
   2. ~~Opaque object ids (Juice Shop BOLA)~~ — **resolved** via owned-resource-id
