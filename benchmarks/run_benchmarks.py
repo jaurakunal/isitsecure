@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -37,16 +38,24 @@ from dataclasses import dataclass, field
 class Expectation:
     label: str
     scanner: str | None = None
+    scanners: tuple[str, ...] | None = None    # any-of scanner match
     category: str | None = None
     title_contains: str | None = None
+    endpoint_contains: str | None = None       # require the finding be on this route
 
     def matches(self, finding: dict) -> bool:
         if self.scanner and finding.get("scanner_name") != self.scanner:
+            return False
+        if self.scanners and finding.get("scanner_name") not in self.scanners:
             return False
         if self.category and finding.get("category") != self.category:
             return False
         if self.title_contains and self.title_contains.lower() not in (
             finding.get("title") or ""
+        ).lower():
+            return False
+        if self.endpoint_contains and self.endpoint_contains.lower() not in (
+            finding.get("endpoint_url") or ""
         ).lower():
             return False
         return True
@@ -64,12 +73,25 @@ class Target:
     ready_timeout: int = 180
     down_cmd: list[str] = field(default_factory=list)
     notes: str = ""
+    # Authenticated scanning (two-user cross-user IDOR uses -b variants; a
+    # single credential + browser/token provider drives login-then-crawl).
+    auth_email: str | None = None
+    auth_password: str | None = None
+    auth_provider: str | None = None
+    pre_scan: list[str] | None = None   # shell cmd run after ready, before scan
 
 
-# --- SQLi/IDOR/header signatures reused across targets ---
-SQLI = dict(scanner="active_injection_scanner", title_contains="sql")
+# --- reusable signatures ---
+# "SQL injection" (not bare "sql", which also matches "NoSQL injection").
+SQLI = dict(scanner="active_injection_scanner", title_contains="SQL injection")
+NOSQL = dict(scanner="active_injection_scanner", title_contains="NoSQL")
+# IDOR now has a consistent category across the read + mutation paths.
 IDOR = dict(category="idor")
 HEADERS = dict(category="missing_headers")
+# XSS lives under injection_risk; match by either XSS scanner (reflected/POST
+# via xss_scanner, DOM via dom_xss_scanner) rather than a nonexistent category.
+XSS = dict(scanners=("xss_scanner", "dom_xss_scanner"))
+INJECTION = dict(scanner="active_injection_scanner")
 
 
 TARGETS: list[Target] = [
@@ -116,10 +138,40 @@ TARGETS: list[Target] = [
         ready_timeout=300,
         expect=[
             Expectation("Missing security headers", **HEADERS),
-            Expectation("Injection", scanner="active_injection_scanner"),
+            Expectation("Injection", **INJECTION),
         ],
         notes="Node/Express OWASP Top 10 — matches isitsecure's primary stack. "
               "Heavy (app + mongo); run on its own.",
+    ),
+    Target(
+        name="nodegoat-auth",
+        up_cmd=["bash", "-c",
+                "test -d benchmarks/_ext/NodeGoat || git clone --depth 1 "
+                "https://github.com/OWASP/NodeGoat benchmarks/_ext/NodeGoat; "
+                "cd benchmarks/_ext/NodeGoat && docker compose up -d"],
+        url="http://localhost:4000",
+        ready_url="http://localhost:4000/",
+        down_cmd=["bash", "-c",
+                  "cd benchmarks/_ext/NodeGoat 2>/dev/null && docker compose down -v || true"],
+        ready_timeout=300,
+        scan_mode="authenticated",
+        # Register a user so the browser-login crawl can authenticate.
+        pre_scan=["bash", "-c",
+                  "curl -s -X POST http://localhost:4000/signup "
+                  "-H 'Content-Type: application/x-www-form-urlencoded' "
+                  "-d 'userName=tester&firstName=T&lastName=U"
+                  "&password=Password1%21&verify=Password1%21&email=t@u.com' "
+                  "-o /dev/null || true"],
+        auth_email="tester",
+        auth_password="Password1!",
+        auth_provider="browser",
+        expect=[
+            Expectation("Missing security headers", **HEADERS),
+            Expectation("Injection", **INJECTION),
+            Expectation("Cross-site scripting", **XSS),
+        ],
+        notes="NodeGoat AUTHENTICATED (browser login, userName field) — recall "
+              "on the server-rendered form surface behind login.",
     ),
     Target(
         name="crapi",
@@ -159,17 +211,35 @@ def wait_ready(url: str, timeout: int) -> bool:
     return False
 
 
-def scan(url: str, mode: str) -> list[dict]:
+def scan(target: Target) -> list[dict] | None:
+    """Run isitsecure and return its findings.
+
+    Returns None if the scan ERRORED (non-parseable report) — so a crashed
+    scan is not silently scored as a clean "found nothing" (recall 0/N).
+    """
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
         out = f.name
-    r = _run(["isitsecure", "scan", url, "--mode", mode, "--output", "json",
-              "-f", out], timeout=1800)
-    if r.returncode != 0:
-        print(f"    scan exited {r.returncode}: {r.stderr[-300:]}")
+    cmd = ["isitsecure", "scan", target.url, "--mode", target.scan_mode,
+           "--llm", "none", "--output", "json", "-f", out]
+    if target.auth_email and target.auth_password:
+        cmd += ["--auth-email", target.auth_email,
+                "--auth-password", target.auth_password]
+        if target.auth_provider:
+            cmd += ["--auth-provider", target.auth_provider]
     try:
-        return json.load(open(out)).get("findings", [])
-    except Exception:
-        return []
+        r = _run(cmd, timeout=1800)
+        try:
+            data = json.load(open(out))
+        except Exception:
+            print(f"    scan produced no readable report (exit {r.returncode}): "
+                  f"{(r.stderr or '')[-300:]}")
+            return None
+        return data.get("findings", [])
+    finally:
+        try:
+            os.unlink(out)
+        except OSError:
+            pass
 
 
 def score(findings: list[dict], target: Target) -> dict:
@@ -195,8 +265,13 @@ def run_target(target: Target, keep: bool) -> dict:
         if not wait_ready(target.ready_url, target.ready_timeout):
             print("    app never became ready — skipping")
             return {"name": target.name, "error": "not ready"}
-        print("    app ready — scanning...")
-        findings = scan(target.url, target.scan_mode)
+        if target.pre_scan:
+            print("    seeding (pre-scan)...")
+            _run(target.pre_scan, timeout=120)
+        print(f"    app ready — scanning ({target.scan_mode})...")
+        findings = scan(target)
+        if findings is None:
+            return {"name": target.name, "error": "scan failed / no readable report"}
         result = score(findings, target)
         result["name"] = target.name
         return result

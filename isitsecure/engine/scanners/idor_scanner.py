@@ -556,7 +556,7 @@ class IDORScanner:
 
         return DeepFinding(
             source=FindingSource.DAST_URL,
-            category=FindingCategory.INJECTION_RISK,
+            category=FindingCategory.IDOR,
             severity=SeverityLevel.CRITICAL,
             title=IDORConfig.TITLE_MUTATION_WRITE_IDOR,
             description=IDORConfig.DESC_MUTATION_WRITE_IDOR.format(
@@ -620,7 +620,7 @@ class IDORScanner:
 
         return DeepFinding(
             source=FindingSource.DAST_URL,
-            category=FindingCategory.INJECTION_RISK,
+            category=FindingCategory.IDOR,
             severity=SeverityLevel.CRITICAL,
             title=IDORConfig.TITLE_MUTATION_DELETE_IDOR,
             description=IDORConfig.DESC_MUTATION_DELETE_IDOR.format(
