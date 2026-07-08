@@ -1,0 +1,680 @@
+[
+ {
+  "key": "adminSectionChallenge",
+  "name": "Admin Section",
+  "category": "Broken Access Control",
+  "difficulty": 2
+ },
+ {
+  "key": "aiDebuggingChallenge",
+  "name": "AI Debugging",
+  "category": "Broken Access Control",
+  "difficulty": 2
+ },
+ {
+  "key": "basketAccessChallenge",
+  "name": "View Basket",
+  "category": "Broken Access Control",
+  "difficulty": 2
+ },
+ {
+  "key": "basketManipulateChallenge",
+  "name": "Manipulate Basket",
+  "category": "Broken Access Control",
+  "difficulty": 3
+ },
+ {
+  "key": "changeProductChallenge",
+  "name": "Product Tampering",
+  "category": "Broken Access Control",
+  "difficulty": 3
+ },
+ {
+  "key": "csrfChallenge",
+  "name": "CSRF",
+  "category": "Broken Access Control",
+  "difficulty": 3
+ },
+ {
+  "key": "easterEggLevelOneChallenge",
+  "name": "Easter Egg",
+  "category": "Broken Access Control",
+  "difficulty": 4
+ },
+ {
+  "key": "feedbackChallenge",
+  "name": "Five-Star Feedback",
+  "category": "Broken Access Control",
+  "difficulty": 2
+ },
+ {
+  "key": "forgedFeedbackChallenge",
+  "name": "Forged Feedback",
+  "category": "Broken Access Control",
+  "difficulty": 3
+ },
+ {
+  "key": "forgedReviewChallenge",
+  "name": "Forged Review",
+  "category": "Broken Access Control",
+  "difficulty": 3
+ },
+ {
+  "key": "ssrfChallenge",
+  "name": "SSRF",
+  "category": "Broken Access Control",
+  "difficulty": 6
+ },
+ {
+  "key": "web3SandboxChallenge",
+  "name": "Web3 Sandbox",
+  "category": "Broken Access Control",
+  "difficulty": 1
+ },
+ {
+  "key": "captchaBypassChallenge",
+  "name": "CAPTCHA Bypass",
+  "category": "Broken Anti Automation",
+  "difficulty": 3
+ },
+ {
+  "key": "extraLanguageChallenge",
+  "name": "Extra Language",
+  "category": "Broken Anti Automation",
+  "difficulty": 5
+ },
+ {
+  "key": "resetPasswordMortyChallenge",
+  "name": "Reset Morty's Password",
+  "category": "Broken Anti Automation",
+  "difficulty": 5
+ },
+ {
+  "key": "timingAttackChallenge",
+  "name": "Multiple Likes",
+  "category": "Broken Anti Automation",
+  "difficulty": 6
+ },
+ {
+  "key": "changePasswordBenderChallenge",
+  "name": "Change Bender's Password",
+  "category": "Broken Authentication",
+  "difficulty": 5
+ },
+ {
+  "key": "ghostLoginChallenge",
+  "name": "GDPR Data Erasure",
+  "category": "Broken Authentication",
+  "difficulty": 3
+ },
+ {
+  "key": "oauthUserPasswordChallenge",
+  "name": "Login Bjoern",
+  "category": "Broken Authentication",
+  "difficulty": 4
+ },
+ {
+  "key": "resetPasswordBenderChallenge",
+  "name": "Reset Bender's Password",
+  "category": "Broken Authentication",
+  "difficulty": 4
+ },
+ {
+  "key": "resetPasswordBjoernChallenge",
+  "name": "Reset Bjoern's Password",
+  "category": "Broken Authentication",
+  "difficulty": 5
+ },
+ {
+  "key": "resetPasswordBjoernOwaspChallenge",
+  "name": "Bjoern's Favorite Pet",
+  "category": "Broken Authentication",
+  "difficulty": 3
+ },
+ {
+  "key": "resetPasswordJimChallenge",
+  "name": "Reset Jim's Password",
+  "category": "Broken Authentication",
+  "difficulty": 3
+ },
+ {
+  "key": "twoFactorAuthUnsafeSecretStorageChallenge",
+  "name": "Two Factor Authentication",
+  "category": "Broken Authentication",
+  "difficulty": 5
+ },
+ {
+  "key": "weakPasswordChallenge",
+  "name": "Password Strength",
+  "category": "Broken Authentication",
+  "difficulty": 2
+ },
+ {
+  "key": "continueCodeChallenge",
+  "name": "Imaginary Challenge",
+  "category": "Cryptographic Issues",
+  "difficulty": 6
+ },
+ {
+  "key": "easterEggLevelTwoChallenge",
+  "name": "Nested Easter Egg",
+  "category": "Cryptographic Issues",
+  "difficulty": 4
+ },
+ {
+  "key": "forgedCouponChallenge",
+  "name": "Forged Coupon",
+  "category": "Cryptographic Issues",
+  "difficulty": 6
+ },
+ {
+  "key": "premiumPaywallChallenge",
+  "name": "Premium Paywall",
+  "category": "Cryptographic Issues",
+  "difficulty": 6
+ },
+ {
+  "key": "weirdCryptoChallenge",
+  "name": "Weird Crypto",
+  "category": "Cryptographic Issues",
+  "difficulty": 2
+ },
+ {
+  "key": "emptyUserRegistration",
+  "name": "Empty User Registration",
+  "category": "Improper Input Validation",
+  "difficulty": 2
+ },
+ {
+  "key": "freeDeluxeChallenge",
+  "name": "Deluxe Fraud",
+  "category": "Improper Input Validation",
+  "difficulty": 3
+ },
+ {
+  "key": "manipulateClockChallenge",
+  "name": "Expired Coupon",
+  "category": "Improper Input Validation",
+  "difficulty": 4
+ },
+ {
+  "key": "missingEncodingChallenge",
+  "name": "Missing Encoding",
+  "category": "Improper Input Validation",
+  "difficulty": 1
+ },
+ {
+  "key": "negativeOrderChallenge",
+  "name": "Payback Time",
+  "category": "Improper Input Validation",
+  "difficulty": 3
+ },
+ {
+  "key": "nftMintChallenge",
+  "name": "Mint the Honey Pot",
+  "category": "Improper Input Validation",
+  "difficulty": 3
+ },
+ {
+  "key": "nullByteChallenge",
+  "name": "Poison Null Byte",
+  "category": "Improper Input Validation",
+  "difficulty": 4
+ },
+ {
+  "key": "passwordRepeatChallenge",
+  "name": "Repetitive Registration",
+  "category": "Improper Input Validation",
+  "difficulty": 1
+ },
+ {
+  "key": "registerAdminChallenge",
+  "name": "Admin Registration",
+  "category": "Improper Input Validation",
+  "difficulty": 3
+ },
+ {
+  "key": "uploadSizeChallenge",
+  "name": "Upload Size",
+  "category": "Improper Input Validation",
+  "difficulty": 3
+ },
+ {
+  "key": "uploadTypeChallenge",
+  "name": "Upload Type",
+  "category": "Improper Input Validation",
+  "difficulty": 3
+ },
+ {
+  "key": "zeroStarsChallenge",
+  "name": "Zero Stars",
+  "category": "Improper Input Validation",
+  "difficulty": 1
+ },
+ {
+  "key": "chatbotGreedyInjectionChallenge",
+  "name": "Greedy Chatbot Manipulation",
+  "category": "Injection",
+  "difficulty": 3
+ },
+ {
+  "key": "chatbotPromptInjectionChallenge",
+  "name": "Chatbot Prompt Injection",
+  "category": "Injection",
+  "difficulty": 2
+ },
+ {
+  "key": "christmasSpecialChallenge",
+  "name": "Christmas Special",
+  "category": "Injection",
+  "difficulty": 4
+ },
+ {
+  "key": "dbSchemaChallenge",
+  "name": "Database Schema",
+  "category": "Injection",
+  "difficulty": 3
+ },
+ {
+  "key": "ephemeralAccountantChallenge",
+  "name": "Ephemeral Accountant",
+  "category": "Injection",
+  "difficulty": 4
+ },
+ {
+  "key": "loginAdminChallenge",
+  "name": "Login Admin",
+  "category": "Injection",
+  "difficulty": 2
+ },
+ {
+  "key": "loginBenderChallenge",
+  "name": "Login Bender",
+  "category": "Injection",
+  "difficulty": 3
+ },
+ {
+  "key": "loginJimChallenge",
+  "name": "Login Jim",
+  "category": "Injection",
+  "difficulty": 3
+ },
+ {
+  "key": "noSqlCommandChallenge",
+  "name": "NoSQL DoS",
+  "category": "Injection",
+  "difficulty": 4
+ },
+ {
+  "key": "noSqlOrdersChallenge",
+  "name": "NoSQL Exfiltration",
+  "category": "Injection",
+  "difficulty": 5
+ },
+ {
+  "key": "noSqlReviewsChallenge",
+  "name": "NoSQL Manipulation",
+  "category": "Injection",
+  "difficulty": 4
+ },
+ {
+  "key": "sstiChallenge",
+  "name": "SSTi",
+  "category": "Injection",
+  "difficulty": 6
+ },
+ {
+  "key": "systemPromptExtractionChallenge",
+  "name": "System Prompt Extraction",
+  "category": "Injection",
+  "difficulty": 3
+ },
+ {
+  "key": "unionSqlInjectionChallenge",
+  "name": "User Credentials",
+  "category": "Injection",
+  "difficulty": 4
+ },
+ {
+  "key": "rceChallenge",
+  "name": "Blocked RCE DoS",
+  "category": "Insecure Deserialization",
+  "difficulty": 5
+ },
+ {
+  "key": "rceOccupyChallenge",
+  "name": "Successful RCE DoS",
+  "category": "Insecure Deserialization",
+  "difficulty": 6
+ },
+ {
+  "key": "yamlBombChallenge",
+  "name": "Memory Bomb",
+  "category": "Insecure Deserialization",
+  "difficulty": 5
+ },
+ {
+  "key": "closeNotificationsChallenge",
+  "name": "Mass Dispel",
+  "category": "Miscellaneous",
+  "difficulty": 1
+ },
+ {
+  "key": "csafChallenge",
+  "name": "Security Advisory",
+  "category": "Miscellaneous",
+  "difficulty": 3
+ },
+ {
+  "key": "privacyPolicyChallenge",
+  "name": "Privacy Policy",
+  "category": "Miscellaneous",
+  "difficulty": 1
+ },
+ {
+  "key": "scoreBoardChallenge",
+  "name": "Score Board",
+  "category": "Miscellaneous",
+  "difficulty": 1
+ },
+ {
+  "key": "securityPolicyChallenge",
+  "name": "Security Policy",
+  "category": "Miscellaneous",
+  "difficulty": 2
+ },
+ {
+  "key": "web3WalletChallenge",
+  "name": "Wallet Depletion",
+  "category": "Miscellaneous",
+  "difficulty": 6
+ },
+ {
+  "key": "accessLogDisclosureChallenge",
+  "name": "Access Log",
+  "category": "Observability Failures",
+  "difficulty": 4
+ },
+ {
+  "key": "dlpPasswordSprayingChallenge",
+  "name": "Leaked Access Logs",
+  "category": "Observability Failures",
+  "difficulty": 5
+ },
+ {
+  "key": "exposedMetricsChallenge",
+  "name": "Exposed Metrics",
+  "category": "Observability Failures",
+  "difficulty": 1
+ },
+ {
+  "key": "misplacedSignatureFileChallenge",
+  "name": "Misplaced Signature File",
+  "category": "Observability Failures",
+  "difficulty": 4
+ },
+ {
+  "key": "deprecatedInterfaceChallenge",
+  "name": "Deprecated Interface",
+  "category": "Security Misconfiguration",
+  "difficulty": 2
+ },
+ {
+  "key": "errorHandlingChallenge",
+  "name": "Error Handling",
+  "category": "Security Misconfiguration",
+  "difficulty": 1
+ },
+ {
+  "key": "loginSupportChallenge",
+  "name": "Login Support Team",
+  "category": "Security Misconfiguration",
+  "difficulty": 6
+ },
+ {
+  "key": "svgInjectionChallenge",
+  "name": "Cross-Site Imaging",
+  "category": "Security Misconfiguration",
+  "difficulty": 5
+ },
+ {
+  "key": "hiddenImageChallenge",
+  "name": "Steganography",
+  "category": "Security through Obscurity",
+  "difficulty": 4
+ },
+ {
+  "key": "privacyPolicyProofChallenge",
+  "name": "Privacy Policy Inspection",
+  "category": "Security through Obscurity",
+  "difficulty": 3
+ },
+ {
+  "key": "tokenSaleChallenge",
+  "name": "Blockchain Hype",
+  "category": "Security through Obscurity",
+  "difficulty": 5
+ },
+ {
+  "key": "dataExportChallenge",
+  "name": "GDPR Data Theft",
+  "category": "Sensitive Data Exposure",
+  "difficulty": 4
+ },
+ {
+  "key": "directoryListingChallenge",
+  "name": "Confidential Document",
+  "category": "Sensitive Data Exposure",
+  "difficulty": 1
+ },
+ {
+  "key": "dlpPastebinDataLeakChallenge",
+  "name": "Leaked Unsafe Product",
+  "category": "Sensitive Data Exposure",
+  "difficulty": 4
+ },
+ {
+  "key": "emailLeakChallenge",
+  "name": "Email Leak",
+  "category": "Sensitive Data Exposure",
+  "difficulty": 5
+ },
+ {
+  "key": "exposedCredentialsChallenge",
+  "name": "Exposed credentials",
+  "category": "Sensitive Data Exposure",
+  "difficulty": 2
+ },
+ {
+  "key": "forgottenBackupChallenge",
+  "name": "Forgotten Sales Backup",
+  "category": "Sensitive Data Exposure",
+  "difficulty": 4
+ },
+ {
+  "key": "forgottenDevBackupChallenge",
+  "name": "Forgotten Developer Backup",
+  "category": "Sensitive Data Exposure",
+  "difficulty": 4
+ },
+ {
+  "key": "geoStalkingMetaChallenge",
+  "name": "Meta Geo Stalking",
+  "category": "Sensitive Data Exposure",
+  "difficulty": 2
+ },
+ {
+  "key": "geoStalkingVisualChallenge",
+  "name": "Visual Geo Stalking",
+  "category": "Sensitive Data Exposure",
+  "difficulty": 2
+ },
+ {
+  "key": "leakedApiKeyChallenge",
+  "name": "Leaked API Key",
+  "category": "Sensitive Data Exposure",
+  "difficulty": 5
+ },
+ {
+  "key": "loginAmyChallenge",
+  "name": "Login Amy",
+  "category": "Sensitive Data Exposure",
+  "difficulty": 3
+ },
+ {
+  "key": "loginRapperChallenge",
+  "name": "Login MC SafeSearch",
+  "category": "Sensitive Data Exposure",
+  "difficulty": 2
+ },
+ {
+  "key": "nftUnlockChallenge",
+  "name": "NFT Takeover",
+  "category": "Sensitive Data Exposure",
+  "difficulty": 2
+ },
+ {
+  "key": "passwordHashLeakChallenge",
+  "name": "Password Hash Leak",
+  "category": "Sensitive Data Exposure",
+  "difficulty": 2
+ },
+ {
+  "key": "resetPasswordUvoginChallenge",
+  "name": "Reset Uvogin's Password",
+  "category": "Sensitive Data Exposure",
+  "difficulty": 4
+ },
+ {
+  "key": "retrieveBlueprintChallenge",
+  "name": "Retrieve Blueprint",
+  "category": "Sensitive Data Exposure",
+  "difficulty": 5
+ },
+ {
+  "key": "redirectChallenge",
+  "name": "Allowlist Bypass",
+  "category": "Unvalidated Redirects",
+  "difficulty": 4
+ },
+ {
+  "key": "redirectCryptoCurrencyChallenge",
+  "name": "Outdated Allowlist",
+  "category": "Unvalidated Redirects",
+  "difficulty": 1
+ },
+ {
+  "key": "fileWriteChallenge",
+  "name": "Arbitrary File Write",
+  "category": "Vulnerable Components",
+  "difficulty": 6
+ },
+ {
+  "key": "jwtForgedChallenge",
+  "name": "Forged Signed JWT",
+  "category": "Vulnerable Components",
+  "difficulty": 6
+ },
+ {
+  "key": "jwtUnsignedChallenge",
+  "name": "Unsigned JWT",
+  "category": "Vulnerable Components",
+  "difficulty": 5
+ },
+ {
+  "key": "knownVulnerableComponentChallenge",
+  "name": "Vulnerable Library",
+  "category": "Vulnerable Components",
+  "difficulty": 4
+ },
+ {
+  "key": "lfrChallenge",
+  "name": "Local File Read",
+  "category": "Vulnerable Components",
+  "difficulty": 5
+ },
+ {
+  "key": "supplyChainAttackChallenge",
+  "name": "Supply Chain Attack",
+  "category": "Vulnerable Components",
+  "difficulty": 5
+ },
+ {
+  "key": "typosquattingAngularChallenge",
+  "name": "Frontend Typosquatting",
+  "category": "Vulnerable Components",
+  "difficulty": 5
+ },
+ {
+  "key": "typosquattingNpmChallenge",
+  "name": "Legacy Typosquatting",
+  "category": "Vulnerable Components",
+  "difficulty": 4
+ },
+ {
+  "key": "httpHeaderXssChallenge",
+  "name": "HTTP-Header XSS",
+  "category": "XSS",
+  "difficulty": 4
+ },
+ {
+  "key": "localXssChallenge",
+  "name": "DOM XSS",
+  "category": "XSS",
+  "difficulty": 1
+ },
+ {
+  "key": "persistedXssFeedbackChallenge",
+  "name": "Server-side XSS Protection",
+  "category": "XSS",
+  "difficulty": 4
+ },
+ {
+  "key": "persistedXssUserChallenge",
+  "name": "Client-side XSS Protection",
+  "category": "XSS",
+  "difficulty": 3
+ },
+ {
+  "key": "reflectedXssChallenge",
+  "name": "Reflected XSS",
+  "category": "XSS",
+  "difficulty": 2
+ },
+ {
+  "key": "restfulXssChallenge",
+  "name": "API-only XSS",
+  "category": "XSS",
+  "difficulty": 3
+ },
+ {
+  "key": "usernameXssChallenge",
+  "name": "CSP Bypass",
+  "category": "XSS",
+  "difficulty": 4
+ },
+ {
+  "key": "videoXssChallenge",
+  "name": "Video XSS",
+  "category": "XSS",
+  "difficulty": 6
+ },
+ {
+  "key": "xssBonusChallenge",
+  "name": "Bonus Payload",
+  "category": "XSS",
+  "difficulty": 1
+ },
+ {
+  "key": "xxeDosChallenge",
+  "name": "XXE DoS",
+  "category": "XXE",
+  "difficulty": 5
+ },
+ {
+  "key": "xxeFileDisclosureChallenge",
+  "name": "XXE Data Access",
+  "category": "XXE",
+  "difficulty": 3
+ }
+]
