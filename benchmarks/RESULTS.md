@@ -20,7 +20,7 @@ _Run: 2026-07-07 · isitsecure commit `0c0dc5f` · mode `url-only` unless noted 
 | VAmPI (vulnerable) | REST API, no frontend | **3/3** | — | OpenAPI discovery: 0→19 endpoints |
 | VAmPI (secure) | REST API, no frontend | — | **2** (IDOR) | unauth heuristic can't tell public from broken-access |
 | VAmPI (authenticated) | REST API, two users | **2/2 BOLA** | **0** | cross-user IDOR; anon guard clears the 2 FPs above |
-| NodeGoat | Server-rendered (EJS) | **0→2 endpoints** | 0 | HTML form/link discovery now surfaces server-rendered forms |
+| NodeGoat | Server-rendered (EJS) | **0→10 endpoints** | 0 | HTML form/link discovery + form-scoped login surface the full authenticated form surface |
 
 ## Detail
 
@@ -103,9 +103,16 @@ forms (**0 → 2**: `login` and `signup`, with all their input fields as
 parameters). The full authenticated surface (profile, allocations, memos) needs
 the logged-in crawler, which now runs the same extractor on every page it
 visits — so a credentialed scan captures server-rendered forms in addition to
-the XHR/fetch calls it already intercepts. (Driving NodeGoat's login also needs
-its `userName` field recognized by the login-field selectors — a small separate
-gap.)
+the XHR/fetch calls it already intercepts. Driving NodeGoat's login works too:
+its identity field is named `userName` (not `email`), which a **form-scoped
+login-field detector** now handles — it finds the password field, scopes to its
+`<form>`, and fills the identity input in that same form.
+
+End-to-end, a credentialed crawl logs in, walks 32 pages, and discovers **10
+form endpoints (0 → 10)** — NodeGoat's actual vulnerable surface: `POST /profile`
+(`ssn`, `dob`, `bankAcc` — mass assignment), `POST /contributions`
+(business-logic), `POST /memos` (stored XSS), `GET /research?symbol` and
+`GET /learn?url=` (SSRF), and `GET /allocations/{id}?threshold` (IDOR).
 
 ## What these results say
 
@@ -117,8 +124,8 @@ gap.)
 - **Known gaps, each surfaced by a benchmark:**
   1. ~~Server-rendered apps (NodeGoat) — discovery needs HTML crawling.~~ —
      **addressed** via HTML form/link discovery (url-only crawl + the same
-     extractor inside the authenticated crawler); remaining nit is login-field
-     detection for non-standard names (`userName`).
+     extractor inside the authenticated crawler) plus a form-scoped login-field
+     detector that handles non-standard identity fields (`userName`).
   2. ~~Opaque object ids (Juice Shop BOLA)~~ — **resolved** via owned-resource-id
      harvesting (read the parent collection as A, test the real ids as B).
   3. Unauthenticated IDOR is FP-prone by nature — authenticated mode is the

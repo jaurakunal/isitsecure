@@ -14,6 +14,32 @@ from isitsecure.engine.constants import BrowserLoginConfig
 
 logger = logging.getLogger(__name__)
 
+# Form-scoped login-field detection. Finds the visible password input, scopes
+# to its enclosing <form>, and marks the identity field as the visible
+# text/email/tel input in that same form. Confined to the login form, so it
+# adapts to any identity field name (userName, login, acct, ...) without ever
+# grabbing an unrelated search box elsewhere on the page.
+_ID_MARK = "data-isitsecure-idfield"
+_PW_MARK = "data-isitsecure-pwfield"
+_DETECT_LOGIN_FIELDS_JS = """
+() => {
+  const vis = (el) => !!(el.offsetParent || el.getClientRects().length);
+  const pw = Array.from(document.querySelectorAll('input[type="password"]')).find(vis);
+  if (!pw) return { ok: false };
+  const scope = pw.closest('form') || document.body;
+  const id = Array.from(scope.querySelectorAll('input')).find(
+    (el) => el !== pw
+      && ['text', 'email', 'tel'].includes(el.type)
+      && !el.disabled
+      && vis(el)
+  );
+  if (!id) return { ok: false };
+  id.setAttribute('data-isitsecure-idfield', '1');
+  pw.setAttribute('data-isitsecure-pwfield', '1');
+  return { ok: true };
+}
+"""
+
 
 class BrowserLoginHelper:
     """Reusable Playwright login + token extraction logic.
@@ -46,6 +72,34 @@ class BrowserLoginHelper:
             except Exception:
                 continue
         return False
+
+    @staticmethod
+    async def detect_and_fill_login(
+        page: object,
+        identity_value: str,
+        password_value: str,
+    ) -> bool:
+        """Fill a login form by structure rather than a fixed selector list.
+
+        Locates the password field, scopes to its form, picks the identity
+        field in that form, and fills both via Playwright (real input events,
+        so framework-controlled inputs register). Returns True if both fields
+        were found and filled.
+        """
+        try:
+            detected = await page.evaluate(_DETECT_LOGIN_FIELDS_JS)  # type: ignore[union-attr]
+        except Exception as exc:
+            logger.debug("Form-scoped login detection failed: %s", exc)
+            return False
+        if not isinstance(detected, dict) or not detected.get("ok"):
+            return False
+        id_ok = await BrowserLoginHelper.fill_input(
+            page, (f'[{_ID_MARK}="1"]',), identity_value,
+        )
+        pw_ok = await BrowserLoginHelper.fill_input(
+            page, (f'[{_PW_MARK}="1"]',), password_value,
+        )
+        return id_ok and pw_ok
 
     @staticmethod
     async def click_submit(page: object) -> bool:

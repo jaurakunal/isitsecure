@@ -58,30 +58,27 @@ class BrowserAuthProvider:
                         )
                     ) from exc
 
-                # Fill form via shared helper
+                # Fill form via shared helper: fixed selectors first, then
+                # form-scoped detection for non-standard identity field names.
                 email_ok = await BrowserLoginHelper.fill_input(
                     page,
                     BrowserLoginConfig.EMAIL_INPUT_SELECTORS,
                     credentials.email,
                 )
-                if not email_ok:
-                    raise ValueError(
-                        BrowserLoginConfig.ERROR_LOGIN_FAILED.format(
-                            error="Could not find email input"
-                        )
-                    )
-
-                pw_ok = await BrowserLoginHelper.fill_input(
+                pw_ok = email_ok and await BrowserLoginHelper.fill_input(
                     page,
                     BrowserLoginConfig.PASSWORD_INPUT_SELECTORS,
                     credentials.password,
                 )
-                if not pw_ok:
-                    raise ValueError(
-                        BrowserLoginConfig.ERROR_LOGIN_FAILED.format(
-                            error="Could not find password input"
+                if not (email_ok and pw_ok):
+                    if not await BrowserLoginHelper.detect_and_fill_login(
+                        page, credentials.email, credentials.password,
+                    ):
+                        raise ValueError(
+                            BrowserLoginConfig.ERROR_LOGIN_FAILED.format(
+                                error="Could not locate login fields"
+                            )
                         )
-                    )
 
                 submitted = await BrowserLoginHelper.click_submit(page)
                 if not submitted:

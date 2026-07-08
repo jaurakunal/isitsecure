@@ -176,19 +176,23 @@ class AuthenticatedCrawler:
             except Exception:
                 pass
 
+            # Try the fixed identity/password selectors first (fast, reliable
+            # for email logins), then fall back to form-scoped detection, which
+            # adapts to non-standard identity field names (e.g. "userName").
             email_ok = await BrowserLoginHelper.fill_input(
                 page, BrowserLoginConfig.EMAIL_INPUT_SELECTORS, self._email,
             )
-            if not email_ok:
-                logger.warning("Could not find email input on %s", self._login_url)
-                return False
-
-            pw_ok = await BrowserLoginHelper.fill_input(
+            pw_ok = email_ok and await BrowserLoginHelper.fill_input(
                 page, BrowserLoginConfig.PASSWORD_INPUT_SELECTORS, self._password,
             )
-            if not pw_ok:
-                logger.warning("Could not find password input on %s", self._login_url)
-                return False
+            if not (email_ok and pw_ok):
+                if not await BrowserLoginHelper.detect_and_fill_login(
+                    page, self._email, self._password,
+                ):
+                    logger.warning(
+                        "Could not locate login fields on %s", self._login_url
+                    )
+                    return False
 
             submitted = await BrowserLoginHelper.click_submit(page)
             if not submitted:

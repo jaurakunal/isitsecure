@@ -214,3 +214,56 @@ class TestExtractToken:
 
         token = await BrowserLoginHelper.extract_token(mock_page)
         assert token is None
+
+
+class _FakeEl:
+    def __init__(self, selector, store):
+        self._selector = selector
+        self._store = store
+
+    async def fill(self, value):
+        self._store[self._selector] = value
+
+
+class _FakePage:
+    """Minimal page: evaluate() returns a canned detection result; the marked
+    fields resolve to fillable elements."""
+
+    def __init__(self, detect_result, has_marked=True):
+        self._detect = detect_result
+        self._has_marked = has_marked
+        self.filled: dict[str, str] = {}
+
+    async def evaluate(self, js):
+        if isinstance(self._detect, Exception):
+            raise self._detect
+        return self._detect
+
+    async def query_selector(self, selector):
+        if self._has_marked and "isitsecure" in selector:
+            return _FakeEl(selector, self.filled)
+        return None
+
+
+class TestDetectAndFillLogin:
+    async def test_fills_both_fields_when_detected(self):
+        page = _FakePage({"ok": True})
+        ok = await BrowserLoginHelper.detect_and_fill_login(page, "tester", "pw")
+        assert ok is True
+        assert "tester" in page.filled.values()
+        assert "pw" in page.filled.values()
+
+    async def test_returns_false_when_no_login_form(self):
+        page = _FakePage({"ok": False})
+        ok = await BrowserLoginHelper.detect_and_fill_login(page, "u", "p")
+        assert ok is False
+        assert page.filled == {}
+
+    async def test_returns_false_when_evaluate_raises(self):
+        page = _FakePage(RuntimeError("no page"))
+        assert await BrowserLoginHelper.detect_and_fill_login(page, "u", "p") is False
+
+    async def test_returns_false_when_marked_fields_missing(self):
+        # detection claimed ok but the marked elements can't be found
+        page = _FakePage({"ok": True}, has_marked=False)
+        assert await BrowserLoginHelper.detect_and_fill_login(page, "u", "p") is False
