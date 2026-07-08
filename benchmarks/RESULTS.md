@@ -20,7 +20,7 @@ _Run: 2026-07-07 · isitsecure commit `0c0dc5f` · mode `url-only` unless noted 
 | VAmPI (vulnerable) | REST API, no frontend | **3/3** | — | OpenAPI discovery: 0→19 endpoints |
 | VAmPI (secure) | REST API, no frontend | — | **2** (IDOR) | unauth heuristic can't tell public from broken-access |
 | VAmPI (authenticated) | REST API, two users | **2/2 BOLA** | **0** | cross-user IDOR; anon guard clears the 2 FPs above |
-| NodeGoat | Server-rendered (EJS) | **0/2** | 0 | no JS bundle / no OpenAPI spec → discovery finds nothing |
+| NodeGoat | Server-rendered (EJS) | **0→2 endpoints** | 0 | HTML form/link discovery now surfaces server-rendered forms |
 
 ## Detail
 
@@ -92,12 +92,20 @@ while the public endpoint is correctly cleared.
 
 ### NodeGoat — `url-only`
 
-**0 findings, recall 0/2.** The clone/build/startup/scan all succeeded against a
-live, known-vulnerable target — the scanner simply found nothing. NodeGoat is a
-**server-rendered** Express/EJS app: no JavaScript API bundle and no OpenAPI
-spec, so endpoint discovery (which relies on one or the other) surfaces nothing
-to test. This is the same blind spot as a frontend-less API, but for
-server-rendered HTML — the fix is HTML form/link crawling for endpoint discovery.
+Originally **0 findings, recall 0/2**: NodeGoat is a **server-rendered**
+Express/EJS app with no JavaScript API bundle and no OpenAPI spec, so discovery
+(which relied on one or the other) surfaced nothing to test.
+
+**Now addressed** by server-rendered HTML discovery — a `<form>`/`<input>`/
+query-link extractor that reads the attack surface out of the HTML. In
+`url-only` mode a bounded same-origin HTML crawl discovers NodeGoat's public
+forms (**0 → 2**: `login` and `signup`, with all their input fields as
+parameters). The full authenticated surface (profile, allocations, memos) needs
+the logged-in crawler, which now runs the same extractor on every page it
+visits — so a credentialed scan captures server-rendered forms in addition to
+the XHR/fetch calls it already intercepts. (Driving NodeGoat's login also needs
+its `userName` field recognized by the login-field selectors — a small separate
+gap.)
 
 ## What these results say
 
@@ -107,7 +115,10 @@ server-rendered HTML — the fix is HTML form/link crawling for endpoint discove
   both identity-based ids (VAmPI: 2 real BOLAs, 0 FPs) and **opaque object ids**
   via owned-resource-id harvesting (Juice Shop: 8 basket BOLAs, 0 FPs).
 - **Known gaps, each surfaced by a benchmark:**
-  1. Server-rendered apps (NodeGoat) — discovery needs HTML crawling.
+  1. ~~Server-rendered apps (NodeGoat) — discovery needs HTML crawling.~~ —
+     **addressed** via HTML form/link discovery (url-only crawl + the same
+     extractor inside the authenticated crawler); remaining nit is login-field
+     detection for non-standard names (`userName`).
   2. ~~Opaque object ids (Juice Shop BOLA)~~ — **resolved** via owned-resource-id
      harvesting (read the parent collection as A, test the real ids as B).
   3. Unauthenticated IDOR is FP-prone by nature — authenticated mode is the

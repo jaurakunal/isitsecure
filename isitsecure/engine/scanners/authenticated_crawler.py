@@ -39,6 +39,9 @@ from isitsecure.engine.models import (
     DiscoveredEndpoint,
     InterceptedRequest,
 )
+from isitsecure.engine.shared.html_endpoint_extractor import (
+    extract_html_endpoints,
+)
 from isitsecure.engine.shared.supabase_utils import (
     extract_supabase_table_from_url,
 )
@@ -75,6 +78,9 @@ class AuthenticatedCrawler:
         self._visited: set[str] = set()
         self._link_queue: deque[str] = deque()
         self._login_succeeded = False
+        # Server-rendered form/link endpoints found on crawled pages, keyed
+        # "METHOD:url" — complements the intercepted XHR/fetch endpoints.
+        self._html_endpoints: dict[str, DiscoveredEndpoint] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -260,6 +266,20 @@ class AuthenticatedCrawler:
             if normalized and normalized not in self._visited:
                 self._link_queue.append(normalized)
 
+    async def _extract_html_endpoints(self, page: object, page_url: str) -> None:
+        """Capture server-rendered <form>/<a?param> endpoints on this page.
+
+        The interception handler only sees XHR/fetch; server-rendered forms
+        (login, upload, profile-edit, admin actions that POST directly) leave
+        no network call to intercept, so their surface must be read from HTML.
+        """
+        try:
+            html = await page.content()  # type: ignore[union-attr]
+        except Exception:
+            return
+        for ep in extract_html_endpoints(html, page_url):
+            self._html_endpoints.setdefault(f"{ep.method.value}:{ep.url}", ep)
+
     async def _discover_links_from_page(self, page: object) -> None:
         """Extract all internal links from the current page DOM."""
         try:
@@ -322,6 +342,7 @@ class AuthenticatedCrawler:
                 logger.debug("Crawled [%d]: %s", visited_count, normalized)
 
                 await self._discover_links_from_page(page)
+                await self._extract_html_endpoints(page, normalized)
                 await self._interact_with_forms(page)
 
             except Exception as exc:
@@ -674,6 +695,12 @@ class AuthenticatedCrawler:
                     requires_auth=True,
                 )
             )
+
+        # Add server-rendered form/link endpoints not already seen via XHR.
+        for key, ep in self._html_endpoints.items():
+            if key not in seen_keys:
+                seen_keys.add(key)
+                endpoints.append(ep)
 
         return endpoints
 

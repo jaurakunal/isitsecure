@@ -82,6 +82,10 @@ class EndpointDiscoveryConfig:
     """Configuration for API endpoint discovery from JS bundles."""
 
     MAX_ENDPOINTS_TO_DISCOVER = 100
+    # Server-rendered HTML crawl: only triggered when JS/OpenAPI discovery
+    # found few endpoints, and bounded to a small number of same-origin pages.
+    HTML_CRAWL_TRIGGER = 10
+    MAX_HTML_PAGES = 15
     MAX_JS_BUNDLE_SIZE_BYTES = 10 * 1024 * 1024  # 10MB
 
     # --- Regex patterns for extracting endpoints from JS ---

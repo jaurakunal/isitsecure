@@ -25,6 +25,10 @@ from isitsecure.engine.constants import (
     IDORConfig,
     SharedPatterns,
 )
+from isitsecure.engine.shared.html_endpoint_extractor import (
+    collect_same_origin_links,
+    extract_html_endpoints,
+)
 from isitsecure.engine.shared.rate_limited_client import RateLimitedClient
 from isitsecure.engine.enums import EndpointCategory, EndpointMethod
 from isitsecure.engine.models import DiscoveredEndpoint
@@ -98,6 +102,10 @@ class EndpointDiscoveryScanner:
         await self._probe_supabase_urls(
             supabase_urls, raw_endpoints, anon_key
         )
+
+        # Server-rendered HTML: forms + query-links are the attack surface for
+        # apps with no JS API bundle or OpenAPI spec (classic MVC apps).
+        await self._discover_html_forms(html_content, base_url, raw_endpoints)
 
         # Phase 3: Extract app routes that might be API routes
         self._extract_app_routes(all_content, base_url, raw_endpoints)
@@ -456,6 +464,63 @@ class EndpointDiscoveryScanner:
                 count += 1
         return count
 
+    async def _discover_html_forms(
+        self,
+        html_content: str,
+        base_url: str,
+        endpoints: dict[str, DiscoveredEndpoint],
+    ) -> None:
+        """Discover endpoints from server-rendered HTML forms and query-links.
+
+        The page we already have is always parsed (free). If JS/OpenAPI
+        discovery came up nearly empty, a small bounded same-origin HTML crawl
+        follows page links to reach forms on other server-rendered pages.
+        """
+        self._merge_html_endpoints(html_content, base_url, endpoints)
+
+        if (
+            not base_url
+            or len(endpoints) >= EndpointDiscoveryConfig.HTML_CRAWL_TRIGGER
+        ):
+            return
+
+        visited: set[str] = {base_url}
+        queue = collect_same_origin_links(html_content, base_url)
+        async with RateLimitedClient(
+            max_concurrent=SharedPatterns.DEFAULT_MAX_CONCURRENT,
+            delay_seconds=SharedPatterns.DEFAULT_PROBE_DELAY,
+            timeout_seconds=DeepScanConfig.HTTP_TIMEOUT_SECONDS,
+            user_agent=DeepScanConfig.USER_AGENT,
+        ) as client:
+            while queue and len(visited) < EndpointDiscoveryConfig.MAX_HTML_PAGES:
+                url = queue.pop(0)
+                if url in visited:
+                    continue
+                visited.add(url)
+                try:
+                    resp = await client.get(url)
+                except httpx.HTTPError:
+                    continue
+                if resp.status_code >= 400:
+                    continue
+                if "html" not in resp.headers.get("content-type", "").lower():
+                    continue
+                self._merge_html_endpoints(resp.text, url, endpoints)
+                for link in collect_same_origin_links(resp.text, url):
+                    if link not in visited and link not in queue:
+                        queue.append(link)
+
+    def _merge_html_endpoints(
+        self,
+        html: str,
+        page_url: str,
+        endpoints: dict[str, DiscoveredEndpoint],
+    ) -> None:
+        for ep in extract_html_endpoints(html, page_url):
+            key = f"{ep.method.value}:{ep.url}"
+            if key not in endpoints:
+                endpoints[key] = ep
+
     async def _probe_supabase_urls(
         self,
         supabase_urls: set[str],
@@ -734,12 +799,18 @@ class EndpointDiscoveryScanner:
         endpoint.has_path_params = len(path_params) > 0
         endpoint.path_param_names = path_params
 
-        # Query params
+        # Query params. Merge URL-derived id params with any already known
+        # (HTML form fields, OpenAPI spec params) rather than overwriting —
+        # otherwise form/spec parameters are silently dropped here.
         query_params = parse_qs(parsed.query)
         id_query_params = [
             p for p in query_params if p.lower() in IDORConfig.ID_QUERY_PARAMS
         ]
-        endpoint.query_param_names = id_query_params
+        merged = list(endpoint.query_param_names)
+        for p in id_query_params:
+            if p not in merged:
+                merged.append(p)
+        endpoint.query_param_names = merged
 
     def _categorize_endpoint(self, endpoint: DiscoveredEndpoint) -> None:
         """Assign a semantic category based on URL patterns."""
