@@ -33,9 +33,14 @@ app = FastAPI(
     description="AI-powered security scanner for modern web apps",
 )
 
+# The server holds the user's LLM key, scans arbitrary URLs, and can write
+# files (via /api/fix). A wildcard origin let any website the user has open
+# drive it cross-origin. Restrict to loopback origins only (the UI is served
+# same-origin from this server).
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origin_regex=r"^https?://(127\.0\.0\.1|localhost)(:\d+)?$",
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )

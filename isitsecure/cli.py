@@ -517,8 +517,9 @@ def fix(
             console.print(f"  [dim]{diff[:800]}[/dim]")
             applied += 1
         else:
-            full_path = os.path.join(repo_path, path)
+            from isitsecure.engine.shared.safe_path import resolve_within
             try:
+                full_path = resolve_within(repo_path, path)
                 with open(full_path, "w") as f:
                     f.write(fixed_content)
                 console.print(f"  [green]Applied[/green]")

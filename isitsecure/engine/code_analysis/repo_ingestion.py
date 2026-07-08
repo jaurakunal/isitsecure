@@ -18,6 +18,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -313,6 +315,24 @@ class RepoIngestionService:
     # Existing methods (unchanged behavior)
     # ------------------------------------------------------------------
 
+    _SCP_LIKE = re.compile(r"^[\w.-]+@[\w.-]+:")   # git@host:path
+
+    @classmethod
+    def _validate_remote(cls, url: str, branch: str) -> None:
+        """Reject repository URLs/branches that could inject git options or
+        reach unsafe transports (ext::/fd:: run commands; file:// reads local)."""
+        for label, value in (("repository URL", url), ("branch", branch)):
+            if value.startswith("-"):
+                raise RuntimeError(f"Refusing {label} that begins with '-'.")
+        lowered = url.lower()
+        if "::" in url or lowered.startswith(("file:", "ext:", "fd:")):
+            raise RuntimeError("Refusing unsafe repository URL transport.")
+        if not (
+            lowered.startswith(("https://", "http://", "ssh://", "git://"))
+            or cls._SCP_LIKE.match(url)
+        ):
+            raise RuntimeError("Unsupported repository URL scheme.")
+
     async def _clone_repo(
         self,
         repo_url: str,
@@ -340,6 +360,10 @@ class RepoIngestionService:
             )
             return
 
+        # Untrusted repo_url/branch: block git arg-injection (leading "-",
+        # transport helpers like ext::/fd::, and file://), which can be RCE.
+        self._validate_remote(repo_url, branch)
+
         url = repo_url
         if github_token and url.startswith("https://"):
             # Inject token for private repository access
@@ -350,13 +374,21 @@ class RepoIngestionService:
         cmd = ["git", "clone"]
         if not full_history:
             cmd.extend(["--depth", "1"])
-        cmd.extend(["--branch", branch, url, clone_path])
+        # "--" ends option parsing so the URL/path can't be read as flags.
+        cmd.extend(["--branch", branch, "--", url, clone_path])
+        # Restrict git to safe transports; never prompt for credentials.
+        env = {
+            **os.environ,
+            "GIT_ALLOW_PROTOCOL": "https:http:ssh:git",
+            "GIT_TERMINAL_PROMPT": "0",
+        }
 
         try:
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=env,
             )
             _, stderr = await asyncio.wait_for(
                 process.communicate(),
@@ -364,6 +396,9 @@ class RepoIngestionService:
             )
             if process.returncode != 0:
                 error_msg = stderr.decode(errors="replace").strip()
+                # git echoes the remote URL (with the injected token) in errors.
+                if github_token:
+                    error_msg = error_msg.replace(github_token, "***")
                 if "not found" in error_msg.lower():
                     raise RuntimeError(
                         RepoIngestionConfig.ERROR_BRANCH_NOT_FOUND.format(

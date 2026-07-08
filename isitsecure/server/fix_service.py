@@ -20,6 +20,7 @@ import os
 from typing import Awaitable, Callable
 
 from isitsecure.config import load_api_key
+from isitsecure.engine.shared.safe_path import resolve_within
 from isitsecure.engine.fixes.fix_generator import FixGenerator, FixPlan
 from isitsecure.engine.fixes.markdown_exporter import FixPlanMarkdownExporter
 from isitsecure.engine.models import DeepFinding
@@ -193,7 +194,8 @@ async def run_fix_all(
             raise RuntimeError(f"Could not create branch: {err}")
         try:
             for path, content in final.items():
-                with open(os.path.join(local_repo, path), "w", encoding="utf-8") as fh:
+                safe_path = resolve_within(local_repo, path)
+                with open(safe_path, "w", encoding="utf-8") as fh:
                     fh.write(content)
                 await _git(local_repo, "add", "--", path)
             msg = f"isitsecure: fix {fixed_count} finding(s) across {len(final)} file(s)"
