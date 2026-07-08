@@ -601,7 +601,7 @@ class EndpointDiscoveryScanner:
     ) -> None:
         """Extract app routes that might be API-backed pages.
 
-        Routes like /dashboard/home, /marketplace/deals may have
+        Routes like /dashboard/home or /account/settings may have
         corresponding API calls. We add them as potential endpoints
         to probe.
         """
@@ -621,10 +621,7 @@ class EndpointDiscoveryScanner:
             # Routes with /dashboard, /api, or resource-like segments are interesting
             if any(
                 seg in route.lower()
-                for seg in (
-                    "/dashboard", "/api", "/marketplace",
-                    "/apps", "/deals", "/vector", "/iceberg",
-                )
+                for seg in ("/dashboard", "/api", "/apps", "/admin", "/account")
             ):
                 self._add_endpoint(
                     endpoints, route, base_url,

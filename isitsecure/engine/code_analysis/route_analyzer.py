@@ -167,21 +167,13 @@ class RouteAuthAnalyzer:
         "/", "/docs", "/swagger", "/openapi",
     })
 
-    # Route pattern substrings that indicate intentionally public endpoints
+    # Generic substrings that indicate intentionally public endpoints. Kept
+    # deliberately minimal — app-specific route names must NOT live here, or a
+    # scanned app that happens to reuse the name gets its missing-auth finding
+    # silently suppressed. Make this configurable per project instead.
     _PUBLIC_ROUTE_INDICATORS = (
         "/webhook",
         "/stripe",  # Stripe webhooks are signature-verified, not auth-gated
-        "marketplace.featured",
-        "marketplace.categories",
-        "marketplace.search",
-        "marketplace.reviews",
-        "marketplace.reviewStats",
-        "deal.list",
-        "deal.get",
-        "deal.getChangelogs",
-        "user.register",
-        "user.resendVerification",
-        "user.requestPasswordReset",
     )
 
     def _analyze_route(self, route: RouteEntry) -> list[CodeFinding]:

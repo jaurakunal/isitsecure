@@ -316,9 +316,7 @@ class IDORConfig:
         "product",
         "invoices",
         "invoice",
-        "marketplace",
         "apps",
-        "deals",
         "agents",
         "services",
         "resources",
@@ -6568,7 +6566,7 @@ class GuidedDASTConfig:
 
     # Scanner identity
     SCANNER_NAME = "sast_guided_dast"
-    USER_AGENT = "BrandifAI-GuidedDAST/1.0"
+    USER_AGENT = "isitsecure-GuidedDAST/1.0"
 
     # Test type identifiers
     TEST_TYPE_AUTH_BYPASS = "auth_bypass"
