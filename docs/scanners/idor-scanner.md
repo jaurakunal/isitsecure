@@ -16,10 +16,12 @@ Four test types:
 
 4. **Sequential ID Enumeration** — For numeric IDs, tries `id+1`, `id-1`, `id+100` to check if sequential enumeration works.
 
-In **authenticated mode** with two sets of credentials, the scanner performs **cross-user IDOR testing**:
-- Log in as User A and User B
-- Discover User A's resource IDs from the authenticated crawl
-- Try to access User A's resources as User B (read, write, delete)
+In **authenticated mode** with two sets of credentials, the scanner performs **cross-user IDOR testing** (broken object-level authorization, BOLA):
+- Log in as User A and User B — via the browser login helper, or via a generic REST login (`RestLoginAuthProvider`) for frontend-less APIs
+- **Harvest User A's real object IDs** from parent collections (e.g. `GET /api/tasks` yields task IDs), instead of guessing. Both **numeric** and **UUID** id shapes are handled; when harvested IDs are all numeric the candidate set is filtered to numeric IDs so UUIDs aren't wasted
+- Try to access User A's harvested resources as User B (read, write, delete)
+- **Anonymous-access guard**: each resource is first probed with no auth at all — if it's simply public, the cross-user finding is suppressed as a false positive
+- **Content-match guard**: a hit is only reported when User B's response actually contains User A's data, not an empty or generic body
 - Test if User B can do a full-table `SELECT *` via Supabase REST API
 
 Risk levels: **CONFIRMED** (data returned), **LIKELY** (200 status but different response), **POSSIBLE** (suspicious behavior), **SAFE**.

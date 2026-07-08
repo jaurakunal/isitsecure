@@ -11,6 +11,8 @@ Scans OpenAPI/Swagger specification files (`openapi.yaml`, `openapi.json`, `swag
 3. **Sensitive data in examples** — real API keys, tokens, or PII in example values
 4. **Overly broad parameters** — endpoints accepting freeform objects without schema validation
 
+> **Note:** This is the *static* scanner that analyzes OpenAPI/Swagger spec **files in your repo**. It is separate from the *runtime* OpenAPI discovery the DAST engine performs — that probes a live target for served specs (`/openapi.json`, `/swagger.json`, `/v3/api-docs`, …) and turns them into testable endpoints. See the "Cross-Referencing + Guided DAST" section of the main README.
+
 ## Why It Matters
 
 OpenAPI specs are often served at `/docs`, `/swagger`, or `/api-docs` in production. They provide attackers with:

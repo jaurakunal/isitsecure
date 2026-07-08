@@ -99,7 +99,7 @@ isitsecure is free and open source. The only cost is LLM API tokens for the AI-p
 | **Code-only + LLM review** | Yes | ~$5–8 |
 | **Full scan** (SAST + DAST + LLM) | Yes | ~$10–15 |
 
-Without an API key, you still get 23 rule-based scanners. The LLM adds business logic review, semantic rule verification, and intelligent triage — things no pattern matcher can do.
+Without an API key, you still get 24 rule-based scanners. The LLM adds business logic review, semantic rule verification, and intelligent triage — things no pattern matcher can do.
 
 **Supported LLM providers:** Anthropic (Claude), Google (Gemini)
 
@@ -148,7 +148,7 @@ Without an API key, you still get 23 rule-based scanners. The LLM adds business 
 | DOM XSS Scanner | Playwright-based sink hooking (innerHTML, eval, location.assign) |
 | Body Param Fuzzer | Prototype pollution, type confusion, injection via JSON body fields |
 
-### SAST Scanners (16) — Analyzes Your Code
+### SAST Scanners (17) — Analyzes Your Code
 
 | Scanner | What It Finds |
 |---|---|
@@ -165,6 +165,7 @@ Without an API key, you still get 23 rule-based scanners. The LLM adds business 
 | Dependency Scanner (npm) | Known CVEs in package.json dependencies |
 | Python Dependency Scanner | Known CVEs in requirements.txt / pyproject.toml (Django, Flask, FastAPI, PyJWT, etc.) |
 | Java Dependency Scanner | Known CVEs in pom.xml / build.gradle (Log4Shell, Spring, Struts, Jackson, etc.) |
+| OSV Dependency Scanner | Real-time CVE lookups against Google's OSV.dev database (200K+ vulns, all ecosystems: npm, PyPI, Maven, Gradle, Go, Rust) — no hardcoded CVE list, no API key |
 | Firebase Rules Analyzer | Overly permissive Firestore/RTDB security rules |
 | OpenAPI Scanner | Internal endpoints exposed in API specifications |
 | K8s Scanner | Privileged containers, no resource limits, hostPath mounts |

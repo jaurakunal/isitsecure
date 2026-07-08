@@ -6,9 +6,9 @@
 
 Tests for server-side injection vulnerabilities by sending payloads to API endpoints and analyzing the responses. Covers six injection types:
 
-1. **Error-based SQL Injection** — Sends `'` and `"1"="2"` characters and checks for SQL error patterns in the response (PostgreSQL, MySQL, SQLite error messages).
+1. **Error-based SQL Injection** — Sends `'` and `"1"="2"` characters and checks for SQL error patterns in the response. Recognizes errors from raw drivers *and* ORMs: PostgreSQL/psycopg2, MySQL, SQLite/sqlite3 ("unrecognized token"), Oracle (`ORA-…`), MSSQL, and SQLAlchemy (`OperationalError`, `ProgrammingError`) — so injections surface even behind an ORM layer.
 
-2. **Time-based Blind SQL Injection** — Measures baseline response time, then sends `SLEEP(5)` / `pg_sleep(5)` payloads. If the response takes 5+ seconds longer, the injection is confirmed.
+2. **Time-based Blind SQL Injection** — Measures baseline response time, then sends `SLEEP(5)` / `pg_sleep(5)` payloads. If the response is 5+ seconds slower, it **re-measures independently to confirm**: the delay must reproduce on a second request before the finding is reported. This kills false positives from one-off timing noise (GC pauses, load spikes, network jitter).
 
 3. **Command Injection** — Injects shell metacharacters (`;`, `|`, `` ` ``) with canary output detection. Checks if the command output appears in the response.
 
@@ -17,6 +17,8 @@ Tests for server-side injection vulnerabilities by sending payloads to API endpo
 5. **XXE (XML External Entity)** — For endpoints accepting XML, injects `<!ENTITY xx SYSTEM "/etc/passwd">` and checks for file content indicators in the response.
 
 6. **SSTI (Server-Side Template Injection)** — Sends `{{7*7}}` and checks if `49` appears in the response, indicating template evaluation.
+
+Each payload is injected into **path parameters** (templated `{id}`-style segments), **query parameters**, and **JSON body fields** — not just the query string — so injection in REST-style path components is covered. Endpoints are ranked by a shared prioritizer so the most likely-injectable ones are tested first within the scanner's time budget.
 
 All payloads are **read-only** — no data modification or exfiltration is attempted.
 

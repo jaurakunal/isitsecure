@@ -8,7 +8,7 @@ Every scan follows this sequence. Phases are skipped automatically based on scan
 
 ```
 Phase 1:  URL Ingestion          ─── Playwright captures HTML + JS bundles
-Phase 2:  Endpoint Discovery     ─── Extract API endpoints from JS code
+Phase 2:  Endpoint Discovery     ─── JS bundles + OpenAPI specs + HTML forms + active probing
 Phase 3:  Authenticated Crawl    ─── Browser login + BFS page discovery
 Phase 3.5: OOB Registration      ─── Setup blind SSRF/injection callbacks
 Phase 4:  DAST Scanners          ─── 15 scanners run in parallel
@@ -17,7 +17,7 @@ Phase 5.5: Probe Analysis        ─── Cross-scanner pattern detection on HT
 Phase 5.6: OOB Collection        ─── Poll for blind vulnerability callbacks
 Phase 6:  Repo Ingestion         ─── Clone + index repository
 Phase 6.5: LSP Initialization    ─── Start TypeScript Language Server
-Phase 7:  SAST Scanners          ─── 16 scanners run in parallel
+Phase 7:  SAST Scanners          ─── 17 scanners run in parallel
 Phase 7.5: LSP Validation        ─── Trace auth flows, suppress false positives
 Phase 8:  LLM Code Review        ─── AI analyzes high-risk routes
 Phase 9:  Cross-Reference        ─── Match DAST findings to SAST findings
@@ -32,24 +32,30 @@ Phase 11: Fix Generation         ─── AI generates code patches (optional, 
 
 ### Phase 1–2: Discovery
 
-The scanner first understands your application's attack surface:
+The scanner first understands your application's attack surface using **four complementary discovery strategies** (`EndpointDiscoveryScanner`), so it works on SPAs, classic server-rendered apps, and frontend-less REST APIs alike:
 
 1. **Playwright** navigates to your URL and captures the rendered HTML + all loaded JavaScript bundles
 2. **Seven regex patterns** extract API endpoints from the JS code: fetch calls, axios requests, Supabase `from()` queries, route definitions, parameterized paths
-3. **Active probing** hits common API base paths (`/api`, `/graphql`, `/rest/v1/`) to discover endpoints not visible in JS
-4. Each endpoint is categorized: `USER_DATA`, `RESOURCE_CRUD`, `AUTH`, `ADMIN`, `PAYMENT`, `FILE_ACCESS`, `PUBLIC`
+3. **OpenAPI/Swagger spec discovery** — probes 13 well-known spec locations (`/openapi.json`, `/swagger.json`, `/v3/api-docs`, `/v2/api-docs`, `/swagger/v1/swagger.json`, `/.well-known/openapi.json`, …) for each API base, parses any spec it finds, and extracts every declared endpoint with its methods, path parameters (including `{templated}` segments), and query parameters. This surfaces APIs with no crawlable frontend
+4. **HTML form/link discovery** (`html_endpoint_extractor`) — parses server-rendered pages with a stdlib `HTMLParser` to extract `<form action>` targets (with their `<input>`/`<select>`/`<textarea>` field names as parameters) and `<a href>` links that carry query parameters. This surfaces classic MVC apps that have no JS API bundle. It runs both in url-only discovery (bounded same-origin crawl) and inside the authenticated crawler after each page load
+5. **Active probing** hits common API base paths (`/api`, `/graphql`, `/rest/v1/`) to discover endpoints not visible in JS
+6. Each endpoint is categorized: `USER_DATA`, `RESOURCE_CRUD`, `AUTH`, `ADMIN`, `PAYMENT`, `FILE_ACCESS`, `PUBLIC`
 
-This matters because SPAs hide their API surface in JavaScript bundles. Traditional crawlers miss most of it.
+This matters because SPAs hide their API surface in JavaScript bundles, server-rendered apps expose it only in HTML forms, and REST APIs may expose nothing but an OpenAPI spec. Traditional crawlers miss most of it.
+
+**Endpoint prioritization + time budget** — before the DAST scanners run, a shared prioritizer (`endpoint_prioritizer.rank()`) scores endpoints per attack dimension (INJECTION, IDOR, XSS, CSRF, AUTH) so the most likely-vulnerable endpoints are tested first. Each scanner then works within a per-scanner `TimeBudget`, checking `budget.expired()` between endpoints so high-risk paths get covered before the external hard timeout cancels the scanner. The injection, XSS, IDOR, CSRF, auth-bypass, and HTTP-probe scanners all use this shared prioritizer.
 
 ### Phase 3: Authenticated Crawl
 
 If credentials are provided:
 
-1. Playwright launches a headless browser and logs in via the actual login form
+1. Playwright launches a headless browser and logs in via the actual login form. **Form-scoped login-field detection** (`BrowserLoginHelper.detect_and_fill_login`) locates the visible password field, scopes to its enclosing `<form>`, and fills the identity field in that same form — so it logs in even when the identity field isn't named `email` (e.g. `userName`, `login`, `handle`) without any hardcoded selectors
 2. Network interception captures every API call the authenticated app makes
-3. BFS (breadth-first search) crawls dashboard pages, discovering endpoints that only appear after login
+3. BFS (breadth-first search) crawls dashboard pages, discovering endpoints that only appear after login — the same HTML form/link extractor runs after each page load
 4. The crawler extracts **owned resource IDs** — UUIDs and numeric IDs that belong to the authenticated user
 5. These IDs are used later for IDOR testing: "can User B access User A's resources?"
+
+For frontend-less REST APIs, `RestLoginAuthProvider` (the `token` auth provider) skips the browser entirely: it POSTs credentials to a login endpoint (auto-discovered, or given via `--login-url`), extracts the bearer token from the JSON response (or via JWT regex), and builds an authenticated session directly.
 
 ### Phase 4–5: DAST Scanners
 
@@ -78,7 +84,7 @@ Authenticated scanners run separately with two sessions (User A and User B) for 
 - **JWT Scanner**: Tests alg:none bypass, weak secrets, key confusion
 - **RLS Deep Scanner**: Queries Supabase tables with anon key and cross-user tokens
 - **Privilege Escalation**: 8 tests including admin route access, role self-elevation, RPC bypass
-- **Cross-User IDOR**: User B tries to read/write/delete User A's resources
+- **Cross-User IDOR (BOLA)**: User B tries to read/write/delete User A's resources. The scanner harvests User A's real object IDs from parent collections (e.g. `GET /api/tasks` yields task IDs — handling both numeric and UUID id shapes), then swaps them into User B's requests. An **anonymous-access guard** first probes each resource without any auth and suppresses the finding if the endpoint is simply public, and a content-match check confirms User B actually received User A's data rather than an empty or generic response
 
 ### Phase 6–7: SAST Scanners
 
@@ -93,7 +99,7 @@ The repository is cloned (shallow, to temp dir) and indexed:
    - `GraphQLRouteMapper`: schema definitions → query/mutation types
 4. **File indexing** — reads all source files into memory (filtered by extension, size limit, skip `node_modules`)
 
-14 SAST scanners then run in parallel against the indexed codebase.
+17 SAST scanners then run in parallel against the indexed codebase (plus the LLM-powered Semantic Rule Verifier when an API key is available).
 
 ### Phase 7.5: LSP Validation
 
@@ -285,7 +291,7 @@ isitsecure/
 │   ├── cross_referencer.py     # DAST ↔ SAST finding matcher
 │   ├── scan_config.py          # User-configurable scan settings
 │   ├── scanners/               # 15 DAST scanners + special scanners
-│   ├── code_analysis/          # 14 SAST scanners + route mappers + LSP
+│   ├── code_analysis/          # 17 SAST scanners + route mappers + LSP
 │   ├── guided_dast/            # SAST → DAST test generation (6 strategies)
 │   ├── auth/                   # Auth providers (Supabase, Firebase, Browser, Token)
 │   ├── shared/                 # Rate limiter, OOB callbacks, JWT utils
@@ -332,7 +338,7 @@ isitsecure/
               │               │                 │
               │               │         ┌───────▼──────────┐
               │               │         │  SAST Scanners   │
-              │               │         │  (14 parallel)   │
+              │               │         │  (17 parallel)   │
               │               │         └───────┬──────────┘
               │               │                 │
               └───────────────┼─────────────────┘
