@@ -1115,11 +1115,12 @@ class DeepSecurityScanAgent:
             names.append("idor_cross_user")
 
         # REST cross-user IDOR: two logged-in users vs. discovered id-bearing
-        # endpoints (no Supabase project or crawler-found resources needed).
-        if (
-            self._idor_scanner and session_a and session_b and endpoints
-            and not owned_resources
-        ):
+        # endpoints. Runs whenever we have two sessions — independent of the
+        # crawler's owned_resources (a plain REST API can have crawler-found
+        # resources yet still need this path; the Supabase path above can't
+        # serve it). The scanner's own anon/content guards prevent duplicates
+        # and false positives.
+        if self._idor_scanner and session_a and session_b and endpoints:
             rest_cu_findings = await self._run_rest_cross_user_idor(
                 session_a, session_b, endpoints,
             )
