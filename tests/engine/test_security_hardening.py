@@ -68,3 +68,24 @@ def test_server_cors_is_not_wildcard():
     opts = cors[0].kwargs if hasattr(cors[0], "kwargs") else cors[0].options
     assert opts.get("allow_origins") != ["*"]
     assert opts.get("allow_origin_regex")  # loopback-only regex in place
+
+
+class TestCredentialRedirect:
+    """Credentialed clients must not auto-follow cross-origin redirects (M1)."""
+
+    _kw = dict(max_concurrent=1, delay_seconds=0.0, timeout_seconds=5.0,
+               user_agent="test")
+
+    async def test_auth_header_disables_redirect_following(self):
+        from isitsecure.engine.shared.rate_limited_client import RateLimitedClient
+        async with RateLimitedClient(**self._kw,
+                                     extra_headers={"apikey": "secret"}) as c:
+            assert c._client.follow_redirects is False
+        async with RateLimitedClient(**self._kw,
+                                     extra_headers={"Authorization": "Bearer x"}) as c:
+            assert c._client.follow_redirects is False
+
+    async def test_no_credentials_follows_redirects_by_default(self):
+        from isitsecure.engine.shared.rate_limited_client import RateLimitedClient
+        async with RateLimitedClient(**self._kw) as c:
+            assert c._client.follow_redirects is True

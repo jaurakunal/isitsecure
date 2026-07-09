@@ -87,8 +87,8 @@ class AnthropicAdapter:
             self.token_usage["input_tokens"] += getattr(usage, "input_tokens", 0) or 0
             self.token_usage["output_tokens"] += getattr(usage, "output_tokens", 0) or 0
             self.token_usage["llm_calls"] += 1
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to record token usage: %s", exc)
 
     async def generate(
         self,
@@ -156,8 +156,8 @@ class GoogleAdapter:
                 getattr(meta, "candidates_token_count", 0) or 0
             )
             self.token_usage["llm_calls"] += 1
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to record token usage: %s", exc)
 
     async def generate(
         self,

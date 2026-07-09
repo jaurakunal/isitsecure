@@ -164,8 +164,8 @@ async def run_fix_all(
             if os.path.isfile(full):
                 try:
                     contents[fp] = open(full, encoding="utf-8", errors="replace").read()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Could not read %s for fix context: %s", fp, exc)
 
         await emit({"type": "progress", "message": "Generating fixes…",
                     "current": 0, "total": len(contents)})

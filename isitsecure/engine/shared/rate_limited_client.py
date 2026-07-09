@@ -36,11 +36,22 @@ class RateLimitedClient:
         self._request_count = 0
         self._client: httpx.AsyncClient | None = None
 
+    # Header names that carry credentials and must never follow a redirect to
+    # another origin. httpx strips Authorization/Cookie cross-origin, but NOT
+    # custom auth headers (e.g. Supabase `apikey`).
+    _AUTH_HEADER_NAMES = frozenset({"authorization", "apikey", "x-api-key", "cookie"})
+
     async def __aenter__(self) -> "RateLimitedClient":
         headers = {SharedPatterns.HEADER_USER_AGENT: self._user_agent, **self._extra_headers}
+        follow = self._follow_redirects
+        if follow and any(k.lower() in self._AUTH_HEADER_NAMES for k in headers):
+            # Carrying credentials: don't auto-follow a redirect that could
+            # leak them to an attacker-controlled origin. The caller sees the
+            # 3xx directly, which is sufficient for probing.
+            follow = False
         self._client = httpx.AsyncClient(
             timeout=self._timeout,
-            follow_redirects=self._follow_redirects,
+            follow_redirects=follow,
             headers=headers,
         )
         return self

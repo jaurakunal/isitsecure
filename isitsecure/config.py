@@ -8,8 +8,11 @@ whether launched from the terminal or the web UI.
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 CONFIG_DIR = Path.home() / ".isitsecure"
 CONFIG_FILE = CONFIG_DIR / "config.toml"
@@ -50,7 +53,7 @@ def load_api_key(provider: str) -> str | None:
             with open(CONFIG_FILE, "rb") as f:
                 config = tomllib.load(f)
             return config.get("llm", {}).get(f"{provider}_api_key")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Could not read API key from %s: %s", CONFIG_FILE, exc)
 
     return None
