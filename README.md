@@ -447,6 +447,8 @@ isitsecure scan http://localhost:4000 --repo ./test-app --mode full
 
 isitsecure ships a repeatable benchmark harness that scores **recall** (of the vulnerability classes an app is known to have, how many we catch) and **false positives** (findings that must not appear against a hardened build) on public, deliberately-vulnerable apps.
 
+**Measured coverage — be realistic about what a scanner catches.** On [OWASP Juice Shop](https://owasp.org/www-project-juice-shop/) — a deliberately hard benchmark of 100+ challenges — isitsecure detects roughly **40% of the 45 DAST-detectable challenge classes** in an authenticated scan (36% url-only), scored automatically against the app's own `/api/Challenges` list. It's strong on authentication bypass, cross-user BOLA/IDOR, injection and misconfiguration, and open redirects; it's weak on interactive client-side XSS and challenges that require multi-step business-logic exploitation. In other words: it's a solid automated first pass that catches whole classes of real bugs in one command — **not** a substitute for a manual pentest. Full per-class breakdown and methodology are in [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
+
 ```bash
 python benchmarks/run_benchmarks.py          # VAmPI (vulnerable + secure builds)
 python benchmarks/run_benchmarks.py --all    # + NodeGoat + crAPI (heavy)
