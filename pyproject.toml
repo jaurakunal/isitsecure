@@ -10,7 +10,7 @@ readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.11"
 authors = [
-    { name = "Kunal Jaura", email = "kunal@isitsecure.ai" },
+    { name = "Kunal Jaura", email = "kunaljaura@gmail.com" },
 ]
 keywords = ["security", "scanner", "sast", "dast", "llm", "ai", "web-security", "penetration-testing"]
 classifiers = [

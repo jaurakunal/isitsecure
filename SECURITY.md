@@ -10,7 +10,7 @@ targets it scans.
 
 Report privately using **GitHub's private vulnerability reporting**:
 [Security → Report a vulnerability](https://github.com/jaurakunal/isitsecure/security/advisories/new).
-If that is unavailable, email the maintainer at **kunal@isitsecure.ai** with
+If that is unavailable, email the maintainer at **kunaljaura@gmail.com** with
 `[SECURITY]` in the subject.
 
 Please include:
