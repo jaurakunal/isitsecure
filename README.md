@@ -10,7 +10,7 @@ Built for developers and **vibe coders** shipping web apps who need to know if t
 
 ## What It Does
 
-isitsecure runs **29+ security scanners** against your web app in a single command. It combines four approaches that commercial tools sell separately:
+isitsecure runs **40 rule-based scanners** (plus optional AI code review) against your web app in a single command. It combines four approaches that commercial tools sell separately:
 
 - **SAST (Static Analysis)** — scans your source code for vulnerabilities without running it
 - **DAST (Dynamic Analysis)** — tests your live app by sending real HTTP requests
@@ -99,7 +99,7 @@ isitsecure is free and open source. The only cost is LLM API tokens for the AI-p
 | **Code-only + LLM review** | Yes | ~$5–8 |
 | **Full scan** (SAST + DAST + LLM) | Yes | ~$10–15 |
 
-Without an API key, you still get 24 rule-based scanners. The LLM adds business logic review, semantic rule verification, and intelligent triage — things no pattern matcher can do.
+Without an API key, you still get all 40 rule-based scanners (15 DAST + 8 special DAST + 17 SAST). The LLM adds business logic review, semantic rule verification, and intelligent triage — things no pattern matcher can do.
 
 **Supported LLM providers:** Anthropic (Claude), Google (Gemini)
 
@@ -456,9 +456,9 @@ Each run spins the target up in Docker, runs a DAST scan, scores against a known
 
 ## Privacy
 
-- **Your code stays on your machine.** SAST scanners clone your repo to a local temp directory and analyze it locally.
+- **Rule-based scanning is fully local.** SAST scanners clone your repo to a local temp directory and analyze it on your machine — no code leaves your computer unless you enable LLM review.
 - **DAST scanners send HTTP requests to your target URL.** Nothing is proxied through external servers.
-- **LLM prompts are sent to your chosen API provider** (Anthropic or Google). The prompts contain code snippets from files flagged by rule-based scanners — not your entire codebase.
+- **LLM review sends code to your chosen API provider** (Anthropic or Google). To be precise: it sends the **full contents of files flagged by the rule-based scanners** (capped at ~50 KB per file) — not your entire codebase, but for most source files that is the whole file, not just a snippet. Run `--llm none` to keep everything local.
 - **OOB callbacks** only involve your scan target making DNS/HTTP requests to the callback server. Your code is never sent there.
 
 ## Architecture
