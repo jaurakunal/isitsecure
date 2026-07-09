@@ -8,6 +8,21 @@ Built for developers and **vibe coders** shipping web apps who need to know if t
 
 ---
 
+## Contents
+
+- [What It Does](#what-it-does)
+- [Install](#install) · [Quick Start](#quick-start) · [What It Costs](#what-it-costs)
+- [Scan Modes](#scan-modes)
+- [What It Scans](#what-it-scans) — [DAST](#dast-scanners-15--tests-your-live-app) · [Special DAST](#special-dast-scanners-8) · [SAST](#sast-scanners-17--analyzes-your-code) · [LLM](#llm-powered-analysis-requires-api-key) · [Cross-Referencing](#cross-referencing--guided-dast)
+- [Language Support](#language-support) · [Output Formats](#output-formats)
+- [Auto-Fix](#auto-fix-one-command-to-fix-your-app) · [Security Badge](#security-badge)
+- [How We Compare](#how-we-compare) · [What It Does NOT Cover](#what-it-does-not-cover)
+- [Configuration](#configuration) — [API Keys](#api-keys) · [OOB Callbacks](#oob-callbacks-blind-vulnerability-detection) · [Authenticated Scanning](#authenticated-scanning)
+- [CLI Reference](#cli-reference) · [Web UI](#web-ui) · [Try It on the Test App](#try-it-on-the-test-app)
+- [Benchmarks](#benchmarks) · [Privacy](#privacy) · [Architecture](#architecture)
+- [Scanner Documentation](#scanner-documentation) · [LSP Setup](#lsp-setup-optional-reduces-false-positives)
+- [Contributing](#contributing) · [License](#license) · [Acknowledgements](#acknowledgements)
+
 ## What It Does
 
 isitsecure runs **40 rule-based scanners** (plus optional AI code review) against your web app in a single command. It combines four approaches that commercial tools sell separately:
