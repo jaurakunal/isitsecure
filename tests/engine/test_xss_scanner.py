@@ -588,3 +588,43 @@ class TestFullScan:
 
         # Should still detect DOM XSS
         assert any(f.title == XSSConfig.TITLE_DOM_XSS for f in findings)
+
+
+class TestStoredXss:
+    """Stored (persist-then-retrieve) XSS detection via _check_stored_reflection."""
+
+    def _resp(self, content_type, text):
+        r = MagicMock()
+        r.status_code = 200
+        r.headers = {"content-type": content_type}
+        r.text = text
+        r.elapsed = datetime.timedelta(seconds=0.1)
+        return r
+
+    async def _run(self, content_type, text):
+        scanner = XSSScanner()
+        client = MagicMock()
+        client.get = AsyncMock(return_value=self._resp(content_type, text))
+        ep = DiscoveredEndpoint(url="http://app/api/memos",
+                                method=EndpointMethod.POST)
+        canary = "<canary_xss_abc_comment>"
+        return await scanner._check_stored_reflection(
+            client, ep, {"comment": canary}, {"comment": canary}, "POST")
+
+    async def test_stored_xss_detected_in_html(self):
+        f = await self._run("text/html; charset=utf-8",
+                            "<div><canary_xss_abc_comment></div>")
+        assert f is not None
+        assert f.severity == SeverityLevel.CRITICAL
+        assert "Stored XSS" in f.title
+
+    async def test_json_retrieval_not_flagged(self):
+        # A JSON API echoing the stored value is not directly XSS -> no finding.
+        f = await self._run("application/json",
+                            '{"comment":"<canary_xss_abc_comment>"}')
+        assert f is None
+
+    async def test_encoded_canary_not_flagged(self):
+        f = await self._run("text/html",
+                            "<div>&lt;canary_xss_abc_comment&gt;</div>")
+        assert f is None

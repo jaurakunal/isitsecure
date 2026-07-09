@@ -387,6 +387,15 @@ class XSSScanner:
                         request_payload=json.dumps(body_payload),
                     )
 
+            # Stored XSS: the payload may reflect only when the resource is
+            # RETRIEVED, not in the POST response. Fetch the collection and
+            # check for an unescaped canary in an HTML response.
+            stored = await self._check_stored_reflection(
+                client, endpoint, field_canary_map, body_payload, http_method,
+            )
+            if stored:
+                return stored
+
         except Exception as exc:
             logger.debug(
                 XSSConfig.ERROR_XSS_SCAN_FAILED.format(
@@ -394,6 +403,68 @@ class XSSScanner:
                 )
             )
 
+        return None
+
+    async def _check_stored_reflection(
+        self,
+        client: RateLimitedClient,
+        endpoint: DiscoveredEndpoint,
+        field_canary_map: dict[str, str],
+        body_payload: dict[str, str],
+        http_method: str,
+    ) -> DeepFinding | None:
+        """GET the endpoint and flag a canary reflected unescaped in HTML.
+
+        This is the stored-then-rendered XSS pattern: the value was accepted by
+        the POST but only appears when the collection is read back. Restricted
+        to HTML responses so a JSON API echoing the stored value isn't a false
+        positive (that path is the DOM scanner's job).
+        """
+        try:
+            response = await client.get(endpoint.url)
+        except Exception:
+            return None
+        if "text/html" not in response.headers.get("content-type", "").lower():
+            return None
+        body = response.text
+        for field_name, canary_value in field_canary_map.items():
+            if canary_value not in body:
+                continue
+            capture = build_probe_capture(
+                method=http_method, url=endpoint.url, headers={},
+                body=json.dumps(body_payload), response_status=response.status_code,
+                response_headers=dict(response.headers), response_body=body,
+                elapsed_ms=response.elapsed.total_seconds() * 1000,
+                scanner_name=self.scanner_name,
+            )
+            return DeepFinding(
+                source=FindingSource.DAST_URL,
+                category=FindingCategory.INJECTION_RISK,
+                severity=SeverityLevel.CRITICAL,
+                title="Stored XSS (persisted, reflected unescaped on retrieval)",
+                description=(
+                    f"A canary submitted to {endpoint.url} via '{field_name}' "
+                    f"was stored and reflected UNESCAPED in the HTML response "
+                    f"when the resource was retrieved (GET). Persisted user "
+                    f"input rendered without encoding is stored XSS."
+                ),
+                technical_detail=(
+                    f"{http_method} stored canary in '{field_name}'; a "
+                    f"subsequent GET {endpoint.url} returned it unescaped in "
+                    f"an HTML response.\nCanary: {canary_value}"
+                ),
+                evidence=(
+                    f"POST->GET {endpoint.url}: '{field_name}' canary persisted "
+                    f"and reflected unescaped in HTML"
+                ),
+                confidence=XSSConfig.CONFIDENCE_REFLECTED_CONFIRMED,
+                scanner_name=self.scanner_name,
+                endpoint_url=endpoint.url,
+                http_method=http_method,
+                request_payload=json.dumps(body_payload),
+                response_preview=body[:300],
+                probe_captures=[capture],
+            )
         return None
 
     # ------------------------------------------------------------------
