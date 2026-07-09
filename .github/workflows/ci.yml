@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: tests (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      # Installs the package deps (playwright/anthropic/etc.) so all imports
+      # resolve. The test suite mocks the browser, so no `playwright install`
+      # (browser binaries) and no Docker are needed — it stays fast.
+      - run: pip install -e ".[all,dev]"
+      - run: pytest -q
+
+  lint:
+    name: ruff (advisory)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install ruff
+      # Advisory for now: the codebase has a pre-existing lint backlog, much of
+      # it domain-noise for a security tool (payload strings flagged as
+      # "hardcoded passwords", intentional per-item try/except isolation). Once
+      # the config is tuned and the real issues are cleared, drop
+      # continue-on-error to make this a gate.
+      - run: ruff check isitsecure benchmarks tests
+        continue-on-error: true
