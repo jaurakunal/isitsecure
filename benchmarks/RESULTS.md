@@ -30,7 +30,7 @@ produced by `run_benchmarks.py` and are not part of the automated scorecard yet.
 | Target | Mode | Result |
 |---|---|---|
 | OWASP Juice Shop v20.1.1 | url-only | SQLi **2** (`/rest/products/search`), IDOR **4**, command-inj FP **0**; 56 endpoints |
-| Juice Shop | authenticated (2 users) | **8** cross-user read BOLA on `/api/BasketItems`, 0 FP |
+| Juice Shop | authenticated (2 users) | recall **16/45 (36%)**; **8** cross-user read BOLA on `/api/BasketItems` (0 FP) — now surfaces end-to-end |
 | VAmPI | authenticated (2 users) | **2** cross-user write BOLA (email/password), 0 FP |
 
 ## Detail
@@ -71,7 +71,11 @@ url-only: 56 endpoints; **SQLi 2** (error-based on `/rest/products/search`),
 login (`/rest/user/login`, nested `authentication.token`) + owned-resource-id
 harvesting finds **8 confirmed read BOLA** on `/api/BasketItems/{id}`, 0 FP.
 Guards: anonymous probe (public endpoints), id-shape inference from harvested
-ids, and a content-match check (B must see the *same* resource as A).
+ids, and a content-match check (B must see the *same* resource as A). These 8
+BOLA now appear in a full `--mode authenticated` scan (comprehensive recall
+31% url-only -> 36% authenticated): an earlier gate (`not owned_resources`)
+skipped the REST cross-user phase whenever the browser crawler populated
+resource ids, which it does even on a failed SPA login — fixed.
 
 ## How to read these numbers
 
@@ -89,9 +93,12 @@ This benchmark is honest about being **limited**:
 - **Known variance:** time-based checks are load-sensitive; VAmPI's `/createdb`
   resets its DB mid-scan. Findings counts are given as ranges where they varied.
 
-Turning this into a **scored benchmark** (per-instance ground truth from each
-app's full challenge list, precision + F-score, true-positive endpoint
-verification) is planned — see the benchmark issues in the repo.
+A **per-instance scored benchmark** now exists for Juice Shop:
+`benchmarks/score.py` grades a scan against all 113 challenges (from the app's
+own `/api/Challenges`), reporting recall over the 45 DAST-detectable ones with
+true-positive endpoint verification, plus the out-of-scope tally. The Juice Shop
+36%/31% figures above come from it. Extending it to VAmPI/NodeGoat/crAPI and
+wiring it into `run_benchmarks.py` is the remaining work (tracked as issues).
 
 ## Reproduce
 
