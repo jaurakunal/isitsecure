@@ -29,8 +29,8 @@ produced by `run_benchmarks.py` and are not part of the automated scorecard yet.
 
 | Target | Mode | Result |
 |---|---|---|
-| OWASP Juice Shop v20.1.1 | url-only | SQLi **2** (`/rest/products/search`), IDOR **4**, command-inj FP **0**; 56 endpoints |
-| Juice Shop | authenticated (2 users) | recall **16/45 (36%)**; **8** cross-user read BOLA on `/api/BasketItems` (0 FP) — now surfaces end-to-end |
+| OWASP Juice Shop v20.1.1 | url-only | comprehensive recall **16/45 (36%)** via score.py; SQLi 2, IDOR 4, open-redirect 2, command-inj FP 0 |
+| Juice Shop | authenticated (2 users) | recall **~18/45 (40%)**; **8** cross-user read BOLA on `/api/BasketItems` (0 FP), open-redirect + BOLA now surface end-to-end |
 | VAmPI | authenticated (2 users) | **2** cross-user write BOLA (email/password), 0 FP |
 
 ## Detail
