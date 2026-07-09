@@ -6161,7 +6161,8 @@ class OpenRedirectConfig:
     REDIRECT_PARAM_NAMES = (
         "redirect", "url", "next", "return", "returnto",
         "continue", "goto", "dest", "destination", "redir",
-        "redirect_uri", "callback",
+        "redirect_uri", "callback", "to", "returnurl", "return_url",
+        "forward", "location",
     )
 
     # Common redirect endpoint paths

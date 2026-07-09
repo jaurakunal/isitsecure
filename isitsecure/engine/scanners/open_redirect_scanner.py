@@ -147,7 +147,15 @@ class OpenRedirectScanner:
         """Test a single parameter with all redirect payloads."""
         findings: list[DeepFinding] = []
 
-        for payload, payload_label in OpenRedirectConfig.REDIRECT_PAYLOADS:
+        payloads = list(OpenRedirectConfig.REDIRECT_PAYLOADS)
+        # Allowlist-bypass: if the param already carries an allowed value (e.g.
+        # a discovered `?to=https://trusted...`), embed it so a substring
+        # allowlist still passes while the host resolves to evil.com.
+        existing = parse_qs(urlparse(endpoint.url).query).get(param_name, [None])[0]
+        if existing:
+            payloads.insert(0, (f"https://evil.com/?_={existing}", "allowlist_bypass"))
+
+        for payload, payload_label in payloads:
             finding = await self._send_redirect_probe(
                 client, endpoint, param_name, payload, payload_label
             )
