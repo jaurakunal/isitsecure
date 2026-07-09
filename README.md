@@ -64,10 +64,10 @@ URL/DAST scanning needs the `[browser]` extra — without it, `isitsecure scan <
 
 ```bash
 # Scan a live URL (DAST only, no API key needed)
-isitsecure scan https://your-app.com
+isitsecure scan https://your-app.com --llm none
 
 # Scan source code (SAST only)
-isitsecure scan --repo https://github.com/you/your-app --mode code-only
+isitsecure scan --repo https://github.com/you/your-app --mode code-only --llm none
 
 # Full scan (SAST + DAST + LLM review)
 isitsecure scan https://your-app.com --repo https://github.com/you/your-app --mode full
@@ -428,7 +428,7 @@ The repo includes **VibeTasks** — an intentionally vulnerable Next.js + Supaba
 
 ```bash
 # Scan the bundled app's source (SAST only — fast, no API key needed)
-isitsecure scan --repo ./test-app --mode code-only
+isitsecure scan --repo ./test-app --mode code-only --llm none
 ```
 
 To also run the live-app (DAST) scanners, start the app first, then scan its URL:

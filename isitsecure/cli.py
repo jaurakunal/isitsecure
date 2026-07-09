@@ -626,7 +626,10 @@ def badge(
     console.print(f"[green]Badge written to {output_file}[/green]")
     console.print(f"Grade: [bold]{grade}[/bold]  |  {len(report.findings)} findings")
     console.print(f"\nAdd to your README:")
-    console.print(f'  [dim]![Security: {grade}](./{output_file})[/dim]')
+    # Only prefix "./" for relative paths; an absolute -o path would otherwise
+    # render as ".//abs/path".
+    badge_ref = output_file if Path(output_file).is_absolute() else f"./{output_file}"
+    console.print(f'  [dim]![Security: {grade}]({badge_ref})[/dim]')
 
 
 def _generate_badge_svg(grade: str, critical: int, high: int, total: int) -> str:
