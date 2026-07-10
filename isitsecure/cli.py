@@ -279,6 +279,12 @@ def scan(
             title="Security Scan",
             border_style="bright_magenta",
         ))
+        # Code scan without language servers → one-line, non-blocking nudge.
+        if repo and any(not _first_which(s["bins"]) for s in _LSP_SPECS):
+            err_console.print(
+                "[dim]💡 Tip: `isitsecure setup --lsp` enables deeper code analysis "
+                "(auth-flow tracing) for more accurate results.[/dim]"
+            )
 
     report = asyncio.run(_run_scan(
         agent=agent,
@@ -549,6 +555,10 @@ def launch(
     import webbrowser
 
     import uvicorn
+
+    # UI users start the UI from a terminal — offer the deeper-analysis setup
+    # here so they get it too (interactive, one-time, skippable).
+    _lsp_offer()
 
     console.print(Panel(
         f"[bold]isitsecure v{__version__}[/bold]\n"
@@ -968,6 +978,43 @@ def _setup_lsps() -> None:
         missing_rt = [r for r in spec["runtime"] if not shutil.which(r)]
         if missing_rt:
             console.print(f"      [dim](also needs {', '.join(missing_rt)} on PATH to run)[/dim]")
+
+
+def _lsp_offer() -> None:
+    """Offer, once, to install missing language servers.
+
+    Used by ``launch`` so UI users — who start the UI from a terminal — get the
+    same deeper-analysis setup. No-op when everything is ready, when running
+    non-interactively, or after the user has declined once.
+    """
+    missing = [s for s in _LSP_SPECS if not _first_which(s["bins"])]
+    if not missing or not sys.stdin.isatty():
+        return
+    marker = CONFIG_DIR / ".lsp_dismissed"
+    try:
+        if marker.exists():
+            return
+    except OSError:
+        pass
+
+    console.print(
+        "\n[bold]Enable deeper code analysis?[/bold] [dim](recommended)[/dim]\n"
+        "  isitsecure can trace how your code actually enforces login and\n"
+        "  permissions — catching more real issues and cutting false alarms on\n"
+        "  code scans. It installs a small language-analysis helper.\n"
+        f"  [dim]Not set up yet: {', '.join(s['lang'] for s in missing)}[/dim]"
+    )
+    if typer.confirm("Set it up now?", default=True):
+        _setup_lsps()
+    else:
+        try:
+            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            marker.write_text("")  # remember the decline; don't nag on relaunch
+        except OSError:
+            pass
+        console.print(
+            "[dim]Skipped — set up any time with `isitsecure setup --lsp`.[/dim]"
+        )
 
 
 @app.command()
