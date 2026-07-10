@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 logger = logging.getLogger(__name__)
 
 from isitsecure.engine.agent import DeepSecurityScanAgent
+from isitsecure.engine.enums import ScanDepth
 from isitsecure.engine.code_analysis.dependency_scanner import (
     DependencyScanner,
 )
@@ -220,6 +221,7 @@ def create_deep_security_scan_agent(
     judgment_llm_client: LLMClientProtocol | None = None,
     repo_ingestion_service=None,
     auth_provider: AuthProviderProtocol | None = None,
+    depth: ScanDepth = ScanDepth.QUICK,
 ) -> DeepSecurityScanAgent:
     """Create a fully wired DeepSecurityScanAgent with all scanners.
 
@@ -255,12 +257,13 @@ def create_deep_security_scan_agent(
         # Triage uses the judgment model (faster/cheaper)
         llm_triage = LLMTriageService(_judgment_client)
 
-    # OCP: new scanners are added to these lists — no agent code changes needed
+    # OCP: new scanners are added to these lists — no agent code changes needed.
+    # QUICK depth (default) runs the fast, high-signal scanners and finishes in
+    # seconds; the injection scanner runs with time-based (blind) SQLi disabled.
+    deep = depth == ScanDepth.DEEP
     dast_scanners = [
-        XSSScanner(),
-        ActiveInjectionScanner(),
+        ActiveInjectionScanner(time_based=deep),
         CSRFScanner(),
-        RateLimitScanner(),
         SessionScanner(),
         GraphQLScanner(),
         SSRFScanner(),
@@ -269,14 +272,21 @@ def create_deep_security_scan_agent(
         SecurityHeadersScanner(),
         CORSScanner(),
         OpenRedirectScanner(),
-        AuthBypassScanner(),
         HTTPProbeScanner(),
-        PasswordResetScanner(),
         SourceMapScanner(),
         MixedContentScanner(),
         SRIScanner(),
         ClientExposureScanner(),
     ]
+    # DEEP-only scanners: slow and/or aggressive (active payload injection, burst
+    # traffic, timing measurements, password-reset side effects).
+    if deep:
+        dast_scanners += [
+            XSSScanner(),
+            RateLimitScanner(),
+            AuthBypassScanner(),
+            PasswordResetScanner(),
+        ]
 
     sast_scanners = [
         GitSecretScanner(),

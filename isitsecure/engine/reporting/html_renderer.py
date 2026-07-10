@@ -25,6 +25,17 @@ class HTMLReportRenderer:
     _TEXT_COLOR = "#111827"
     _MUTED_TEXT_COLOR = "#6b7280"
 
+    # Risk Summary callout styling (owner-friendly, non-technical section)
+    _RISK_CALLOUT_BG = "#eff6ff"
+    _RISK_CALLOUT_BORDER = "#bfdbfe"
+    _RISK_CALLOUT_ACCENT = "#1d4ed8"
+
+    # Section titles owned by the renderer (owner-facing sections)
+    _SECTION_RISK_SUMMARY = "What This Means for You"
+    _SECTION_KEY_RISKS = "Your Biggest Risks"
+    _SECTION_ACTION_PLAN = "Recommended Action Plan"
+    _SECTION_THEMES = "Security Themes"
+
     def render(self, report_data: dict) -> str:
         """Render report dict to HTML string.
 
@@ -39,8 +50,10 @@ class HTMLReportRenderer:
 
         sections = [
             self._render_header(report_data, grade, grade_color),
+            self._render_risk_summary(report_data),
             self._render_executive_summary(report_data),
             self._render_finding_counts(report_data),
+            self._render_themes(report_data),
             self._render_findings_section(
                 ReportConfig.SECTION_CRITICAL_FINDINGS,
                 report_data.get("critical_findings", [])
@@ -103,6 +116,27 @@ class HTMLReportRenderer:
             f"border: 1px solid {self._BORDER_COLOR}; }}\n"
             f"    .count-number {{ font-size: 28px; font-weight: bold; }}\n"
             f"    .count-label {{ font-size: 12px; color: {self._MUTED_TEXT_COLOR}; }}\n"
+            f"    .risk-callout {{ background: {self._RISK_CALLOUT_BG}; "
+            f"border: 1px solid {self._RISK_CALLOUT_BORDER}; "
+            f"border-left: 6px solid {self._RISK_CALLOUT_ACCENT}; border-radius: 8px; "
+            f"padding: 16px 20px; margin: 20px 0; }}\n"
+            f"    .risk-callout h2 {{ border: none; margin: 0 0 8px 0; padding: 0; "
+            f"font-size: 18px; color: {self._RISK_CALLOUT_ACCENT}; }}\n"
+            f"    .risk-callout .risk-text {{ font-size: 15px; line-height: 1.7; }}\n"
+            f"    .risk-callout h3 {{ font-size: 14px; margin: 16px 0 6px 0; }}\n"
+            f"    .risk-callout ul {{ margin: 6px 0 0 0; padding-left: 20px; }}\n"
+            f"    .risk-callout li {{ margin: 4px 0; }}\n"
+            f"    .phase-card {{ background: {self._BODY_BG}; "
+            f"border: 1px solid {self._RISK_CALLOUT_BORDER}; border-radius: 6px; "
+            f"padding: 10px 14px; margin: 8px 0; }}\n"
+            f"    .phase-num {{ display: inline-block; min-width: 22px; height: 22px; "
+            f"line-height: 22px; text-align: center; border-radius: 50%; "
+            f"background: {self._RISK_CALLOUT_ACCENT}; color: white; font-size: 12px; "
+            f"font-weight: 600; margin-right: 8px; }}\n"
+            f"    .disclaimer {{ font-size: 12px; color: {self._MUTED_TEXT_COLOR}; "
+            f"margin-top: 12px; }}\n"
+            f"    .theme-card {{ border: 1px solid {self._BORDER_COLOR}; border-radius: 8px; "
+            f"padding: 12px 16px; margin: 8px 0; }}\n"
             "  </style>\n"
             "</head>\n"
             f"<body>\n{body}\n</body>\n"
@@ -133,6 +167,115 @@ class HTMLReportRenderer:
             f"  </div>\n"
             f"</div>"
         )
+
+    def _render_risk_summary(self, report_data: dict) -> str:
+        """Render the plain-English owner risk summary as a callout box.
+
+        Rendered prominently near the top of the report for non-technical
+        readers. Returns an empty string when no owner summary is present
+        (e.g. ``--llm none`` scans) so the section degrades gracefully.
+        """
+        owner = report_data.get("owner_summary")
+        if not owner:
+            return ""
+
+        parts = ["<div class=\"risk-callout\">"]
+        parts.append(f"  <h2>{escape(self._SECTION_RISK_SUMMARY)}</h2>")
+
+        risk_summary = owner.get("risk_summary", "")
+        if risk_summary and risk_summary.strip():
+            parts.append(
+                f"  <div class=\"risk-text\">{escape(risk_summary)}</div>"
+            )
+
+        key_risks = owner.get("key_risks") or []
+        if key_risks:
+            parts.append(f"  <h3>{escape(self._SECTION_KEY_RISKS)}</h3>")
+            parts.append("  <ul>")
+            for risk in key_risks:
+                parts.append(f"    <li>{escape(str(risk))}</li>")
+            parts.append("  </ul>")
+
+        phases = owner.get("remediation_phases") or []
+        if phases:
+            parts.append(f"  <h3>{escape(self._SECTION_ACTION_PLAN)}</h3>")
+            for phase in phases:
+                number = escape(str(phase.get("phase_number", "")))
+                title = escape(phase.get("title", ""))
+                description = escape(phase.get("description", ""))
+                count = phase.get("finding_count", 0)
+                count_str = (
+                    f" <span class=\"muted\">({count} finding"
+                    f"{'s' if count != 1 else ''})</span>"
+                    if count
+                    else ""
+                )
+                parts.append(
+                    f"  <div class=\"phase-card\">"
+                    f"<span class=\"phase-num\">{number}</span>"
+                    f"<strong>{title}</strong>{count_str}"
+                    f"<div style=\"margin-top: 4px;\">{description}</div>"
+                    f"</div>"
+                )
+
+        disclaimer_bits = []
+        scope = owner.get("scope_disclaimer", "")
+        if scope and scope.strip():
+            disclaimer_bits.append(escape(scope))
+        not_report = owner.get("what_this_report_is_not", "")
+        if not_report and not_report.strip():
+            disclaimer_bits.append(escape(not_report))
+        if disclaimer_bits:
+            parts.append(
+                f"  <div class=\"disclaimer\">{' '.join(disclaimer_bits)}</div>"
+            )
+
+        parts.append("</div>")
+        return "\n".join(parts)
+
+    def _render_themes(self, report_data: dict) -> str:
+        """Render thematic groupings of findings, if present.
+
+        Returns an empty string when no themes are available so the
+        section is omitted entirely rather than showing an empty heading.
+        """
+        themes = report_data.get("themes") or []
+        if not themes:
+            return ""
+
+        cards = [f"<h2>{escape(self._SECTION_THEMES)}</h2>"]
+        for theme in themes:
+            title = escape(theme.get("title", ""))
+            description = escape(theme.get("description", ""))
+            severity = theme.get("severity", "") or ""
+            count = theme.get("finding_count", 0)
+
+            badge = ""
+            if severity:
+                severity_color = ReportConfig.HTML_SEVERITY_COLORS.get(
+                    severity.lower(), self._MUTED_TEXT_COLOR
+                )
+                badge = (
+                    f"<span class=\"severity-badge\" style=\"background: "
+                    f"{severity_color};\">{escape(severity.upper())}</span> "
+                )
+
+            count_str = (
+                f"<span class=\"muted\" style=\"margin-left: auto;\">"
+                f"{count} finding{'s' if count != 1 else ''}</span>"
+                if count
+                else ""
+            )
+            cards.append(
+                f"<div class=\"theme-card\">"
+                f"<div style=\"display: flex; align-items: center; gap: 8px; "
+                f"margin-bottom: 6px;\">{badge}<strong>{title}</strong>"
+                f"{count_str}</div>"
+                f"<p>{description}</p>"
+                f"</div>"
+            )
+
+        return "\n".join(cards)
 
     def _render_executive_summary(self, report_data: dict) -> str:
         """Render executive summary section."""

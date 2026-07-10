@@ -8,6 +8,9 @@ from isitsecure.engine.models import (
     DeepFinding,
     DeepScanReport,
     FindingSource,
+    OwnerSummary,
+    RemediationPhase,
+    SecurityTheme,
 )
 from isitsecure.engine.reporting.html_renderer import HTMLReportRenderer
 from isitsecure.engine.reporting.report_generator import ReportGenerator
@@ -428,3 +431,152 @@ class TestHTMLRenderer:
         ])
         assert "Remediation" in html
         assert "Add helmet middleware" in html
+
+
+# ---------------------------------------------------------------------------
+# Owner summary (risk summary) tests
+# ---------------------------------------------------------------------------
+
+_RISK_TEXT = (
+    "Anyone on the internet can read data from your 'predictions' table "
+    "without logging in."
+)
+
+
+def _make_owner_summary(**kwargs) -> OwnerSummary:
+    """Create an OwnerSummary with a plain-English risk summary."""
+    defaults = {
+        "grade": "F",
+        "grade_label": "Critical",
+        "risk_summary": _RISK_TEXT,
+        "key_risks": ["Unauthenticated data access", "Payments can be forged"],
+        "remediation_phases": [
+            RemediationPhase(
+                phase_number=1,
+                title="Lock down public data access",
+                description="Require login before returning prediction data.",
+                priority=1,
+                finding_count=3,
+            ),
+        ],
+        "scope_disclaimer": "This scan covered your public web app only.",
+        "what_this_report_is_not": "This is not a full penetration test.",
+    }
+    defaults.update(kwargs)
+    return OwnerSummary(**defaults)
+
+
+class TestOwnerSummaryGeneration:
+    """ReportGenerator should surface owner_summary and themes."""
+
+    def setup_method(self) -> None:
+        self.generator = ReportGenerator()
+
+    def test_owner_summary_surfaced(self) -> None:
+        report = _make_report(findings=[], owner_summary=_make_owner_summary())
+        result = self.generator.generate(report)
+
+        owner = result["owner_summary"]
+        assert owner is not None
+        assert owner["risk_summary"] == _RISK_TEXT
+        assert owner["key_risks"] == [
+            "Unauthenticated data access",
+            "Payments can be forged",
+        ]
+        assert owner["remediation_phases"][0]["title"] == (
+            "Lock down public data access"
+        )
+        assert owner["remediation_phases"][0]["finding_count"] == 3
+
+    def test_owner_summary_none_when_absent(self) -> None:
+        report = _make_report(findings=[], owner_summary=None)
+        result = self.generator.generate(report)
+        assert result["owner_summary"] is None
+
+    def test_owner_summary_none_when_empty(self) -> None:
+        """An OwnerSummary with no usable content is surfaced as None."""
+        report = _make_report(findings=[], owner_summary=OwnerSummary())
+        result = self.generator.generate(report)
+        assert result["owner_summary"] is None
+
+    def test_themes_surfaced(self) -> None:
+        theme = SecurityTheme(
+            theme_id="payment-integrity",
+            title="Payment Processing Integrity",
+            description="Payment amounts can be tampered with client-side.",
+            severity="critical",
+            finding_count=2,
+        )
+        report = _make_report(findings=[], themes=[theme])
+        result = self.generator.generate(report)
+
+        assert len(result["themes"]) == 1
+        assert result["themes"][0]["title"] == "Payment Processing Integrity"
+        assert result["themes"][0]["finding_count"] == 2
+
+    def test_themes_empty_by_default(self) -> None:
+        report = _make_report(findings=[])
+        result = self.generator.generate(report)
+        assert result["themes"] == []
+
+
+class TestRiskSummaryRendering:
+    """HTMLReportRenderer should render the Risk Summary callout."""
+
+    def setup_method(self) -> None:
+        self.generator = ReportGenerator()
+        self.renderer = HTMLReportRenderer()
+
+    def _render(self, **kwargs) -> str:
+        report = _make_report(findings=[], **kwargs)
+        return self.renderer.render(self.generator.generate(report))
+
+    def test_risk_summary_appears_when_present(self) -> None:
+        html = self._render(owner_summary=_make_owner_summary())
+        # Text appears; apostrophes are HTML-escaped by the renderer.
+        assert "Anyone on the internet can read data from your" in html
+        assert "table without logging in." in html
+        # The callout div (not just the CSS rule) is emitted.
+        assert '<div class="risk-callout">' in html
+        assert "What This Means for You" in html
+        # Owner-friendly extras render too.
+        assert "Unauthenticated data access" in html
+        assert "Lock down public data access" in html
+        assert "This is not a full penetration test." in html
+
+    def test_risk_summary_omitted_when_absent(self) -> None:
+        """No owner_summary -> no callout box, no crash, report still complete."""
+        html = self._render(owner_summary=None)
+        assert '<div class="risk-callout">' not in html
+        assert "What This Means for You" not in html
+        # Report remains complete with technical sections.
+        assert ReportConfig.SECTION_EXECUTIVE_SUMMARY in html
+        assert ReportConfig.SECTION_REMEDIATION in html
+
+    def test_risk_summary_omitted_when_empty(self) -> None:
+        html = self._render(owner_summary=OwnerSummary())
+        assert '<div class="risk-callout">' not in html
+
+    def test_risk_summary_escapes_html(self) -> None:
+        malicious = "<script>alert('xss')</script>"
+        html = self._render(
+            owner_summary=_make_owner_summary(risk_summary=malicious)
+        )
+        assert "<script>alert" not in html
+        assert "&lt;script&gt;" in html
+
+    def test_themes_rendered_when_present(self) -> None:
+        theme = SecurityTheme(
+            theme_id="payment-integrity",
+            title="Payment Processing Integrity",
+            description="Payment amounts can be tampered with client-side.",
+            severity="critical",
+            finding_count=2,
+        )
+        html = self._render(themes=[theme])
+        assert "Security Themes" in html
+        assert "Payment Processing Integrity" in html
+
+    def test_themes_omitted_when_absent(self) -> None:
+        html = self._render()
+        assert "Security Themes" not in html

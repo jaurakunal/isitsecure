@@ -99,6 +99,20 @@ class ScanMode(str, Enum):
     FULL = "full"
 
 
+class ScanDepth(str, Enum):
+    """Scan depth trades speed for coverage.
+
+    QUICK (default) runs the fast, high-signal scanners — structural checks,
+    error-based injection, and the snapshot-based scanners — and finishes in
+    seconds. DEEP adds the slow, aggressive probes: time-based (blind) SQL
+    injection, active XSS, auth-bypass timing, rate-limit bursts, and password
+    reset flows.
+    """
+
+    QUICK = "quick"
+    DEEP = "deep"
+
+
 class EndpointMethod(str, Enum):
     """HTTP methods discovered for API endpoints."""
 

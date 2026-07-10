@@ -18,9 +18,7 @@ from typing import Optional
 
 import typer
 from rich.console import Console
-from rich.live import Live
 from rich.panel import Panel
-from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
 from isitsecure import __version__
@@ -61,6 +59,7 @@ def scan(
     branch: str = typer.Option("main", "--branch", "-b", help="Git branch"),
     github_token: Optional[str] = typer.Option(None, "--github-token", envvar="GITHUB_TOKEN"),
     mode: str = typer.Option("auto", "--mode", "-m", help="Scan mode: auto|url-only|code-only|authenticated|full"),
+    depth: str = typer.Option("quick", "--depth", help="Scan depth: quick (fast, default) | deep (adds time-based SQLi, active XSS, and other slow/aggressive probes)"),
     auth_email: Optional[str] = typer.Option(None, "--auth-email", help="Auth email/username for authenticated scanning (user A)"),
     auth_password: Optional[str] = typer.Option(None, "--auth-password", help="Auth password (user A)"),
     auth_email_b: Optional[str] = typer.Option(None, "--auth-email-b", help="Second user's email/username — enables cross-user IDOR testing"),
@@ -104,11 +103,15 @@ def scan(
         create_repo_ingestion_service,
     )
 
+    from isitsecure.engine.enums import ScanDepth
+    scan_depth = ScanDepth.DEEP if depth.lower() == "deep" else ScanDepth.QUICK
+
     repo_service = create_repo_ingestion_service() if repo else None
     agent = create_deep_security_scan_agent(
         llm_client=llm_client,
         judgment_llm_client=judgment_llm_client,
         repo_ingestion_service=repo_service,
+        depth=scan_depth,
     )
 
     # Build credentials
@@ -197,6 +200,16 @@ def scan(
         if output_file:
             Path(output_file).write_text(report.model_dump_json(indent=2))
             console.print(f"\n[green]Full report written to {output_file}[/green]")
+        # Always leave the user a browseable HTML report they can open.
+        try:
+            html_path = Path("isitsecure-report.html")
+            html_path.write_text(_generate_html_report(report))
+            console.print(
+                f"\n[bold]📄 HTML report:[/bold] {html_path.resolve()}"
+                f"\n[dim]   open it in a browser to explore the findings[/dim]"
+            )
+        except Exception as exc:
+            logging.getLogger(__name__).debug("HTML report generation failed: %s", exc)
     else:
         console.print(f"[yellow]Output format '{output}' not yet implemented. Using table.[/yellow]")
         _print_report_table(report)
@@ -268,39 +281,60 @@ def _generate_html_report(report) -> str:
 
 
 async def _run_scan(agent, **kwargs):
-    """Run the scan and display progress."""
+    """Run the scan, narrating each step as a live scrolling log.
+
+    The tool "speaks" what it's doing — a phase header for each stage and an
+    indented line as each scanner finishes — so a long scan visibly progresses
+    instead of freezing on a single bar.
+    """
+    import time
+
     report = None
+    t0 = time.monotonic()
+    last_phase = None
+    console.print()
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-        console=console,
-    ) as progress:
-        task = progress.add_task("Initializing...", total=100)
+    async for event in agent.scan(**kwargs):
+        phase = getattr(event, "phase", "")
+        phase_val = getattr(phase, "value", phase)
+        message = getattr(event, "message", "") or "Scanning..."
+        data = getattr(event, "data", None) or {}
+        elapsed = time.monotonic() - t0
+        stamp = f"[dim]{elapsed:6.1f}s[/dim]"
 
-        async for event in agent.scan(**kwargs):
-            phase = getattr(event, "phase", "")
-            message = getattr(event, "message", "")
-            pct = getattr(event, "progress", 0)
-            data = getattr(event, "data", None)
+        # The final COMPLETE event carries the report; capture it, don't log it.
+        if "report" in data:
+            from isitsecure.engine.models import DeepScanReport
+            report = DeepScanReport.model_validate(data["report"])
+            continue
 
-            description = message or phase or "Scanning..."
-            if len(description) > 60:
-                description = description[:57] + "..."
-            progress.update(task, completed=pct, description=description)
-
-            # The final COMPLETE event carries the report as a JSON dict
-            # under data["report"]; reconstruct the model from it.
-            if isinstance(data, dict) and "report" in data:
-                from isitsecure.engine.models import DeepScanReport
-
-                report = DeepScanReport.model_validate(data["report"])
+        if data.get("scanner"):
+            # Per-scanner completion — indented detail line.
+            count = data.get("findings", 0)
+            if count:
+                console.print(
+                    f"{stamp}    [green]✓[/green] {data['scanner']} "
+                    f"[yellow]— {count} finding(s)[/yellow]"
+                )
+            else:
+                console.print(
+                    f"{stamp}    [green]✓[/green] [dim]{data['scanner']} — clean[/dim]"
+                )
+        elif phase_val != last_phase:
+            # New phase — header line.
+            console.print(f"{stamp} [bold cyan]▶[/bold cyan] {message}")
+            last_phase = phase_val
+        else:
+            # Same-phase progress note.
+            console.print(f"{stamp}    [dim]{message}[/dim]")
 
     if report is None:
         console.print("[red]Scan completed but no report was generated.[/red]")
         raise typer.Exit(1)
+
+    console.print(
+        f"[dim]{time.monotonic() - t0:6.1f}s[/dim] [green]✓ Scan complete[/green]\n"
+    )
 
     return report
 

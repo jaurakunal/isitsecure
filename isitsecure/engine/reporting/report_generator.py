@@ -52,6 +52,8 @@ class ReportGenerator:
             "duration_seconds": report.scan_duration_seconds,
             "scanners_run": report.scanners_run,
             "summary": self._build_executive_summary(report, grade),
+            "owner_summary": self._build_owner_summary(report),
+            "themes": self._build_themes(report),
             "finding_counts": self._build_finding_counts(report),
             "critical_findings": self._format_findings(
                 [f for f in report.findings if f.severity == SeverityLevel.CRITICAL]
@@ -129,6 +131,74 @@ class ReportGenerator:
             critical=critical,
             high=high,
         )
+
+    def _build_owner_summary(self, report: DeepScanReport) -> dict | None:
+        """Surface the non-technical owner summary for rendering.
+
+        Returns a plain dict of owner-friendly fields, or None when the
+        report has no owner_summary (e.g. ``--llm none`` scans) or the
+        summary carries no meaningful content.
+
+        Args:
+            report: The scan report.
+
+        Returns:
+            A dict with owner-facing fields, or None if unavailable/empty.
+        """
+        owner = report.owner_summary
+        if owner is None:
+            return None
+
+        # Treat a summary with no usable content as absent so the renderer
+        # can gracefully omit the section rather than show an empty box.
+        has_content = bool(
+            owner.risk_summary.strip()
+            or owner.key_risks
+            or owner.remediation_phases
+            or owner.scope_disclaimer.strip()
+            or owner.what_this_report_is_not.strip()
+        )
+        if not has_content:
+            return None
+
+        return {
+            "grade": owner.grade,
+            "grade_label": owner.grade_label,
+            "risk_summary": owner.risk_summary,
+            "key_risks": list(owner.key_risks),
+            "remediation_phases": [
+                {
+                    "phase_number": phase.phase_number,
+                    "title": phase.title,
+                    "description": phase.description,
+                    "priority": phase.priority,
+                    "finding_count": phase.finding_count,
+                }
+                for phase in owner.remediation_phases
+            ],
+            "scope_disclaimer": owner.scope_disclaimer,
+            "what_this_report_is_not": owner.what_this_report_is_not,
+        }
+
+    def _build_themes(self, report: DeepScanReport) -> list[dict]:
+        """Surface thematic groupings of findings for rendering.
+
+        Args:
+            report: The scan report.
+
+        Returns:
+            List of theme dicts (empty when no themes are present).
+        """
+        return [
+            {
+                "theme_id": theme.theme_id,
+                "title": theme.title,
+                "description": theme.description,
+                "severity": theme.severity,
+                "finding_count": theme.finding_count,
+            }
+            for theme in report.themes
+        ]
 
     def _build_finding_counts(self, report: DeepScanReport) -> dict:
         """Build finding count summary dict."""

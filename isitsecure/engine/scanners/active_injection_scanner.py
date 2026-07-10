@@ -53,6 +53,14 @@ class ActiveInjectionScanner:
     # --- Testable HTTP methods ---
     _TESTABLE_METHODS = frozenset({"GET", "POST"})
 
+    def __init__(self, time_based: bool = True) -> None:
+        """Args:
+        time_based: Run time-based (blind) SQLi probes. These inject
+            server-side sleep payloads and are the dominant cost of a scan, so
+            they are disabled in QUICK depth and enabled only for DEEP.
+        """
+        self._time_based = time_based
+
     @property
     def scanner_name(self) -> str:
         """Unique name identifying this scanner."""
@@ -147,7 +155,7 @@ class ActiveInjectionScanner:
         sqli_error = await self._test_error_based_sqli(client, endpoint, param_name)
         if sqli_error:
             findings.append(sqli_error)
-        else:
+        elif self._time_based:
             sqli_time = await self._test_time_based_sqli(client, endpoint, param_name)
             if sqli_time:
                 findings.append(sqli_time)

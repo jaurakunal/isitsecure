@@ -476,7 +476,15 @@ class DeepSecurityScanAgent:
                 OrchestratorConfig.MSG_DAST_RUNNING,
                 OrchestratorConfig.PROGRESS_DAST_SCANNERS,
             )
-            dast_findings, dast_names = await self._run_dast_scanners(endpoints, snapshot)
+            dast_findings: list[DeepFinding] = []
+            dast_names: list[str] = []
+            async for _kind, _payload in self._run_dast_scanners_streamed(
+                endpoints, snapshot
+            ):
+                if _kind == "event":
+                    yield _payload
+                else:
+                    dast_findings, dast_names = _payload
             all_findings.extend(dast_findings)
             scanners_run.extend(dast_names)
 
@@ -989,6 +997,56 @@ class DeepSecurityScanAgent:
             all_findings.extend(findings)
             names.append(name)
         return all_findings, names
+
+    async def _run_dast_scanners_streamed(
+        self,
+        endpoints: list[DiscoveredEndpoint],
+        snapshot: CodebaseSnapshot,
+    ):
+        """Run DAST scanners in parallel, yielding a progress event as EACH
+        scanner finishes (so the CLI can narrate live instead of freezing on
+        one bar). Yields ``("event", DeepScanEvent)`` per scanner and finally
+        ``("result", (findings, names))``.
+        """
+        if not self._dast_scanners:
+            yield ("result", ([], []))
+            return
+
+        async def _named(name: str, coro):
+            return name, await coro
+
+        tasks = [
+            asyncio.ensure_future(_named(
+                s.scanner_name,
+                run_scanner_safe(
+                    s.scanner_name,
+                    s.scan(endpoints, snapshot),
+                    self._dast_timeout(s.scanner_name),
+                ),
+            ))
+            for s in self._dast_scanners
+        ]
+
+        all_findings: list[DeepFinding] = []
+        names: list[str] = []
+        total = len(tasks)
+        base = OrchestratorConfig.PROGRESS_DAST_SCANNERS
+        band = OrchestratorConfig.PROGRESS_AUTH_AND_IDOR - base
+        done = 0
+        for fut in asyncio.as_completed(tasks):
+            name, findings = await fut
+            done += 1
+            all_findings.extend(findings)
+            names.append(name)
+            count = len(findings)
+            detail = f"{count} finding(s)" if count else "clean"
+            yield ("event", DeepScanEvent(
+                DeepScanPhase.DAST_SCANNING,
+                f"{name}: {detail} ({done}/{total})",
+                base + int(band * done / total),
+                {"scanner": name, "findings": count, "done": done, "total": total},
+            ))
+        yield ("result", (all_findings, names))
 
     @staticmethod
     def _dast_timeout(scanner_name: str) -> float:

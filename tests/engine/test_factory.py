@@ -15,9 +15,10 @@ from isitsecure.engine.scanners.endpoint_discovery import (
 )
 from isitsecure.engine.scanners.protocols import DASTScannerProtocol
 
-# Expected DAST scanner count based on factory.py dast_scanners list
-# 15 original + 4 url-only snapshot scanners (source-map, mixed-content, SRI, client-exposure)
-EXPECTED_DAST_SCANNER_COUNT = 19
+# DAST scanner counts. QUICK (default) runs the fast set; DEEP adds 4 slow /
+# aggressive scanners (XSS, rate-limit, auth-bypass, password-reset).
+EXPECTED_DAST_SCANNER_COUNT_QUICK = 15
+EXPECTED_DAST_SCANNER_COUNT_DEEP = 19
 # Expected SAST scanner count based on factory.py sast_scanners list (without LLM)
 EXPECTED_SAST_SCANNER_COUNT = 17
 
@@ -42,11 +43,35 @@ class TestFactory:
         assert agent._llm_code_reviewer is not None
 
     def test_all_dast_scanners_wired(self):
-        """All DAST scanners in the list should be present."""
+        """QUICK depth (default) wires the fast DAST scanner set."""
         agent = create_deep_security_scan_agent()
-        assert len(agent._dast_scanners) == EXPECTED_DAST_SCANNER_COUNT
+        assert len(agent._dast_scanners) == EXPECTED_DAST_SCANNER_COUNT_QUICK
         for scanner in agent._dast_scanners:
             assert isinstance(scanner, DASTScannerProtocol)
+
+    def test_deep_depth_adds_aggressive_scanners(self):
+        """DEEP depth adds the slow/aggressive scanners."""
+        from isitsecure.engine.enums import ScanDepth
+        quick = create_deep_security_scan_agent(depth=ScanDepth.QUICK)
+        deep = create_deep_security_scan_agent(depth=ScanDepth.DEEP)
+        assert len(quick._dast_scanners) == EXPECTED_DAST_SCANNER_COUNT_QUICK
+        assert len(deep._dast_scanners) == EXPECTED_DAST_SCANNER_COUNT_DEEP
+        deep_names = {s.scanner_name for s in deep._dast_scanners}
+        quick_names = {s.scanner_name for s in quick._dast_scanners}
+        # XSS is deep-only; injection is present in both.
+        assert "xss_scanner" in deep_names
+        assert "xss_scanner" not in quick_names
+        assert any("injection" in n for n in quick_names)
+
+    def test_quick_injection_has_time_based_disabled(self):
+        """QUICK depth builds the injection scanner with time-based SQLi off."""
+        from isitsecure.engine.enums import ScanDepth
+        quick = create_deep_security_scan_agent(depth=ScanDepth.QUICK)
+        deep = create_deep_security_scan_agent(depth=ScanDepth.DEEP)
+        q_inj = next(s for s in quick._dast_scanners if "injection" in s.scanner_name)
+        d_inj = next(s for s in deep._dast_scanners if "injection" in s.scanner_name)
+        assert q_inj._time_based is False
+        assert d_inj._time_based is True
 
     def test_all_sast_scanners_wired(self):
         """All SAST scanners in the list should be present."""
