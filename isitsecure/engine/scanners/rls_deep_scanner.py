@@ -138,9 +138,11 @@ class RLSDeepScanner:
         table: str,
     ) -> DeepFinding | None:
         """Test if a table is readable with just the anon key."""
+        # Select all columns (limit 1) so we can detect sensitive columns and
+        # escalate severity — but never put the row VALUES in the report.
         url = (
             f"{supabase_url}/rest/v1/{table}"
-            f"?{RLSDeepScanConfig.SELECT_ID_ONLY}"
+            f"?{RLSDeepScanConfig.SELECT_ALL}"
             f"&{RLSDeepScanConfig.LIMIT_ONE}"
         )
         try:
@@ -149,7 +151,35 @@ class RLSDeepScanner:
                 body = resp.text.strip()
                 if body and body != "[]":
                     data = json.loads(body)
-                    count = len(data) if isinstance(data, list) else 1
+                    rows = data if isinstance(data, list) else [data]
+                    count = len(rows)
+                    columns = sorted({
+                        k for r in rows if isinstance(r, dict) for k in r
+                    })
+                    sensitive = self._sensitive_columns(columns)
+                    # Redacted preview: column NAMES only, never PII values.
+                    preview = (
+                        f"columns: {', '.join(columns)}" if columns
+                        else "(non-object rows)"
+                    )
+                    if sensitive:
+                        return DeepFinding(
+                            source=FindingSource.DAST_AUTHENTICATED,
+                            category=FindingCategory.RLS_MISCONFIGURATION,
+                            severity=SeverityLevel.CRITICAL,
+                            title=RLSDeepScanConfig.TITLE_ANON_READ_SENSITIVE.format(
+                                table=table
+                            ),
+                            description=RLSDeepScanConfig.DESC_ANON_READ_SENSITIVE.format(
+                                table=table, count=count,
+                                columns=", ".join(sensitive),
+                            ),
+                            confidence=RLSDeepScanConfig.CONFIDENCE_ANON_READ,
+                            scanner_name=self.scanner_name,
+                            endpoint_url=url,
+                            http_method="GET",
+                            response_preview=preview[:300],
+                        )
                     return DeepFinding(
                         source=FindingSource.DAST_AUTHENTICATED,
                         category=FindingCategory.RLS_MISCONFIGURATION,
@@ -164,7 +194,7 @@ class RLSDeepScanner:
                         scanner_name=self.scanner_name,
                         endpoint_url=url,
                         http_method="GET",
-                        response_preview=body[:300],
+                        response_preview=preview[:300],
                     )
         except Exception as exc:
             logger.debug(
@@ -191,7 +221,23 @@ class RLSDeepScanner:
                     "Prefer": RLSDeepScanConfig.SAFE_WRITE_PREFER,
                 },
             )
-            if resp.status_code in (200, 201):
+            status = resp.status_code
+            description: str | None = None
+            confidence = RLSDeepScanConfig.CONFIDENCE_ANON_WRITE
+
+            if status in (200, 201):
+                # A row was actually created — anon write is confirmed.
+                description = RLSDeepScanConfig.DESC_ANON_WRITE.format(table=table)
+            elif status == 400 and self._write_passed_rls(resp.text):
+                # 400 with an integrity-constraint code (not an RLS denial) means
+                # the row cleared the RLS policy and only failed a column
+                # constraint — anon write is exposed (inferred).
+                description = RLSDeepScanConfig.DESC_ANON_WRITE_INFERRED.format(
+                    table=table
+                )
+                confidence = RLSDeepScanConfig.CONFIDENCE_ANON_WRITE_INFERRED
+
+            if description is not None:
                 return DeepFinding(
                     source=FindingSource.DAST_AUTHENTICATED,
                     category=FindingCategory.RLS_MISCONFIGURATION,
@@ -199,10 +245,8 @@ class RLSDeepScanner:
                     title=RLSDeepScanConfig.TITLE_ANON_WRITE.format(
                         table=table
                     ),
-                    description=RLSDeepScanConfig.DESC_ANON_WRITE.format(
-                        table=table
-                    ),
-                    confidence=RLSDeepScanConfig.CONFIDENCE_ANON_WRITE,
+                    description=description,
+                    confidence=confidence,
                     scanner_name=self.scanner_name,
                     endpoint_url=url,
                     http_method="POST",
@@ -216,6 +260,32 @@ class RLSDeepScanner:
                 )
             )
         return None
+
+    @staticmethod
+    def _sensitive_columns(columns: list[str]) -> list[str]:
+        """Return columns whose name marks the table as holding sensitive data."""
+        out: list[str] = []
+        for col in columns:
+            low = col.lower()
+            if any(m in low for m in RLSDeepScanConfig.SENSITIVE_COLUMN_NAMES):
+                out.append(col)
+        return out
+
+    @staticmethod
+    def _write_passed_rls(body: str) -> bool:
+        """True if a 400 response is a column-constraint error (the row cleared
+        the RLS policy) rather than an RLS denial. Keys on the PostgREST error
+        ``code``: ``42501`` = RLS-blocked; class ``23`` = integrity constraint.
+        """
+        try:
+            code = str(json.loads(body).get("code", ""))
+        except Exception:
+            code = ""
+        if code == RLSDeepScanConfig.PG_RLS_DENIED_CODE:
+            return False
+        if RLSDeepScanConfig.RLS_DENY_MESSAGE in body.lower():
+            return False
+        return code.startswith(RLSDeepScanConfig.PG_CONSTRAINT_CODE_CLASS)
 
     # ------------------------------------------------------------------
     # Tier 3: Cross-user access

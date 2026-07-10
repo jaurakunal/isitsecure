@@ -1644,11 +1644,31 @@ class RLSDeepScanConfig:
     # Confidence values
     CONFIDENCE_ANON_READ = 0.95
     CONFIDENCE_ANON_WRITE = 0.98
+    CONFIDENCE_ANON_WRITE_INFERRED = 0.9
     CONFIDENCE_CROSS_USER_READ = 0.95
     CONFIDENCE_CROSS_USER_WRITE = 0.98
 
+    # Column-name substrings that mark a table as holding sensitive data.
+    # Anon-readable tables with any of these are escalated to CRITICAL.
+    SENSITIVE_COLUMN_NAMES = (
+        "email", "password", "passwd", "phone", "ssn", "social_security",
+        "credit_card", "card_number", "secret", "token", "api_key", "apikey",
+        "address", "dob", "date_of_birth", "birth",
+    )
+    # Distinguishing an anon INSERT that RLS *blocked* from one it *allowed*
+    # (that merely failed a column constraint), via the PostgREST error `code`:
+    #   42501  -> insufficient_privilege = blocked by RLS (no finding)
+    #   23xxx  -> integrity_constraint_violation = row PASSED RLS, hit a
+    #             NOT NULL / unique / FK / check constraint = write is exposed
+    PG_RLS_DENIED_CODE = "42501"
+    PG_CONSTRAINT_CODE_CLASS = "23"
+    RLS_DENY_MESSAGE = "row-level security"  # message fallback
+
     # Finding titles (templates)
     TITLE_ANON_READ = "Table '{table}' readable with anon key (no auth required)"
+    TITLE_ANON_READ_SENSITIVE = (
+        "Table '{table}' exposes sensitive data with anon key (no auth required)"
+    )
     TITLE_ANON_WRITE = "Table '{table}' writable with anon key (no auth required)"
     TITLE_CROSS_USER_READ = "Table '{table}' leaks data across users (RLS bypass)"
     TITLE_CROSS_USER_WRITE = "Table '{table}' allows cross-user writes (RLS bypass)"
@@ -1660,9 +1680,20 @@ class RLSDeepScanConfig:
         "only the anon key (no user authentication). If this table contains "
         "user-specific data, RLS SELECT policies are missing or misconfigured."
     )
+    DESC_ANON_READ_SENSITIVE = (
+        "The Supabase table '{table}' returned {count} row(s) with only the anon "
+        "key (no user authentication), and exposes sensitive column(s): "
+        "{columns}. Any unauthenticated visitor can read this data — RLS SELECT "
+        "policies are missing or misconfigured."
+    )
     DESC_ANON_WRITE = (
         "The Supabase table '{table}' accepted a write operation (INSERT/PATCH) "
         "with only the anon key. Any unauthenticated user can modify this table."
+    )
+    DESC_ANON_WRITE_INFERRED = (
+        "The Supabase table '{table}' accepted an unauthenticated INSERT past its "
+        "RLS policy (the request failed only on a column constraint, HTTP 400 — "
+        "not on RLS). Any anonymous user can write to this table."
     )
     DESC_CROSS_USER_READ = (
         "User B was able to read {count} row(s) from table '{table}' that belong "

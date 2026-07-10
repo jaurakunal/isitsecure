@@ -351,6 +351,112 @@ class TestRLSDeepScanner:
         assert len(good_findings) >= 1
 
 
+class TestRLSDeepScannerRefinements:
+    """Sensitive-column read escalation + constraint-inferred anon writes."""
+
+    @pytest.mark.asyncio
+    async def test_sensitive_column_escalates_read_to_critical(self) -> None:
+        """A readable table exposing an email column is CRITICAL, not HIGH."""
+        scanner = RLSDeepScanner()
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(
+            return_value=_make_response(200, '[{"id": 1, "email": "a@b.com"}]')
+        )
+        mock_client.post = AsyncMock(return_value=_make_response(401))
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with _patch_client(mock_client):
+            findings = await scanner.scan(
+                supabase_url=SUPABASE_URL, anon_key=ANON_KEY, tables=["leads"]
+            )
+
+        read = [f for f in findings if "anon key" in f.title and "writable" not in f.title]
+        assert len(read) == 1
+        assert read[0].severity == SeverityLevel.CRITICAL
+        assert "sensitive" in read[0].title.lower()
+        assert "email" in read[0].description
+        # The row VALUES must never appear in the report — only column names.
+        assert "a@b.com" not in read[0].response_preview
+
+    @pytest.mark.asyncio
+    async def test_non_sensitive_read_stays_high(self) -> None:
+        """A readable table with no sensitive columns remains HIGH."""
+        scanner = RLSDeepScanner()
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(
+            return_value=_make_response(200, '[{"id": 1, "slug": "x"}]')
+        )
+        mock_client.post = AsyncMock(return_value=_make_response(401))
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with _patch_client(mock_client):
+            findings = await scanner.scan(
+                supabase_url=SUPABASE_URL, anon_key=ANON_KEY, tables=["pages"]
+            )
+        read = [f for f in findings if "readable with anon key" in f.title]
+        assert len(read) == 1
+        assert read[0].severity == SeverityLevel.HIGH
+
+    @pytest.mark.asyncio
+    async def test_anon_write_inferred_from_constraint_error(self) -> None:
+        """A 400 not-null (code 23502) INSERT means the row cleared RLS."""
+        scanner = RLSDeepScanner()
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=_make_response(200, "[]"))
+        mock_client.post = AsyncMock(return_value=_make_response(
+            400,
+            '{"code":"23502","message":"null value in column \\"email\\" '
+            'violates not-null constraint"}',
+        ))
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with _patch_client(mock_client):
+            findings = await scanner.scan(
+                supabase_url=SUPABASE_URL, anon_key=ANON_KEY, tables=["leads"]
+            )
+        write = [f for f in findings if "writable with anon key" in f.title]
+        assert len(write) == 1
+        assert write[0].severity == SeverityLevel.CRITICAL
+        assert write[0].confidence == RLSDeepScanConfig.CONFIDENCE_ANON_WRITE_INFERRED
+
+    @pytest.mark.asyncio
+    async def test_anon_write_blocked_by_rls_no_finding(self) -> None:
+        """A 400/403 with the RLS-denial code (42501) is NOT a write finding."""
+        scanner = RLSDeepScanner()
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=_make_response(200, "[]"))
+        mock_client.post = AsyncMock(return_value=_make_response(
+            403,
+            '{"code":"42501","message":"new row violates row-level security '
+            'policy for table \\"leads\\""}',
+        ))
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with _patch_client(mock_client):
+            findings = await scanner.scan(
+                supabase_url=SUPABASE_URL, anon_key=ANON_KEY, tables=["leads"]
+            )
+        assert [f for f in findings if "writable" in f.title] == []
+
+    def test_write_passed_rls_helper(self) -> None:
+        f = RLSDeepScanner._write_passed_rls
+        assert f('{"code":"23502","message":"not-null"}') is True     # constraint
+        assert f('{"code":"23505","message":"duplicate"}') is True    # unique
+        assert f('{"code":"42501","message":"denied"}') is False      # RLS block
+        assert f('{"message":"new row violates row-level security"}') is False
+        assert f("not json") is False                                  # ambiguous
+
+    def test_sensitive_columns_helper(self) -> None:
+        f = RLSDeepScanner._sensitive_columns
+        assert f(["id", "email", "created_at"]) == ["email"]
+        assert f(["user_email", "phone"]) == ["user_email", "phone"]
+        assert f(["id", "slug", "title"]) == []
+
+
 # ------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------
