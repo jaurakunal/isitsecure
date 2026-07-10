@@ -13,7 +13,7 @@ Built for developers and **vibe coders** shipping web apps who need to know if t
 - [What It Does](#what-it-does)
 - [Install](#install) · [Quick Start](#quick-start) · [What It Costs](#what-it-costs)
 - [Scan Modes](#scan-modes) · [Scan Depth](#scan-depth)
-- [What It Scans](#what-it-scans) — [DAST](#dast-scanners-19--tests-your-live-app) · [Special DAST](#special-dast-scanners-8) · [SAST](#sast-scanners-17--analyzes-your-code) · [LLM](#llm-powered-analysis-requires-api-key) · [Cross-Referencing](#cross-referencing--guided-dast)
+- [What It Scans](#what-it-scans) — [DAST](#dast-scanners--tests-your-live-app) · [Special DAST](#special-dast-scanners-8) · [SAST](#sast-scanners-17--analyzes-your-code) · [LLM](#llm-powered-analysis-requires-api-key) · [Cross-Referencing](#cross-referencing--guided-dast)
 - [Language Support](#language-support) · [Output Formats](#output-formats)
 - [Auto-Fix](#auto-fix-one-command-to-fix-your-app) · [Security Badge](#security-badge)
 - [How We Compare](#how-we-compare) · [What It Does NOT Cover](#what-it-does-not-cover)
@@ -25,7 +25,7 @@ Built for developers and **vibe coders** shipping web apps who need to know if t
 
 ## What It Does
 
-isitsecure runs **44 rule-based scanners** (plus optional AI code review) against your web app in a single command. It combines four approaches that commercial tools sell separately:
+isitsecure runs **40 rule-based scanners by default** — up to **44 with `--depth deep`** — (plus optional AI code review) against your web app in a single command. It combines four approaches that commercial tools sell separately:
 
 - **SAST (Static Analysis)** — scans your source code for vulnerabilities without running it
 - **DAST (Dynamic Analysis)** — tests your live app by sending real HTTP requests
@@ -134,7 +134,7 @@ isitsecure is free and open source. The only cost is LLM API tokens for the AI-p
 | **Code-only + LLM review** | Yes | ~$5–8 |
 | **Full scan** (SAST + DAST + LLM) | Yes | ~$10–15 |
 
-Without an API key, you still get all 44 rule-based scanners (19 DAST + 8 special DAST + 17 SAST). The LLM adds business logic review, semantic rule verification, and intelligent triage — things no pattern matcher can do.
+Without an API key, you still get all rule-based scanners — **40 in the default `quick` depth** (15 DAST + 8 special DAST + 17 SAST), or **44 with `--depth deep`** (which adds 4 slower/aggressive DAST scanners). The LLM adds business logic review, semantic rule verification, and intelligent triage — things no pattern matcher can do.
 
 **Supported LLM providers:** Anthropic (Claude), Google (Gemini)
 
@@ -169,14 +169,16 @@ The scan narrates each phase and every scanner as it runs (with elapsed time), s
 
 ## What It Scans
 
-### DAST Scanners (19) — Tests Your Live App
+### DAST Scanners — Tests Your Live App
+
+**19 total** — 15 run in the default `quick` depth; the 4 marked **◆** (slower/aggressive probes) are added by `--depth deep`.
 
 | Scanner | What It Finds |
 |---|---|
-| XSS Scanner | Reflected, POST body, and DOM-based cross-site scripting |
+| XSS Scanner **◆** | Reflected, POST body, and DOM-based cross-site scripting |
 | Active Injection Scanner | SQL injection (error + time-based, incl. SQLAlchemy/sqlite3/psycopg errors), command injection, NoSQL injection, XXE, SSTI — injects query, body, and path parameters |
 | CSRF Scanner | Cross-site request forgery on state-changing endpoints |
-| Rate Limit Scanner | Missing or bypassable rate limiting on auth endpoints |
+| Rate Limit Scanner **◆** | Missing or bypassable rate limiting on auth endpoints |
 | Session Scanner | Insecure token storage (localStorage), missing cookie flags, long-lived JWTs |
 | GraphQL Scanner | Introspection enabled, no depth limits, batch query abuse |
 | SSRF Scanner | Server-side request forgery (internal IPs, cloud metadata) |
@@ -185,9 +187,9 @@ The scan narrates each phase and every scanner as it runs (with elapsed time), s
 | Security Headers Scanner | Missing CSP, HSTS, X-Frame-Options; server version disclosure |
 | CORS Scanner | Wildcard origins, credentials with permissive CORS |
 | Open Redirect Scanner | Unvalidated redirect parameters |
-| Auth Bypass Scanner | Username enumeration, default credentials, account lockout bypass |
+| Auth Bypass Scanner **◆** | Username enumeration, default credentials, account lockout bypass |
 | HTTP Probe Scanner | Method tampering, host header injection, directory listing, .env exposure |
-| Password Reset Scanner | Token leakage in response body, email enumeration, no rate limiting |
+| Password Reset Scanner **◆** | Token leakage in response body, email enumeration, no rate limiting |
 | Source Map Scanner | Publicly exposed `.map` files leaking original source (verified, not just present) |
 | Mixed Content Scanner | `http://` resources loaded on an HTTPS page |
 | SRI Scanner | External CDN scripts/styles loaded without Subresource Integrity hashes |

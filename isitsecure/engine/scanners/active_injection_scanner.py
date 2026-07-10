@@ -735,7 +735,7 @@ class ActiveInjectionScanner:
 
                     capture = build_probe_capture(
                         method="GET",
-                        url=url,
+                        url=endpoint.url,
                         headers=dict(resp.request.headers),
                         body="",
                         response_status=resp.status_code,

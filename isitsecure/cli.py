@@ -301,9 +301,11 @@ def scan(
         result_json = report.model_dump_json(indent=2)
         if output_file:
             Path(output_file).write_text(result_json)
-            console.print(f"[green]Report written to {output_file}[/green]")
+            err_console.print(f"[green]Report written to {output_file}[/green]")
         else:
-            console.print(result_json)
+            # Write raw — never through Rich, which would word-wrap and corrupt
+            # the JSON (inserting newlines mid-string) when stdout isn't a TTY.
+            sys.stdout.write(result_json + "\n")
     elif output == "html":
         html_content = _generate_html_report(report)
         out_path = output_file or "isitsecure-report.html"

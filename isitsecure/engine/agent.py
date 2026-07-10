@@ -1072,7 +1072,8 @@ class DeepSecurityScanAgent:
                 logger.debug("DAST scanner %s failed: %s", name, exc)
                 findings = []
             results[name] = findings
-            reporter.post(_DONE, {"scanner": name, "findings": len(findings)})
+            reporter.post(_DONE, {"scanner": name, "findings": len(findings),
+                                  "_scanner_done": True})
 
         # Announce each scanner as it launches (they run concurrently); their
         # own emit() sub-events and completions then flow through the reporter
@@ -1098,7 +1099,7 @@ class DeepSecurityScanAgent:
         done = 0
         while done < total:
             message, data = await reporter.queue.get()
-            if message == _DONE:
+            if data.get("_scanner_done"):
                 done += 1
                 count = data["findings"]
                 detail = f"{count} finding(s)" if count else "clean"
@@ -1399,7 +1400,8 @@ class DeepSecurityScanAgent:
                 logger.debug("SAST scanner %s failed: %s", name, exc)
                 code_findings = []
             results[name] = code_findings
-            reporter.post(_DONE, {"scanner": name, "findings": len(code_findings)})
+            reporter.post(_DONE, {"scanner": name, "findings": len(code_findings),
+                                  "_scanner_done": True})
 
         tasks = []
         for s in self._sast_scanners:
@@ -1421,7 +1423,7 @@ class DeepSecurityScanAgent:
         done = 0
         while done < total:
             message, data = await reporter.queue.get()
-            if message == _DONE:
+            if data.get("_scanner_done"):
                 done += 1
                 count = data["findings"]
                 detail = f"{count} finding(s)" if count else "clean"
