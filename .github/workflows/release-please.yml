@@ -1,0 +1,21 @@
+name: release-please
+
+# Reads Conventional Commits on main, maintains a "Release PR" that bumps the
+# version (pyproject.toml + isitsecure/__init__.py) and rewrites CHANGELOG.md,
+# and tags a GitHub Release when that PR is merged. No manual changelog edits.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
