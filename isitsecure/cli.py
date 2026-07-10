@@ -887,7 +887,11 @@ _LSP_SPECS = [
         "runtime": ("node",),
         "needs": "npm",
         "cmd": ["npm", "install", "-g", "typescript-language-server", "typescript"],
-        "hint": "install Node.js (e.g. `brew install node`), then re-run `isitsecure setup --lsp`",
+        "hint": {
+            "macos": "install Node.js (`brew install node`), then re-run `isitsecure setup --lsp`",
+            "windows": "install Node.js (`winget install OpenJS.NodeJS` or nodejs.org), then re-run `isitsecure setup --lsp`",
+            "linux": "install Node.js (your package manager or nodejs.org), then re-run `isitsecure setup --lsp`",
+        },
     },
     {
         "lang": "Java / Kotlin",
@@ -895,9 +899,41 @@ _LSP_SPECS = [
         "runtime": ("java",),
         "needs": "brew",
         "cmd": ["brew", "install", "jdtls"],
-        "hint": "install a JDK + jdtls — https://github.com/eclipse-jdtls/eclipse.jdt.ls#installation",
+        "hint": {
+            "macos": "install a JDK (`brew install openjdk`) + jdtls — https://github.com/eclipse-jdtls/eclipse.jdt.ls#installation",
+            "windows": "install a JDK (`winget install Microsoft.OpenJDK`) + jdtls — https://github.com/eclipse-jdtls/eclipse.jdt.ls#installation",
+            "linux": "install a JDK + jdtls — https://github.com/eclipse-jdtls/eclipse.jdt.ls#installation",
+        },
     },
 ]
+
+
+def _os_key() -> str:
+    import os
+    if os.name == "nt":
+        return "windows"
+    return "macos" if sys.platform == "darwin" else "linux"
+
+
+def _os_hint(spec) -> str:
+    """The install hint for this OS (specs use a str or a per-OS dict)."""
+    hint = spec["hint"]
+    return hint if isinstance(hint, str) else hint.get(_os_key(), next(iter(hint.values())))
+
+
+def _resolve_install_cmd(cmd):
+    """Make an install command launchable across platforms.
+
+    Resolves argv[0] to its real path (so PATHEXT lookups like npm.cmd resolve),
+    and on Windows launches .cmd/.bat shims via ``cmd /c`` — CreateProcess can't
+    run those directly, which is why a bare ["npm", ...] fails on Windows.
+    """
+    import os
+    import shutil
+    exe = shutil.which(cmd[0]) or cmd[0]
+    if os.name == "nt" and exe.lower().endswith((".cmd", ".bat")):
+        return ["cmd", "/c", exe, *cmd[1:]]
+    return [exe, *cmd[1:]]
 
 
 def _first_which(bins) -> Optional[str]:
@@ -960,21 +996,24 @@ def _setup_lsps() -> None:
             continue
         needs = spec["needs"]
         if needs is not None and not shutil.which(needs):
-            console.print(f"  [yellow]•[/yellow] {spec['lang']}: [dim]{spec['hint']}[/dim]")
+            console.print(f"  [yellow]•[/yellow] {spec['lang']}: [dim]{_os_hint(spec)}[/dim]")
             continue
         console.print(f"  [cyan]→[/cyan] {spec['lang']}: installing…")
         try:
-            res = subprocess.run(spec["cmd"], capture_output=True, text=True, timeout=600)
+            res = subprocess.run(
+                _resolve_install_cmd(spec["cmd"]),
+                capture_output=True, text=True, timeout=600,
+            )
         except Exception as exc:
             console.print(f"  [red]✗[/red] {spec['lang']}: {exc}")
-            console.print(f"      [dim]{spec['hint']}[/dim]")
+            console.print(f"      [dim]{_os_hint(spec)}[/dim]")
             continue
         if res.returncode == 0 and _first_which(spec["bins"]):
             console.print(f"  [green]✓[/green] {spec['lang']}: installed")
         else:
             tail = (res.stderr or res.stdout or "install did not complete").strip().splitlines()
             console.print(f"  [yellow]![/yellow] {spec['lang']}: {(tail[-1] if tail else '')[:120]}")
-            console.print(f"      [dim]{spec['hint']}[/dim]")
+            console.print(f"      [dim]{_os_hint(spec)}[/dim]")
         missing_rt = [r for r in spec["runtime"] if not shutil.which(r)]
         if missing_rt:
             console.print(f"      [dim](also needs {', '.join(missing_rt)} on PATH to run)[/dim]")
