@@ -32,6 +32,34 @@ console = Console()
 
 
 # ---------------------------------------------------------------------------
+# Vanity banner
+# ---------------------------------------------------------------------------
+
+# 5-row block font — only the glyphs in "isitsecure" are defined.
+_BANNER_FONT = {
+    "i": ["████", " ██ ", " ██ ", " ██ ", "████"],
+    "s": ["████", "█   ", "████", "   █", "████"],
+    "t": ["████", " ██ ", " ██ ", " ██ ", " ██ "],
+    "e": ["████", "█   ", "███ ", "█   ", "████"],
+    "c": ["████", "█   ", "█   ", "█   ", "████"],
+    "u": ["█  █", "█  █", "█  █", "█  █", "████"],
+    "r": ["███ ", "█  █", "███ ", "█ █ ", "█  █"],
+}
+
+
+def _print_banner() -> None:
+    """Print the isitsecure wordmark as block-font ASCII art."""
+    word = "isitsecure"
+    for row in range(5):
+        line = " ".join(_BANNER_FONT[ch][row] for ch in word if ch in _BANNER_FONT)
+        console.print(f"[bright_magenta]{line}[/bright_magenta]")
+    console.print(
+        f"[dim]  AI-powered security scanner  ·  SAST + DAST + LLM  ·  "
+        f"v{__version__}[/dim]\n"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Config management
 # ---------------------------------------------------------------------------
 
@@ -144,13 +172,15 @@ def scan(
     }
     resolved_mode = scan_mode_map.get(mode) if mode != "auto" else None
 
-    # Run scan with progress display
-    console.print(Panel(
-        f"[bold]isitsecure v{__version__}[/bold]\n"
-        f"Target: {target_url or 'N/A'}  |  Repo: {repo or 'N/A'}  |  LLM: {llm_provider}",
-        title="Security Scan",
-        border_style="bright_magenta",
-    ))
+    # Run scan with progress display. Skip the decorative header for machine
+    # output so it doesn't pollute piped JSON/SARIF.
+    if output not in ("json", "sarif"):
+        _print_banner()
+        console.print(Panel(
+            f"Target: {target_url or 'N/A'}  |  Repo: {repo or 'N/A'}  |  LLM: {llm_provider}",
+            title="Security Scan",
+            border_style="bright_magenta",
+        ))
 
     report = asyncio.run(_run_scan(
         agent=agent,
