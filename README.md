@@ -44,9 +44,29 @@ Code → SAST → Findings → Guide DAST → Test → Cross-Reference → LLM T
 
 ## Install
 
-isitsecure is not yet on PyPI (the `isitsecure` name there belongs to an unrelated project — don't `pip install` it). Install from source:
+**Requirements:** Python 3.11+ and `git`. (isitsecure isn't on PyPI — the `isitsecure` name there is an unrelated project, so don't `pip install` it.)
 
-**Requirements:** Python 3.11+ and `git`. No Node.js needed for the CLI.
+### Quick install (recommended)
+
+The installer verifies Python/git, then clones the repo, sets up an isolated environment, installs everything, and runs first-time setup:
+
+```bash
+# macOS / Linux — download it, glance at it, run it
+curl -fsSLo install.sh https://raw.githubusercontent.com/jaurakunal/isitsecure/main/install.sh
+bash install.sh
+```
+
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/jaurakunal/isitsecure/main/install.ps1 -OutFile install.ps1
+./install.ps1
+```
+
+If Python or git are missing, the installer tells you the exact command to install them for your OS and stops cleanly — it never leaves a half-finished state.
+
+### Manual install
+
+Prefer to do it by hand:
 
 ```bash
 # 1. Clone the repo
@@ -60,7 +80,7 @@ source .venv/bin/activate          # Windows: .venv\Scripts\activate
 # 3. Install with all features (browser DAST, LLM review, OOB detection)
 pip install -e ".[all]"
 
-# 4. First-time setup — installs the Chromium browser, optionally saves an API key
+# 4. First-time setup — installs the Chromium browser, language servers, optionally saves an API key
 isitsecure setup
 ```
 
