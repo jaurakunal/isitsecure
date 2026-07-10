@@ -29,10 +29,13 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 console = Console()
+# Decorative output (welcome banner, scan progress) goes to stderr so stdout
+# stays clean for piped data (JSON/SARIF/report bodies).
+err_console = Console(stderr=True)
 
 
 # ---------------------------------------------------------------------------
-# Vanity banner
+# Welcome banner
 # ---------------------------------------------------------------------------
 
 # 5-row block font — only the glyphs in "isitsecure" are defined.
@@ -46,17 +49,53 @@ _BANNER_FONT = {
     "r": ["███ ", "█  █", "███ ", "█ █ ", "█  █"],
 }
 
+_WELCOME_SHOWN = False
 
-def _print_banner() -> None:
-    """Print the isitsecure wordmark as block-font ASCII art."""
-    word = "isitsecure"
+
+def _print_welcome() -> None:
+    """Print the framed isitsecure welcome banner (once per process, to stderr)."""
+    global _WELCOME_SHOWN
+    if _WELCOME_SHOWN:
+        return
+    _WELCOME_SHOWN = True
+
+    m = "bright_magenta"
+    width = 58
+    top = f"[{m}]┌[/{m}]" + " " * (width - 2) + f"[{m}]┐[/{m}]"
+    bot = f"[{m}]└[/{m}]" + " " * (width - 2) + f"[{m}]┘[/{m}]"
+
+    err_console.print()
+    err_console.print(f"  {top}")
+    err_console.print("     [dim]Welcome to[/dim]")
     for row in range(5):
-        line = " ".join(_BANNER_FONT[ch][row] for ch in word if ch in _BANNER_FONT)
-        console.print(f"[bright_magenta]{line}[/bright_magenta]")
-    console.print(
-        f"[dim]  AI-powered security scanner  ·  SAST + DAST + LLM  ·  "
-        f"v{__version__}[/dim]\n"
+        line = " ".join(
+            _BANNER_FONT[ch][row] for ch in "isitsecure" if ch in _BANNER_FONT
+        )
+        err_console.print(f"     [{m}]{line}[/{m}]")
+    err_console.print(f"[dim]{('CLI  ·  v' + __version__).rjust(width - 2)}[/dim]")
+    err_console.print(f"  {bot}")
+    err_console.print()
+    err_console.print(
+        "  [dim]Scan your web app for security issues right from your terminal —[/dim]"
     )
+    err_console.print(
+        "  [dim]SAST + DAST + LLM review in one command.[/dim]"
+    )
+    err_console.print()
+    err_console.print(
+        f"  [{m}]●[/{m}] 44 rule-based scanners [dim](+ optional AI review)[/dim]"
+    )
+    err_console.print(
+        f"  [{m}]●[/{m}] Quick by default  [dim]· run[/dim] --depth deep "
+        "[dim]for the full arsenal[/dim]"
+    )
+    err_console.print()
+
+
+@app.callback()
+def _main() -> None:
+    """AI-powered security scanner. Runs before every command."""
+    _print_welcome()
 
 
 # ---------------------------------------------------------------------------
@@ -172,11 +211,9 @@ def scan(
     }
     resolved_mode = scan_mode_map.get(mode) if mode != "auto" else None
 
-    # Run scan with progress display. Skip the decorative header for machine
-    # output so it doesn't pollute piped JSON/SARIF.
+    # Scan header (to stderr so it never pollutes piped JSON/SARIF).
     if output not in ("json", "sarif"):
-        _print_banner()
-        console.print(Panel(
+        err_console.print(Panel(
             f"Target: {target_url or 'N/A'}  |  Repo: {repo or 'N/A'}  |  LLM: {llm_provider}",
             title="Security Scan",
             border_style="bright_magenta",
@@ -322,7 +359,7 @@ async def _run_scan(agent, **kwargs):
     report = None
     t0 = time.monotonic()
     last_phase = None
-    console.print()
+    err_console.print()
 
     async for event in agent.scan(**kwargs):
         phase = getattr(event, "phase", "")
@@ -341,32 +378,32 @@ async def _run_scan(agent, **kwargs):
         status = data.get("status")
         if status == "start":
             # Scanner launched — show it's in flight.
-            console.print(f"{stamp}    [cyan]→[/cyan] [dim]{data['scanner']}…[/dim]")
+            err_console.print(f"{stamp}    [cyan]→[/cyan] [dim]{data['scanner']}…[/dim]")
         elif status == "done":
             # Scanner finished — detail line.
             count = data.get("findings", 0)
             if count:
-                console.print(
+                err_console.print(
                     f"{stamp}    [green]✓[/green] {data['scanner']} "
                     f"[yellow]— {count} finding(s)[/yellow]"
                 )
             else:
-                console.print(
+                err_console.print(
                     f"{stamp}    [green]✓[/green] [dim]{data['scanner']} — clean[/dim]"
                 )
         elif phase_val != last_phase:
             # New phase — header line.
-            console.print(f"{stamp} [bold cyan]▶[/bold cyan] {message}")
+            err_console.print(f"{stamp} [bold cyan]▶[/bold cyan] {message}")
             last_phase = phase_val
         else:
             # A sub-step within the current phase (emitted by a scanner).
-            console.print(f"{stamp}      [dim]· {message}[/dim]")
+            err_console.print(f"{stamp}      [dim]· {message}[/dim]")
 
     if report is None:
-        console.print("[red]Scan completed but no report was generated.[/red]")
+        err_console.print("[red]Scan completed but no report was generated.[/red]")
         raise typer.Exit(1)
 
-    console.print(
+    err_console.print(
         f"[dim]{time.monotonic() - t0:6.1f}s[/dim] [green]✓ Scan complete[/green]\n"
     )
 
