@@ -512,7 +512,16 @@ See [docs/scanners/](docs/scanners/) for detailed documentation on every scanner
 
 ## LSP Setup (Optional, Reduces False Positives)
 
-See [docs/lsp-setup.md](docs/lsp-setup.md) for instructions on setting up the TypeScript Language Server for auth flow tracing. This is optional — scans work without it using regex-based detection.
+Language servers let the scanner trace auth flows through your code (via go-to-definition) and suppress false positives — confirming auth middleware is genuinely *applied*, not just imported.
+
+**Let isitsecure install them for you:**
+
+```bash
+isitsecure setup --lsp      # install/verify the Python, TypeScript, and Java language servers
+isitsecure setup --check    # report what's installed (API key, DAST browser, LSP) — installs nothing
+```
+
+`setup --lsp` installs what it can cleanly (Python via pip always; TypeScript via npm if Node is present; Java via Homebrew if available) and prints guidance for anything it can't. It's also offered as a step in the full `isitsecure setup`. This is optional — scans still work without it using regex-based detection. For manual setup and per-language detail, see [docs/lsp-setup.md](docs/lsp-setup.md).
 
 ## Contributing
 

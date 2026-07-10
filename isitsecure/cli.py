@@ -855,14 +855,143 @@ def version() -> None:
 # setup command
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Language-server (LSP) setup
+# ---------------------------------------------------------------------------
+
+# The scan auto-detects each language server via shutil.which; this table drives
+# `setup` installing/verifying them. `needs` is the tool that must be on PATH to
+# run `cmd` (None = uses the current interpreter's pip, always available).
+_LSP_SPECS = [
+    {
+        "lang": "Python",
+        "bins": ("pylsp", "pyright-langserver", "basedpyright-langserver"),
+        "runtime": (),
+        "needs": None,
+        "cmd": [sys.executable, "-m", "pip", "install", "python-lsp-server"],
+        "hint": "pip install python-lsp-server",
+    },
+    {
+        "lang": "TypeScript / JavaScript",
+        "bins": ("typescript-language-server",),
+        "runtime": ("node",),
+        "needs": "npm",
+        "cmd": ["npm", "install", "-g", "typescript-language-server", "typescript"],
+        "hint": "install Node.js (e.g. `brew install node`), then re-run `isitsecure setup --lsp`",
+    },
+    {
+        "lang": "Java / Kotlin",
+        "bins": ("jdtls", "jdt-language-server"),
+        "runtime": ("java",),
+        "needs": "brew",
+        "cmd": ["brew", "install", "jdtls"],
+        "hint": "install a JDK + jdtls — https://github.com/eclipse-jdtls/eclipse.jdt.ls#installation",
+    },
+]
+
+
+def _first_which(bins) -> Optional[str]:
+    import shutil
+    for b in bins:
+        if shutil.which(b):
+            return b
+    return None
+
+
+def _chromium_installed() -> bool:
+    """True if Playwright's Chromium is installed (best effort, no launch)."""
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            return bool(p.chromium.executable_path) and Path(p.chromium.executable_path).exists()
+    except Exception:
+        return False
+
+
+def _print_status_report() -> None:
+    """`setup --check`: report what's configured without changing anything."""
+    import shutil
+    console.print("\n[bold]isitsecure environment[/bold]")
+
+    key = _load_api_key("anthropic") or _load_api_key("google")
+    mark = "[green]✓[/green]" if key else "[yellow]•[/yellow]"
+    console.print(f"  {mark} LLM API key: "
+                  + ("configured" if key else "[dim]not set — rule-based scanning only[/dim]"))
+
+    browser = _chromium_installed()
+    mark = "[green]✓[/green]" if browser else "[yellow]•[/yellow]"
+    console.print(f"  {mark} DAST browser (Chromium): "
+                  + ("installed" if browser else "[dim]not installed — run `isitsecure setup`[/dim]"))
+
+    console.print("\n  [dim]Language servers (deeper code analysis, fewer false positives):[/dim]")
+    for spec in _LSP_SPECS:
+        found = _first_which(spec["bins"])
+        missing_rt = [r for r in spec["runtime"] if not shutil.which(r)]
+        if found and not missing_rt:
+            console.print(f"  [green]✓[/green] {spec['lang']}: [dim]{found}[/dim]")
+        elif found and missing_rt:
+            console.print(f"  [yellow]![/yellow] {spec['lang']}: {found} found, but "
+                          f"[dim]{', '.join(missing_rt)}[/dim] not on PATH to run it")
+        else:
+            console.print(f"  [yellow]•[/yellow] {spec['lang']}: [dim]not installed[/dim]")
+    console.print("\n[dim]Install missing language servers with:[/dim] isitsecure setup --lsp")
+
+
+def _setup_lsps() -> None:
+    """Install any missing language servers we can, guide for the rest."""
+    import shutil
+    import subprocess
+    console.print("\n[bold]Language servers (LSP)[/bold] "
+                  "[dim]— trace auth flows, reduce false positives on code scans[/dim]")
+    for spec in _LSP_SPECS:
+        found = _first_which(spec["bins"])
+        if found:
+            console.print(f"  [green]✓[/green] {spec['lang']}: already installed [dim]({found})[/dim]")
+            continue
+        needs = spec["needs"]
+        if needs is not None and not shutil.which(needs):
+            console.print(f"  [yellow]•[/yellow] {spec['lang']}: [dim]{spec['hint']}[/dim]")
+            continue
+        console.print(f"  [cyan]→[/cyan] {spec['lang']}: installing…")
+        try:
+            res = subprocess.run(spec["cmd"], capture_output=True, text=True, timeout=600)
+        except Exception as exc:
+            console.print(f"  [red]✗[/red] {spec['lang']}: {exc}")
+            console.print(f"      [dim]{spec['hint']}[/dim]")
+            continue
+        if res.returncode == 0 and _first_which(spec["bins"]):
+            console.print(f"  [green]✓[/green] {spec['lang']}: installed")
+        else:
+            tail = (res.stderr or res.stdout or "install did not complete").strip().splitlines()
+            console.print(f"  [yellow]![/yellow] {spec['lang']}: {(tail[-1] if tail else '')[:120]}")
+            console.print(f"      [dim]{spec['hint']}[/dim]")
+        missing_rt = [r for r in spec["runtime"] if not shutil.which(r)]
+        if missing_rt:
+            console.print(f"      [dim](also needs {', '.join(missing_rt)} on PATH to run)[/dim]")
+
+
 @app.command()
-def setup() -> None:
-    """Interactive first-time setup - configure API keys and install browsers."""
+def setup(
+    lsp: bool = typer.Option(
+        False, "--lsp", help="Only install/verify the code-analysis language servers"),
+    check: bool = typer.Option(
+        False, "--check", help="Report what's installed (API key, browser, LSP) — installs nothing"),
+) -> None:
+    """First-time setup — API key, DAST browser, and code-analysis language servers."""
     _ensure_config_dir()
+
+    if check:
+        _print_status_report()
+        return
+
+    if lsp:
+        _setup_lsps()
+        console.print("\n[green]Language-server setup done.[/green]")
+        return
 
     console.print(Panel(
         "[bold]isitsecure setup[/bold]\n"
-        "Configure API keys and install browser for DAST scanning.",
+        "Configure API keys, install the DAST browser, and set up language servers.",
         border_style="bright_magenta",
     ))
 
@@ -904,6 +1033,13 @@ def setup() -> None:
         else:
             console.print(f"[red]Failed to install Chromium: {result.stderr}[/red]")
             console.print("You can install it later: python -m playwright install chromium")
+
+    # Language servers
+    console.print("\n[bold]3. Language servers (deeper code analysis)[/bold]")
+    console.print("   Let the scanner trace auth flows through your code and cut false")
+    console.print("   positives. Optional — scans still work with regex-based detection.")
+    if typer.confirm("Install/verify language servers now?", default=True):
+        _setup_lsps()
 
     console.print("\n[green bold]Setup complete![/green bold]")
     console.print("Run: isitsecure scan https://your-app.com")
