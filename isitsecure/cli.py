@@ -72,7 +72,8 @@ def _print_welcome() -> None:
             _BANNER_FONT[ch][row] for ch in "isitsecure" if ch in _BANNER_FONT
         )
         err_console.print(f"     [{m}]{line}[/{m}]")
-    err_console.print(f"[dim]{('CLI  ·  v' + __version__).rjust(width - 2)}[/dim]")
+    err_console.print()
+    err_console.print(f"[dim]{('CLI  ·  v' + __version__).rjust(width - 4)}  [/dim]")
     err_console.print(f"  {bot}")
     err_console.print()
     err_console.print(
