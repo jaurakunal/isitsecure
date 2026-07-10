@@ -53,24 +53,40 @@ jobs:
             echo "SLACK_WEBHOOK_URL not set — skipping (add it in repo secrets to enable)."
             exit 0
           fi
+          BTN_URL=""; BTN_LABEL=""
           case "$EVENT" in
             pull_request_target)
               TEXT=":sparkles: *New PR* #${PR_NUM} — ${REPO}
-${PR_TITLE}  (by ${PR_USER})
-${PR_URL}" ;;
+${PR_TITLE}  (by ${PR_USER})"
+              BTN_URL="$PR_URL"; BTN_LABEL="Review & approve on GitHub" ;;
             fork)
               TEXT=":herb: *New fork* of ${REPO}
-${FORK_NAME}
-${FORK_URL}" ;;
+${FORK_NAME}"
+              BTN_URL="$FORK_URL"; BTN_LABEL="View fork" ;;
             push)
               TEXT=":rocket: *Push to main* — ${REPO}  (by ${PUSHER})
-${HEAD_MSG%%$'\n'*}
-${COMPARE}" ;;
+${HEAD_MSG%%$'\n'*}"
+              BTN_URL="$COMPARE"; BTN_LABEL="View changes" ;;
             workflow_run)
-              TEXT=":x: *CI failed* — ${REPO} @ ${WF_BRANCH}
-${WF_URL}" ;;
+              TEXT=":x: *CI failed* — ${REPO} @ ${WF_BRANCH}"
+              BTN_URL="$WF_URL"; BTN_LABEL="View failed run" ;;
             *)
               TEXT="Event ${EVENT} on ${REPO}" ;;
           esac
-          curl -sSf -X POST -H 'Content-type: application/json' \
-            --data "$(jq -n --arg t "$TEXT" '{text: $t}')" "$WEBHOOK"
+
+          # A Slack "url" button opens the link (GitHub's approve/review page) —
+          # no interactivity backend required.
+          if [ -n "$BTN_URL" ]; then
+            PAYLOAD=$(jq -n --arg t "$TEXT" --arg u "$BTN_URL" --arg l "$BTN_LABEL" '{
+              text: $t,
+              blocks: [
+                {type: "section", text: {type: "mrkdwn", text: $t}},
+                {type: "actions", elements: [
+                  {type: "button", text: {type: "plain_text", text: $l}, url: $u, style: "primary"}
+                ]}
+              ]
+            }')
+          else
+            PAYLOAD=$(jq -n --arg t "$TEXT" '{text: $t}')
+          fi
+          curl -sSf -X POST -H 'Content-type: application/json' --data "$PAYLOAD" "$WEBHOOK"
