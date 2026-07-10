@@ -53,41 +53,101 @@ _WELCOME_SHOWN = False
 
 
 def _print_welcome() -> None:
-    """Print the framed isitsecure welcome banner (once per process, to stderr)."""
+    """Print the framed isitsecure welcome banner (once per process, to stderr).
+
+    The wordmark scales to the terminal width, coloured by a diagonal pink→purple
+    wave. On an interactive terminal a one-time shimmer sweeps across it on load.
+    """
     global _WELCOME_SHOWN
     if _WELCOME_SHOWN:
         return
     _WELCOME_SHOWN = True
 
-    m = "bright_magenta"
-    width = 58
-    top = f"[{m}]┌[/{m}]" + " " * (width - 2) + f"[{m}]┐[/{m}]"
-    bot = f"[{m}]└[/{m}]" + " " * (width - 2) + f"[{m}]┘[/{m}]"
+    import math
+    import time
 
+    word = "isitsecure"
+    pink, purple = (255, 106, 193), (168, 107, 255)
+    out = err_console.file          # stderr
+    tty = err_console.is_terminal   # colour + animate only on a real terminal
+    m = "bright_magenta"
+
+    # --- scale the block font toward the terminal width ---
+    term_w = err_console.width or 80
+    base_w = len(" ".join(_BANNER_FONT[c][0] for c in word))  # unscaled width
+    hscale = max(1, min(4, (term_w - 12) // base_w))
+    vscale = (hscale + 1) // 2
+
+    rows: list[str] = []
+    for r in range(5):
+        raw = " ".join(_BANNER_FONT[c][r] for c in word)
+        wide = "".join(ch * hscale for ch in raw)
+        rows.extend([wide] * vscale)
+    n_rows = len(rows)
+    wm_w = len(rows[0])
+    pad = "     "  # inner left padding for the wordmark
+
+    def _cell(col: int, ri: int, glint) -> str:
+        if not tty:
+            return ""
+        t = (math.sin(col * (2 * math.pi / (24 * hscale)) - ri * 0.85) + 1) / 2
+        r, g, b = (pink[i] + (purple[i] - pink[i]) * t for i in range(3))
+        if glint is not None:
+            d = (col - glint) / (5 * hscale)
+            boost = math.exp(-d * d) * 0.9
+            r, g, b = (v + (255 - v) * boost for v in (r, g, b))
+        return f"\033[38;2;{round(r)};{round(g)};{round(b)}m"
+
+    def _wordmark(glint=None) -> list[str]:
+        reset = "\033[0m" if tty else ""
+        return [
+            pad + "".join(_cell(i, ri, glint) + ch for i, ch in enumerate(rowstr)) + reset
+            for ri, rowstr in enumerate(rows)
+        ]
+
+    frame_w = min(term_w - 3, wm_w + len(pad) + 4)
+    top = f"[{m}]┌[/{m}]" + " " * (frame_w - 2) + f"[{m}]┐[/{m}]"
+    bot = f"[{m}]└[/{m}]" + " " * (frame_w - 2) + f"[{m}]┘[/{m}]"
+
+    # header
     err_console.print()
     err_console.print(f"  {top}")
-    err_console.print("     [dim]Welcome to[/dim]")
-    for row in range(5):
-        line = " ".join(
-            _BANNER_FONT[ch][row] for ch in "isitsecure" if ch in _BANNER_FONT
-        )
-        err_console.print(f"     [{m}]{line}[/{m}]")
+    err_console.print(f"  {pad}[dim]Welcome to[/dim]")
+
+    # wordmark — resting frame, then (on a tty) a single shimmer sweep
+    for line in _wordmark():
+        out.write("  " + line + "\n")
+    out.flush()
+    if tty:
+        frames = 20
+        span = wm_w + 20 * hscale
+        for k in range(1, frames + 1):
+            glint = -10 * hscale + span * k / frames
+            out.write(f"\033[{n_rows}A")
+            for line in _wordmark(glint):
+                out.write("\033[2K  " + line + "\n")
+            out.flush()
+            time.sleep(0.025)
+        out.write(f"\033[{n_rows}A")
+        for line in _wordmark():
+            out.write("\033[2K  " + line + "\n")
+        out.flush()
+
+    # footer
     err_console.print()
-    err_console.print(f"[dim]{('CLI  ·  v' + __version__).rjust(width - 4)}  [/dim]")
+    err_console.print(f"[dim]{('CLI  ·  v' + __version__).rjust(frame_w)}[/dim]")
     err_console.print(f"  {bot}")
     err_console.print()
     err_console.print(
-        "  [dim]Scan your web app for security issues right from your terminal —[/dim]"
+        f"  {pad}[dim]Scan your web app for security issues right from your terminal —[/dim]"
     )
-    err_console.print(
-        "  [dim]SAST + DAST + LLM review in one command.[/dim]"
-    )
+    err_console.print(f"  {pad}[dim]SAST + DAST + LLM review in one command.[/dim]")
     err_console.print()
     err_console.print(
-        f"  [{m}]●[/{m}] 44 rule-based scanners [dim](+ optional AI review)[/dim]"
+        f"  {pad}[{m}]●[/{m}] 44 rule-based scanners [dim](+ optional AI review)[/dim]"
     )
     err_console.print(
-        f"  [{m}]●[/{m}] Quick by default  [dim]· run[/dim] --depth deep "
+        f"  {pad}[{m}]●[/{m}] Quick by default  [dim]· run[/dim] --depth deep "
         "[dim]for the full arsenal[/dim]"
     )
     err_console.print()
