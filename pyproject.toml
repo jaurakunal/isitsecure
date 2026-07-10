@@ -28,7 +28,7 @@ dependencies = [
     "httpx>=0.25",
     "typer>=0.12",
     "rich>=13.0",
-    "uvicorn>=0.30",
+    "uvicorn>=0.51.0",
     "fastapi>=0.111",
 ]
 
