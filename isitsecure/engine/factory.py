@@ -131,6 +131,16 @@ from isitsecure.engine.scanners.cors_scanner import CORSScanner
 from isitsecure.engine.scanners.open_redirect_scanner import (
     OpenRedirectScanner,
 )
+from isitsecure.engine.scanners.source_map_scanner import (
+    SourceMapScanner,
+)
+from isitsecure.engine.scanners.mixed_content_scanner import (
+    MixedContentScanner,
+)
+from isitsecure.engine.scanners.sri_scanner import SRIScanner
+from isitsecure.engine.scanners.client_exposure_scanner import (
+    ClientExposureScanner,
+)
 from isitsecure.engine.scanners.ssrf_scanner import SSRFScanner
 from isitsecure.engine.scanners.xss_scanner import XSSScanner
 from isitsecure.engine.ingestion.url_ingestion import URLIngestionService
@@ -262,6 +272,10 @@ def create_deep_security_scan_agent(
         AuthBypassScanner(),
         HTTPProbeScanner(),
         PasswordResetScanner(),
+        SourceMapScanner(),
+        MixedContentScanner(),
+        SRIScanner(),
+        ClientExposureScanner(),
     ]
 
     sast_scanners = [

@@ -480,6 +480,31 @@ class DeepSecurityScanAgent:
             all_findings.extend(dast_findings)
             scanners_run.extend(dast_names)
 
+        # Anon RLS deep testing (url-only): probe live Supabase REST API for
+        # exposed-read / exposed-write tables using just the anon key. The
+        # authenticated path (Phase 5) runs the same scanner WITH sessions, so
+        # gate this to fire only when that path won't — avoids a double-run.
+        if (
+            self._rls_deep_scanner
+            and supabase_url
+            and anon_key
+            and not (
+                session_a
+                and mode in (ScanMode.AUTHENTICATED, ScanMode.FULL)
+            )
+        ):
+            anon_rls_findings = await run_scanner_safe(
+                "rls_deep",
+                self._rls_deep_scanner.scan(
+                    supabase_url=supabase_url,
+                    anon_key=anon_key,
+                    tables=tables,
+                ),
+                ScannerTimeouts.IDOR_CROSS_USER_SECONDS,
+            )
+            all_findings.extend(anon_rls_findings)
+            scanners_run.append("rls_deep")
+
         # IDOR (unauthenticated — returns IDORTestResult + mutation DeepFindings)
         idor_results = []
         if self._idor_scanner and endpoints:
@@ -872,6 +897,7 @@ class DeepSecurityScanAgent:
         # ==============================================================
         duration = time.monotonic() - start_time
         endpoints_with_ids = [ep for ep in endpoints if ep.has_id_params]
+        backend = self._resolve_backend(repo_snapshot, snapshot, supabase_url)
         report = DeepScanReport(
             target_url=target_url,
             repo_url=repo_url,
@@ -880,9 +906,7 @@ class DeepSecurityScanAgent:
             framework=self._safe_enum_value(
                 repo_snapshot.framework if repo_snapshot else None
             ),
-            backend=self._safe_enum_value(
-                repo_snapshot.backend if repo_snapshot else None
-            ),
+            backend=backend,
             scan_mode=mode.value if mode else "",
             total_endpoints_discovered=len(endpoints),
             endpoints_with_ids=len(endpoints_with_ids),
@@ -1966,6 +1990,35 @@ class DeepSecurityScanAgent:
             cat = ep.category.value
             categories[cat] = categories.get(cat, 0) + 1
         return {"category_summary": categories}
+
+    def _resolve_backend(
+        self,
+        repo_snapshot: RepoSnapshot | None,
+        snapshot: CodebaseSnapshot | None,
+        supabase_url: str | None,
+    ) -> str:
+        """Compose the report's backend string.
+
+        Prefers the SAST-derived backend (repo snapshot) when present. For
+        url-only scans (no repo) it reflects the live target: CDN / edge
+        providers fingerprinted from response headers plus "Supabase" when a
+        Supabase project was discovered (e.g. "Cloudflare + Supabase").
+        """
+        sast_backend = self._safe_enum_value(
+            repo_snapshot.backend if repo_snapshot else None
+        )
+        if sast_backend:
+            return sast_backend
+
+        from isitsecure.engine.shared.infra_fingerprint import detect_providers
+
+        parts: list[str] = []
+        if snapshot is not None:
+            parts.extend(detect_providers(snapshot.headers.raw_headers))
+        if supabase_url:
+            parts.append("Supabase")
+
+        return " + ".join(parts)
 
     @staticmethod
     def _safe_enum_value(enum_val) -> str:

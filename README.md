@@ -13,7 +13,7 @@ Built for developers and **vibe coders** shipping web apps who need to know if t
 - [What It Does](#what-it-does)
 - [Install](#install) · [Quick Start](#quick-start) · [What It Costs](#what-it-costs)
 - [Scan Modes](#scan-modes)
-- [What It Scans](#what-it-scans) — [DAST](#dast-scanners-15--tests-your-live-app) · [Special DAST](#special-dast-scanners-8) · [SAST](#sast-scanners-17--analyzes-your-code) · [LLM](#llm-powered-analysis-requires-api-key) · [Cross-Referencing](#cross-referencing--guided-dast)
+- [What It Scans](#what-it-scans) — [DAST](#dast-scanners-19--tests-your-live-app) · [Special DAST](#special-dast-scanners-8) · [SAST](#sast-scanners-17--analyzes-your-code) · [LLM](#llm-powered-analysis-requires-api-key) · [Cross-Referencing](#cross-referencing--guided-dast)
 - [Language Support](#language-support) · [Output Formats](#output-formats)
 - [Auto-Fix](#auto-fix-one-command-to-fix-your-app) · [Security Badge](#security-badge)
 - [How We Compare](#how-we-compare) · [What It Does NOT Cover](#what-it-does-not-cover)
@@ -25,7 +25,7 @@ Built for developers and **vibe coders** shipping web apps who need to know if t
 
 ## What It Does
 
-isitsecure runs **40 rule-based scanners** (plus optional AI code review) against your web app in a single command. It combines four approaches that commercial tools sell separately:
+isitsecure runs **44 rule-based scanners** (plus optional AI code review) against your web app in a single command. It combines four approaches that commercial tools sell separately:
 
 - **SAST (Static Analysis)** — scans your source code for vulnerabilities without running it
 - **DAST (Dynamic Analysis)** — tests your live app by sending real HTTP requests
@@ -114,7 +114,7 @@ isitsecure is free and open source. The only cost is LLM API tokens for the AI-p
 | **Code-only + LLM review** | Yes | ~$5–8 |
 | **Full scan** (SAST + DAST + LLM) | Yes | ~$10–15 |
 
-Without an API key, you still get all 40 rule-based scanners (15 DAST + 8 special DAST + 17 SAST). The LLM adds business logic review, semantic rule verification, and intelligent triage — things no pattern matcher can do.
+Without an API key, you still get all 44 rule-based scanners (19 DAST + 8 special DAST + 17 SAST). The LLM adds business logic review, semantic rule verification, and intelligent triage — things no pattern matcher can do.
 
 **Supported LLM providers:** Anthropic (Claude), Google (Gemini)
 
@@ -130,7 +130,7 @@ Without an API key, you still get all 40 rule-based scanners (15 DAST + 8 specia
 
 ## What It Scans
 
-### DAST Scanners (15) — Tests Your Live App
+### DAST Scanners (19) — Tests Your Live App
 
 | Scanner | What It Finds |
 |---|---|
@@ -149,6 +149,10 @@ Without an API key, you still get all 40 rule-based scanners (15 DAST + 8 specia
 | Auth Bypass Scanner | Username enumeration, default credentials, account lockout bypass |
 | HTTP Probe Scanner | Method tampering, host header injection, directory listing, .env exposure |
 | Password Reset Scanner | Token leakage in response body, email enumeration, no rate limiting |
+| Source Map Scanner | Publicly exposed `.map` files leaking original source (verified, not just present) |
+| Mixed Content Scanner | `http://` resources loaded on an HTTPS page |
+| SRI Scanner | External CDN scripts/styles loaded without Subresource Integrity hashes |
+| Client Exposure Scanner | Secrets in client JS — Supabase `service_role` keys, internal URLs, unreplaced env placeholders |
 
 ### Special DAST Scanners (8)
 
