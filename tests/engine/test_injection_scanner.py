@@ -585,3 +585,41 @@ class TestFullScan:
             findings = await scanner.scan([])
 
         assert findings == []
+
+
+class TestTemplateInjectionDetection:
+    """Regression: a confirmed SSTI must actually surface a finding.
+
+    The build_probe_capture() call once referenced an undefined `url`, raising
+    a NameError that the broad except swallowed — so every real SSTI was
+    detected and then silently dropped. The prior tests only covered the
+    no-detection path, so it went unnoticed.
+    """
+
+    @pytest.mark.asyncio
+    async def test_confirmed_ssti_returns_finding(self) -> None:
+        from isitsecure.engine.constants import TemplateInjectionConfig
+        from isitsecure.engine.models import DiscoveredEndpoint
+        from isitsecure.engine.enums import FindingCategory, SeverityLevel
+
+        payload, expected, _engine = TemplateInjectionConfig.SSTI_PAYLOADS[0]
+        scanner = ActiveInjectionScanner()
+        ep = DiscoveredEndpoint(
+            url="https://example.com/api?q=1",
+            method=EndpointMethod.GET,
+        )
+
+        async def _probe(_client, _ep, _param, sent_payload):
+            # Reflect the evaluated marker for the template payload; a benign
+            # value for the false-positive re-check.
+            if sent_payload == "harmless_test_value":
+                return _make_response(text="totally clean page")
+            return _make_response(text=f"result is {expected} here")
+
+        scanner._probe = _probe
+        finding = await scanner._test_template_injection(None, ep, "q")
+
+        assert finding is not None, "confirmed SSTI was dropped"
+        assert finding.category == FindingCategory.INJECTION_RISK
+        assert finding.severity == SeverityLevel.CRITICAL
+        assert finding.endpoint_url == ep.url
