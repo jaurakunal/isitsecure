@@ -26,6 +26,7 @@ from isitsecure.engine.models import (
     InterceptedRequest,
 )
 from isitsecure.engine.shared.auth_headers import build_replay_headers
+from isitsecure.engine.shared.progress import emit
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
 
 logger = logging.getLogger(__name__)
@@ -81,6 +82,8 @@ class RaceConditionScanner:
         """Send N concurrent copies via a SINGLE client for true concurrency."""
         headers = build_replay_headers(session, req)
         method = req.method.upper()
+
+        emit(f"race-condition: {method} {req.url}")
 
         # Use a single shared client — critical for real race condition testing
         async with httpx.AsyncClient(

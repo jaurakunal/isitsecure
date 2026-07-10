@@ -701,9 +701,15 @@ class DeepSecurityScanAgent:
                 OrchestratorConfig.MSG_SAST_RUNNING,
                 OrchestratorConfig.PROGRESS_SAST_SCANNERS,
             )
-            sast_findings, sast_names, sast_code_findings = (
-                await self._run_sast_scanners(repo_snapshot)
-            )
+            sast_findings: list[DeepFinding] = []
+            sast_names: list[str] = []
+            async for _kind, _payload in self._run_sast_scanners_streamed(
+                repo_snapshot
+            ):
+                if _kind == "event":
+                    yield _payload
+                else:
+                    sast_findings, sast_names, sast_code_findings = _payload
             all_findings.extend(sast_findings)
             scanners_run.extend(sast_names)
 
@@ -1369,6 +1375,78 @@ class DeepSecurityScanAgent:
                 all_code_findings.append(cf)
             names.append(name)
         return all_findings, names, all_code_findings
+
+    async def _run_sast_scanners_streamed(self, repo_snapshot: RepoSnapshot):
+        """Like :meth:`_run_sast_scanners` but narrates: yields a start line as
+        each scanner launches, per-scanner sub-events, and a done line as each
+        finishes. Final yield is ``("result", (findings, names, code_findings))``.
+        """
+        if not self._sast_scanners:
+            yield ("result", ([], [], []))
+            return
+
+        reporter = self._reporter
+        total = len(self._sast_scanners)
+        base = OrchestratorConfig.PROGRESS_SAST_SCANNERS
+        band = 5  # SAST band spans PROGRESS_SAST_SCANNERS .. +5 (LSP validation)
+        results: dict[str, list] = {}
+        _DONE = "__scanner_done__"
+
+        async def _run(name: str, coro) -> None:
+            try:
+                code_findings = await coro
+            except Exception as exc:
+                logger.debug("SAST scanner %s failed: %s", name, exc)
+                code_findings = []
+            results[name] = code_findings
+            reporter.post(_DONE, {"scanner": name, "findings": len(code_findings)})
+
+        tasks = []
+        for s in self._sast_scanners:
+            yield ("event", DeepScanEvent(
+                DeepScanPhase.SAST_SCANNING,
+                f"running {s.scanner_name}...",
+                base,
+                {"scanner": s.scanner_name, "status": "start"},
+            ))
+            tasks.append(asyncio.ensure_future(_run(
+                s.scanner_name,
+                run_scanner_safe(
+                    s.scanner_name,
+                    s.scan(repo_snapshot),
+                    self._sast_timeout(s.scanner_name),
+                ),
+            )))
+
+        done = 0
+        while done < total:
+            message, data = await reporter.queue.get()
+            if message == _DONE:
+                done += 1
+                count = data["findings"]
+                detail = f"{count} finding(s)" if count else "clean"
+                yield ("event", DeepScanEvent(
+                    DeepScanPhase.SAST_SCANNING,
+                    f"{data['scanner']}: {detail} ({done}/{total})",
+                    base + int(band * done / total),
+                    {"scanner": data["scanner"], "findings": count,
+                     "done": done, "total": total, "status": "done"},
+                ))
+            else:
+                yield ("event", DeepScanEvent(
+                    DeepScanPhase.SAST_SCANNING, message, base, data,
+                ))
+
+        await asyncio.gather(*tasks, return_exceptions=True)
+        all_findings: list[DeepFinding] = []
+        all_code_findings: list[CodeFinding] = []
+        names: list[str] = []
+        for s in self._sast_scanners:
+            for cf in results.get(s.scanner_name, []):
+                all_findings.append(self._code_finding_to_deep_finding(cf))
+                all_code_findings.append(cf)
+            names.append(s.scanner_name)
+        yield ("result", (all_findings, names, all_code_findings))
 
     # Pricing per million tokens (USD) — keyed by model name prefix
     _MODEL_PRICING = {

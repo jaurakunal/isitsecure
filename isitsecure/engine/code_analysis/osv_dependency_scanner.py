@@ -26,6 +26,7 @@ import httpx
 from isitsecure.engine.code_analysis.models import CodeFinding
 from isitsecure.engine.code_analysis.protocols import RepoSnapshot
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
+from isitsecure.engine.shared.progress import emit
 
 logger = logging.getLogger(__name__)
 
@@ -78,10 +79,15 @@ class OSVDependencyScanner:
         if not deps:
             return []
 
+        ecosystems = sorted({d.ecosystem for d in deps})
         logger.info(
             "OSV scanner: querying %d dependencies across %d ecosystems",
             len(deps),
-            len({d.ecosystem for d in deps}),
+            len(ecosystems),
+        )
+        emit(
+            f"OSV: querying {len(deps)} package(s) "
+            f"across {', '.join(ecosystems)}"
         )
 
         vulns = await self._query_osv_batch(deps)
@@ -223,8 +229,11 @@ class OSVDependencyScanner:
         results: list[tuple[ParsedDependency, list[dict]]] = []
 
         # Split into batches
-        for i in range(0, len(deps), MAX_BATCH_SIZE):
+        total_batches = (len(deps) + MAX_BATCH_SIZE - 1) // MAX_BATCH_SIZE
+        for batch_num, i in enumerate(range(0, len(deps), MAX_BATCH_SIZE), 1):
             batch = deps[i:i + MAX_BATCH_SIZE]
+            if total_batches > 1:
+                emit(f"OSV: batch {batch_num}/{total_batches} ({len(batch)} pkg)")
             batch_results = await self._query_batch(batch)
             results.extend(batch_results)
 

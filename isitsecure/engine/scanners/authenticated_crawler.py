@@ -42,6 +42,7 @@ from isitsecure.engine.models import (
 from isitsecure.engine.shared.html_endpoint_extractor import (
     extract_html_endpoints,
 )
+from isitsecure.engine.shared.progress import emit
 from isitsecure.engine.shared.supabase_utils import (
     extract_supabase_table_from_url,
 )
@@ -162,6 +163,7 @@ class AuthenticatedCrawler:
 
     async def _login(self, page: object) -> bool:
         """Navigate to login page and fill credentials via shared helper."""
+        emit(f"crawling {self._login_url}")
         try:
             await page.goto(  # type: ignore[union-attr]
                 self._login_url,
@@ -325,6 +327,8 @@ class AuthenticatedCrawler:
                 continue
 
             self._visited.add(normalized)
+
+            emit(f"crawling {normalized}")
 
             try:
                 await page.goto(  # type: ignore[union-attr]

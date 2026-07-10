@@ -31,6 +31,7 @@ from isitsecure.engine.shared.jwt_utils import (
     decode_jwt_header as _shared_decode_jwt_header,
     decode_jwt_payload as _shared_decode_jwt_payload,
 )
+from isitsecure.engine.shared.progress import emit
 from isitsecure.engine.shared.rate_limited_client import RateLimitedClient
 from isitsecure.engine.models import (
     DeepFinding,
@@ -113,11 +114,13 @@ class JWTScanner:
         # Phase 2: Test algorithm none attack
         test_url = self._test_endpoint or self._pick_test_endpoint(endpoints)
         if test_url:
+            emit(f"JWT: alg=none forgery against {test_url}")
             alg_none_finding = await self._test_alg_none(token, payload, test_url)
             if alg_none_finding:
                 findings.append(alg_none_finding)
 
             # Phase 3: Test weak secrets
+            emit(f"JWT: trying weak secrets on {test_url}")
             weak_secret_finding = await self._test_weak_secrets(
                 token, payload, test_url
             )
@@ -125,6 +128,7 @@ class JWTScanner:
                 findings.append(weak_secret_finding)
 
             # Phase 3.5: Claim manipulation (privilege escalation)
+            emit(f"JWT: claim manipulation on {test_url}")
             claim_findings = await self._test_claim_manipulation(
                 token, payload, test_url
             )
@@ -133,6 +137,7 @@ class JWTScanner:
             # Phase 4: RS256/ES256 key confusion via JWKS
             base_url = self._extract_base_url(test_url)
             if base_url:
+                emit(f"JWT: key-confusion via JWKS on {test_url}")
                 key_confusion_findings = await self._test_key_confusion(
                     payload, test_url, base_url
                 )

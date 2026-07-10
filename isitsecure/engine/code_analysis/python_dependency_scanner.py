@@ -14,6 +14,7 @@ from isitsecure.engine.code_analysis.models import CodeFinding
 from isitsecure.engine.code_analysis.protocols import RepoSnapshot
 from isitsecure.engine.code_analysis.shared_utils import is_version_vulnerable
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
+from isitsecure.engine.shared.progress import emit
 
 logger = logging.getLogger(__name__)
 
@@ -84,8 +85,10 @@ class PythonDependencyScanner:
 
         for file_path, content in repo.file_index.items():
             if self._is_requirements_file(file_path):
+                emit(f"deps: parsing {Path(file_path).name}")
                 findings.extend(self._scan_requirements(file_path, content))
             elif file_path.endswith("pyproject.toml"):
+                emit(f"deps: parsing {Path(file_path).name}")
                 findings.extend(self._scan_pyproject(file_path, content))
 
         logger.info("Python dependency scanner found %d issues", len(findings))

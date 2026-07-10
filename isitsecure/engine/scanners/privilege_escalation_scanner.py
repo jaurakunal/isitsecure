@@ -34,6 +34,7 @@ from isitsecure.engine.models import (
     FindingSource,
     InterceptedRequest,
 )
+from isitsecure.engine.shared.progress import emit
 from isitsecure.engine.shared.rate_limited_client import (
     RateLimitedClient,
 )
@@ -109,6 +110,7 @@ class PrivilegeEscalationScanner:
             # Test 1 + 2: Supabase table tests
             if supabase_url and anon_key and tables:
                 for t in tables:
+                    emit(f"priv-esc: probing table {t}")
                     if self._is_admin_table(t):
                         f = await self._test_admin_table_access(
                             client, supabase_url, anon_key, t,
@@ -129,6 +131,7 @@ class PrivilegeEscalationScanner:
                 e for e in (endpoints or []) if self._is_admin_endpoint(e)
             ]
             for ep in admin_eps:
+                emit(f"priv-esc: admin route {ep.url}")
                 f = await self._test_admin_route_access(
                     client, ep, regular_user_session
                 )
@@ -143,6 +146,7 @@ class PrivilegeEscalationScanner:
             for ep in auth_eps[
                 : PrivilegeEscalationConfig.MAX_AUTH_ENDPOINTS_TO_TEST
             ]:
+                emit(f"priv-esc: {ep.url}")
                 f = await self._test_authenticated_endpoint_access(
                     client, ep, regular_user_session
                 )

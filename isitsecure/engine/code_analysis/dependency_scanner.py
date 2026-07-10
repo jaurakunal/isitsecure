@@ -15,6 +15,7 @@ from isitsecure.engine.code_analysis.models import CodeFinding
 from isitsecure.engine.code_analysis.protocols import RepoSnapshot
 from isitsecure.engine.constants import DependencyScannerConfig
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
+from isitsecure.engine.shared.progress import emit
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +70,7 @@ class DependencyScanner:
 
         # Root package.json
         if repo.package_json:
+            emit(f"deps: parsing {DependencyScannerConfig.PACKAGE_JSON_FILE}")
             root_deps = self._parse_dependencies(repo.package_json)
             for name, version in root_deps.items():
                 all_dependencies[name] = version
@@ -77,6 +79,7 @@ class DependencyScanner:
         # Workspace package.json files (monorepo)
         for ws in getattr(repo, "workspaces", []):
             if ws.package_json:
+                emit(f"deps: parsing {ws.path}/package.json")
                 ws_deps = self._parse_dependencies(ws.package_json)
                 for name, version in ws_deps.items():
                     if name not in all_dependencies:
@@ -96,6 +99,7 @@ class DependencyScanner:
         owns_client = self._external_client is None
 
         try:
+            emit(f"OSV: querying {len(packages)} npm package(s)")
             findings = await self._scan_packages(client, packages)
 
             # Update file_path to reflect which workspace the dep came from

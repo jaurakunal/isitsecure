@@ -29,6 +29,7 @@ from isitsecure.engine.models import (
     FindingSource,
     InterceptedRequest,
 )
+from isitsecure.engine.shared.progress import emit
 from isitsecure.engine.shared.rate_limited_client import (
     RateLimitedClient,
 )
@@ -82,6 +83,8 @@ class BodyParamFuzzer:
                         continue
                 except (json.JSONDecodeError, TypeError):
                     continue
+
+                emit(f"fuzzing body params: {req.method.upper()} {req.url}")
 
                 params = list(body.keys())[
                     : BodyParamFuzzerConfig.MAX_PARAMS_PER_REQUEST

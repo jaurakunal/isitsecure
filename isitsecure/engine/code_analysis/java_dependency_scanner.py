@@ -13,6 +13,7 @@ from isitsecure.engine.code_analysis.models import CodeFinding
 from isitsecure.engine.code_analysis.protocols import RepoSnapshot
 from isitsecure.engine.code_analysis.shared_utils import is_version_vulnerable
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
+from isitsecure.engine.shared.progress import emit
 
 logger = logging.getLogger(__name__)
 
@@ -80,8 +81,10 @@ class JavaDependencyScanner:
         for file_path, content in repo.file_index.items():
             name = file_path.rsplit("/", 1)[-1].lower()
             if name == "pom.xml":
+                emit(f"deps: parsing {name}")
                 findings.extend(self._scan_pom(file_path, content))
             elif name in ("build.gradle", "build.gradle.kts"):
+                emit(f"deps: parsing {name}")
                 findings.extend(self._scan_gradle(file_path, content))
 
         logger.info("Java dependency scanner found %d issues", len(findings))

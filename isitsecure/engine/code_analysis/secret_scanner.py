@@ -16,6 +16,7 @@ from isitsecure.engine.code_analysis.models import CodeFinding
 from isitsecure.engine.code_analysis.protocols import RepoSnapshot
 from isitsecure.engine.constants import SecretScannerConfig
 from isitsecure.engine.shared.code_utils import find_line_number
+from isitsecure.engine.shared.progress import emit
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
 
 logger = logging.getLogger(__name__)
@@ -45,13 +46,16 @@ class GitSecretScanner:
         findings: list[CodeFinding] = []
 
         # Pass 1: Scan current HEAD files
+        emit("secrets: scanning working tree")
         findings.extend(self._scan_current_files(repo))
 
         # Pass 2: Scan git history
+        emit("secrets: scanning git history")
         history_findings = await self._scan_git_history(repo)
         findings.extend(history_findings)
 
         # Pass 3: Check for sensitive files committed
+        emit("secrets: checking history for sensitive files")
         findings.extend(await self._scan_sensitive_files(repo))
 
         logger.info("GitSecretScanner: found %d findings", len(findings))
