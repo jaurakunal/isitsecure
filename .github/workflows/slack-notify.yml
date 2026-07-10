@@ -1,0 +1,76 @@
+name: slack-notify
+
+# Posts to Slack on: a new PR, a new fork, a push/merge to main, and CI failures.
+# Requires a repo secret SLACK_WEBHOOK_URL (a Slack Incoming Webhook URL). Until
+# that secret exists the job is a harmless no-op.
+#
+# Note: `pull_request_target` (not `pull_request`) is used so secrets are
+# available even for PRs from forks. This is safe here because the job only
+# reads event metadata and posts a message — it never checks out or runs the
+# PR's code.
+
+on:
+  pull_request_target:
+    types: [opened, reopened]
+  fork:
+  push:
+    branches: [main]
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    # For CI runs, only ping on failure; other events always ping.
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post to Slack
+        env:
+          # Event data via env (NOT inlined into the script) to avoid injection
+          # from attacker-controlled fields like PR titles.
+          WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_USER: ${{ github.event.pull_request.user.login }}
+          FORK_NAME: ${{ github.event.forkee.full_name }}
+          FORK_URL: ${{ github.event.forkee.html_url }}
+          PUSHER: ${{ github.event.pusher.name }}
+          HEAD_MSG: ${{ github.event.head_commit.message }}
+          COMPARE: ${{ github.event.compare }}
+          WF_NAME: ${{ github.event.workflow_run.name }}
+          WF_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          WF_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          set -euo pipefail
+          if [ -z "${WEBHOOK:-}" ]; then
+            echo "SLACK_WEBHOOK_URL not set — skipping (add it in repo secrets to enable)."
+            exit 0
+          fi
+          case "$EVENT" in
+            pull_request_target)
+              TEXT=":sparkles: *New PR* #${PR_NUM} — ${REPO}
+${PR_TITLE}  (by ${PR_USER})
+${PR_URL}" ;;
+            fork)
+              TEXT=":herb: *New fork* of ${REPO}
+${FORK_NAME}
+${FORK_URL}" ;;
+            push)
+              TEXT=":rocket: *Push to main* — ${REPO}  (by ${PUSHER})
+${HEAD_MSG%%$'\n'*}
+${COMPARE}" ;;
+            workflow_run)
+              TEXT=":x: *CI failed* — ${REPO} @ ${WF_BRANCH}
+${WF_URL}" ;;
+            *)
+              TEXT="Event ${EVENT} on ${REPO}" ;;
+          esac
+          curl -sSf -X POST -H 'Content-type: application/json' \
+            --data "$(jq -n --arg t "$TEXT" '{text: $t}')" "$WEBHOOK"
