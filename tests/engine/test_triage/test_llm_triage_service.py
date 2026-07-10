@@ -150,6 +150,40 @@ class TestRuleBasedDedup:
         assert len(deduped) == 1
         assert deduped[0].scanner_name == "llm_code_reviewer"
 
+    def test_per_endpoint_findings_not_fuzzy_merged(self) -> None:
+        """Same-template titles for DIFFERENT endpoints are distinct issues.
+
+        Regression: 6 per-table RLS findings collapsed to 1 because their
+        titles differ only by the table name (word-overlap >= 0.6).
+        """
+        service, _ = _make_service()
+        findings = [
+            _make_finding(
+                finding_id=f"f{i}",
+                title=f"Table '{t}' exposes sensitive data with anon key (no auth required)",
+                severity=SeverityLevel.CRITICAL,
+                scanner_name="rls_deep_scanner",
+                endpoint_url=f"https://x.supabase.co/rest/v1/{t}?select=*",
+            )
+            for i, t in enumerate(["leads", "predictions", "user_history"])
+        ]
+        deduped, removed = service._rule_based_dedup(findings)
+        assert len(deduped) == 3
+        assert removed == 0
+
+    def test_same_endpoint_duplicates_still_merge(self) -> None:
+        """Guard is endpoint-aware: same endpoint + same title still dedupes."""
+        service, _ = _make_service()
+        findings = [
+            _make_finding(finding_id="a", title="Table 'leads' readable with anon key",
+                          endpoint_url="https://x.supabase.co/rest/v1/leads"),
+            _make_finding(finding_id="b", title="Table 'leads' readable with anon key",
+                          endpoint_url="https://x.supabase.co/rest/v1/leads"),
+        ]
+        deduped, removed = service._rule_based_dedup(findings)
+        assert len(deduped) == 1
+        assert removed == 1
+
 
 # ---------------------------------------------------------------------------
 # TestSASTAutoTriage

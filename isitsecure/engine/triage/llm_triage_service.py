@@ -358,6 +358,16 @@ class LLMTriageService:
                 w2 = _title_words(f2.title)
                 if len(w2) < 3:
                     continue
+                # Never fuzzy-merge two live findings that target DIFFERENT
+                # endpoints — same-template titles (e.g. per-table RLS findings
+                # that differ only by the table name) are distinct issues, not
+                # textual duplicates. Pure-SAST cross-file merges are untouched.
+                if (
+                    f1.endpoint_url
+                    and f2.endpoint_url
+                    and f1.endpoint_url != f2.endpoint_url
+                ):
+                    continue
                 overlap = len(w1 & w2) / max(len(w1), len(w2))
                 if overlap >= 0.6:
                     current_group.append(f2)
