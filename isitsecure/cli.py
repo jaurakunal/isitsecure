@@ -308,8 +308,12 @@ async def _run_scan(agent, **kwargs):
             report = DeepScanReport.model_validate(data["report"])
             continue
 
-        if data.get("scanner"):
-            # Per-scanner completion — indented detail line.
+        status = data.get("status")
+        if status == "start":
+            # Scanner launched — show it's in flight.
+            console.print(f"{stamp}    [cyan]→[/cyan] [dim]{data['scanner']}…[/dim]")
+        elif status == "done":
+            # Scanner finished — detail line.
             count = data.get("findings", 0)
             if count:
                 console.print(
@@ -325,8 +329,8 @@ async def _run_scan(agent, **kwargs):
             console.print(f"{stamp} [bold cyan]▶[/bold cyan] {message}")
             last_phase = phase_val
         else:
-            # Same-phase progress note.
-            console.print(f"{stamp}    [dim]{message}[/dim]")
+            # A sub-step within the current phase (emitted by a scanner).
+            console.print(f"{stamp}      [dim]· {message}[/dim]")
 
     if report is None:
         console.print("[red]Scan completed but no report was generated.[/red]")

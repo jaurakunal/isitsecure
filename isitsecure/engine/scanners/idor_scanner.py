@@ -37,6 +37,7 @@ from isitsecure.engine.models import (
     IDORTestResult,
 )
 from isitsecure.engine.shared.endpoint_prioritizer import PriorityDimension, rank
+from isitsecure.engine.shared.progress import emit
 from isitsecure.engine.shared.rate_limited_client import RateLimitedClient
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
 from urllib.parse import quote
@@ -86,12 +87,14 @@ class IDORScanner:
             user_agent=DeepScanConfig.USER_AGENT,
         ) as client:
             for endpoint in testable:
+                emit(f"IDOR: testing {endpoint.url}")
                 result = await self._test_endpoint(client, endpoint)
                 results.append(result)
 
             # Mutation IDOR: test PUT/PATCH/DELETE with swapped IDs
             mutation_testable = self._filter_mutation_endpoints(endpoints)
             for endpoint in mutation_testable[: IDORConfig.MAX_ENDPOINTS_TO_TEST]:
+                emit(f"IDOR: mutation test {endpoint.method.value} {endpoint.url}")
                 findings = await self._test_mutation_idor(
                     client, endpoint
                 )

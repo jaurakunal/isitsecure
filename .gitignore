@@ -52,3 +52,9 @@ package-lock.json
 # SQLite local storage
 *.db
 *.db-journal
+
+# Default scan output artifacts
+isitsecure-report.html
+isitsecure-results.sarif
+isitsecure-fixes.md
+isitsecure-badge.svg

@@ -26,6 +26,7 @@ from isitsecure.engine.models import (
 )
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
 from isitsecure.engine.ingestion.snapshot import CodebaseSnapshot
+from isitsecure.engine.shared.progress import emit
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +70,9 @@ class PasswordResetScanner:
             headers={"User-Agent": DeepScanConfig.USER_AGENT},
         ) as client:
             for ep in reset_endpoints:
+                path = urlparse(ep.url).path
                 # Test 1: Email enumeration
+                emit(f"password-reset: email enumeration on {path}")
                 enum_finding = await self._test_email_enumeration(client, ep)
                 if enum_finding:
                     findings.append(enum_finding)
@@ -77,11 +80,13 @@ class PasswordResetScanner:
                 await asyncio.sleep(PasswordResetConfig.PROBE_DELAY_SECONDS)
 
                 # Test 2: Rate limiting
+                emit(f"password-reset: rate limiting on {path}")
                 rate_finding = await self._test_rate_limiting(client, ep)
                 if rate_finding:
                     findings.append(rate_finding)
 
                 # Test 3: Token leakage
+                emit(f"password-reset: token leakage on {path}")
                 token_finding = await self._test_token_leakage(client, ep)
                 if token_finding:
                     findings.append(token_finding)

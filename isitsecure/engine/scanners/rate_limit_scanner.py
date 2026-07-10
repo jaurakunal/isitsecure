@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from urllib.parse import urlparse
 
 import httpx
 
@@ -22,6 +23,7 @@ from isitsecure.engine.models import (
 )
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
 from isitsecure.engine.ingestion.snapshot import CodebaseSnapshot
+from isitsecure.engine.shared.progress import emit
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +115,8 @@ class RateLimitScanner:
             List of findings for this endpoint (may be empty, one, or multiple).
         """
         findings: list[DeepFinding] = []
+
+        emit(f"rate-limit: sending burst to {urlparse(endpoint.url).path}")
 
         try:
             # Phase 1: Measure threshold with sequential requests

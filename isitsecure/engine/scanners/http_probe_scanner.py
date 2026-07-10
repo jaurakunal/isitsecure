@@ -24,6 +24,7 @@ from isitsecure.engine.models import (
     FindingSource,
 )
 from isitsecure.engine.shared.endpoint_prioritizer import PriorityDimension, rank
+from isitsecure.engine.shared.progress import emit
 from isitsecure.engine.shared.rate_limited_client import (
     RateLimitedClient,
 )
@@ -74,20 +75,25 @@ class HTTPProbeScanner:
             timeout_seconds=DeepScanConfig.HTTP_TIMEOUT_SECONDS,
             user_agent=DeepScanConfig.USER_AGENT,
         ) as client:
+            emit("http-probe: method tampering (OPTIONS/TRACE)")
             findings.extend(
                 await self._check_method_tampering(test_endpoints, client)
             )
+            emit("http-probe: host header injection")
             findings.extend(
                 await self._check_host_header_injection(
                     base_url, test_endpoints, client,
                 )
             )
+            emit("http-probe: verbose error pages")
             findings.extend(
                 await self._check_verbose_errors(base_url, client)
             )
+            emit("http-probe: directory listing & sensitive files (.git/.env)")
             findings.extend(
                 await self._check_directory_listing(base_url, client)
             )
+            emit("http-probe: CRLF header injection")
             findings.extend(
                 await self._check_crlf_injection(
                     test_endpoints, client,

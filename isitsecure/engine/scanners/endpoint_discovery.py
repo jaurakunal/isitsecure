@@ -30,6 +30,7 @@ from isitsecure.engine.shared.html_endpoint_extractor import (
     extract_html_endpoints,
 )
 from isitsecure.engine.shared.rate_limited_client import RateLimitedClient
+from isitsecure.engine.shared.progress import emit
 from isitsecure.engine.enums import EndpointCategory, EndpointMethod
 from isitsecure.engine.models import DiscoveredEndpoint
 
@@ -95,16 +96,22 @@ class EndpointDiscoveryScanner:
             len(api_base_urls),
             len(supabase_urls),
         )
+        emit(f"extracted {len(raw_endpoints)} endpoint(s) from page content")
 
+        if api_base_urls:
+            emit(f"probing {len(api_base_urls)} API base URL(s)")
         await self._probe_api_base_urls(api_base_urls, raw_endpoints)
         await self._probe_openapi_specs(api_base_urls, raw_endpoints)
         anon_key = self._discover_supabase_anon_key(all_content)
+        if supabase_urls:
+            emit(f"probing {len(supabase_urls)} Supabase project(s) for tables")
         await self._probe_supabase_urls(
             supabase_urls, raw_endpoints, anon_key
         )
 
         # Server-rendered HTML: forms + query-links are the attack surface for
         # apps with no JS API bundle or OpenAPI spec (classic MVC apps).
+        emit("scanning HTML forms and links")
         await self._discover_html_forms(html_content, base_url, raw_endpoints)
 
         # Phase 3: Extract app routes that might be API routes
@@ -128,6 +135,7 @@ class EndpointDiscoveryScanner:
             len(endpoints),
             len(all_content),
         )
+        emit(f"discovered {len(endpoints)} endpoint(s)")
         return endpoints[: EndpointDiscoveryConfig.MAX_ENDPOINTS_TO_DISCOVER]
 
     # --- Phase 1: Static extraction methods ---
@@ -329,6 +337,7 @@ class EndpointDiscoveryScanner:
             user_agent=DeepScanConfig.USER_AGENT,
         ) as client:
             for base_url in api_base_urls:
+                emit(f"probing API paths on {base_url}")
                 for path in EndpointDiscoveryConfig.COMMON_API_PROBE_PATHS:
                     probe_url = f"{base_url}{path}"
                     try:
@@ -367,6 +376,7 @@ class EndpointDiscoveryScanner:
             user_agent=DeepScanConfig.USER_AGENT,
         ) as client:
             for base_url in api_base_urls:
+                emit(f"probing OpenAPI spec on {base_url}")
                 for path in EndpointDiscoveryConfig.OPENAPI_SPEC_PATHS:
                     probe_url = f"{base_url.rstrip('/')}{path}"
                     try:
@@ -545,6 +555,7 @@ class EndpointDiscoveryScanner:
             extra_headers=extra_headers,
         ) as client:
             for sb_url in supabase_urls:
+                emit(f"probing Supabase tables on {sb_url}")
                 for path in EndpointDiscoveryConfig.SUPABASE_PROBE_PATHS:
                     probe_url = f"{sb_url}{path}"
                     try:

@@ -221,6 +221,13 @@ class DeepSecurityScanAgent:
         - Repo only               -> CODE_ONLY
         """
         start_time = time.monotonic()
+        # Install an ambient progress reporter so scanners can narrate their
+        # work (see engine/shared/progress.py). Tasks spawned below inherit it.
+        from isitsecure.engine.shared.progress import (
+            ProgressReporter, use_reporter, reset_reporter,
+        )
+        self._reporter = ProgressReporter()
+        _progress_token = use_reporter(self._reporter)
         mode = scan_mode or self._detect_scan_mode(target_url, repo_url, credentials_a)
 
         # Auto-upgrade: if credentials were provided but mode doesn't include auth
@@ -276,11 +283,18 @@ class DeepSecurityScanAgent:
                 OrchestratorConfig.MSG_DISCOVERING,
                 OrchestratorConfig.PROGRESS_ENDPOINT_DISCOVERY,
             )
-            endpoints = await self._endpoint_scanner.discover(
+            _disc_task = asyncio.ensure_future(self._endpoint_scanner.discover(
                 js_content=snapshot.all_js_content,
                 html_content=snapshot.html_content,
                 base_url=target_url,
-            )
+            ))
+            async for _ev in self._drain_progress(
+                _disc_task,
+                DeepScanPhase.DISCOVERING_ENDPOINTS,
+                OrchestratorConfig.PROGRESS_ENDPOINT_DISCOVERY,
+            ):
+                yield _ev
+            endpoints = _disc_task.result()
 
             # Extract Supabase info from discovery results
             supabase_url, anon_key, tables = self._extract_supabase_info(
@@ -961,6 +975,32 @@ class DeepSecurityScanAgent:
             except Exception as e:
                 logger.debug("LSP shutdown error: %s", e)
 
+        reset_reporter(_progress_token)
+
+    # ------------------------------------------------------------------
+    # Progress draining
+    # ------------------------------------------------------------------
+
+    async def _drain_progress(self, task, phase, progress):
+        """Yield a DeepScanEvent for every message emitted while ``task`` runs.
+
+        Polls the reporter queue on a short timeout so we notice ``task``
+        finishing, then flushes anything still queued. Lets long phases with a
+        single await (e.g. endpoint discovery) narrate their internal work.
+        """
+        reporter = self._reporter
+        while not task.done():
+            try:
+                message, data = await asyncio.wait_for(
+                    reporter.queue.get(), timeout=0.2
+                )
+                yield DeepScanEvent(phase, message, progress, data)
+            except asyncio.TimeoutError:
+                continue
+        while not reporter.queue.empty():
+            message, data = reporter.queue.get_nowait()
+            yield DeepScanEvent(phase, message, progress, data)
+
     # ------------------------------------------------------------------
     # DAST parallel runner
     # ------------------------------------------------------------------
@@ -1012,40 +1052,69 @@ class DeepSecurityScanAgent:
             yield ("result", ([], []))
             return
 
-        async def _named(name: str, coro):
-            return name, await coro
+        reporter = self._reporter
+        total = len(self._dast_scanners)
+        base = OrchestratorConfig.PROGRESS_DAST_SCANNERS
+        band = OrchestratorConfig.PROGRESS_AUTH_AND_IDOR - base
+        results: dict[str, list[DeepFinding]] = {}
+        _DONE = "__scanner_done__"
 
-        tasks = [
-            asyncio.ensure_future(_named(
+        async def _run(name: str, coro) -> None:
+            try:
+                findings = await coro
+            except Exception as exc:  # keep the drain loop from hanging
+                logger.debug("DAST scanner %s failed: %s", name, exc)
+                findings = []
+            results[name] = findings
+            reporter.post(_DONE, {"scanner": name, "findings": len(findings)})
+
+        # Announce each scanner as it launches (they run concurrently); their
+        # own emit() sub-events and completions then flow through the reporter
+        # queue, so a slow scanner running alone still narrates instead of
+        # looking idle.
+        tasks = []
+        for s in self._dast_scanners:
+            yield ("event", DeepScanEvent(
+                DeepScanPhase.DAST_SCANNING,
+                f"running {s.scanner_name}...",
+                base,
+                {"scanner": s.scanner_name, "status": "start"},
+            ))
+            tasks.append(asyncio.ensure_future(_run(
                 s.scanner_name,
                 run_scanner_safe(
                     s.scanner_name,
                     s.scan(endpoints, snapshot),
                     self._dast_timeout(s.scanner_name),
                 ),
-            ))
-            for s in self._dast_scanners
-        ]
+            )))
 
+        done = 0
+        while done < total:
+            message, data = await reporter.queue.get()
+            if message == _DONE:
+                done += 1
+                count = data["findings"]
+                detail = f"{count} finding(s)" if count else "clean"
+                yield ("event", DeepScanEvent(
+                    DeepScanPhase.DAST_SCANNING,
+                    f"{data['scanner']}: {detail} ({done}/{total})",
+                    base + int(band * done / total),
+                    {"scanner": data["scanner"], "findings": count,
+                     "done": done, "total": total, "status": "done"},
+                ))
+            else:
+                # A scanner's own progress message (via emit()).
+                yield ("event", DeepScanEvent(
+                    DeepScanPhase.DAST_SCANNING, message, base, data,
+                ))
+
+        await asyncio.gather(*tasks, return_exceptions=True)
         all_findings: list[DeepFinding] = []
         names: list[str] = []
-        total = len(tasks)
-        base = OrchestratorConfig.PROGRESS_DAST_SCANNERS
-        band = OrchestratorConfig.PROGRESS_AUTH_AND_IDOR - base
-        done = 0
-        for fut in asyncio.as_completed(tasks):
-            name, findings = await fut
-            done += 1
-            all_findings.extend(findings)
-            names.append(name)
-            count = len(findings)
-            detail = f"{count} finding(s)" if count else "clean"
-            yield ("event", DeepScanEvent(
-                DeepScanPhase.DAST_SCANNING,
-                f"{name}: {detail} ({done}/{total})",
-                base + int(band * done / total),
-                {"scanner": name, "findings": count, "done": done, "total": total},
-            ))
+        for s in self._dast_scanners:
+            all_findings.extend(results.get(s.scanner_name, []))
+            names.append(s.scanner_name)
         yield ("result", (all_findings, names))
 
     @staticmethod

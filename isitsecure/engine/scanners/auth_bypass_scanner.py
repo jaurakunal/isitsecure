@@ -30,6 +30,7 @@ from isitsecure.engine.models import (
 )
 from isitsecure.engine.shared.endpoint_prioritizer import PriorityDimension, rank
 from isitsecure.engine.shared.probe_capture import build_probe_capture
+from isitsecure.engine.shared.progress import emit
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
 from isitsecure.engine.ingestion.snapshot import CodebaseSnapshot
 
@@ -96,12 +97,16 @@ class AuthBypassScanner:
             headers={"User-Agent": DeepScanConfig.USER_AGENT},
         ) as client:
             # Phase 1: Username enumeration
+            if login_endpoints:
+                emit("auth-bypass: username enumeration")
             for ep in login_endpoints:
                 enum_findings = await self._test_username_enumeration(client, ep)
                 findings.extend(enum_findings)
                 await asyncio.sleep(AuthBypassConfig.PROBE_DELAY_SECONDS)
 
             # Phase 2: Password reset token leaks
+            if reset_endpoints:
+                emit("auth-bypass: reset token leak check")
             for ep in reset_endpoints:
                 leak_finding = await self._test_reset_token_leak(client, ep)
                 if leak_finding:
@@ -109,6 +114,8 @@ class AuthBypassScanner:
                 await asyncio.sleep(AuthBypassConfig.PROBE_DELAY_SECONDS)
 
             # Phase 3: Account lockout detection
+            if login_endpoints:
+                emit("auth-bypass: account lockout check")
             for ep in login_endpoints:
                 lockout_finding = await self._test_account_lockout(client, ep)
                 if lockout_finding:
@@ -116,12 +123,16 @@ class AuthBypassScanner:
                 await asyncio.sleep(AuthBypassConfig.PROBE_DELAY_SECONDS)
 
             # Phase 4: Default credentials
+            if login_endpoints:
+                emit("auth-bypass: default credentials")
             for ep in login_endpoints:
                 cred_findings = await self._test_default_credentials(client, ep)
                 findings.extend(cred_findings)
                 await asyncio.sleep(AuthBypassConfig.PROBE_DELAY_SECONDS)
 
             # Phase 5: Auth header bypass
+            if auth_required_endpoints:
+                emit("auth-bypass: auth header bypass")
             for ep in rank(auth_required_endpoints, PriorityDimension.AUTH)[:AuthBypassConfig.MAX_AUTH_BYPASS_ENDPOINTS]:
                 bypass_findings = await self._test_auth_header_bypass(client, ep)
                 findings.extend(bypass_findings)

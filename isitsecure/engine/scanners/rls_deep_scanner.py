@@ -23,6 +23,7 @@ from isitsecure.engine.models import (
     DeepFinding,
     FindingSource,
 )
+from isitsecure.engine.shared.progress import emit
 from isitsecure.engine.shared.rate_limited_client import (
     RateLimitedClient,
 )
@@ -77,6 +78,7 @@ class RLSDeepScanner:
             extra_headers={"apikey": anon_key},
         ) as client:
             for table in tables[: RLSDeepScanConfig.MAX_TABLES_TO_TEST]:
+                emit(f"RLS: checking table '{table}'")
                 # Tier 1: Anon access
                 anon_findings = await self._test_anon_access(
                     client, supabase_url, table

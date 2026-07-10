@@ -27,6 +27,7 @@ from isitsecure.engine.models import (
     DeepFinding,
     FindingSource,
 )
+from isitsecure.engine.shared.progress import emit
 from isitsecure.engine.shared.url_utils import inject_query_param
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
 
@@ -221,6 +222,7 @@ class DOMXSSScanner:
 
                     tested = 0
                     for url in pages_to_test[:DOMXSSConfig.MAX_PAGES_TO_TEST]:
+                        emit(f"DOM-XSS: {url}")
                         page_findings = await self._test_page(page, url)
                         findings.extend(page_findings)
                         tested += 1
@@ -263,6 +265,7 @@ class DOMXSSScanner:
         findings: list[DeepFinding] = []
 
         for url in pages_to_test[:DOMXSSConfig.MAX_PAGES_TO_TEST]:
+            emit(f"DOM-XSS: {url}")
             page_findings = await self._test_page(page, url)
             findings.extend(page_findings)
 

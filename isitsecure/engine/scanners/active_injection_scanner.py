@@ -34,6 +34,7 @@ from isitsecure.engine.models import (
 )
 from isitsecure.engine.shared.endpoint_prioritizer import PriorityDimension, rank
 from isitsecure.engine.shared.probe_capture import build_probe_capture
+from isitsecure.engine.shared.progress import emit
 from isitsecure.engine.shared.scanner_runner import ScannerTimeouts
 from isitsecure.engine.shared.time_budget import TimeBudget
 from isitsecure.engine.shared.rate_limited_client import RateLimitedClient
@@ -106,6 +107,7 @@ class ActiveInjectionScanner:
                         "%d/%d endpoints", tested, len(candidates),
                     )
                     break
+                emit(f"injection: testing {urlparse(ep.url).path or ep.url}")
                 params = self._get_testable_params(ep)
                 for param in params[: InjectionConfig.MAX_PARAMS_PER_ENDPOINT]:
                     try:
