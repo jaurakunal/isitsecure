@@ -1,5 +1,11 @@
 # isitsecure
 
+[![CI](https://github.com/jaurakunal/isitsecure/actions/workflows/ci.yml/badge.svg)](https://github.com/jaurakunal/isitsecure/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/jaurakunal/isitsecure/actions/workflows/codeql.yml/badge.svg)](https://github.com/jaurakunal/isitsecure/actions/workflows/codeql.yml)
+[![Release](https://img.shields.io/github/v/release/jaurakunal/isitsecure)](https://github.com/jaurakunal/isitsecure/releases)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org)
+
 AI-powered security scanner for modern web apps. SAST + DAST + LLM code review in a single scan.
 
 Built for developers and **vibe coders** shipping web apps who need to know if their code is secure — without becoming security experts.
