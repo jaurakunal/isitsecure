@@ -12,7 +12,7 @@ Built for developers and **vibe coders** shipping web apps who need to know if t
 
 - [What It Does](#what-it-does)
 - [Install](#install) · [Quick Start](#quick-start) · [What It Costs](#what-it-costs)
-- [Scan Modes](#scan-modes)
+- [Scan Modes](#scan-modes) · [Scan Depth](#scan-depth)
 - [What It Scans](#what-it-scans) — [DAST](#dast-scanners-19--tests-your-live-app) · [Special DAST](#special-dast-scanners-8) · [SAST](#sast-scanners-17--analyzes-your-code) · [LLM](#llm-powered-analysis-requires-api-key) · [Cross-Referencing](#cross-referencing--guided-dast)
 - [Language Support](#language-support) · [Output Formats](#output-formats)
 - [Auto-Fix](#auto-fix-one-command-to-fix-your-app) · [Security Badge](#security-badge)
@@ -127,6 +127,25 @@ Without an API key, you still get all 44 rule-based scanners (19 DAST + 8 specia
 | `authenticated` | DAST with login credentials (IDOR, cross-user BOLA, RLS, privilege escalation) | URL + credentials (add a second account for cross-user tests) |
 | `full` | Everything: SAST + DAST + authenticated + LLM review + cross-referencing | URL + repo + credentials + API key |
 | `auto` (default) | Detects mode from what you provide | Whatever you give it |
+
+## Scan Depth
+
+Orthogonal to mode, `--depth` trades speed for coverage:
+
+| Depth | What runs | When to use |
+|---|---|---|
+| `quick` (default) | Structural + config checks, error-based injection, and the snapshot-based scanners (headers, CORS, RLS, source-map, SRI, client-exposure, redirects…). Fast. | Everyday scans — a solid first pass in a fraction of the time. |
+| `deep` | Everything in `quick` **plus** the slow/aggressive probes: time-based (blind) SQL injection, active XSS, auth-bypass timing, rate-limit bursts, and password-reset flows. | When you want the full arsenal and can wait. |
+
+```bash
+# Fast pass (default)
+isitsecure scan https://your-app.com --llm none
+
+# Full, aggressive DAST
+isitsecure scan https://your-app.com --depth deep --llm none
+```
+
+The scan narrates each phase and every scanner as it runs (with elapsed time), so a longer `deep` scan shows continuous progress rather than appearing to hang.
 
 ## What It Scans
 
@@ -400,6 +419,7 @@ Options:
   -r, --repo TEXT        GitHub repo URL (SAST)
   -b, --branch TEXT      Git branch [default: main]
   -m, --mode TEXT        Scan mode: auto|url-only|code-only|authenticated|full
+  --depth TEXT           Scan depth: quick|deep [default: quick]
   --llm TEXT             LLM provider: anthropic|google|none [default: anthropic]
   -o, --output TEXT      Output format: table|json|html|sarif|fixes [default: table]
   -f, --output-file TEXT Write report to file
