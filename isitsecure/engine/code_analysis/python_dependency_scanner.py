@@ -104,7 +104,7 @@ class PythonDependencyScanner:
                 continue
 
             # Parse: package==version, package>=version, package
-            match = re.match(r"^([a-zA-Z0-9_-]+)\s*(?:([=<>!~]+)\s*([0-9.\w]+))?", line)
+            match = re.match(r"^([a-zA-Z0-9_-]+)\s*(?:([=<>!~]+)\s*([.\w]+))?", line)
             if not match:
                 continue
 
@@ -169,7 +169,7 @@ class PythonDependencyScanner:
             if in_deps and stripped.startswith('"'):
                 # Parse "package>=version"
                 dep = stripped.strip('",').strip()
-                match = re.match(r"^([a-zA-Z0-9_-]+)\s*(?:([=<>!~]+)\s*([0-9.\w]+))?", dep)
+                match = re.match(r"^([a-zA-Z0-9_-]+)\s*(?:([=<>!~]+)\s*([.\w]+))?", dep)
                 if match:
                     package = match.group(1).lower()
                     version = match.group(3) or ""

@@ -1,0 +1,15 @@
+name: "isitsecure CodeQL config"
+
+# CodeQL should analyze the shipped product code only. The paths below are
+# excluded deliberately — flagging them produces noise, not vulnerabilities:
+#
+#   tests/     Test assertions and fixtures. CodeQL's url-substring rule fires on
+#              things like `assert "example.com" in url`, which is a test check,
+#              not runtime sanitization.
+#   test-app/  An INTENTIONALLY vulnerable sample app (old next/jsonwebtoken/etc.)
+#              used as input to exercise the scanner. It is supposed to be insecure.
+#   ui/        The bundled Next.js UI has its own JS toolchain and Dependabot.
+paths-ignore:
+  - tests
+  - test-app
+  - ui
