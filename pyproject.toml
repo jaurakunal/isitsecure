@@ -39,7 +39,7 @@ browser = [
 ]
 # OOB blind vulnerability detection
 oob = [
-    "cryptography>=42.0",
+    "cryptography>=49.0.0",
 ]
 # LLM-powered code review, triage, business logic analysis
 llm = [
