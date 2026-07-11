@@ -8,7 +8,14 @@
 #
 # It shows the animated welcome banner, the live narrated scan (each scanner
 # reporting as it runs), and the graded findings — a fast code-only scan of the
-# bundled test app, so it renders in seconds.
+# bundled test app.
+#
+# NOTE: the scan's tail (OSV dependency lookup over the network + git-history
+# secret scan + LSP auth tracing) can run slow in some environments and blow the
+# Wait timeout below. If that happens, either bump the timeout, or just render
+# demo/banner.tape (the animated banner — no scan) and keep docs/demo.svg for
+# the findings. First, sanity-check the scan is fast on your machine:
+#   time isitsecure scan --repo ./test-app --mode code-only --depth quick --llm none
 
 Output docs/demo.gif
 
