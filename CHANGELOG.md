@@ -4,6 +4,22 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2](https://github.com/jaurakunal/isitsecure/compare/v0.1.1...v0.1.2) (2026-07-11)
+
+
+### Dependencies
+
+* Bump actions/checkout from 4 to 7 ([#23](https://github.com/jaurakunal/isitsecure/issues/23)) ([fdb7c75](https://github.com/jaurakunal/isitsecure/commit/fdb7c75bf2c32801c3c32c45e0b40fd3026fd7d8))
+* Bump actions/setup-python from 5 to 6 ([#24](https://github.com/jaurakunal/isitsecure/issues/24)) ([368849d](https://github.com/jaurakunal/isitsecure/commit/368849d79bad4c9cd5e34595880bf3fb2837f245))
+* Bump eslint-config-next from 16.2.6 to 16.2.10 in /ui ([#31](https://github.com/jaurakunal/isitsecure/issues/31)) ([7edb854](https://github.com/jaurakunal/isitsecure/commit/7edb85402950c51c63f4755e277bfbc09807a9e1))
+* Bump github/codeql-action from 3 to 4 ([#21](https://github.com/jaurakunal/isitsecure/issues/21)) ([90bbdd3](https://github.com/jaurakunal/isitsecure/commit/90bbdd330de32ddcb0d030ffe899d53c77563fea))
+* Bump googleapis/release-please-action from 4 to 5 ([#22](https://github.com/jaurakunal/isitsecure/issues/22)) ([ea448dc](https://github.com/jaurakunal/isitsecure/commit/ea448dcc80b01c2e44e52bddd1e18c0ac9f72b8b))
+* Update cryptography requirement from &gt;=42.0 to &gt;=49.0.0 ([#27](https://github.com/jaurakunal/isitsecure/issues/27)) ([df22a1c](https://github.com/jaurakunal/isitsecure/commit/df22a1ccbd793f7303c8981e86e7466f443e032b))
+* Update fastapi requirement from &gt;=0.111 to &gt;=0.139.0 ([#28](https://github.com/jaurakunal/isitsecure/issues/28)) ([052e253](https://github.com/jaurakunal/isitsecure/commit/052e2530df92331c159c6047edbdc8e16849af0a))
+* Update pytest-cov requirement from &gt;=5.0 to &gt;=7.1.0 ([#26](https://github.com/jaurakunal/isitsecure/issues/26)) ([c7016f9](https://github.com/jaurakunal/isitsecure/commit/c7016f92ecfeb5c904d0de401dfcbc1598394f79))
+* Update ruff requirement from &gt;=0.5 to &gt;=0.15.21 ([#29](https://github.com/jaurakunal/isitsecure/issues/29)) ([ad83a4a](https://github.com/jaurakunal/isitsecure/commit/ad83a4a6c898a7fe53d79ddcc9bea48ee2249b9a))
+* Update typer requirement from &gt;=0.12 to &gt;=0.26.8 ([#25](https://github.com/jaurakunal/isitsecure/issues/25)) ([db27c0d](https://github.com/jaurakunal/isitsecure/commit/db27c0da1d875466227700466cca34d0ab32533d))
+
 ## [0.1.1](https://github.com/jaurakunal/isitsecure/compare/v0.1.0...v0.1.1) (2026-07-11)
 
 
