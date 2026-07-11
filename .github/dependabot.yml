@@ -7,7 +7,7 @@ updates:
       interval: "weekly"
     open-pull-requests-limit: 5
     commit-message:
-      prefix: "chore(deps)"
+      prefix: "deps"
 
   # GitHub Actions used in workflows
   - package-ecosystem: "github-actions"
@@ -15,7 +15,7 @@ updates:
     schedule:
       interval: "weekly"
     commit-message:
-      prefix: "chore(ci)"
+      prefix: "deps"
 
   # UI dependencies (Next.js app)
   - package-ecosystem: "npm"
@@ -24,4 +24,4 @@ updates:
       interval: "weekly"
     open-pull-requests-limit: 5
     commit-message:
-      prefix: "chore(deps)"
+      prefix: "deps"
