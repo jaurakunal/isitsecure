@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "isitsecure"
-version = "0.1.1"
+version = "0.1.2"
 description = "AI-powered security scanner for modern web apps. SAST + DAST + LLM review in one scan."
 readme = "README.md"
 license = "Apache-2.0"
