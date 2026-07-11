@@ -16,7 +16,7 @@ Built for developers and **vibe coders** shipping web apps who need to know if t
 
 ## Demo
 
-![isitsecure running a scan — live narration and a graded report](docs/demo.gif)
+![isitsecure running a scan — live narration and a graded report](docs/demo.svg)
 
 *`isitsecure scan --repo ./your-app` — every scanner narrates as it runs, then you get a graded report (and a browseable HTML page) with the fixes.*
 

@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="554" viewBox="0 0 760 554" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">
+<defs><linearGradient id="wave" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#ff6ac1"/><stop offset="1" stop-color="#a86bff"/></linearGradient></defs>
+<rect x="0" y="0" width="760" height="554" rx="12" fill="#0d1117"/>
+<rect x="0" y="0" width="760" height="40" rx="12" fill="#161b22"/>
+<rect x="0" y="28" width="760" height="12" fill="#161b22"/>
+<circle cx="22" cy="20" r="6" fill="#ff5f56"/>
+<circle cx="42" cy="20" r="6" fill="#ffbd2e"/>
+<circle cx="62" cy="20" r="6" fill="#27c93f"/>
+<text x="380.0" y="25" fill="#7d8594" font-size="13" text-anchor="middle">isitsecure — scan</text>
+<text x="26" y="74" xml:space="preserve"><tspan fill="#6ee7b7">$ </tspan><tspan fill="#cdd0d7">isitsecure scan --repo ./test-app --mode code-only</tspan></text>
+<text x="26" y="118" fill="url(#wave)" font-weight="700" xml:space="preserve">████ ████ ████ ████ ████ ████ ████ █  █ ███  ████</text>
+<text x="26" y="140" fill="url(#wave)" font-weight="700" xml:space="preserve"> ██  █     ██   ██  █    █    █    █  █ █  █ █   </text>
+<text x="26" y="162" fill="url(#wave)" font-weight="700" xml:space="preserve"> ██  ████  ██   ██  ████ ███  █    █  █ ███  ███ </text>
+<text x="26" y="184" fill="url(#wave)" font-weight="700" xml:space="preserve"> ██     █  ██   ██     █ █    █    █  █ █ █  █   </text>
+<text x="26" y="206" fill="url(#wave)" font-weight="700" xml:space="preserve">████ ████ ████  ██  ████ ████ ████ ████ █  █ ████</text>
+<text x="26" y="250" xml:space="preserve"><tspan fill="#7d8594">  AI-powered security scanner  ·  SAST + DAST + LLM  ·  v0.1.0</tspan></text>
+<text x="26" y="294" xml:space="preserve"><tspan fill="#7d8594">  0.6s </tspan><tspan fill="#5fb3ff">▶ </tspan><tspan fill="#cdd0d7">Running code analysis…</tspan></text>
+<text x="26" y="316" xml:space="preserve"><tspan fill="#7d8594">  0.7s   </tspan><tspan fill="#4ade80">✓ </tspan><tspan fill="#cdd0d7">git_secret_scanner </tspan><tspan fill="#f2c14e">— 2 findings</tspan></text>
+<text x="26" y="338" xml:space="preserve"><tspan fill="#7d8594">  0.7s   </tspan><tspan fill="#4ade80">✓ </tspan><tspan fill="#cdd0d7">docker_scanner </tspan><tspan fill="#f2c14e">— 4 findings</tspan></text>
+<text x="26" y="360" xml:space="preserve"><tspan fill="#7d8594">  1.1s   </tspan><tspan fill="#4ade80">✓ </tspan><tspan fill="#cdd0d7">osv_dependency_scanner </tspan><tspan fill="#f2c14e">— 30 findings</tspan></text>
+<text x="26" y="382" xml:space="preserve"><tspan fill="#7d8594">  1.1s </tspan><tspan fill="#5fb3ff">▶ </tspan><tspan fill="#cdd0d7">Tracing auth flows across 15 routes…</tspan></text>
+<text x="26" y="404" xml:space="preserve"><tspan fill="#7d8594">  6.1s </tspan><tspan fill="#4ade80">✓ Scan complete</tspan></text>
+<text x="26" y="448" xml:space="preserve"><tspan fill="#cdd0d7">  Critical: </tspan><tspan fill="#f2777a">5</tspan><tspan fill="#cdd0d7">    High: </tspan><tspan fill="#f2a35e">45</tspan><tspan fill="#cdd0d7">    Medium: </tspan><tspan fill="#f2c14e">35</tspan></text>
+<text x="26" y="492" xml:space="preserve"><tspan fill="#cdd0d7">  </tspan><tspan fill="#f2777a">CRITICAL</tspan><tspan fill="#7d8594">  exposed_secrets   </tspan><tspan fill="#e6e8ee">Supabase service role key (bypasses RLS)</tspan></text>
+<text x="26" y="514" xml:space="preserve"><tspan fill="#cdd0d7">           </tspan><tspan fill="#7d8594">git_secret_scanner · test-app/src/lib/supabase.ts</tspan></text>
+</svg>
