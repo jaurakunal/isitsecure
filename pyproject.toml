@@ -44,7 +44,7 @@ oob = [
 # LLM-powered code review, triage, business logic analysis
 llm = [
     "anthropic>=0.116.0",
-    "google-genai>=1.0",
+    "google-genai>=2.11.0",
 ]
 # Everything
 all = [
