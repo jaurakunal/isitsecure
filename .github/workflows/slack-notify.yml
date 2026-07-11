@@ -53,19 +53,17 @@ jobs:
             echo "SLACK_WEBHOOK_URL not set — skipping (add it in repo secrets to enable)."
             exit 0
           fi
+          NL=$'\n'
           BTN_URL=""; BTN_LABEL=""
           case "$EVENT" in
             pull_request_target)
-              TEXT=":sparkles: *New PR* #${PR_NUM} — ${REPO}
-${PR_TITLE}  (by ${PR_USER})"
+              TEXT=":sparkles: *New PR* #${PR_NUM} — ${REPO}${NL}${PR_TITLE}  (by ${PR_USER})"
               BTN_URL="$PR_URL"; BTN_LABEL="Review & approve on GitHub" ;;
             fork)
-              TEXT=":herb: *New fork* of ${REPO}
-${FORK_NAME}"
+              TEXT=":herb: *New fork* of ${REPO}${NL}${FORK_NAME}"
               BTN_URL="$FORK_URL"; BTN_LABEL="View fork" ;;
             push)
-              TEXT=":rocket: *Push to main* — ${REPO}  (by ${PUSHER})
-${HEAD_MSG%%$'\n'*}"
+              TEXT=":rocket: *Push to main* — ${REPO}  (by ${PUSHER})${NL}${HEAD_MSG%%${NL}*}"
               BTN_URL="$COMPARE"; BTN_LABEL="View changes" ;;
             workflow_run)
               TEXT=":x: *CI failed* — ${REPO} @ ${WF_BRANCH}"
