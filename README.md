@@ -14,9 +14,15 @@ Built for developers and **vibe coders** shipping web apps who need to know if t
 
 ---
 
+## Demo
+
+![isitsecure running a scan — live narration and a graded report](docs/demo.gif)
+
+*`isitsecure scan --repo ./your-app` — every scanner narrates as it runs, then you get a graded report (and a browseable HTML page) with the fixes.*
+
 ## Contents
 
-- [What It Does](#what-it-does)
+- [Demo](#demo) · [What It Does](#what-it-does)
 - [Install](#install) · [Quick Start](#quick-start) · [What It Costs](#what-it-costs)
 - [Scan Modes](#scan-modes) · [Scan Depth](#scan-depth)
 - [What It Scans](#what-it-scans) — [DAST](#dast-scanners--tests-your-live-app) · [Special DAST](#special-dast-scanners-8) · [SAST](#sast-scanners-17--analyzes-your-code) · [LLM](#llm-powered-analysis-requires-api-key) · [Cross-Referencing](#cross-referencing--guided-dast)
