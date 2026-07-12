@@ -84,6 +84,14 @@ DETECTABLE: dict[str, tuple[str, str | None, bool]] = {
     "registerAdminChallenge": ("mass_assignment", "User", False),
 }
 
+# Findings the full scan MUST surface — the scanner confirms them reliably and
+# the endpoint is always discovered, so their absence is a full-scan-path
+# REGRESSION, not a coverage gap. Guards issue #1 (a confirmed injection finding
+# silently dropped between the standalone scanner and the full scan).
+MUST_DETECT: set[str] = {
+    "unionSqlInjectionChallenge",   # error-based SQLi on GET /rest/products/search
+}
+
 # Fallback class label for out-of-scope challenges (for the report breakdown).
 _CATEGORY_CLASS = {
     "Injection": "injection", "XSS": "xss",
@@ -111,6 +119,7 @@ def build_ground_truth() -> list[GroundTruthItem]:
                 vuln_class=vuln_class, dast_detectable=True,
                 signature=SIGNATURES.get(vuln_class),
                 endpoint_contains=endpoint, auth_required=auth,
+                regression_critical=key in MUST_DETECT,
             ))
         else:
             items.append(GroundTruthItem(

@@ -65,6 +65,7 @@ def score(findings: list[dict], gt: list[GroundTruthItem]) -> dict:
             "id": g.id, "name": g.name, "vuln_class": g.vuln_class,
             "endpoint": g.endpoint_contains, "auth_required": g.auth_required,
             "verification": verification, "detected": detected,
+            "regression_critical": g.regression_critical,
             "evidence": {"title": f.get("title"), "endpoint": f.get("endpoint_url")}
             if f else None,
         })
@@ -96,6 +97,11 @@ def score(findings: list[dict], gt: list[GroundTruthItem]) -> dict:
                       "unmatched": len(findings) - len(matched)},
         "items": items,
         "gaps": [it for it in items if not it["detected"]],
+        # Must-detect findings that were missed — a full-scan-path regression.
+        "regression_failures": [
+            it for it in items
+            if it["regression_critical"] and not it["detected"]
+        ],
     }
 
 
@@ -126,6 +132,14 @@ def print_report(app: str, r: dict) -> None:
             ep = f"  @{g['endpoint']}" if g["endpoint"] else ""
             auth = " (auth)" if g["auth_required"] else ""
             print(f"  - [{g['vuln_class']}] {g['name']}{ep}{auth}")
+
+    if r.get("regression_failures"):
+        print(f"\n⚠ REGRESSION — {len(r['regression_failures'])} must-detect "
+              f"finding(s) MISSING (the full scan dropped a finding it reliably "
+              f"catches; see issue #1):")
+        for g in r["regression_failures"]:
+            ep = f"  @{g['endpoint']}" if g["endpoint"] else ""
+            print(f"  - [{g['vuln_class']}] {g['name']}{ep}")
 
 
 def main() -> int:

@@ -50,6 +50,10 @@ class GroundTruthItem:
     endpoint_contains: str | None = None   # require the finding on this route
     auth_required: bool = False
     note: str = ""
+    # A finding the full scan MUST surface — reliably detectable, so its absence
+    # means a full-scan-path regression (a confirmed finding silently dropped),
+    # not a coverage gap. The harness fails when a regression_critical item is missed.
+    regression_critical: bool = False
 
     def detected_by(self, findings: list[dict]) -> dict | None:
         """Return the first finding that detects this item, or None."""

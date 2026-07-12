@@ -407,6 +407,16 @@ def main() -> int:
 
     results = [run_target(t, args.keep) for t in selected]
     print_scorecard(results)
+    # Fail the run if any must-detect finding was dropped — a full-scan-path
+    # regression (issue #1), distinct from a coverage gap.
+    regressions = sum(
+        len(r.get("scorecard", {}).get("regression_failures", []))
+        for r in results
+    )
+    if regressions:
+        print(f"\n✗ {regressions} regression failure(s) — a finding the scanner "
+              f"reliably catches was dropped by the full scan. See ⚠ REGRESSION above.")
+        return 1
     return 0
 
 
