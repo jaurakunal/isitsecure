@@ -97,6 +97,18 @@ class ActiveInjectionScanner:
             timeout_seconds=InjectionConfig.HTTP_TIMEOUT_SECONDS,
             user_agent=DeepScanConfig.USER_AGENT,
         ) as client:
+            # Target-level probe: auth-bypass SQLi on conventional login paths.
+            # A login POST is rarely recoverable from a minified SPA bundle, so
+            # discovery usually misses it — probe the standard paths directly.
+            base_url = self._derive_base_url(endpoints)
+            if base_url and not budget.expired():
+                try:
+                    ab = await self._test_auth_bypass(client, base_url)
+                    if ab:
+                        findings.append(ab)
+                except Exception:
+                    logger.warning("auth-bypass probe failed", exc_info=True)
+
             for tested, ep in enumerate(candidates):
                 # Stop cooperatively before the external hard timeout cancels
                 # us (which would discard every finding so far). Endpoints are
@@ -175,6 +187,118 @@ class ActiveInjectionScanner:
             findings.append(ssti_finding)
 
         return findings
+
+    # ------------------------------------------------------------------
+    # Authentication-bypass (boolean) SQL injection
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _derive_base_url(endpoints: list[DiscoveredEndpoint]) -> str | None:
+        """Return the target's scheme://host from any discovered endpoint."""
+        for ep in endpoints:
+            parsed = urlparse(ep.url)
+            if parsed.scheme and parsed.netloc:
+                return f"{parsed.scheme}://{parsed.netloc}"
+        return None
+
+    async def _test_auth_bypass(
+        self,
+        client: RateLimitedClient,
+        base_url: str,
+    ) -> DeepFinding | None:
+        """Probe conventional login paths for authentication-bypass SQLi.
+
+        Differential oracle: a benign invalid credential must be REJECTED, and a
+        SQL tautology in the identity field must AUTHENTICATE (return a session
+        token). That state change is near-unambiguous, so it is false-positive
+        safe — a hardened login rejects the tautology exactly like the benign
+        credential. The hit is reproduced once before it is reported.
+        """
+        for path in InjectionConfig.AUTH_LOGIN_PATHS:
+            url = base_url.rstrip("/") + path
+            for field in InjectionConfig.AUTH_IDENTITY_FIELDS:
+                control = await self._auth_post(
+                    client, url, field, "isitsecure_no_such_user", "wrong_pw_x1y2",
+                )
+                if control is None:
+                    break                       # unreachable — skip this path
+                if control.status_code == 404:
+                    break                       # path doesn't exist — next path
+                if self._looks_authenticated(control):
+                    continue                    # auths anything — can't tell; next field
+                for payload in InjectionConfig.AUTH_BYPASS_PAYLOADS:
+                    resp = await self._auth_post(client, url, field, payload, "x")
+                    if resp is None or not self._looks_authenticated(resp):
+                        continue
+                    repro = await self._auth_post(client, url, field, payload, "x")
+                    if repro is not None and self._looks_authenticated(repro):
+                        return self._build_auth_bypass_finding(
+                            url, field, payload, resp.text,
+                        )
+        return None
+
+    async def _auth_post(
+        self,
+        client: RateLimitedClient,
+        url: str,
+        field: str,
+        identity: str,
+        password: str,
+    ):
+        """POST a JSON credential body ``{field: identity, password: ...}``."""
+        body = json.dumps({field: identity, InjectionConfig.AUTH_PASSWORD_FIELD: password})
+        try:
+            return await client.request(
+                "POST", url, content=body,
+                headers={"Content-Type": "application/json"},
+            )
+        except Exception:
+            return None
+
+    @staticmethod
+    def _looks_authenticated(response) -> bool:
+        """True only if the response is 2xx AND carries a session token/cookie."""
+        if not (200 <= response.status_code < 300):
+            return False
+        body = response.text
+        for pat in InjectionConfig.AUTH_TOKEN_PATTERNS:
+            if re.search(pat, body):
+                return True
+        cookie = response.headers.get("set-cookie", "")
+        return bool(cookie and re.search(
+            InjectionConfig.AUTH_SESSION_COOKIE_PATTERN, cookie
+        ))
+
+    def _build_auth_bypass_finding(
+        self,
+        url: str,
+        field: str,
+        payload: str,
+        body: str,
+    ) -> DeepFinding:
+        """Build a DeepFinding for a confirmed auth-bypass SQLi."""
+        return DeepFinding(
+            source=FindingSource.DAST_URL,
+            category=FindingCategory.INJECTION_RISK,
+            severity=SeverityLevel.CRITICAL,
+            title=InjectionConfig.TITLE_AUTH_BYPASS,
+            description=InjectionConfig.DESC_AUTH_BYPASS.format(
+                url=url, field=field, payload=payload,
+            ),
+            technical_detail=(
+                f"Authentication-bypass SQLi at {url}: a benign invalid "
+                f"credential was rejected, but the body "
+                f'`{{"{field}": "{payload}", "password": "x"}}` returned an '
+                f"authenticated session (reproduced)."
+            ),
+            evidence=body[:500],
+            confidence=InjectionConfig.CONFIDENCE_AUTH_BYPASS,
+            scanner_name=self.scanner_name,
+            endpoint_url=url,
+            http_method="POST",
+            request_payload=f'{{"{field}": "{payload}", "password": "x"}}',
+            response_preview=body[:300],
+        )
 
     # ------------------------------------------------------------------
     # Error-based SQL injection

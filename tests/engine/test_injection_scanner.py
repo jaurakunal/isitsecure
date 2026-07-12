@@ -623,3 +623,86 @@ class TestTemplateInjectionDetection:
         assert finding.category == FindingCategory.INJECTION_RISK
         assert finding.severity == SeverityLevel.CRITICAL
         assert finding.endpoint_url == ep.url
+
+
+_JWT = "eyJ" + "a" * 20 + "." + "b" * 20 + ".ccccccc"
+_AUTHED = _make_response(200, '{"authentication":{"token":"%s"}}' % _JWT)
+_REJECTED = _make_response(401, '{"error":"Invalid email or password."}')
+
+
+class TestAuthBypassSQLi:
+    """Boolean / authentication-bypass SQLi oracle (#2).
+
+    Differential: a benign invalid credential must be rejected AND a tautology
+    must authenticate, then reproduce. FP-safe by construction.
+    """
+
+    @pytest.mark.asyncio
+    async def test_login_bypass_detected(self) -> None:
+        """Benign creds rejected, tautology returns a JWT -> CRITICAL finding."""
+        scanner = ActiveInjectionScanner()
+        client = AsyncMock()
+        # first path is /rest/user/login, field 'email':
+        #   control(reject), payload(auth), reproduce(auth)
+        client.request = AsyncMock(side_effect=[_REJECTED, _AUTHED, _AUTHED])
+        finding = await scanner._test_auth_bypass(client, "http://localhost:3000")
+        assert finding is not None
+        assert "SQL injection" in finding.title
+        assert "user/login" in finding.endpoint_url
+        assert finding.severity == SeverityLevel.CRITICAL
+
+    @pytest.mark.asyncio
+    async def test_no_fp_on_hardened_login(self) -> None:
+        """Both benign creds and tautology are rejected -> no finding."""
+        scanner = ActiveInjectionScanner()
+        client = AsyncMock()
+        client.request = AsyncMock(return_value=_REJECTED)  # everything 401
+        finding = await scanner._test_auth_bypass(client, "http://localhost:3000")
+        assert finding is None
+
+    @pytest.mark.asyncio
+    async def test_no_fp_when_endpoint_authenticates_anything(self) -> None:
+        """If even the benign control authenticates, we can't attribute it -> skip."""
+        scanner = ActiveInjectionScanner()
+        client = AsyncMock()
+        client.request = AsyncMock(return_value=_AUTHED)  # control also 'authed'
+        finding = await scanner._test_auth_bypass(client, "http://localhost:3000")
+        assert finding is None
+
+    @pytest.mark.asyncio
+    async def test_no_fp_when_not_reproducible(self) -> None:
+        """A one-off auth that does not reproduce is not reported."""
+        scanner = ActiveInjectionScanner()
+        client = AsyncMock()
+        calls = {"n": 0}
+
+        def _resp(*args, **kwargs):
+            calls["n"] += 1
+            # call 1 = control (reject), call 2 = payload (auth), everything else reject
+            return _AUTHED if calls["n"] == 2 else _REJECTED
+
+        client.request = AsyncMock(side_effect=_resp)
+        finding = await scanner._test_auth_bypass(client, "http://localhost:3000")
+        assert finding is None
+
+    @pytest.mark.asyncio
+    async def test_missing_path_skipped(self) -> None:
+        """A 404 login path is skipped without error."""
+        scanner = ActiveInjectionScanner()
+        client = AsyncMock()
+        client.request = AsyncMock(return_value=_make_response(404, "Not Found"))
+        finding = await scanner._test_auth_bypass(client, "http://localhost:3000")
+        assert finding is None
+
+    def test_looks_authenticated_requires_2xx_and_token(self) -> None:
+        scanner = ActiveInjectionScanner()
+        assert scanner._looks_authenticated(_AUTHED) is True
+        assert scanner._looks_authenticated(_REJECTED) is False
+        # a 2xx with no token is NOT authenticated
+        assert scanner._looks_authenticated(_make_response(200, '{"ok":true}')) is False
+
+    def test_derive_base_url(self) -> None:
+        scanner = ActiveInjectionScanner()
+        eps = [_make_endpoint(url="https://app.example.com/rest/products/search")]
+        assert scanner._derive_base_url(eps) == "https://app.example.com"
+        assert scanner._derive_base_url([]) is None

