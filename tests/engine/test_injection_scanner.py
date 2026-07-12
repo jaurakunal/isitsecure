@@ -623,3 +623,105 @@ class TestTemplateInjectionDetection:
         assert finding.category == FindingCategory.INJECTION_RISK
         assert finding.severity == SeverityLevel.CRITICAL
         assert finding.endpoint_url == ep.url
+
+
+def _docs(n: int) -> str:
+    """A JSON body containing n Mongo documents."""
+    return '{"data":[' + ",".join('{"_id":%d,"v":1}' % i for i in range(n)) + "]}"
+
+
+class TestNoSQLInjection:
+    """NoSQL differential oracle — true positives AND false-positive guards (#5).
+
+    The mock client returns a scripted sequence: baseline A, baseline B, the
+    injected probe, then (only when a signal fires) the reproduce probe.
+    """
+
+    @pytest.mark.asyncio
+    async def test_data_leak_reported(self) -> None:
+        """2xx response leaking many more documents than baseline -> reported."""
+        scanner = ActiveInjectionScanner()
+        ep = _make_endpoint(method=EndpointMethod.GET)
+        client = AsyncMock()
+        client.get = AsyncMock(side_effect=[
+            _make_response(200, _docs(1)),    # baseline A
+            _make_response(200, _docs(1)),    # baseline B
+            _make_response(200, _docs(20)),   # injected probe (leak)
+            _make_response(200, _docs(20)),   # reproduce (leak holds)
+        ])
+        finding = await scanner._test_nosql_injection(client, ep, "q")
+        assert finding is not None
+        assert finding.category == FindingCategory.INJECTION_RISK
+        assert finding.severity == SeverityLevel.CRITICAL
+
+    @pytest.mark.asyncio
+    async def test_mongo_error_differential_reported(self) -> None:
+        """A Mongo error the baseline did NOT have -> reported."""
+        scanner = ActiveInjectionScanner()
+        ep = _make_endpoint(method=EndpointMethod.GET)
+        client = AsyncMock()
+        client.get = AsyncMock(side_effect=[
+            _make_response(200, '{"ok":1}'),               # baseline A
+            _make_response(200, '{"ok":1}'),               # baseline B
+            _make_response(500, "MongoError: bad operator"),  # injected
+            _make_response(500, "MongoError: bad operator"),  # reproduce
+        ])
+        finding = await scanner._test_nosql_injection(client, ep, "q")
+        assert finding is not None
+
+    @pytest.mark.asyncio
+    async def test_no_fp_on_error_page(self) -> None:
+        """The /redirect case: a large NON-2xx error page must NOT be flagged."""
+        scanner = ActiveInjectionScanner()
+        ep = _make_endpoint(url="https://example.com/redirect", method=EndpointMethod.GET)
+        client = AsyncMock()
+        client.get = AsyncMock(side_effect=[
+            _make_response(500, "short error"),        # baseline A
+            _make_response(500, "short error"),        # baseline B
+            _make_response(500, "big error " * 500),   # injected (large, non-2xx, no _id)
+        ])
+        finding = await scanner._test_nosql_injection(client, ep, "to")
+        assert finding is None
+
+    @pytest.mark.asyncio
+    async def test_no_fp_on_normal_document_endpoint(self) -> None:
+        """An endpoint that always returns _id documents (no injection) -> no FP."""
+        scanner = ActiveInjectionScanner()
+        ep = _make_endpoint(method=EndpointMethod.GET)
+        client = AsyncMock()
+        client.get = AsyncMock(side_effect=[
+            _make_response(200, _docs(8)),   # baseline A
+            _make_response(200, _docs(8)),   # baseline B
+            _make_response(200, _docs(8)),   # injected (same doc count -> no leak)
+        ])
+        finding = await scanner._test_nosql_injection(client, ep, "q")
+        assert finding is None
+
+    @pytest.mark.asyncio
+    async def test_no_fp_when_error_already_in_baseline(self) -> None:
+        """A Mongo error present in the baseline (not caused by the payload) -> no FP."""
+        scanner = ActiveInjectionScanner()
+        ep = _make_endpoint(method=EndpointMethod.GET)
+        client = AsyncMock()
+        client.get = AsyncMock(side_effect=[
+            _make_response(200, "CastError: normal"),   # baseline A
+            _make_response(200, "CastError: normal"),   # baseline B
+            _make_response(200, "CastError: normal"),   # injected (same)
+        ])
+        finding = await scanner._test_nosql_injection(client, ep, "q")
+        assert finding is None
+
+    @pytest.mark.asyncio
+    async def test_no_fp_when_not_reproducible(self) -> None:
+        """A one-off document spike that does not reproduce -> no FP."""
+        scanner = ActiveInjectionScanner()
+        ep = _make_endpoint(method=EndpointMethod.GET)
+        client = AsyncMock()
+        client.get = AsyncMock(side_effect=[
+            _make_response(200, _docs(1)),    # baseline A
+            _make_response(200, _docs(1)),    # baseline B
+            _make_response(200, _docs(20)),   # injected probe (signal fires)
+            _make_response(200, _docs(1)),    # reproduce (does NOT hold)
+        ])
+        finding = await scanner._test_nosql_injection(client, ep, "q")
+        assert finding is None

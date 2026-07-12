@@ -124,8 +124,11 @@ TARGETS: list[Target] = [
         ready_url="http://localhost:5002/",
         down_cmd=["docker", "rm", "-f", "bench_vampi_secure"],
         # Secure build: injection/IDOR findings would be FALSE POSITIVES.
+        # VAmPI is SQL-only, so ANY NoSQL finding is a false positive too — this
+        # is the hardened-build guard for the NoSQL oracle (#5).
         forbid=[
             Expectation("SQL injection (should be absent)", **SQLI),
+            Expectation("NoSQL injection (should be absent)", **NOSQL),
             Expectation("IDOR (should be absent)", **IDOR),
         ],
         notes="Same app, vulnerable=0 — measures the false-positive rate.",
