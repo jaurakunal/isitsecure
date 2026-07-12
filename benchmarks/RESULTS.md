@@ -106,6 +106,13 @@ forms is a real, reportable gap.
   the per-challenge scorer to them is tracked work.
 - **Precision is only measured on `vampi-secure`** (a false-positive allow-list).
   On vulnerable builds, the findings count is undifferentiated.
+- **NoSQL injection is a known false-positive-prone class**
+  ([#5](https://github.com/jaurakunal/isitsecure/issues/5)). The oracle keys on
+  response-size / document deltas and can fire on endpoints with naturally
+  variable responses (e.g. `/redirect`). A tightening attempt over-corrected and
+  killed the real detections (2/3 → 0/3), so it was reverted — the honest trade
+  is to keep the 2/3 detections and flag the class as noisy. Treat NoSQL findings
+  as leads to confirm, not confirmed bugs.
 - **Known variance:** time-based checks are load-sensitive; VAmPI's `/createdb`
   resets its DB mid-scan. Juice Shop url-only was deterministic across runs.
 
