@@ -1431,25 +1431,18 @@ class InjectionConfig:
         "[$ne]=null",
     )
 
-    # NoSQL ERROR indicators — a payload that produces one of these when the
-    # baseline did NOT shows it reached and broke a Mongo query. Bare presence is
-    # not enough (normal Mongo-backed responses always carry document data), so
-    # detection uses a baseline DIFFERENTIAL, never bare presence — see #5.
-    NOSQL_ERROR_INDICATORS = (
-        r"MongoError",
-        r"MongoServerError",
+    # NoSQL indicators in response that suggest injection worked
+    NOSQL_INDICATORS = (
+        r'"_id"\s*:',          # MongoDB document ID field
+        r'"ObjectId\("',       # MongoDB ObjectId
+        r"MongoError",         # MongoDB error leak
         r"CastError",          # Mongoose cast error
-        r"BSONError",
     )
 
-    # Document-count oracle (replaces the raw response-size ratio, which tripped
-    # on error pages and dynamic content — #5). A working [$ne]=null / operator
-    # injection leaks MANY more documents than a safe value: count Mongo document
-    # ids and require the injected 2xx response to carry substantially more than
-    # the baseline, verified against a second baseline and reproduced.
-    NOSQL_DOC_PATTERN = r'"_id"\s*:'   # ~one match per leaked document
-    NOSQL_DOC_MIN_DELTA = 5            # injected must have >= this many MORE docs
-    NOSQL_DOC_RATIO = 3.0              # ...and >= this multiple of the baseline
+    # Response size ratio: if injected response is > this * baseline, likely leak
+    NOSQL_RESPONSE_SIZE_RATIO = 2.0
+    # Minimum baseline response size to compare against
+    NOSQL_MIN_BASELINE_SIZE = 20
 
     # XXE / XML injection
     CONFIDENCE_XXE = 0.90

@@ -18,7 +18,6 @@ import json
 import logging
 import re
 import time
-from dataclasses import dataclass
 from urllib.parse import parse_qs, quote, unquote_plus, urlparse
 
 import httpx
@@ -43,14 +42,6 @@ from isitsecure.engine.shared.url_utils import inject_query_param
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class _NoSQLObs:
-    """One observed response for the NoSQL differential oracle."""
-    status: int
-    body: str
-    docs: int   # count of Mongo document ids ("_id":) — a proxy for #documents
 
 
 class ActiveInjectionScanner:
@@ -418,124 +409,95 @@ class ActiveInjectionScanner:
         endpoint: DiscoveredEndpoint,
         param_name: str,
     ) -> DeepFinding | None:
-        """Inject NoSQL operator payloads and report only a real, reproducible
-        behaviour change vs. the baseline.
+        """Inject NoSQL operator payloads and compare response to baseline.
 
-        Two corroborated signals — avoiding the false positives of the old
-        single-shot size oracle (#5):
-          * a Mongo ERROR the baseline did not produce (the payload broke a
-            query), or
-          * a 2xx response leaking substantially MORE documents than the
-            baseline (the classic ``[$ne]=null`` auth-bypass data leak).
-        Each candidate is re-issued once and must reproduce before it is reported.
+        Tests both query-string format ([$ne]=null appended to param name)
+        and JSON body payloads via POST. Detection relies on response size
+        inflation or NoSQL error/document indicators in the response.
         """
-        # Two baselines with distinct safe values establish normal behaviour AND
-        # the endpoint's natural document-count variance.
-        base = await self._nosql_observe(
-            client, inject_query_param(endpoint.url, param_name, "baselineSafeA1"),
-        )
-        base2 = await self._nosql_observe(
-            client, inject_query_param(endpoint.url, param_name, "baselineSafeB2"),
-        )
-        if base is None or base2 is None:
+        # 1. Get baseline response for comparison
+        baseline_url = inject_query_param(endpoint.url, param_name, "baseline_safe_value")
+        try:
+            baseline_response = await client.get(baseline_url)
+            baseline_body = baseline_response.text
+            baseline_size = len(baseline_body)
+        except (httpx.HTTPError, Exception):
             return None
 
-        async def probe_qs(pl: str) -> _NoSQLObs | None:
-            return await self._nosql_observe(
-                client, inject_query_param(endpoint.url, f"{param_name}{pl}", ""),
-            )
-
-        # 1. Query-string operator payloads ([$ne]=null style)
+        # 2. Test query-string NoSQL payloads ([$ne]=null style)
         for qs_payload in InjectionConfig.NOSQL_QUERY_PAYLOADS:
-            obs = await probe_qs(qs_payload)
-            reason = self._nosql_signal(obs, base, base2)
-            if reason and self._nosql_signal(await probe_qs(qs_payload), base, base2):
-                return self._build_nosql_finding(
-                    endpoint, param_name, qs_payload, obs.body, reason,
-                )
+            injected_url = inject_query_param(
+                endpoint.url, f"{param_name}{qs_payload}", ""
+            )
+            try:
+                response = await client.get(injected_url)
+                body = response.text
+            except (httpx.HTTPError, Exception):
+                continue
 
-        # 2. JSON body operator payloads (POST endpoints)
+            finding = self._check_nosql_response(
+                body, baseline_size, endpoint, param_name, qs_payload
+            )
+            if finding:
+                return finding
+
+        # 3. Test JSON body NoSQL payloads (POST endpoints)
         if endpoint.method.value == "POST":
-            async def probe_body(pl: str) -> _NoSQLObs | None:
-                return await self._nosql_observe(
-                    client, endpoint.url, method="POST",
-                    content='{{"{}": {}}}'.format(param_name, pl),
-                    headers={"Content-Type": "application/json"},
-                )
-
             for payload in InjectionConfig.NOSQL_PAYLOADS:
-                obs = await probe_body(payload)
-                reason = self._nosql_signal(obs, base, base2)
-                if reason and self._nosql_signal(await probe_body(payload), base, base2):
-                    return self._build_nosql_finding(
-                        endpoint, param_name, payload, obs.body, reason,
+                # Build a body with the param name wrapping the NoSQL operator
+                nosql_body = '{{"{}": {}}}'.format(param_name, payload)
+                try:
+                    response = await client.request(
+                        "POST",
+                        endpoint.url,
+                        content=nosql_body,
+                        headers={"Content-Type": "application/json"},
                     )
+                    body = response.text
+                except (httpx.HTTPError, Exception):
+                    continue
+
+                finding = self._check_nosql_response(
+                    body, baseline_size, endpoint, param_name, payload
+                )
+                if finding:
+                    return finding
 
         return None
 
-    async def _nosql_observe(
+    def _check_nosql_response(
         self,
-        client: RateLimitedClient,
-        url: str,
-        *,
-        method: str = "GET",
-        content: str | None = None,
-        headers: dict[str, str] | None = None,
-    ) -> _NoSQLObs | None:
-        """Fetch a URL and capture (status, body, document count), or None on error."""
-        try:
-            if method == "GET":
-                response = await client.get(url)
-            else:
-                response = await client.request(
-                    method, url, content=content, headers=headers or {},
+        body: str,
+        baseline_size: int,
+        endpoint: DiscoveredEndpoint,
+        param_name: str,
+        payload: str,
+    ) -> DeepFinding | None:
+        """Analyze a response for NoSQL injection indicators.
+
+        Returns a DeepFinding if the response contains MongoDB indicators
+        or is significantly larger than the baseline (data leak).
+        """
+        # Check for NoSQL error/document indicators
+        for pattern in InjectionConfig.NOSQL_INDICATORS:
+            match = re.search(pattern, body, re.IGNORECASE)
+            if match:
+                return self._build_nosql_finding(
+                    endpoint, param_name, payload, body,
+                    f"Matched NoSQL indicator: {match.group(0)}",
                 )
-            body = response.text
-        except (httpx.HTTPError, Exception):
-            return None
-        return _NoSQLObs(
-            status=response.status_code,
-            body=body,
-            docs=len(re.findall(InjectionConfig.NOSQL_DOC_PATTERN, body)),
-        )
 
-    def _nosql_signal(
-        self,
-        obs: _NoSQLObs | None,
-        base: _NoSQLObs,
-        base2: _NoSQLObs,
-    ) -> str | None:
-        """Return a reason string if `obs` shows real NoSQL injection vs. the two
-        baselines, else None. This is the whole precision fix for #5."""
-        if obs is None:
-            return None
-
-        # (A) A Mongo error surfaced by the payload that the baselines did NOT
-        #     have — the payload reached and broke a Mongo query.
-        for pat in InjectionConfig.NOSQL_ERROR_INDICATORS:
-            if (
-                re.search(pat, obs.body, re.IGNORECASE)
-                and not re.search(pat, base.body, re.IGNORECASE)
-                and not re.search(pat, base2.body, re.IGNORECASE)
-            ):
-                return f"payload surfaced a NoSQL error ({pat}) absent from the baseline"
-
-        # (B) 2xx response leaking substantially MORE documents than baseline —
-        #     the [$ne]=null auth-bypass leak. Requires an absolute floor, a
-        #     margin over baseline, AND a multiple of it, so normal listing
-        #     variance and (non-2xx) error pages can't trip it.
-        if 200 <= obs.status < 300:
-            base_docs = max(base.docs, base2.docs)
-            if (
-                obs.docs >= InjectionConfig.NOSQL_DOC_MIN_DELTA
-                and obs.docs - base_docs >= InjectionConfig.NOSQL_DOC_MIN_DELTA
-                and obs.docs >= max(1, base_docs) * InjectionConfig.NOSQL_DOC_RATIO
-            ):
-                return (
-                    f"payload leaked {obs.docs} documents vs. baseline {base_docs} "
-                    f"(>= {InjectionConfig.NOSQL_DOC_RATIO:g}x and "
-                    f"+{InjectionConfig.NOSQL_DOC_MIN_DELTA})"
-                )
+        # Check for response size inflation (data leak)
+        if (
+            baseline_size >= InjectionConfig.NOSQL_MIN_BASELINE_SIZE
+            and len(body) > baseline_size * InjectionConfig.NOSQL_RESPONSE_SIZE_RATIO
+        ):
+            return self._build_nosql_finding(
+                endpoint, param_name, payload, body,
+                f"Response size inflated: baseline={baseline_size}, "
+                f"injected={len(body)} "
+                f"(ratio={len(body) / baseline_size:.1f}x)",
+            )
 
         return None
 
