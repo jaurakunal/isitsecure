@@ -4,6 +4,32 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0](https://github.com/jaurakunal/isitsecure/compare/v0.1.2...v0.2.0) (2026-07-12)
+
+
+### Features
+
+* **dast:** interactive DOM/reflected XSS oracle (closes [#3](https://github.com/jaurakunal/isitsecure/issues/3)) ([de6e483](https://github.com/jaurakunal/isitsecure/commit/de6e483022b978f807185207d950ed27084251c5))
+
+
+### Bug Fixes
+
+* **dast:** return DOM XSS findings on timeout instead of discarding them ([3c979ad](https://github.com/jaurakunal/isitsecure/commit/3c979adc7c7574498036e4adbb1891158e3bc8da))
+* **dast:** tighten NoSQL oracle to kill false positives ([#5](https://github.com/jaurakunal/isitsecure/issues/5)) ([f899664](https://github.com/jaurakunal/isitsecure/commit/f899664ab28d1b249ffcd38df341e2da3e3b0f9a))
+
+
+### Documentation
+
+* **benchmarks:** document the must-detect regression guard ([d8e1150](https://github.com/jaurakunal/isitsecure/commit/d8e11509e0b8886a3cbafbf0bb66973abb8ec153))
+* **benchmarks:** Juice Shop url-only recall 33% -&gt; 36% after XSS fix ([4b8b16a](https://github.com/jaurakunal/isitsecure/commit/4b8b16afab06f7d56dfc79723eb89efbced5e099))
+* **benchmarks:** make OWASP Juice Shop reproducible + correct the numbers ([be9af0f](https://github.com/jaurakunal/isitsecure/commit/be9af0f695123cb27c77c6ef5b5f85e02f342f9e))
+* flag NoSQL injection as a known false-positive-prone class ([#5](https://github.com/jaurakunal/isitsecure/issues/5)) ([c334c3e](https://github.com/jaurakunal/isitsecure/commit/c334c3e0e8a0dca7a4952737663582af2bfcfdff))
+
+
+### Reverts
+
+* NoSQL oracle tightening — restore prior detection ([#5](https://github.com/jaurakunal/isitsecure/issues/5)) ([f60d7fb](https://github.com/jaurakunal/isitsecure/commit/f60d7fbd36f78e75a2d30bed045fafab86d3730a))
+
 ## [0.1.2](https://github.com/jaurakunal/isitsecure/compare/v0.1.1...v0.1.2) (2026-07-11)
 
 
