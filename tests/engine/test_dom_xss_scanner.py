@@ -210,6 +210,21 @@ class TestScanWithPage:
         assert findings == []
 
     @pytest.mark.asyncio
+    async def test_time_budget_stops_cleanly(
+        self, scanner: DOMXSSScanner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A blown time budget stops the loop cleanly and RETURNS (findings are
+        not discarded). Regression guard for the timeout-discard bug where a
+        long DOM-XSS scan lost every finding on the external hard-cancel."""
+        monkeypatch.setattr(DOMXSSConfig, "SCAN_BUDGET_SECONDS", -1)
+        page = _make_mock_page([])
+        findings = await scanner.scan_with_page(
+            page, ["https://example.com/a", "https://example.com/b"],
+        )
+        assert findings == []          # returned normally, not raised/cancelled
+        page.goto.assert_not_called()  # deadline tripped before the first page
+
+    @pytest.mark.asyncio
     async def test_max_pages_respected(self, scanner: DOMXSSScanner) -> None:
         """Scanner respects MAX_PAGES_TO_TEST limit."""
         page = AsyncMock()

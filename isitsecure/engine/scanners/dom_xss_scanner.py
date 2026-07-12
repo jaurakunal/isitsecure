@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
 try:
     from playwright.async_api import Page, async_playwright
@@ -233,7 +234,16 @@ class DOMXSSScanner:
                     await page.add_init_script(_SINK_HOOK_SCRIPT)
 
                     tested = 0
+                    deadline = time.monotonic() + DOMXSSConfig.SCAN_BUDGET_SECONDS
                     for url in pages_to_test[:DOMXSSConfig.MAX_PAGES_TO_TEST]:
+                        if time.monotonic() > deadline:
+                            logger.warning(
+                                "DOMXSSScanner: %ds budget reached after %d/%d "
+                                "pages — returning %d findings gathered so far",
+                                DOMXSSConfig.SCAN_BUDGET_SECONDS, tested,
+                                len(pages_to_test), len(findings),
+                            )
+                            break
                         emit(f"DOM-XSS: {url}")
                         page_findings = await self._test_page(page, url)
                         findings.extend(page_findings)
@@ -276,7 +286,15 @@ class DOMXSSScanner:
         """
         findings: list[DeepFinding] = []
 
+        deadline = time.monotonic() + DOMXSSConfig.SCAN_BUDGET_SECONDS
         for url in pages_to_test[:DOMXSSConfig.MAX_PAGES_TO_TEST]:
+            if time.monotonic() > deadline:
+                logger.warning(
+                    "DOMXSSScanner: %ds budget reached — returning %d findings "
+                    "gathered so far",
+                    DOMXSSConfig.SCAN_BUDGET_SECONDS, len(findings),
+                )
+                break
             emit(f"DOM-XSS: {url}")
             page_findings = await self._test_page(page, url)
             findings.extend(page_findings)

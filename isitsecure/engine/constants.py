@@ -1312,6 +1312,12 @@ class DOMXSSConfig:
     # Limits
     MAX_PAGES_TO_TEST = 30
     MAX_INPUTS_PER_PAGE = 8      # interactive vector: inputs typed into per page
+    # Soft internal wall-clock budget. Must stay comfortably UNDER the external
+    # run_scanner_safe timeout (DOM_XSS_SECONDS = 900) so the scan stops cleanly
+    # and RETURNS the findings gathered so far, instead of being hard-cancelled
+    # (which discards everything). The target URL is always tested first, so its
+    # findings survive even under a tight budget.
+    SCAN_BUDGET_SECONDS = 300
 
     # Confidence
     CONFIDENCE_CONFIRMED = 0.95
