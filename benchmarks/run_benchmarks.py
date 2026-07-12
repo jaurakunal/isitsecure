@@ -71,14 +71,21 @@ class Target:
     expect: list[Expectation] = field(default_factory=list)   # recall
     forbid: list[Expectation] = field(default_factory=list)   # false positives
     ready_timeout: int = 180
+    scan_timeout: int = 1800      # hard cap on the scan itself (seconds)
     down_cmd: list[str] = field(default_factory=list)
     notes: str = ""
     # Authenticated scanning (two-user cross-user IDOR uses -b variants; a
     # single credential + browser/token provider drives login-then-crawl).
     auth_email: str | None = None
     auth_password: str | None = None
+    auth_email_b: str | None = None      # second user — enables cross-user BOLA/IDOR
+    auth_password_b: str | None = None
     auth_provider: str | None = None
     pre_scan: list[str] | None = None   # shell cmd run after ready, before scan
+    # When set (e.g. "juiceshop"), score with the per-challenge ground-truth
+    # scorer (benchmarks/score.py) instead of the coarse expect/forbid model —
+    # producing full recall over the app's documented, DAST-detectable vulns.
+    ground_truth: str | None = None
 
 
 # --- reusable signatures ---
@@ -193,6 +200,51 @@ TARGETS: list[Target] = [
         notes="OWASP crAPI — API Top 10, microservices. Very heavy (~several GB, "
               "long startup).",
     ),
+    # --- OWASP Juice Shop: the headline benchmark. Scored per-challenge against
+    #     the app's own /api/Challenges ground truth (45 DAST-detectable of 113),
+    #     so the recall number in RESULTS.md is reproducible with one command. ---
+    Target(
+        name="juiceshop",
+        up_cmd=["docker", "run", "-d", "--name", "bench_juiceshop",
+                "-p", "3000:3000", "bkimminich/juice-shop:v20.1.1"],
+        url="http://localhost:3000",
+        ready_url="http://localhost:3000/",
+        down_cmd=["docker", "rm", "-f", "bench_juiceshop"],
+        ready_timeout=300,
+        ground_truth="juiceshop",
+        notes="OWASP Juice Shop — url-only recall over the DAST-detectable subset "
+              "(the '36% url-only' headline number).",
+    ),
+    Target(
+        name="juiceshop-auth",
+        up_cmd=["docker", "run", "-d", "--name", "bench_juiceshop",
+                "-p", "3000:3000", "bkimminich/juice-shop:v20.1.1"],
+        url="http://localhost:3000",
+        ready_url="http://localhost:3000/",
+        down_cmd=["docker", "rm", "-f", "bench_juiceshop"],
+        ready_timeout=300,
+        scan_mode="authenticated",
+        # Register TWO users so the scanner can test cross-user object access
+        # (BOLA): log in as A, harvest owned resource ids, then verify user B
+        # (a different identity) can reach them while anon cannot. This is what
+        # surfaces Juice Shop's basket BOLA — the delta over url-only.
+        pre_scan=["bash", "-c",
+                  "for u in bencha benchb; do "
+                  "curl -s -X POST http://localhost:3000/api/Users "
+                  "-H 'Content-Type: application/json' "
+                  "-d \"{\\\"email\\\":\\\"$u@isitsecure.test\\\","
+                  "\\\"password\\\":\\\"Passw0rd!23\\\","
+                  "\\\"passwordRepeat\\\":\\\"Passw0rd!23\\\"}\" "
+                  "-o /dev/null; done || true"],
+        auth_email="bencha@isitsecure.test",
+        auth_password="Passw0rd!23",
+        auth_email_b="benchb@isitsecure.test",
+        auth_password_b="Passw0rd!23",
+        auth_provider="token",   # plain REST login (/rest/user/login)
+        ground_truth="juiceshop",
+        notes="OWASP Juice Shop AUTHENTICATED, two-user cross-user BOLA — adds the "
+              "basket object-access challenges (the '~40% authenticated' number).",
+    ),
 ]
 
 
@@ -226,8 +278,17 @@ def scan(target: Target) -> list[dict] | None:
                 "--auth-password", target.auth_password]
         if target.auth_provider:
             cmd += ["--auth-provider", target.auth_provider]
+        if target.auth_email_b and target.auth_password_b:
+            cmd += ["--auth-email-b", target.auth_email_b,
+                    "--auth-password-b", target.auth_password_b]
     try:
-        r = _run(cmd, timeout=1800)
+        try:
+            r = _run(cmd, timeout=target.scan_timeout)
+        except subprocess.TimeoutExpired:
+            # A scan that blows its time budget must be recorded as an error,
+            # not crash the whole harness (and not be scored as "found nothing").
+            print(f"    scan exceeded {target.scan_timeout}s time budget — no report")
+            return None
         try:
             data = json.load(open(out))
         except Exception:
@@ -253,6 +314,22 @@ def score(findings: list[dict], target: Target) -> dict:
             "total_findings": len(findings)}
 
 
+def score_ground_truth(target: Target, findings: list[dict]) -> dict:
+    """Score findings against a per-challenge ground truth (benchmarks/score.py).
+
+    Reuses the full scorer so the harness produces the same recall/precision/gap
+    breakdown as running score.py by hand — just automated end to end.
+    """
+    from score import score as gt_score
+    from ground_truth import juiceshop
+
+    builders = {"juiceshop": juiceshop.build_ground_truth}
+    gt = builders[target.ground_truth]()
+    return {"name": target.name, "total_findings": len(findings),
+            "ground_truth": target.ground_truth,
+            "scorecard": gt_score(findings, gt)}
+
+
 def run_target(target: Target, keep: bool) -> dict:
     print(f"\n=== {target.name} ===\n    {target.notes}")
     _run(target.down_cmd or ["true"])  # clean any prior instance
@@ -272,6 +349,8 @@ def run_target(target: Target, keep: bool) -> dict:
         findings = scan(target)
         if findings is None:
             return {"name": target.name, "error": "scan failed / no readable report"}
+        if target.ground_truth:
+            return score_ground_truth(target, findings)
         result = score(findings, target)
         result["name"] = target.name
         return result
@@ -285,6 +364,12 @@ def print_scorecard(results: list[dict]) -> None:
     print("BENCHMARK SCORECARD")
     print("=" * 64)
     for r in results:
+        # Per-challenge ground-truth targets get the full scorecard (recall %,
+        # by-class, gap list) from score.py rather than the coarse breakdown.
+        if r.get("scorecard"):
+            from score import print_report
+            print_report(r["name"], r["scorecard"])
+            continue
         print(f"\n{r['name']}  ({r.get('total_findings', 0)} findings)")
         if r.get("error"):
             print(f"  ERROR: {r['error']}")

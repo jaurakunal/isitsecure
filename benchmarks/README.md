@@ -7,7 +7,8 @@ the findings against a known ground truth, and tears the app down.
 ```bash
 pip install -e ".[all]"          # isitsecure on PATH + browser deps
 python benchmarks/run_benchmarks.py            # default: VAmPI (both builds)
-python benchmarks/run_benchmarks.py --all      # + NodeGoat + crAPI (heavy)
+python benchmarks/run_benchmarks.py juiceshop  # OWASP Juice Shop — the headline recall number
+python benchmarks/run_benchmarks.py --all      # + NodeGoat + crAPI + Juice Shop (heavy)
 python benchmarks/run_benchmarks.py crapi      # a single target
 python benchmarks/run_benchmarks.py --keep vampi-vulnerable   # leave it running
 ```
@@ -33,6 +34,8 @@ For each target the scorecard reports two things — both matter:
 | `vampi-secure` | same, `vulnerable=0` | single image | **false-positive rate** |
 | `nodegoat` | Node/Express + Mongo | upstream compose (auto-cloned) | matches isitsecure's primary stack |
 | `crapi` | microservices | upstream compose (auto-cloned) | OWASP API Top 10; IDOR/BAC/auth depth |
+| `juiceshop` | Angular/Express SPA | single image | **headline recall** — scored per-challenge vs the app's own `/api/Challenges` |
+| `juiceshop-auth` | same, authenticated | single image | adds the login-gated challenges (the `~40%` number) |
 
 VAmPI is a single container and runs in the default set. NodeGoat and crAPI are
 heavier (compose, mongo, several GB for crAPI) — run them individually. They are
@@ -46,6 +49,13 @@ Expectations live in `run_benchmarks.py` as `Target.expect` (recall) and
 category, and/or a title substring — coarse but honest, and easy to extend as
 detection improves. It scores at the *vulnerability-class* level (did we find a
 SQLi at all?), not exact endpoints, so it isn't brittle to app version changes.
+
+**Juice Shop is scored more precisely.** `benchmarks/score.py` grades a scan
+against the app's *full* documented challenge set (`ground_truth/juiceshop.py`,
+seeded from `/api/Challenges`): recall over the **45 DAST-detectable** challenges
+(of 113), broken down per class, with each finding required to land on the right
+endpoint. `run_benchmarks.py juiceshop` runs this end to end; you can also score a
+saved scan by hand with `python benchmarks/score.py juiceshop findings.json`.
 
 ## Authenticated cross-user IDOR (BOLA)
 
@@ -71,7 +81,10 @@ guard, so intentionally-public endpoints are not reported.
 ## Adding a target
 
 Append a `Target(...)` to `TARGETS`: the docker `up_cmd`/`down_cmd`, the URL to
-scan, and the `expect`/`forbid` signatures for that app's known issues.
+scan, and the `expect`/`forbid` signatures for that app's known issues. For an
+app with a full documented challenge list, set `ground_truth="<app>"` and add a
+builder under `ground_truth/` instead — the harness then uses the per-challenge
+scorer (recall %, per class, endpoint-verified) rather than expect/forbid.
 
 > These are intentionally vulnerable apps — only run them locally, never expose
 > the ports to a network.
