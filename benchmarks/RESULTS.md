@@ -97,6 +97,10 @@ forms is a real, reportable gap.
 - **Juice Shop is per-instance scored**: recall over the 45 DAST-detectable
   challenges (of 113), each verified by class signature AND endpoint. This is the
   honest headline number, and it is reproducible and deterministic.
+- **Regression guard:** a few reliably-caught findings (e.g. the products/search
+  SQLi) are marked `MUST_DETECT`. The harness prints `⚠ REGRESSION` and exits
+  non-zero if the full-scan path drops one — so a confirmed finding can't
+  silently vanish again ([#1](https://github.com/jaurakunal/isitsecure/issues/1)).
 - **VAmPI/NodeGoat recall is "of checked", not "of known"** — each checks 2–3
   classes we chose, so "3/3" means 3 of 3 checked, not full coverage. Extending
   the per-challenge scorer to them is tracked work.

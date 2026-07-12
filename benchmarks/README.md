@@ -25,6 +25,12 @@ For each target the scorecard reports two things — both matter:
   **VAmPI's `vulnerable=0` build**: a SQLi or IDOR "finding" against the secure
   app is a false alarm. A scanner that cries wolf is untrusted, so this number
   should be **0**.
+- **Regressions** — a few findings the scanner catches *reliably* (e.g. the
+  error-based SQLi on Juice Shop's `GET /rest/products/search`) are flagged
+  `MUST_DETECT` in the ground truth. If the full-scan path ever drops one, the
+  harness prints a loud `⚠ REGRESSION` and **exits non-zero** — separating a
+  full-scan-path bug (a confirmed finding silently lost) from an ordinary
+  coverage gap. Guards [#1](https://github.com/jaurakunal/isitsecure/issues/1).
 
 ## Targets
 
