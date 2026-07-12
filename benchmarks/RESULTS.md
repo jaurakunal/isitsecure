@@ -14,7 +14,7 @@ _Runs: 2026-07 · `--llm none` (pure DAST detection, no LLM) · Juice Shop pinne
 
 | Target | Mode | Recall | False positives | Findings |
 |---|---|--:|--:|--:|
-| `juiceshop` | url-only | **16/45 (36%)** — per-challenge, deterministic | not yet measured | ~24 |
+| `juiceshop` | url-only | **20/45 (44%)** — per-challenge, deterministic | not yet measured | ~25 |
 | `vampi-vulnerable` | url-only | **3/3** (SQLi, IDOR, headers) | — | 14–16 |
 | `vampi-secure` | url-only | — | **2** (IDOR) | 13–15 |
 | `nodegoat-auth` | authenticated | **2/3** (headers, XSS; injection missed) | unmeasured | 28 |
@@ -27,13 +27,13 @@ _Runs: 2026-07 · `--llm none` (pure DAST detection, no LLM) · Juice Shop pinne
 
 ## Juice Shop — per-class breakdown (`juiceshop`, url-only, v20.1.1)
 
-Recall **16/45 (36%)**, deterministic across runs. Of 113 challenges, 68 are out
+Recall **20/45 (44%)**, deterministic across runs. Of 113 challenges, 68 are out
 of scope for DAST (crypto, CTF mechanics, deep business logic, SAST-only).
 
 | Class | Found / detectable | Class | Found / detectable |
 |---|--:|---|--:|
 | exposed_data | 4/5 | mass_assignment | 0/2 |
-| sqli | 3/7 | ssrf | 0/2 |
+| sqli | **7/7** | ssrf | 0/2 |
 | idor | 2/5 | xxe | 0/2 |
 | nosql | 2/3 | auth | 0/1 |
 | open_redirect | 2/2 | csrf | 0/1 |
@@ -49,9 +49,13 @@ of scope for DAST (crypto, CTF mechanics, deep business logic, SAST-only).
   are stored, HTTP-header, or auth-gated variants. (Fixing #3 also exposed a real
   bug: DOM-XSS findings were being *discarded* when the scan hit its timeout —
   now they're returned, which is what moved this from 0/7 to 1/7.)
-- The four **login SQLi** challenges at `/rest/user/login` are missed because
-  url-only discovery can't reach the SPA's login POST endpoint
-  ([#2](https://github.com/jaurakunal/isitsecure/issues/2)).
+- **Login / auth-bypass SQLi is now detected** — `sqli` is **7/7**. A differential
+  oracle probes conventional login paths and flags a SQL tautology that
+  authenticates (returns a session token) where a benign credential is rejected —
+  reaching the login POST that url-only discovery can't recover from the SPA
+  bundle ([#2](https://github.com/jaurakunal/isitsecure/issues/2)). The remaining
+  recall levers are file-upload (0/4), XXE / SSRF (0/2 each), and the stored /
+  header XSS variants.
 
 ## Authenticated cross-user BOLA (manually verified — heavy to reproduce)
 
