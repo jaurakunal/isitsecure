@@ -160,6 +160,18 @@ _SINK_HOOK_SCRIPT = """
 """
 
 
+# Text-bearing inputs an attacker could type into, selected by TYPE — not by any
+# app-specific id/class/route — so input discovery stays generic. Non-text and
+# password fields are excluded (typing markup there is noise, not signal).
+_INTERACTIVE_INPUT_SELECTOR = (
+    "input:not([type=hidden]):not([type=submit]):not([type=button])"
+    ":not([type=reset]):not([type=checkbox]):not([type=radio])"
+    ":not([type=file]):not([type=image]):not([type=range])"
+    ":not([type=color]):not([type=password]), "
+    "textarea, [contenteditable='true'], [contenteditable='']"
+)
+
+
 class DOMXSSScanner:
     """Browser-based DOM XSS scanner.
 
@@ -324,6 +336,18 @@ class DOMXSSScanner:
                     self._build_finding(url, hit, "postMessage", "message", canary)
                 )
 
+        # --- Vector 4: interactive form inputs (type -> submit -> observe) ---
+        # Covers the flows URL navigation alone can't reach: reflected/DOM XSS
+        # that requires TYPING into a field (e.g. an SPA search box that renders
+        # the term client-side). Inputs are discovered from the live DOM, so it
+        # is app-agnostic.
+        if not findings:
+            hits = await self._inject_via_inputs(page, url, canary)
+            for hit in hits:
+                findings.append(
+                    self._build_finding(url, hit, "form_input", "input", canary)
+                )
+
         return findings
 
     # ------------------------------------------------------------------
@@ -372,6 +396,97 @@ class DOMXSSScanner:
 
         await asyncio.sleep(DOMXSSConfig.POST_INJECT_WAIT_SECONDS)
         return await self._collect_findings(page)
+
+    async def _inject_via_inputs(
+        self,
+        page: Page,
+        url: str,
+        canary: str,
+    ) -> list[dict]:
+        """Interactive vector: type a payload into each discoverable input,
+        trigger its handlers + submit, and observe both the sink hooks and the
+        rendered DOM.
+
+        The payload embeds the canary token in an element id, so it confirms two
+        ways — either is execution-equivalent and false-positive-free:
+          * the string reaches a hooked DOM sink (innerHTML/write/eval/...), or
+          * it is parsed into the DOM as a real element (the id materialises).
+
+        Generic by construction: inputs are found by TYPE from the live DOM, with
+        no app-specific selectors, ids, or routes.
+        """
+        await self._safe_navigate(page, url)
+
+        # `<img>` with a broken src (no onerror) — harmless, but if this parses
+        # into the DOM so would `<img onerror=...>`. The id IS the canary token,
+        # so the sink-hook regex also matches if the string flows to a sink.
+        payload = f'<img src=x id="{canary}">'
+
+        try:
+            handles = await page.query_selector_all(_INTERACTIVE_INPUT_SELECTOR)
+        except Exception:
+            return []
+
+        for handle in handles[:DOMXSSConfig.MAX_INPUTS_PER_PAGE]:
+            if not await self._fill_input(handle, payload):
+                continue
+            # First observe reflection on input/change handlers...
+            await asyncio.sleep(DOMXSSConfig.POST_INJECT_WAIT_SECONDS)
+            hits = await self._observe(page, canary, payload, url)
+            if not hits:
+                # ...then try submitting (many search boxes reflect on Enter).
+                try:
+                    await handle.press("Enter")
+                except Exception:
+                    pass
+                await asyncio.sleep(DOMXSSConfig.POST_INJECT_WAIT_SECONDS)
+                hits = await self._observe(page, canary, payload, url)
+            if hits:
+                return hits
+        return []
+
+    @staticmethod
+    async def _fill_input(handle: object, payload: str) -> bool:
+        """Type ``payload`` into one field. Returns False if it isn't typeable
+        (detached, disabled, or a non-fillable custom widget)."""
+        try:
+            await handle.fill(payload)  # type: ignore[union-attr]
+            return True
+        except Exception:
+            try:  # contenteditable / rich fields aren't fillable — type instead
+                await handle.click()      # type: ignore[union-attr]
+                await handle.type(payload)  # type: ignore[union-attr]
+                return True
+            except Exception:
+                return False
+
+    async def _observe(
+        self,
+        page: Page,
+        canary: str,
+        payload: str,
+        url: str,
+    ) -> list[dict]:
+        """Collect sink-hook hits, falling back to a DOM-materialisation check."""
+        hits = await self._collect_findings(page)
+        if not hits and await self._canary_materialized(page, canary):
+            hits = [{
+                "sink": "rendered DOM (HTML injection)",
+                "value": payload,
+                "url": url,
+            }]
+        return hits
+
+    @staticmethod
+    async def _canary_materialized(page: Page, canary: str) -> bool:
+        """True if an element carrying the canary id exists in the DOM — i.e. the
+        typed payload was parsed as HTML rather than escaped to text."""
+        try:
+            return bool(await page.evaluate(
+                "(id) => !!document.getElementById(id)", canary
+            ))
+        except Exception:
+            return False
 
     # ------------------------------------------------------------------
     # Navigation + collection
@@ -454,6 +569,7 @@ class DOMXSSScanner:
             "query_param": f"URL query parameter '{param}'",
             "hash_fragment": "URL hash fragment (#)",
             "postMessage": "window.postMessage()",
+            "form_input": "an interactive form input (typed + submitted)",
         }.get(vector, vector)
 
         return DeepFinding(

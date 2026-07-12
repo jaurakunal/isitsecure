@@ -1311,6 +1311,7 @@ class DOMXSSConfig:
 
     # Limits
     MAX_PAGES_TO_TEST = 30
+    MAX_INPUTS_PER_PAGE = 8      # interactive vector: inputs typed into per page
 
     # Confidence
     CONFIDENCE_CONFIRMED = 0.95

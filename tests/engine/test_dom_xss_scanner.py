@@ -95,6 +95,20 @@ class TestBuildFinding:
         assert "eval" in finding.title
         assert "postMessage" in finding.description
 
+    def test_form_input_finding(self, scanner: DOMXSSScanner) -> None:
+        """Interactive-input vector maps to a clear, distinct finding label."""
+        hit = {
+            "sink": "rendered DOM (HTML injection)",
+            "value": '<img src=x id="DOMXSS_CANARY_abcd1234">',
+            "url": "https://example.com/page",
+        }
+        finding = scanner._build_finding(
+            "https://example.com/page", hit, "form_input", "input", "DOMXSS_CANARY_abcd1234",
+        )
+        assert finding.severity == SeverityLevel.HIGH
+        assert finding.scanner_name == DOMXSSConfig.SCANNER_NAME
+        assert "interactive form input" in finding.description
+
 
 # ---------------------------------------------------------------------------
 # Unit Tests: URL helpers
@@ -215,7 +229,7 @@ class TestScanWithPage:
         # Should have navigated at most MAX_PAGES_TO_TEST * num_vectors times
         # (each page tests multiple vectors but stops early on no findings)
         assert page.goto.call_count <= DOMXSSConfig.MAX_PAGES_TO_TEST * (
-            len(DOMXSSConfig.INJECTION_PARAMS) + 2  # +2 for hash + postMessage
+            len(DOMXSSConfig.INJECTION_PARAMS) + 3  # +3: hash + postMessage + form_input
         )
 
 
@@ -290,3 +304,89 @@ class TestSinkHookScript:
         # setTimeout and setInterval with string args are postMessage attack vectors
         assert "origSetTimeout" in _SINK_HOOK_SCRIPT
         assert "origSetInterval" in _SINK_HOOK_SCRIPT
+
+
+# ---------------------------------------------------------------------------
+# Interactive-input vector (real browser, synthetic fixtures — NOT app-specific)
+# ---------------------------------------------------------------------------
+
+try:  # optional — these tests need a real Chromium
+    from playwright.async_api import async_playwright as _async_playwright
+except Exception:  # pragma: no cover
+    _async_playwright = None
+
+from isitsecure.engine.scanners.dom_xss_scanner import _SINK_HOOK_SCRIPT as _HOOK
+
+
+def _data_url(body: str) -> str:
+    import urllib.parse
+    return "data:text/html," + urllib.parse.quote(body)
+
+
+async def _run_input_vector(url: str) -> list[dict]:
+    """Drive ONLY the interactive vector against a page, with a real browser."""
+    scanner = DOMXSSScanner()
+    async with _async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True)
+        try:
+            page = await (await browser.new_context()).new_page()
+            await page.add_init_script(_HOOK)
+            return await scanner._inject_via_inputs(
+                page, url, scanner._generate_canary()
+            )
+        finally:
+            await browser.close()
+
+
+async def _chromium_ok() -> bool:
+    if _async_playwright is None:
+        return False
+    try:
+        async with _async_playwright() as pw:
+            await (await pw.chromium.launch(headless=True)).close()
+        return True
+    except Exception:
+        return False
+
+
+class TestInteractiveInputVector:
+    """Type-into-input DOM/reflected XSS oracle, proven on synthetic pages.
+
+    Fixtures are generic data: URLs (an input whose value flows to a sink vs. an
+    escaped one) — no Juice Shop, no app-specific selectors — so passing here
+    means the detector generalises, not that it memorised a benchmark.
+    """
+
+    # value typed into the field is written to innerHTML → real DOM XSS
+    VULN = _data_url(
+        "<input id='s' oninput=\"document.getElementById('o').innerHTML=this.value\">"
+        "<div id='o'></div>"
+    )
+    # same shape, but escaped via textContent → must NOT fire (false-positive guard)
+    SAFE = _data_url(
+        "<input id='s' oninput=\"document.getElementById('o').textContent=this.value\">"
+        "<div id='o'></div>"
+    )
+    # nothing to type into → nothing to report
+    NO_INPUT = _data_url("<div>static page</div>")
+
+    @pytest.mark.asyncio
+    async def test_detects_typed_input_reaching_dom(self) -> None:
+        if not await _chromium_ok():
+            pytest.skip("chromium not available")
+        hits = await _run_input_vector(self.VULN)
+        assert len(hits) >= 1
+
+    @pytest.mark.asyncio
+    async def test_no_false_positive_when_output_escaped(self) -> None:
+        if not await _chromium_ok():
+            pytest.skip("chromium not available")
+        hits = await _run_input_vector(self.SAFE)
+        assert hits == []
+
+    @pytest.mark.asyncio
+    async def test_no_findings_when_page_has_no_inputs(self) -> None:
+        if not await _chromium_ok():
+            pytest.skip("chromium not available")
+        hits = await _run_input_vector(self.NO_INPUT)
+        assert hits == []
