@@ -14,7 +14,7 @@ _Runs: 2026-07 · `--llm none` (pure DAST detection, no LLM) · Juice Shop pinne
 
 | Target | Mode | Recall | False positives | Findings |
 |---|---|--:|--:|--:|
-| `juiceshop` | url-only | **15/45 (33%)** — per-challenge, deterministic | not yet measured | 24 |
+| `juiceshop` | url-only | **16/45 (36%)** — per-challenge, deterministic | not yet measured | ~24 |
 | `vampi-vulnerable` | url-only | **3/3** (SQLi, IDOR, headers) | — | 14–16 |
 | `vampi-secure` | url-only | — | **2** (IDOR) | 13–15 |
 | `nodegoat-auth` | authenticated | **2/3** (headers, XSS; injection missed) | unmeasured | 28 |
@@ -27,7 +27,7 @@ _Runs: 2026-07 · `--llm none` (pure DAST detection, no LLM) · Juice Shop pinne
 
 ## Juice Shop — per-class breakdown (`juiceshop`, url-only, v20.1.1)
 
-Recall **15/45 (33%)**, deterministic across runs. Of 113 challenges, 68 are out
+Recall **16/45 (36%)**, deterministic across runs. Of 113 challenges, 68 are out
 of scope for DAST (crypto, CTF mechanics, deep business logic, SAST-only).
 
 | Class | Found / detectable | Class | Found / detectable |
@@ -38,14 +38,17 @@ of scope for DAST (crypto, CTF mechanics, deep business logic, SAST-only).
 | nosql | 2/3 | auth | 0/1 |
 | open_redirect | 2/2 | csrf | 0/1 |
 | info_disclosure | 2/2 | rate_limit | 0/1 |
-| xss | **0/7** | ssti | 0/1 |
+| xss | **1/7** | ssti | 0/1 |
 | file_upload | **0/4** | | |
 
 **Biggest gaps (the recall levers):**
 
-- Interactive **XSS is 0/7** — a whole class missed
-  ([#3](https://github.com/jaurakunal/isitsecure/issues/3)). Closing XSS alone
-  would take url-only from 15→22 (**49%**).
+- **XSS is 1/7** — the reflected/DOM search-box case is now detected by an
+  interactive input oracle that types into fields and observes the sink
+  ([#3](https://github.com/jaurakunal/isitsecure/issues/3)). The remaining six
+  are stored, HTTP-header, or auth-gated variants. (Fixing #3 also exposed a real
+  bug: DOM-XSS findings were being *discarded* when the scan hit its timeout —
+  now they're returned, which is what moved this from 0/7 to 1/7.)
 - The four **login SQLi** challenges at `/rest/user/login` are missed because
   url-only discovery can't reach the SPA's login POST endpoint
   ([#2](https://github.com/jaurakunal/isitsecure/issues/2)).
@@ -106,7 +109,7 @@ forms is a real, reportable gap.
 
 ```bash
 pip install -e ".[all]"
-python benchmarks/run_benchmarks.py juiceshop       # OWASP Juice Shop — the headline number (~5 min)
+python benchmarks/run_benchmarks.py juiceshop       # OWASP Juice Shop — the headline number (~10 min)
 python benchmarks/run_benchmarks.py                 # VAmPI (both builds)
 python benchmarks/run_benchmarks.py nodegoat-auth   # NodeGoat, authenticated
 
