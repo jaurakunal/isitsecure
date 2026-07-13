@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1](https://github.com/jaurakunal/isitsecure/compare/v0.2.0...v0.2.1) (2026-07-12)
+
+
+### Bug Fixes
+
+* **dast:** detect authentication-bypass SQLi via login-path probing (closes [#2](https://github.com/jaurakunal/isitsecure/issues/2)) ([6cef112](https://github.com/jaurakunal/isitsecure/commit/6cef112f0b49cecf5b1eb03d195a41eff4e4c4f4))
+
+
+### Documentation
+
+* **benchmarks:** Juice Shop url-only recall 36% -&gt; 44% after auth-bypass SQLi ([855a7c4](https://github.com/jaurakunal/isitsecure/commit/855a7c4be4b9b8b3ee0bcef10b2eb7bee54ea32e))
+
 ## [0.2.0](https://github.com/jaurakunal/isitsecure/compare/v0.1.2...v0.2.0) (2026-07-12)
 
 
