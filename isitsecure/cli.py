@@ -201,7 +201,13 @@ def scan(
 ) -> None:
     """Run a security scan against a web application."""
     if not target_url and not repo:
-        console.print("[red]Error: provide a target URL, a --repo, or both.[/red]")
+        err_console.print(
+            "[red]I need either your website's address (to test it live) or your "
+            "code (to scan it). You gave neither.[/red]\n"
+            "[dim]Try one of:[/dim]\n"
+            "  isitsecure scan https://your-app.com\n"
+            "  isitsecure scan --repo github.com/you/your-app"
+        )
         raise typer.Exit(1)
 
     if verbose:
@@ -209,21 +215,30 @@ def scan(
     else:
         logging.basicConfig(level=logging.WARNING)
 
+    # Smart first-run (#56): if the user didn't pick a mode, choose it from what
+    # they gave us and tell them, in plain language, what we're about to do.
+    has_auth = bool(auth_email and auth_password)
+    resolved_mode_name = mode if mode != "auto" else _auto_select_mode(
+        target_url, repo, has_auth
+    )
+
     # Resolve LLM client
     llm_client = None
     judgment_llm_client = None
+    has_api_key = False
     if llm_provider != "none":
         api_key = _load_api_key(llm_provider)
-        if not api_key:
-            console.print(
-                f"[yellow]No API key found for {llm_provider}. "
-                f"Set {llm_provider.upper()}_API_KEY in your environment or .env file.\n"
-                f"Running without LLM review (reduced accuracy).[/yellow]"
-            )
-        else:
+        has_api_key = bool(api_key)
+        if api_key:
             from isitsecure.llm.adapters import create_llm_client
             llm_client = create_llm_client(llm_provider, api_key)
             judgment_llm_client = create_llm_client(llm_provider, api_key, judgment=True)
+
+    # Pre-flight (#54): surface missing prerequisites up front, before we spend
+    # minutes scanning. Only checks what the chosen mode actually needs.
+    if output not in ("json", "sarif"):
+        _explain_mode(resolved_mode_name)
+    _preflight_checks(resolved_mode_name, llm_provider, has_api_key)
 
     # Build scanner
     from isitsecure.engine.factory import (
@@ -262,7 +277,8 @@ def scan(
                 login_url=login_url,
             )
 
-    # Resolve scan mode
+    # Resolve scan mode — resolved_mode_name was decided up front (#56); map it
+    # to the engine enum so the CLI and engine always agree on what runs.
     from isitsecure.engine.enums import ScanMode
     scan_mode_map = {
         "url-only": ScanMode.URL_ONLY,
@@ -270,7 +286,7 @@ def scan(
         "authenticated": ScanMode.AUTHENTICATED,
         "full": ScanMode.FULL,
     }
-    resolved_mode = scan_mode_map.get(mode) if mode != "auto" else None
+    resolved_mode = scan_mode_map.get(resolved_mode_name)
 
     # Scan header (to stderr so it never pollutes piped JSON/SARIF).
     if output not in ("json", "sarif"):
@@ -279,12 +295,6 @@ def scan(
             title="Security Scan",
             border_style="bright_magenta",
         ))
-        # Code scan without language servers → one-line, non-blocking nudge.
-        if repo and any(not _first_which(s["bins"]) for s in _LSP_SPECS):
-            err_console.print(
-                "[dim]💡 Tip: `isitsecure setup --lsp` enables deeper code analysis "
-                "(auth-flow tracing) for more accurate results.[/dim]"
-            )
 
     report = asyncio.run(_run_scan(
         agent=agent,
@@ -322,7 +332,12 @@ def scan(
         )
     elif output == "fixes":
         if not llm_client:
-            console.print("[red]Fix generation requires an LLM API key. Set ANTHROPIC_API_KEY or use --llm anthropic.[/red]")
+            err_console.print(
+                "[red]Writing fix suggestions needs the AI review turned on, and I "
+                "couldn't find an API key.[/red]\n"
+                "[bold]Fix:[/bold] run [dim]isitsecure setup[/dim] to add one "
+                "(or set ANTHROPIC_API_KEY)."
+            )
             raise typer.Exit(1)
         _print_report_table(report)
         console.print("\n[bold]Generating fixes...[/bold]")
@@ -347,7 +362,11 @@ def scan(
         except Exception as exc:
             logging.getLogger(__name__).debug("HTML report generation failed: %s", exc)
     else:
-        console.print(f"[yellow]Output format '{output}' not yet implemented. Using table.[/yellow]")
+        err_console.print(
+            f"[yellow]I don't recognize the output format '{output}', so I'll show "
+            "the results as a table.[/yellow]\n"
+            "[dim]Valid options for --output are: table, json, html, sarif, fixes.[/dim]"
+        )
         _print_report_table(report)
 
 
@@ -469,7 +488,12 @@ async def _run_scan(agent, **kwargs):
             err_console.print(f"{stamp}      [dim]· {message}[/dim]")
 
     if report is None:
-        err_console.print("[red]Scan completed but no report was generated.[/red]")
+        err_console.print(
+            "[red]The scan finished but didn't produce any results — something went "
+            "wrong along the way.[/red]\n"
+            "[dim]Try re-running with -v (verbose) to see what happened, or check "
+            "that your website address / code path is correct.[/dim]"
+        )
         raise typer.Exit(1)
 
     err_console.print(
@@ -652,9 +676,11 @@ def fix(
     # Resolve API key
     resolved_key = api_key or _load_api_key(llm_provider)
     if not resolved_key:
-        console.print(
-            f"[red]Fix generation requires an API key. "
-            f"Set {llm_provider.upper()}_API_KEY or pass --api-key.[/red]"
+        err_console.print(
+            "[red]Auto-fixing your code needs the AI turned on, and I couldn't "
+            "find an API key.[/red]\n"
+            "[bold]Fix:[/bold] run [dim]isitsecure setup[/dim] to add one "
+            f"(or set {llm_provider.upper()}_API_KEY, or pass --api-key)."
         )
         raise typer.Exit(1)
 
@@ -665,7 +691,11 @@ def fix(
     import os
     repo_path = os.path.abspath(repo.replace("file://", ""))
     if not os.path.isdir(repo_path):
-        console.print(f"[red]Repository path not found: {repo_path}[/red]")
+        err_console.print(
+            f"[red]I couldn't find your code at:[/red] {repo_path}\n"
+            "[dim]Double-check the path — --repo should point to a folder on your "
+            "computer (e.g. --repo ./my-app or --repo /Users/you/my-app).[/dim]"
+        )
         raise typer.Exit(1)
 
     repo_url = f"file://{repo_path}"
@@ -1009,6 +1039,114 @@ def _chromium_installed() -> bool:
         return False
 
 
+# ---------------------------------------------------------------------------
+# Smart first-run: pick the scan mode from what the user gave us (issue #56)
+# ---------------------------------------------------------------------------
+
+def _auto_select_mode(
+    target_url: Optional[str],
+    repo: Optional[str],
+    has_auth: bool,
+) -> str:
+    """Pick a scan mode from the inputs the user provided.
+
+    A beginner shouldn't have to know the mode names — if they give a website
+    we test it live, if they give code we scan it, if they give both we do the
+    full scan. Mirrors the engine's own detection so ``--mode auto`` and this
+    explanation always agree.
+    """
+    if target_url and repo:
+        return "full"
+    if target_url and has_auth:
+        return "authenticated"
+    if repo:
+        return "code-only"
+    return "url-only"
+
+
+# Plain-language, one-line "here's what I'm doing" per resolved mode.
+_MODE_EXPLANATIONS = {
+    "url-only": "Testing your live website for security issues (no code needed).",
+    "authenticated": "Logging into your live website and testing it as a real user "
+                     "would see it.",
+    "code-only": "Scanning your code for security issues (no live site needed).",
+    "full": "Scanning your code AND testing your live website — the most thorough scan.",
+}
+
+
+def _explain_mode(resolved_mode: str) -> None:
+    """Print a friendly one-liner telling the user what the scan will do."""
+    explanation = _MODE_EXPLANATIONS.get(resolved_mode)
+    if explanation:
+        err_console.print(f"[bright_magenta]▸[/bright_magenta] {explanation}")
+
+
+# ---------------------------------------------------------------------------
+# Pre-flight checks: catch missing prerequisites BEFORE the scan runs (#54)
+# ---------------------------------------------------------------------------
+
+def _preflight_checks(
+    resolved_mode: str,
+    llm_provider: str,
+    has_api_key: bool,
+) -> None:
+    """Warn about missing prerequisites *before* a long scan starts.
+
+    Only checks what the chosen mode actually needs, so a code-only scan never
+    nags about a browser. Each warning names the exact fix command and what is
+    degraded if left unaddressed. Warnings only — a scan can still run degraded,
+    so we never hard-exit here.
+    """
+    import shutil
+
+    needs_live_site = resolved_mode in ("url-only", "authenticated", "full")
+    needs_code_analysis = resolved_mode in ("code-only", "full")
+
+    warnings: list[str] = []
+
+    # (a) Chromium / Playwright — required to test a live site.
+    if needs_live_site and not _chromium_installed():
+        warnings.append(
+            "The browser used to test your live website isn't installed yet.\n"
+            "    [dim]→ Live-site testing will be skipped until you install it.[/dim]\n"
+            "    [bold]Fix:[/bold] isitsecure setup"
+        )
+
+    # (b) Language servers — deeper code analysis for code/full scans.
+    if needs_code_analysis:
+        missing = [
+            s["lang"] for s in _LSP_SPECS
+            if not _first_which(s["bins"])
+            or any(not shutil.which(r) for r in s["runtime"])
+        ]
+        if missing:
+            warnings.append(
+                "Deeper code analysis isn't fully set up "
+                f"([dim]{', '.join(missing)}[/dim]).\n"
+                "    [dim]→ Code scanning still runs, but may miss some issues and "
+                "flag more false alarms.[/dim]\n"
+                "    [bold]Fix:[/bold] isitsecure setup --lsp"
+            )
+
+    # (c) LLM API key — only if the user asked for an LLM provider.
+    if llm_provider != "none" and not has_api_key:
+        warnings.append(
+            f"No {llm_provider} API key found, so the AI review is off.\n"
+            "    [dim]→ You'll still get findings, but without plain-English "
+            "explanations or fix suggestions.[/dim]\n"
+            "    [bold]Fix:[/bold] isitsecure setup  [dim](or set "
+            f"{llm_provider.upper()}_API_KEY)[/dim]"
+        )
+
+    if warnings:
+        err_console.print()
+        err_console.print("[yellow bold]Before we start — a couple of things to know:[/yellow bold]")
+        for w in warnings:
+            err_console.print(f"  [yellow]•[/yellow] {w}")
+        err_console.print("[dim]The scan will still run with what's available.[/dim]")
+        err_console.print()
+
+
 def _print_status_report() -> None:
     """`setup --check`: report what's configured without changing anything."""
     import shutil
@@ -1137,12 +1275,14 @@ def setup(
     ))
 
     # API key
-    console.print("\n[bold]1. LLM API Key[/bold]")
-    console.print("   For full scanning (business logic review, triage, semantic analysis)")
-    console.print("   Set ANTHROPIC_API_KEY or GOOGLE_API_KEY in your .env file")
-    console.print("   Or enter it now to save to ~/.isitsecure/config.toml\n")
+    console.print("\n[bold]1. AI review key (optional, but recommended)[/bold]")
+    console.print("   With an AI key, isitsecure turns the report into plain English you")
+    console.print("   can actually read and gives you specific fix suggestions. Without")
+    console.print("   one, scans still run — you just get the raw findings.")
+    console.print("   [dim]Get a key at console.anthropic.com. It saves to "
+                  "~/.isitsecure/config.toml.[/dim]\n")
 
-    key = typer.prompt("Anthropic API key (or press Enter to skip)", default="", show_default=False)
+    key = typer.prompt("Paste your Anthropic API key (or press Enter to skip)", default="", show_default=False)
     if key:
         import os
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -1159,8 +1299,10 @@ def setup(
         console.print("[green]Saved to ~/.isitsecure/config.toml (perms 0600)[/green]")
 
     # Playwright
-    console.print("\n[bold]2. Browser for DAST scanning[/bold]")
-    install_browser = typer.confirm("Install Chromium for dynamic testing?", default=True)
+    console.print("\n[bold]2. Browser for live-site testing[/bold]")
+    console.print("   isitsecure opens your website in a real browser to test it the way")
+    console.print("   an attacker would. This installs that browser (Chromium).")
+    install_browser = typer.confirm("Install it now?", default=True)
     if install_browser:
         import subprocess
         console.print("Installing Chromium...")
@@ -1172,8 +1314,13 @@ def setup(
         if result.returncode == 0:
             console.print("[green]Chromium installed successfully[/green]")
         else:
-            console.print(f"[red]Failed to install Chromium: {result.stderr}[/red]")
-            console.print("You can install it later: python -m playwright install chromium")
+            console.print(
+                "[red]The browser download didn't finish.[/red] "
+                "[dim]Live-site testing won't work until it's installed.[/dim]"
+            )
+            console.print("You can try again any time with: python -m playwright install chromium")
+            if result.stderr:
+                console.print(f"[dim]Details: {result.stderr.strip().splitlines()[-1][:200]}[/dim]")
 
     # Language servers
     console.print("\n[bold]3. Language servers (deeper code analysis)[/bold]")
