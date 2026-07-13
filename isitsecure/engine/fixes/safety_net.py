@@ -80,9 +80,18 @@ def create_safety_net(repo_path: str, files: list[str]) -> SafetyNet:
         ref = f"refs/isitsecure/backup/{stamp}"
         head = _git(repo_path, "rev-parse", "HEAD")
         if head.returncode == 0:
-            # Point a private backup ref at the current commit. This keeps HEAD
+            # Capture the FULL pre-fix state — including any uncommitted
+            # working-tree edits — so restoring the ref recovers exactly what
+            # the user had before, not just the last commit. `git stash create`
+            # writes a commit for the dirty tree WITHOUT touching the working
+            # tree; on a clean tree it prints nothing and we fall back to HEAD.
+            stash = _git(repo_path, "stash", "create", "isitsecure pre-fix backup")
+            snapshot = stash.stdout.strip() if stash.returncode == 0 else ""
+            if not snapshot:
+                snapshot = head.stdout.strip()
+            # Point a private backup ref at that snapshot. This keeps it
             # reachable even if the user later commits over the fixes.
-            _git(repo_path, "update-ref", ref, head.stdout.strip())
+            _git(repo_path, "update-ref", ref, snapshot)
             return SafetyNet(kind="git", location=ref)
         # Repo with no commits yet — fall through to a file copy.
 
