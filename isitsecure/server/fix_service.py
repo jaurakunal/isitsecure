@@ -218,6 +218,29 @@ async def run_fix_all(
             # Return the user to their original branch no matter what.
             await _git(local_repo, "checkout", "--force", base_branch)
 
+        # Plain-language layer (#50): translate the fix + verify outcome into
+        # git-free language the UI can show directly. The branch mechanics stay
+        # in the payload for power users / backward-compat, but the UI leads
+        # with `plain`.
+        from isitsecure.engine.fixes import plain_results
+
+        attempted = len(findings)
+        fix_failed = attempted - fixed_count
+        counts = plain_results.classify_verification(
+            attempted=attempted,
+            fix_failed=fix_failed,
+            verification=verification,
+        )
+        plain = {
+            "summary": plain_results.summarize(counts),
+            "next_step": plain_results.next_step_hint(
+                counts, saved_hint="Your original code is safely backed up."
+            ),
+            "fixed": counts.fixed,
+            "needs_review": counts.needs_review,
+            "couldnt_fix": counts.couldnt_fix,
+        }
+
         return {
             "mode": "applied",
             "applied": True,
@@ -227,6 +250,7 @@ async def run_fix_all(
             "fixed_count": fixed_count,
             "skipped": skipped,
             "verification": verification,
+            "plain": plain,
         }
 
     # ---- PLAN MODE: no local files (URL / remote repo) or dirty tree ----

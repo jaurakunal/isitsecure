@@ -146,6 +146,11 @@ export function FindingCard({ finding, index }: { finding: Finding; index: numbe
               {fixError && <p className="text-critical text-xs mt-2 whitespace-pre-wrap">{fixError}</p>}
               {fix?.success && (
                 <div className="space-y-2">
+                  {/* Plain-language status: a suggested fix that a human should
+                      review before trusting (it isn't applied/re-scanned here). */}
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] bg-medium/15 text-medium border border-medium/30">
+                    Fix ready — review before applying
+                  </span>
                   {fix.explanation && (
                     <p className="text-text-muted text-xs leading-relaxed whitespace-pre-wrap">{fix.explanation}</p>
                   )}

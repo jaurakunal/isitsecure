@@ -665,9 +665,18 @@ def fix(
     api_key: Optional[str] = typer.Option(None, "--api-key", envvar="ANTHROPIC_API_KEY"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show fixes without applying them"),
     severity: str = typer.Option("critical,high", "--severity", help="Severities to fix: critical,high,medium"),
+    technical: bool = typer.Option(
+        False, "--technical",
+        help="Show the git details (backup ref, diff/test commands) instead of the plain-language summary",
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
-    """Scan, generate AI fixes, and apply them to your code in one command."""
+    """Scan your code, fix the issues, and re-check — in plain language.
+
+    By default this is a git-free experience: fixes are written straight to your
+    files (with your original safely backed up under the hood) and the result is
+    reported in plain English. Pass --technical for the git details.
+    """
     if verbose:
         logging.basicConfig(level=logging.DEBUG)
     else:
@@ -759,81 +768,103 @@ def fix(
     # the same file are chained into a single rewrite (no clobbering).
     from difflib import unified_diff
     n_files = len(fix_plan.files)
-    console.print(
-        f"\n[bold]Step 3/3:[/bold] {'Previewing' if dry_run else 'Applying'} "
-        f"fixes for {fix_plan.fixed_count} findings across {n_files} file(s)..."
-    )
 
-    applied = 0
-    failed = 0
-    for path, fixed_content in fix_plan.files.items():
-        console.print(f"\n  [bold]{path}[/bold]")
-        if dry_run:
+    # --- Dry run: just preview the diffs, change nothing. ---
+    if dry_run:
+        console.print(
+            f"\n[bold]Step 3/3:[/bold] Previewing fixes for {fix_plan.fixed_count} "
+            f"findings across {n_files} file(s)..."
+        )
+        for path, fixed_content in fix_plan.files.items():
+            console.print(f"\n  [bold]{path}[/bold]")
             original = file_contents.get(path, "")
             diff = "\n".join(unified_diff(
                 original.splitlines(), fixed_content.splitlines(),
                 fromfile=f"a/{path}", tofile=f"b/{path}", lineterm="",
             ))
             console.print(f"  [dim]{diff[:800]}[/dim]")
-            applied += 1
-        else:
-            from isitsecure.engine.shared.safe_path import resolve_within
-            try:
-                full_path = resolve_within(repo_path, path)
-                with open(full_path, "w") as f:
-                    f.write(fixed_content)
-                console.print(f"  [green]Applied[/green]")
-                applied += 1
-            except Exception as e:
-                console.print(f"  [red]Failed to write: {e}[/red]")
-                failed += 1
+        console.print(
+            f"\n[dim]Run without --dry-run to apply these fixes: "
+            f"isitsecure fix --repo {repo}[/dim]"
+        )
+        raise typer.Exit(0)
 
-    # Summary
+    # --- Apply for real: take a safety net first, then write files in place. ---
+    console.print(
+        f"\n[bold]Step 3/3:[/bold] Applying fixes for {fix_plan.fixed_count} "
+        f"findings across {n_files} file(s)..."
+    )
+
+    from isitsecure.engine.fixes.safety_net import create_safety_net
+    from isitsecure.engine.shared.safe_path import resolve_within
+
+    net = create_safety_net(repo_path, list(fix_plan.files.keys()))
+
+    applied = 0
+    failed = 0
+    for path, fixed_content in fix_plan.files.items():
+        try:
+            full_path = resolve_within(repo_path, path)
+            with open(full_path, "w") as f:
+                f.write(fixed_content)
+            applied += 1
+        except Exception as e:
+            console.print(f"  [red]Couldn't update {path}: {e}[/red]")
+            failed += 1
+
+    # Re-scan the fixed code to confirm the findings are actually gone.
+    from isitsecure.engine.fixes.verifier import verify_findings_resolved
+    from isitsecure.engine.fixes import plain_results
+
+    fixed_findings = [
+        f for f in fixable
+        if f.code_location and f.code_location.file_path in fix_plan.files
+    ]
+    console.print("[bold]Re-checking your code...[/bold]")
+    vr = asyncio.run(verify_findings_resolved(repo_path, fixed_findings))
+
+    # Fold everything into the three plain-language buckets. "couldn't fix" =
+    # findings we tried but produced no fix for (failed generation + write
+    # failures).
+    fix_failed = (len(fixable) - fix_plan.fixed_count) + failed
+    counts = plain_results.classify_verification(
+        attempted=len(fixable),
+        fix_failed=fix_failed,
+        verification=vr.to_dict(),
+    )
+
     console.print()
-    action = "previewed" if dry_run else "applied"
     console.print(Panel(
-        f"[bold]{fix_plan.fixed_count} findings fixed across {applied} file(s) {action}[/bold]  |  "
-        f"{failed} failed  |  "
-        f"{len(fix_plan.skipped)} skipped  |  "
-        f"{fix_plan.total_findings} total findings",
-        title="Fix Summary",
-        border_style="green" if failed == 0 else "yellow",
+        f"[bold]{plain_results.summarize(counts)}[/bold]",
+        title="Done",
+        border_style="green" if counts.needs_review == 0 and counts.couldnt_fix == 0 else "yellow",
     ))
 
-    if not dry_run and applied > 0:
-        # Re-scan the fixed code to confirm the findings are actually gone.
-        from isitsecure.engine.fixes.verifier import verify_findings_resolved
-        fixed_findings = [
-            f for f in fixable
-            if f.code_location and f.code_location.file_path in fix_plan.files
-        ]
-        console.print("\n[bold]Verifying fixes (re-scanning)...[/bold]")
-        vr = asyncio.run(verify_findings_resolved(repo_path, fixed_findings))
-        if vr.checked:
-            console.print(
-                f"  [green]{vr.resolved} of {vr.checked} findings confirmed resolved "
-                f"by re-scan[/green]"
-            )
-            if vr.still_present:
-                console.print(
-                    f"  [yellow]{vr.still_present} still flagged — this can be a partial "
-                    f"fix, or a valid fix the scanner can't confirm. Review the diff:[/yellow]"
-                )
-                for t in vr.still_present_titles:
-                    console.print(f"    [yellow]• {t}[/yellow]")
-        if vr.unverifiable:
-            console.print(
-                f"  [dim]{vr.unverifiable} finding(s) can't be auto-verified "
-                f"(business-logic/DAST) — review manually[/dim]"
-            )
+    hint = plain_results.next_step_hint(counts, saved_hint=net.restore_hint)
+    if hint:
+        console.print(f"\n[dim]{hint}[/dim]")
 
-        console.print("\n[bold]Next steps:[/bold]")
+    if counts.needs_review and vr.still_present_titles:
+        console.print("\n[bold]Worth a look:[/bold]")
+        for t in vr.still_present_titles:
+            console.print(f"  [yellow]•[/yellow] {t}")
+
+    # --- Power-user / technical view: the git mechanics, on request. ---
+    if technical:
+        console.print("\n[bold]Technical details:[/bold]")
+        if net.kind == "git":
+            console.print(
+                f"  Backup ref: [dim]{net.location}[/dim] "
+                f"[dim](restore original: git checkout {net.location} -- .)[/dim]"
+            )
+        elif net.kind == "copy":
+            console.print(f"  Backup copy: [dim]{net.location}[/dim]")
         console.print("  1. Review changes: [dim]git diff[/dim]")
         console.print("  2. Run your tests")
-        console.print("  3. Add isitsecure to CI so it can't regress "
-                      "([dim]see examples/github-action.yml[/dim])")
-    elif dry_run:
-        console.print(f"\n[dim]Run without --dry-run to apply fixes: isitsecure fix --repo {repo}[/dim]")
+        console.print(
+            "  3. Add isitsecure to CI so it can't regress "
+            "([dim]see examples/github-action.yml[/dim])"
+        )
 
 
 async def _run_fix_generation(llm_client, findings, file_contents):
