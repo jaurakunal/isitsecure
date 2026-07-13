@@ -298,8 +298,16 @@ async def generate_fix(request: FixRequest):
     finding = DeepFinding.model_validate(finding_data)
     result = await generator.generate_fix(finding, request.file_content)
 
+    # Plain-language verify status for the UI (#50). A single-finding fix is
+    # generated but not applied/re-scanned here, so a successful fix is
+    # "needs_review" (a human should look before trusting it), and a failure is
+    # "couldnt_fix".
+    from isitsecure.engine.fixes import plain_results
+    status = plain_results.status_for_single(result.success, verified=None)
+
     return {
         "success": result.success,
+        "status": status,
         "diff": result.diff,
         "explanation": result.explanation,
         "error": result.error,

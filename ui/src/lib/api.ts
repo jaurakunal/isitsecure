@@ -162,8 +162,12 @@ export function reportHtmlUrl(scanId: string): string {
   return `${API_BASE}/api/scan/${scanId}/report.html`;
 }
 
+/** Plain-language verify status for a single finding's fix (#50). */
+export type FixStatus = "fixed" | "needs_review" | "couldnt_fix";
+
 export interface FixResult {
   success: boolean;
+  status?: FixStatus;
   diff: string;
   explanation: string;
   error: string | null;
@@ -209,6 +213,15 @@ export interface FixVerification {
   error: string;
 }
 
+/** Git-free, plain-language summary of a fix-all run (#50). */
+export interface FixPlain {
+  summary: string;
+  next_step: string;
+  fixed: number;
+  needs_review: number;
+  couldnt_fix: number;
+}
+
 export interface FixAllResult {
   mode: "applied" | "plan" | "none";
   applied?: boolean;
@@ -221,6 +234,8 @@ export interface FixAllResult {
   reason?: string;
   message?: string;
   verification?: FixVerification | null;
+  // Plain-language layer — the UI leads with this and hides git mechanics.
+  plain?: FixPlain | null;
 }
 
 export interface FixAllEvent {
