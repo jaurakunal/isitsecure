@@ -46,9 +46,16 @@ class HTMLReportRenderer:
             Complete HTML document string with inline CSS.
         """
         grade = report_data.get("grade", "?")
-        grade_color = ReportConfig.HTML_GRADE_COLORS.get(grade, self._MUTED_TEXT_COLOR)
+        # Granular grades (A+, A-, C+, ...) share the color of their base
+        # letter (A-F), so look up the color by the base letter.
+        grade_base = report_data.get("grade_base", grade)
+        grade_color = ReportConfig.HTML_GRADE_COLORS.get(
+            grade_base, self._MUTED_TEXT_COLOR
+        )
 
         sections = [
+            # #57 — launch-readiness verdict is the very first thing shown.
+            self._render_launch_verdict(report_data),
             self._render_header(report_data, grade, grade_color),
             self._render_risk_summary(report_data),
             self._render_executive_summary(report_data),
@@ -137,22 +144,81 @@ class HTMLReportRenderer:
             f"margin-top: 12px; }}\n"
             f"    .theme-card {{ border: 1px solid {self._BORDER_COLOR}; border-radius: 8px; "
             f"padding: 12px 16px; margin: 8px 0; }}\n"
+            # #57 — launch-readiness verdict banner (go = green, no-go = red).
+            f"    .verdict {{ border-radius: 10px; padding: 16px 20px; margin: 0 0 20px 0; "
+            f"font-size: 17px; font-weight: 600; display: flex; align-items: baseline; "
+            f"gap: 10px; flex-wrap: wrap; }}\n"
+            f"    .verdict.go {{ background: #ecfdf5; border: 1px solid #a7f3d0; "
+            f"color: #065f46; }}\n"
+            f"    .verdict.nogo {{ background: #fef2f2; border: 1px solid #fecaca; "
+            f"color: #991b1b; }}\n"
+            f"    .verdict .verdict-detail {{ font-weight: 400; font-size: 14px; }}\n"
+            # #43 — plain-language grade legend under the grade badge.
+            f"    .grade-legend {{ font-size: 12px; color: {self._MUTED_TEXT_COLOR}; "
+            f"margin-top: 4px; }}\n"
+            # #44 — business-impact-first line on each finding card.
+            f"    .impact-line {{ font-weight: 600; margin: 0 0 8px 0; }}\n"
+            # #41 — three-part plain-English explanation block.
+            f"    .plain-explain {{ background: #f9fafb; border-radius: 6px; "
+            f"padding: 10px 14px; margin: 8px 0; }}\n"
+            f"    .plain-explain dt {{ font-weight: 600; font-size: 12px; "
+            f"text-transform: uppercase; letter-spacing: .02em; "
+            f"color: {self._MUTED_TEXT_COLOR}; margin-top: 6px; }}\n"
+            f"    .plain-explain dt:first-child {{ margin-top: 0; }}\n"
+            f"    .plain-explain dd {{ margin: 2px 0 0 0; }}\n"
+            # #42 — inline glossary tooltip (dotted underline + hover title).
+            f"    .glossary-term {{ border-bottom: 1px dotted {self._MUTED_TEXT_COLOR}; "
+            f"cursor: help; }}\n"
+            f"    .glossary-list {{ font-size: 12px; color: {self._MUTED_TEXT_COLOR}; "
+            f"margin: 6px 0 0 0; }}\n"
             "  </style>\n"
             "</head>\n"
             f"<body>\n{body}\n</body>\n"
             "</html>"
         )
 
+    def _render_launch_verdict(self, report_data: dict) -> str:
+        """Render the go/no-go launch-readiness banner at the top (#57).
+
+        Returns an empty string when no verdict is present so the report
+        still renders (older report dicts, or partial data).
+        """
+        verdict = report_data.get("launch_verdict")
+        if not verdict:
+            return ""
+
+        headline = escape(verdict.get("headline", ""))
+        if not headline:
+            return ""
+        detail = escape(verdict.get("detail", "") or "")
+        css_class = "go" if verdict.get("ready") else "nogo"
+
+        detail_html = (
+            f"<span class=\"verdict-detail\">{detail}</span>" if detail else ""
+        )
+        return (
+            f"<div class=\"verdict {css_class}\">"
+            f"<span>{headline}</span>{detail_html}"
+            f"</div>"
+        )
+
     def _render_header(self, report_data: dict, grade: str, grade_color: str) -> str:
         """Render report header with title and grade badge."""
         title = escape(report_data.get("title", ReportConfig.REPORT_TITLE))
         grade_label = escape(report_data.get("grade_label", ""))
+        grade_legend = escape(report_data.get("grade_legend", ""))
         target = escape(report_data.get("target_url", "") or "")
         scan_mode = escape(report_data.get("scan_mode", ""))
         duration = report_data.get("duration_seconds", 0)
         scanners = report_data.get("scanners_run", [])
 
         scanners_str = escape(", ".join(scanners)) if scanners else "N/A"
+
+        legend_html = (
+            f"    <div class=\"grade-legend\">{grade_legend}</div>\n"
+            if grade_legend
+            else ""
+        )
 
         return (
             f"<h1>{title}</h1>\n"
@@ -161,6 +227,7 @@ class HTMLReportRenderer:
             f"{escape(grade)}</div>\n"
             f"  <div>\n"
             f"    <div style=\"font-size: 16px; font-weight: 600;\">{grade_label}</div>\n"
+            f"{legend_html}"
             f"    <div class=\"muted\">Target: {target}</div>\n"
             f"    <div class=\"muted\">Mode: {scan_mode} | "
             f"Duration: {duration:.1f}s | Scanners: {scanners_str}</div>\n"
@@ -339,6 +406,9 @@ class HTMLReportRenderer:
         code_loc = finding.get("code_location")
         remediation = finding.get("remediation_guidance")
         confidence = finding.get("confidence", 0)
+        impact = finding.get("business_impact", "")
+        explanation = finding.get("plain_explanation") or {}
+        glossary = finding.get("glossary") or {}
 
         parts = [
             f"<div class=\"finding-card\">",
@@ -349,8 +419,26 @@ class HTMLReportRenderer:
             f"    <span class=\"muted\" style=\"margin-left: auto;\">"
             f"{scanner} ({source}) | conf: {confidence:.0%}</span>",
             f"  </div>",
-            f"  <p>{description}</p>",
         ]
+
+        # #44 — lead the card with the plain-English business impact.
+        if impact:
+            parts.append(f"  <p class=\"impact-line\">{escape(impact)}</p>")
+
+        # #41 — three-part rule-based plain-English explanation.
+        if explanation:
+            parts.append(self._render_plain_explanation(explanation))
+
+        parts.append(f"  <p class=\"muted\">{description}</p>")
+
+        # #42 — inline glossary definitions for jargon in this finding.
+        if glossary:
+            terms = "; ".join(
+                f"<span class=\"glossary-term\" title=\"{escape(defn)}\">"
+                f"{escape(term.upper())}</span> — {escape(defn)}"
+                for term, defn in glossary.items()
+            )
+            parts.append(f"  <p class=\"glossary-list\">{terms}</p>")
 
         if endpoint:
             parts.append(
@@ -380,6 +468,24 @@ class HTMLReportRenderer:
         parts.append("</div>")
         return "\n".join(parts)
 
+    def _render_plain_explanation(self, explanation: dict) -> str:
+        """Render the three-part plain-English explanation block (#41)."""
+        rows = [
+            ("What it is", explanation.get("what_it_is", "")),
+            ("What an attacker could do", explanation.get("attacker_could", "")),
+            ("What to do", explanation.get("what_to_do", "")),
+        ]
+        items = []
+        for label, text in rows:
+            if not text:
+                continue
+            items.append(
+                f"<dt>{escape(label)}</dt><dd>{escape(text)}</dd>"
+            )
+        if not items:
+            return ""
+        return f"  <dl class=\"plain-explain\">{''.join(items)}</dl>"
+
     def _render_remediation_checklist(self, report_data: dict) -> str:
         """Render remediation checklist as a table."""
         header = f"<h2>{escape(ReportConfig.SECTION_REMEDIATION)}</h2>\n"
@@ -395,13 +501,18 @@ class HTMLReportRenderer:
                 severity, self._MUTED_TEXT_COLOR
             )
             fix_icon = "Yes" if item.get("fix_available") else "No"
+            # #44 — lead the row with the owner-facing consequence, and keep
+            # the technical category as a muted secondary label beneath it.
+            impact = escape(item.get("business_impact", ""))
+            category = escape(item.get("category", ""))
+            what_cell = impact or escape(item.get("action", ""))
             rows.append(
                 f"<tr>"
                 f"<td>{item.get('priority', '')}</td>"
                 f"<td><span class=\"severity-badge\" style=\"background: {severity_color};\">"
                 f"{escape(severity.upper())}</span></td>"
-                f"<td>{escape(item.get('category', ''))}</td>"
-                f"<td>{escape(item.get('action', ''))}</td>"
+                f"<td>{what_cell}"
+                f"<div class=\"muted\" style=\"font-size:12px;\">{category}</div></td>"
                 f"<td>{item.get('finding_count', 0)}</td>"
                 f"<td>{fix_icon}</td>"
                 f"</tr>"
@@ -410,8 +521,8 @@ class HTMLReportRenderer:
         return (
             header
             + "<table>\n"
-            + "<tr><th>#</th><th>Severity</th><th>Category</th>"
-            + "<th>Action</th><th>Findings</th><th>Fix Available</th></tr>\n"
+            + "<tr><th>#</th><th>Severity</th><th>What this means for you</th>"
+            + "<th>Findings</th><th>Fix Available</th></tr>\n"
             + "\n".join(rows)
             + "\n</table>"
         )
