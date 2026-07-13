@@ -222,8 +222,18 @@ export interface FixPlain {
   couldnt_fix: number;
 }
 
+/** A pull request opened by the remote-repo fix flow (#62). */
+export interface OpenedPR {
+  category: string;
+  title: string;
+  branch: string;
+  url: string;
+  finding_count: number;
+  is_low_batch: boolean;
+}
+
 export interface FixAllResult {
-  mode: "applied" | "plan" | "none";
+  mode: "applied" | "plan" | "none" | "pull_requests";
   applied?: boolean;
   branch?: string;
   base_branch?: string;
@@ -236,6 +246,11 @@ export interface FixAllResult {
   verification?: FixVerification | null;
   // Plain-language layer — the UI leads with this and hides git mechanics.
   plain?: FixPlain | null;
+  // Remote-repo pull-request flow
+  repo?: string;
+  summary?: string;
+  errors?: string[];
+  pull_requests?: OpenedPR[];
 }
 
 export interface FixAllEvent {
@@ -246,15 +261,33 @@ export interface FixAllEvent {
   result?: FixAllResult;
 }
 
-/** Start a batch fix job for a scan's findings. Returns a job id for streaming. */
+/** Options for the remote-repo → pull-request fix flow (GitHub only). */
+export interface FixAllOptions {
+  githubToken?: string;
+  prStrategy?: "per-category" | "per-file" | "per-finding" | "single";
+  maxPrs?: number;
+}
+
+/** Start a batch fix job for a scan's findings. Returns a job id for streaming.
+ *
+ * For a remote GitHub scan, pass a `githubToken` in `opts` to open per-category
+ * pull requests. The token is sent once to the local server for the push + PR
+ * and is never persisted. */
 export async function startFixAll(
   scanId: string,
-  severities?: string[]
+  severities?: string[],
+  opts?: FixAllOptions
 ): Promise<{ job_id: string }> {
   const res = await fetch(`${API_BASE}/api/fix-all`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ scan_id: scanId, severities }),
+    body: JSON.stringify({
+      scan_id: scanId,
+      severities,
+      github_token: opts?.githubToken,
+      pr_strategy: opts?.prStrategy,
+      max_prs: opts?.maxPrs,
+    }),
   });
   if (!res.ok) {
     let msg = res.statusText;
