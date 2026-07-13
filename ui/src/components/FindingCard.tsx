@@ -3,6 +3,7 @@
 import { useState, type MouseEvent } from "react";
 import { generateFix, type Finding, type FixResult } from "@/lib/api";
 import { SeverityBadge } from "./SeverityBadge";
+import { GlossaryText } from "./GlossaryText";
 
 export function FindingCard({ finding, index }: { finding: Finding; index: number }) {
   const [expanded, setExpanded] = useState(false);
@@ -43,7 +44,14 @@ export function FindingCard({ finding, index }: { finding: Finding; index: numbe
             <span className="text-xs text-text-muted/30">|</span>
             <span className="text-xs text-text-muted">{finding.source}</span>
           </div>
-          <h3 className="text-sm font-medium text-white">{finding.title}</h3>
+          <h3 className="text-sm font-medium text-white">
+            <GlossaryText text={finding.title} glossary={finding.glossary} />
+          </h3>
+          {finding.business_impact && (
+            <p className="text-xs text-text-muted mt-1 leading-relaxed">
+              {finding.business_impact}
+            </p>
+          )}
           {finding.code_location && (
             <p className="text-xs text-text-muted mt-1 font-mono">
               {finding.code_location.file_path}
@@ -61,6 +69,34 @@ export function FindingCard({ finding, index }: { finding: Finding; index: numbe
 
       {expanded && (
         <div className="border-t border-border px-4 pb-4 pt-3 space-y-4 text-sm">
+          {finding.plain_explanation && (
+            <div className="rounded-xl bg-bg-secondary/50 border border-border p-3 space-y-3">
+              <div>
+                <h4 className="text-text-accent text-xs font-semibold mb-1 uppercase tracking-wider">What it is</h4>
+                <GlossaryText
+                  text={finding.plain_explanation.what_it_is}
+                  glossary={finding.glossary}
+                  className="text-text-muted leading-relaxed"
+                />
+              </div>
+              <div>
+                <h4 className="text-text-accent text-xs font-semibold mb-1 uppercase tracking-wider">What an attacker could do</h4>
+                <GlossaryText
+                  text={finding.plain_explanation.attacker_could}
+                  glossary={finding.glossary}
+                  className="text-text-muted leading-relaxed"
+                />
+              </div>
+              <div>
+                <h4 className="text-text-accent text-xs font-semibold mb-1 uppercase tracking-wider">What to do</h4>
+                <GlossaryText
+                  text={finding.plain_explanation.what_to_do}
+                  glossary={finding.glossary}
+                  className="text-text-muted leading-relaxed"
+                />
+              </div>
+            </div>
+          )}
           {finding.description && (
             <div>
               <h4 className="text-text-accent text-xs font-semibold mb-1 uppercase tracking-wider">Description</h4>
@@ -120,6 +156,19 @@ export function FindingCard({ finding, index }: { finding: Finding; index: numbe
                   )}
                 </div>
               )}
+            </div>
+          )}
+          {finding.glossary && Object.keys(finding.glossary).length > 0 && (
+            <div>
+              <h4 className="text-text-accent text-xs font-semibold mb-1 uppercase tracking-wider">Jargon, in plain English</h4>
+              <dl className="space-y-1">
+                {Object.entries(finding.glossary).map(([term, def]) => (
+                  <div key={term} className="text-xs leading-relaxed">
+                    <dt className="inline font-medium text-text uppercase">{term}</dt>
+                    <dd className="inline text-text-muted"> — {def}</dd>
+                  </div>
+                ))}
+              </dl>
             </div>
           )}
           <div className="flex gap-4 text-xs text-text-muted pt-1">

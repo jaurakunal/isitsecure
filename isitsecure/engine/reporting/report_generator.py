@@ -7,6 +7,7 @@ into a serializable dict. HTML rendering is delegated to HTMLReportRenderer.
 from isitsecure.engine.constants import ReportConfig
 from isitsecure.engine.models import DeepFinding, DeepScanReport
 from isitsecure.engine.enums import SeverityLevel
+from isitsecure.engine.reporting import plain_english
 
 
 class ReportGenerator:
@@ -40,12 +41,26 @@ class ReportGenerator:
         Returns:
             A JSON-serializable dict containing the full report data.
         """
-        grade = self._calculate_grade(report)
+        grade_result = self._grade_result(report)
+        grade = grade_result.grade
+        verdict = plain_english.launch_verdict(
+            report.critical_count, report.high_count, report.medium_count
+        )
 
         return {
             "title": ReportConfig.REPORT_TITLE,
             "grade": grade,
-            "grade_label": ReportConfig.GRADE_LABELS.get(grade, ""),
+            # Base letter (A-F) drives coloring so A+/A/A- share a color.
+            "grade_base": plain_english.grade_base_letter(grade),
+            "grade_label": grade_result.label,
+            "grade_legend": grade_result.legend,
+            # #57 — launch-readiness verdict for the top of the report.
+            "launch_verdict": {
+                "ready": verdict.ready,
+                "headline": verdict.headline,
+                "detail": verdict.detail,
+                "line": verdict.as_line(),
+            },
             "scan_mode": report.scan_mode,
             "target_url": report.target_url,
             "repo_url": report.repo_url,
@@ -76,28 +91,32 @@ class ReportGenerator:
             "remediation_checklist": self._build_remediation_checklist(report),
         }
 
-    def _calculate_grade(self, report: DeepScanReport) -> str:
-        """Calculate security grade A-F based on finding severity counts.
+    def _low_count(self, report: DeepScanReport) -> int:
+        """Count findings with LOW severity."""
+        return sum(
+            1 for f in report.findings if f.severity == SeverityLevel.LOW
+        )
 
-        Grade logic:
-        - A: 0 critical, 0 high
-        - B: 0 critical, <= GRADE_B high
-        - C: 0 critical, <= GRADE_C high
-        - D: <= 1 critical, <= GRADE_D high
-        - F: Everything else
+    def _grade_result(self, report: DeepScanReport) -> "plain_english.GradeResult":
+        """Compute the granular grade (A+/A/A-/B+/B/C+/C/D/F) for a report.
+
+        Delegates to the rule-based ladder in ``plain_english`` so the CLI
+        and HTML report share one source of truth. Works with ``--llm none``.
         """
-        critical = report.critical_count
-        high = report.high_count
+        return plain_english.calculate_grade(
+            critical=report.critical_count,
+            high=report.high_count,
+            medium=report.medium_count,
+            low=self._low_count(report),
+        )
 
-        if critical == 0 and high == 0:
-            return "A"
-        if critical == 0 and high <= ReportConfig.GRADE_B:
-            return "B"
-        if critical == 0 and high <= ReportConfig.GRADE_C:
-            return "C"
-        if critical <= 1 and high <= ReportConfig.GRADE_D:
-            return "D"
-        return "F"
+    def _calculate_grade(self, report: DeepScanReport) -> str:
+        """Return the granular security grade string for a report.
+
+        Kept as the public entry point used by the CLI badge command and
+        tests. See ``plain_english.calculate_grade`` for the thresholds.
+        """
+        return self._grade_result(report).grade
 
     def _build_executive_summary(self, report: DeepScanReport, grade: str) -> str:
         """Build executive summary text based on grade and findings.
@@ -123,7 +142,10 @@ class ReportGenerator:
             "F": ReportConfig.SUMMARY_CRITICAL,
         }
 
-        template = summary_map.get(grade, ReportConfig.SUMMARY_CRITICAL)
+        # Granular grades (A+, A-, C+, ...) collapse to their base letter
+        # so the executive-summary template lookup still resolves.
+        base = plain_english.grade_base_letter(grade)
+        template = summary_map.get(base, ReportConfig.SUMMARY_CRITICAL)
         return template.format(
             target=target,
             total=total,
@@ -221,8 +243,11 @@ class ReportGenerator:
         Returns:
             List of JSON-serializable finding dicts.
         """
-        return [
-            {
+        formatted = []
+        for f in findings:
+            # #41 — rule-based, LLM-free plain-English explanation.
+            explanation = plain_english.explain_finding(f)
+            formatted.append({
                 "id": f.id,
                 "severity": f.severity.value,
                 "category": f.category.value,
@@ -240,9 +265,30 @@ class ReportGenerator:
                 else None,
                 "remediation_guidance": f.remediation_guidance,
                 "confidence": f.confidence,
-            }
-            for f in findings
-        ]
+                # #41 — three-part jargon-free explanation.
+                "plain_explanation": explanation.as_dict(),
+                # #44 — consequence-first, owner-facing one-liner.
+                "business_impact": plain_english.business_impact(f.category),
+                # #42 — glossary terms present in the title (for tooltips).
+                "glossary": self._glossary_for(f),
+            })
+        return formatted
+
+    @staticmethod
+    def _glossary_for(finding: DeepFinding) -> dict[str, str]:
+        """Return {term: definition} for glossary terms in a finding's title.
+
+        Powers inline tooltips / parentheticals in the report renderers.
+        """
+        import re
+
+        text = f"{finding.title} {finding.category.value}"
+        lowered = text.lower()
+        found: dict[str, str] = {}
+        for term, definition in plain_english.GLOSSARY.items():
+            if re.search(rf"\b{re.escape(term)}\b", lowered):
+                found[term] = definition
+        return found
 
     def _build_remediation_checklist(self, report: DeepScanReport) -> list[dict]:
         """Build prioritized remediation checklist.
@@ -268,12 +314,19 @@ class ReportGenerator:
             category_value = finding.category.value
             if category_value not in seen_categories:
                 seen_categories.add(category_value)
+                explanation = plain_english.explain_finding(finding)
                 checklist.append(
                     {
                         "priority": len(checklist) + 1,
                         "category": category_value,
                         "severity": finding.severity.value,
                         "action": finding.title,
+                        # #44 — lead each checklist row with the consequence
+                        # to the owner, not the technical category label.
+                        "business_impact": plain_english.business_impact(
+                            finding.category
+                        ),
+                        "what_to_do": explanation.what_to_do,
                         "finding_count": sum(
                             1
                             for f in report.findings

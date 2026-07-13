@@ -71,49 +71,37 @@ class TestReportGenerator:
     def setup_method(self) -> None:
         self.generator = ReportGenerator()
 
-    def test_grade_a(self) -> None:
-        """0 critical, 0 high -> grade A."""
-        report = _make_report(findings=[
-            _make_finding(severity=SeverityLevel.MEDIUM),
-            _make_finding(severity=SeverityLevel.LOW),
-        ])
+    def test_grade_a_when_clean(self) -> None:
+        """No findings -> grade A (A+ is reserved for hardened results)."""
+        report = _make_report(findings=[])
         result = self.generator.generate(report)
         assert result["grade"] == "A"
-        assert result["grade_label"] == ReportConfig.GRADE_LABELS["A"]
+        assert result["grade_base"] == "A"
+        assert result["grade_legend"]  # legend present (#43)
 
-    def test_grade_b(self) -> None:
-        """0 critical, 2 high -> grade B."""
+    def test_grade_d_on_any_high(self) -> None:
+        """Any high (no critical) -> grade D."""
         report = _make_report(findings=[
             _make_finding(severity=SeverityLevel.HIGH, title="High 1"),
             _make_finding(severity=SeverityLevel.HIGH, title="High 2"),
         ])
         result = self.generator.generate(report)
-        assert result["grade"] == "B"
+        assert result["grade"] == "D"
 
-    def test_grade_c(self) -> None:
-        """0 critical, 4 high -> grade C."""
+    def test_grade_c_on_three_medium(self) -> None:
+        """3+ medium (no critical/high) -> grade C."""
         findings = [
-            _make_finding(severity=SeverityLevel.HIGH, title=f"High {i}")
-            for i in range(4)
+            _make_finding(severity=SeverityLevel.MEDIUM, title=f"Med {i}")
+            for i in range(3)
         ]
         report = _make_report(findings=findings)
         result = self.generator.generate(report)
         assert result["grade"] == "C"
 
-    def test_grade_d(self) -> None:
-        """1 critical, 5 high -> grade D."""
-        findings = [
-            _make_finding(severity=SeverityLevel.CRITICAL, title="Crit 1"),
-        ] + [
-            _make_finding(severity=SeverityLevel.HIGH, title=f"High {i}")
-            for i in range(5)
-        ]
-        report = _make_report(findings=findings)
-        result = self.generator.generate(report)
-        assert result["grade"] == "D"
+    def test_grade_f_on_any_critical(self) -> None:
+        """Any critical -> grade F, with the new plain-language label."""
+        from isitsecure.engine.reporting import plain_english
 
-    def test_grade_f(self) -> None:
-        """Multiple critical -> grade F."""
         findings = [
             _make_finding(severity=SeverityLevel.CRITICAL, title=f"Crit {i}")
             for i in range(3)
@@ -124,7 +112,7 @@ class TestReportGenerator:
         report = _make_report(findings=findings)
         result = self.generator.generate(report)
         assert result["grade"] == "F"
-        assert result["grade_label"] == ReportConfig.GRADE_LABELS["F"]
+        assert result["grade_label"] == plain_english.GRADE_LADDER_LABELS["F"]
 
     def test_format_findings(self) -> None:
         """Findings should include all required fields."""
@@ -580,3 +568,104 @@ class TestRiskSummaryRendering:
     def test_themes_omitted_when_absent(self) -> None:
         html = self._render()
         assert "Security Themes" not in html
+
+
+# ---------------------------------------------------------------------------
+# Wave 1: vibe-coder readiness (rule-based, no LLM)
+# ---------------------------------------------------------------------------
+
+class TestVibeCoderReadiness:
+    """ReportGenerator surfaces the rule-based plain-English layer (#41-#57)."""
+
+    def setup_method(self) -> None:
+        self.generator = ReportGenerator()
+        self.renderer = HTMLReportRenderer()
+
+    def test_launch_verdict_blocks_on_critical(self) -> None:
+        report = _make_report(findings=[
+            _make_finding(severity=SeverityLevel.CRITICAL, title="Crit"),
+        ])
+        result = self.generator.generate(report)
+        verdict = result["launch_verdict"]
+        assert verdict["ready"] is False
+        assert "Not safe to launch" in verdict["headline"]
+        assert verdict["line"]  # combined line present
+
+    def test_launch_verdict_clean_is_ready(self) -> None:
+        result = self.generator.generate(_make_report(findings=[]))
+        assert result["launch_verdict"]["ready"] is True
+
+    def test_grade_is_granular_and_has_legend(self) -> None:
+        # Two mediums -> C+ on the new ladder.
+        report = _make_report(findings=[
+            _make_finding(severity=SeverityLevel.MEDIUM, title="M1"),
+            _make_finding(severity=SeverityLevel.MEDIUM, title="M2"),
+        ])
+        result = self.generator.generate(report)
+        assert result["grade"] == "C+"
+        assert result["grade_base"] == "C"
+        assert result["grade_legend"]
+
+    def test_findings_carry_plain_explanation_and_impact(self) -> None:
+        report = _make_report(findings=[
+            _make_finding(
+                severity=SeverityLevel.CRITICAL,
+                category=FindingCategory.IDOR,
+                title="IDOR in orders",
+            ),
+        ])
+        result = self.generator.generate(report)
+        f = result["critical_findings"][0]
+        assert set(f["plain_explanation"]) == {
+            "what_it_is", "attacker_could", "what_to_do",
+        }
+        assert f["business_impact"].strip()
+        # Glossary picks up IDOR from the title.
+        assert "idor" in f["glossary"]
+
+    def test_checklist_leads_with_business_impact(self) -> None:
+        report = _make_report(findings=[
+            _make_finding(
+                severity=SeverityLevel.CRITICAL,
+                category=FindingCategory.RLS_MISCONFIGURATION,
+                title="RLS disabled on predictions",
+            ),
+        ])
+        result = self.generator.generate(report)
+        item = result["remediation_checklist"][0]
+        assert item["business_impact"].strip()
+        assert item["what_to_do"].strip()
+
+    def test_html_renders_verdict_and_plain_english(self) -> None:
+        report = _make_report(findings=[
+            _make_finding(
+                severity=SeverityLevel.CRITICAL,
+                category=FindingCategory.IDOR,
+                title="IDOR in orders",
+            ),
+        ])
+        html = self.renderer.render(self.generator.generate(report))
+        # #57 verdict banner at the top.
+        assert 'class="verdict' in html
+        assert "Not safe to launch" in html
+        # #43 legend.
+        assert "safe to ship" in html
+        # #41 plain-English block.
+        assert "plain-explain" in html
+        assert "What an attacker could do" in html
+        # #42 glossary tooltip.
+        assert "glossary-term" in html
+
+    def test_html_verdict_go_when_clean(self) -> None:
+        html = self.renderer.render(self.generator.generate(_make_report(findings=[])))
+        assert 'class="verdict go"' in html
+
+    def test_html_grade_color_uses_base_letter(self) -> None:
+        """Granular grade C+ should still color using the C base color."""
+        report = _make_report(findings=[
+            _make_finding(severity=SeverityLevel.MEDIUM, title="M1"),
+            _make_finding(severity=SeverityLevel.MEDIUM, title="M2"),
+        ])
+        html = self.renderer.render(self.generator.generate(report))
+        assert ReportConfig.HTML_GRADE_COLORS["C"] in html
+        assert ">C+<" in html

@@ -6,13 +6,32 @@ const GRADE_COLORS: Record<string, { bg: string; text: string; shadow: string }>
   F: { bg: "rgba(220, 38, 38, 0.15)", text: "#DC2626", shadow: "0 0 20px rgba(220, 38, 38, 0.3)" },
 };
 
-export function GradeBadge({ grade, size = "lg" }: { grade: string; size?: "sm" | "lg" }) {
-  const colors = GRADE_COLORS[grade?.[0]] || GRADE_COLORS.C;
-  const sizeClass = size === "lg" ? "text-5xl w-24 h-24" : "text-xl w-10 h-10";
+/**
+ * Grade badge. Supports granular grades (A+, A-, C+, ...); color is chosen by
+ * the base letter so A+/A/A- all share the "A" color. Pass `base` explicitly
+ * (from the server's `grade_base`) to override; otherwise the first character
+ * of `grade` is used.
+ */
+export function GradeBadge({
+  grade,
+  base,
+  size = "lg",
+}: {
+  grade: string;
+  base?: string;
+  size?: "sm" | "lg";
+}) {
+  const colorKey = (base || grade?.[0] || "").toUpperCase();
+  const colors = GRADE_COLORS[colorKey] || GRADE_COLORS.C;
+  const sizeClass = size === "lg" ? "w-24 h-24" : "w-10 h-10";
+  // Granular grades ("A+", "C+") need smaller type to fit the badge.
+  const multiChar = (grade?.length || 0) > 1;
+  const textClass =
+    size === "lg" ? (multiChar ? "text-4xl" : "text-5xl") : multiChar ? "text-base" : "text-xl";
 
   return (
     <div
-      className={`${sizeClass} rounded-2xl border flex items-center justify-center font-bold`}
+      className={`${sizeClass} ${textClass} rounded-2xl border flex items-center justify-center font-bold shrink-0`}
       style={{
         background: colors.bg,
         color: colors.text,

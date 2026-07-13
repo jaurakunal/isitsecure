@@ -75,16 +75,49 @@ function ReportContent() {
     return true;
   });
 
-  const grade = report.owner_summary?.grade || "?";
+  // Prefer the granular Wave 1 grade (A+/A/A-/B+/...) from the server; fall
+  // back to the coarse owner-summary grade only if the enriched field is
+  // absent (older cached reports).
+  const grade = report.grade || report.owner_summary?.grade || "?";
+  const gradeBase = report.grade_base || grade?.[0];
+  const verdict = report.launch_verdict;
 
   return (
     <div className="max-w-5xl mx-auto px-6 py-8">
+      {/* Launch verdict — go/no-go banner at the very top */}
+      {verdict && (
+        <div
+          className={`mb-6 rounded-xl border p-4 ${
+            verdict.ready
+              ? "bg-low/10 border-low/40"
+              : "bg-critical/10 border-critical/40"
+          }`}
+        >
+          <p
+            className={`text-base font-semibold leading-snug ${
+              verdict.ready ? "text-low" : "text-critical"
+            }`}
+          >
+            {verdict.headline}
+          </p>
+          {verdict.detail && (
+            <p className="text-sm text-text-muted mt-1">{verdict.detail}</p>
+          )}
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-start gap-6 mb-8">
-        <GradeBadge grade={grade} />
+        <GradeBadge grade={grade} base={gradeBase} />
         <div className="flex-1">
           <h1 className="text-2xl font-bold text-white">Scan Report</h1>
-          <p className="text-text-muted text-sm mt-1">
+          {report.grade_label && (
+            <p className="text-sm text-text mt-1 font-medium">{report.grade_label}</p>
+          )}
+          {report.grade_legend && (
+            <p className="text-xs text-text-muted mt-0.5">{report.grade_legend}</p>
+          )}
+          <p className="text-text-muted text-sm mt-2">
             {report.target_url && <span>{report.target_url} | </span>}
             {report.repo_url && <span>{report.repo_url} | </span>}
             {report.framework && <span>{report.framework} | </span>}

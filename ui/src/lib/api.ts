@@ -21,6 +21,13 @@ export interface ScanEvent {
   data?: Record<string, unknown>;
 }
 
+/** Three-part, jargon-free explanation of a finding (Wave 1, rule-based). */
+export interface PlainExplanation {
+  what_it_is: string;
+  attacker_could: string;
+  what_to_do: string;
+}
+
 export interface Finding {
   id: string;
   source: string;
@@ -43,6 +50,18 @@ export interface Finding {
     line_number: number | null;
     code_snippet: string;
   } | null;
+  // --- Wave 1 plain-English enrichment (added by the server) ---
+  plain_explanation?: PlainExplanation | null;
+  business_impact?: string | null;
+  glossary?: Record<string, string> | null;
+}
+
+/** Go/no-go launch-readiness verdict shown at the top of the report. */
+export interface LaunchVerdict {
+  ready: boolean;
+  headline: string;
+  detail: string;
+  line: string;
 }
 
 export interface ScanReport {
@@ -69,6 +88,12 @@ export interface ScanReport {
   findings: Finding[];
   scanners_run: string[];
   scan_duration_seconds: number;
+  // --- Wave 1 plain-English enrichment (added by the server) ---
+  grade?: string;
+  grade_base?: string;
+  grade_label?: string;
+  grade_legend?: string;
+  launch_verdict?: LaunchVerdict | null;
   themes: { theme_id: string; title: string; severity: string; finding_count: number }[];
   token_usage: {
     input_tokens: number;
