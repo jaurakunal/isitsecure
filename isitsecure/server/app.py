@@ -126,15 +126,90 @@ async def stream_scan(scan_id: str):
     )
 
 
+def _enrich_report(raw_report: dict) -> dict:
+    """Return the raw scan report augmented with plain-English fields.
+
+    The React UI consumes the RAW ``DeepScanReport`` shape (flat ``findings``
+    list with ``scanner_name``/``code_location.file_path``/``owner_summary``).
+    We keep that shape intact and add the Wave 1 plain-English layer as a
+    SUPERSET so nothing existing breaks:
+
+    * top-level: ``grade``, ``grade_base``, ``grade_label``, ``grade_legend``,
+      and ``launch_verdict`` (``ready``/``headline``/``detail``/``line``).
+    * per finding (matched by ``id``): ``plain_explanation``,
+      ``business_impact`` and ``glossary``.
+
+    The enrichment is rule-based and LLM-free, so it works for every scan
+    (including ``--llm none``). Any failure falls back to the raw report so
+    the endpoint never 500s on a report that would otherwise render fine.
+    """
+    from isitsecure.engine.models import DeepScanReport
+    from isitsecure.engine.reporting.report_generator import ReportGenerator
+    from isitsecure.engine.reporting import plain_english
+
+    try:
+        report_model = DeepScanReport.model_validate(raw_report)
+        generated = ReportGenerator().generate(report_model)
+    except Exception:
+        logger.exception("Failed to enrich report; returning raw report")
+        return raw_report
+
+    # Shallow copy so we don't mutate the stored scan report.
+    enriched = dict(raw_report)
+
+    # Top-level plain-English / grade / launch-verdict fields (from generate()).
+    for key in ("grade", "grade_base", "grade_label", "grade_legend", "launch_verdict"):
+        if key in generated:
+            enriched[key] = generated[key]
+
+    # Per-finding enrichment derived directly from the raw findings via the
+    # rule-based plain_english layer. Deriving it here (rather than from
+    # generate()'s severity groups) guarantees EVERY finding is covered,
+    # including INFO-severity ones the report groups omit.
+    raw_findings = enriched.get("findings")
+    if isinstance(raw_findings, list):
+        merged_findings = []
+        for f in raw_findings:
+            merged = dict(f)
+            category = f.get("category", "")
+            try:
+                explanation = plain_english.explain_finding_category(category)
+                merged["plain_explanation"] = explanation.as_dict()
+                merged["business_impact"] = plain_english.business_impact(category)
+                merged["glossary"] = _glossary_for_finding(f, plain_english)
+            except Exception:
+                logger.exception("Failed to enrich finding %s", f.get("id"))
+            merged_findings.append(merged)
+        enriched["findings"] = merged_findings
+
+    return enriched
+
+
+def _glossary_for_finding(finding: dict, plain_english) -> dict[str, str]:
+    """Return {term: definition} for glossary terms in a finding's text.
+
+    Mirrors ReportGenerator._glossary_for but operates on the raw finding
+    dict so tooltips can be attached in the UI.
+    """
+    import re
+
+    text = f"{finding.get('title', '')} {finding.get('category', '')}".lower()
+    found: dict[str, str] = {}
+    for term, definition in plain_english.GLOSSARY.items():
+        if re.search(rf"\b{re.escape(term)}\b", text):
+            found[term] = definition
+    return found
+
+
 @app.get("/api/scan/{scan_id}/report")
 async def get_report(scan_id: str):
-    """Get the completed scan report."""
+    """Get the completed scan report (raw shape + plain-English superset)."""
     scan = _scans.get(scan_id)
     if not scan:
         raise HTTPException(status_code=404, detail="Scan not found")
     if not scan["report"]:
         raise HTTPException(status_code=202, detail="Scan still in progress")
-    return scan["report"]
+    return _enrich_report(scan["report"])
 
 
 @app.get("/api/scan/{scan_id}/report.html")
