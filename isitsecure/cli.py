@@ -881,7 +881,10 @@ def fix(
                 f"[dim](restore original: git checkout {net.location} -- .)[/dim]"
             )
         elif net.kind == "copy":
-            console.print(f"  Backup copy: [dim]{net.location}[/dim]")
+            console.print(
+                f"  Backup copy: [dim]{net.location}[/dim] "
+                f"[dim](restore original: cp -a {net.location}/. .)[/dim]"
+            )
         console.print("  1. Review changes: [dim]git diff[/dim]")
         console.print("  2. Run your tests")
         console.print(

@@ -470,9 +470,10 @@ class LLMTriageService:
         """Generate category-specific remediation guidance.
 
         Delegates to ``plain_english`` — the single source of truth for
-        remediation content (#47/#48) — so there is exactly one copy of
-        every string. When the report exposes the detected stack, this
-        also appends the stack-tailored, copy-pasteable snippet (#48).
+        remediation content (#47) — so there is exactly one copy of every
+        string. Triage works per-finding and has no access to the detected
+        stack (framework/backend live on the report), so the stack-tailored
+        snippet (#48) is added later by the report/UI renderers, which do.
         """
         return plain_english.remediation_detail(finding.category)
 
