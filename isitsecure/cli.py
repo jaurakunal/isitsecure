@@ -480,15 +480,42 @@ async def _run_scan(agent, **kwargs):
 
 
 def _print_report_table(report) -> None:
-    """Print a summary table of the scan report."""
-    # Grade
-    grade = "N/A"
-    if report.owner_summary:
-        grade = report.owner_summary.grade
+    """Print a summary table of the scan report.
 
+    Leads with a rule-based, LLM-free launch-readiness verdict and a
+    granular grade so a non-technical user gets a clear go/no-go up top,
+    then a business-impact-first findings table with plain-English framing.
+    """
+    from isitsecure.engine.reporting import plain_english
+
+    # #43 — granular grade (A+/A/A-/.../F) + plain-language legend.
+    grade_result = plain_english.calculate_grade(
+        critical=report.critical_count,
+        high=report.high_count,
+        medium=report.medium_count,
+        low=sum(
+            1 for f in report.findings
+            if (f.severity.value if hasattr(f.severity, "value") else f.severity)
+            == "low"
+        ),
+    )
+    grade = grade_result.grade
+
+    # #57 — go/no-go launch verdict, rendered first and most prominently.
+    verdict = plain_english.launch_verdict(
+        report.critical_count, report.high_count, report.medium_count
+    )
     console.print()
     console.print(Panel(
-        f"[bold]Grade: {grade}[/bold]  |  "
+        f"[bold]{verdict.headline}[/bold]"
+        + (f"\n{verdict.detail}" if verdict.detail else ""),
+        title="Launch Readiness",
+        border_style="green" if verdict.ready else "red",
+    ))
+
+    console.print(Panel(
+        f"[bold]Grade: {grade}[/bold] — {grade_result.label}\n"
+        f"[dim]{grade_result.legend}[/dim]\n\n"
         f"Critical: {report.critical_count}  |  "
         f"High: {report.high_count}  |  "
         f"Medium: {report.medium_count}  |  "
@@ -503,14 +530,14 @@ def _print_report_table(report) -> None:
         console.print("[green]No vulnerabilities found![/green]")
         return
 
-    # Findings table
+    # Findings table — business-impact-first (#44), with plain-English
+    # framing and inline glossary (#41, #42).
     table = Table(title="Findings", show_lines=True)
     table.add_column("#", style="dim", width=3)
-    table.add_column("Severity", width=10)
-    table.add_column("Category", width=20)
-    table.add_column("Title", width=50)
-    table.add_column("Scanner", width=20)
-    table.add_column("Source", width=12)
+    table.add_column("Severity", width=9)
+    table.add_column("What this means for you", width=48)
+    table.add_column("Category", width=18)
+    table.add_column("Detail", width=40)
 
     severity_colors = {
         "critical": "red bold",
@@ -520,21 +547,46 @@ def _print_report_table(report) -> None:
         "info": "dim",
     }
 
-    for i, finding in enumerate(report.findings, 1):
-        sev = finding.severity.value if hasattr(finding.severity, "value") else str(finding.severity)
+    # Order most-severe first so the biggest risks are read first.
+    severity_order = {
+        "critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4,
+    }
+
+    def _sev(f):
+        return f.severity.value if hasattr(f.severity, "value") else str(f.severity)
+
+    ordered = sorted(report.findings, key=lambda f: severity_order.get(_sev(f), 5))
+
+    seen_glossary: set[str] = set()
+    for i, finding in enumerate(ordered, 1):
+        sev = _sev(finding)
         color = severity_colors.get(sev, "white")
+        category = finding.category.value if hasattr(finding.category, "value") else str(finding.category)
+
+        # #44 — consequence-first summary column.
+        impact = plain_english.business_impact(finding.category)
+        # #42 — expand each acronym once on first use (parenthetical).
+        detail = finding.title[:40]
+        for term, definition in plain_english.GLOSSARY.items():
+            if term in seen_glossary:
+                continue
+            import re as _re
+            if _re.search(rf"\b{_re.escape(term)}\b", f"{finding.title} {category}".lower()):
+                detail = f"{detail}\n[dim]{term.upper()}: {definition}[/dim]"
+                seen_glossary.add(term)
+                break
+
         table.add_row(
             str(i),
             f"[{color}]{sev.upper()}[/{color}]",
-            str(finding.category.value if hasattr(finding.category, "value") else finding.category),
-            finding.title[:50],
-            finding.scanner_name or "",
-            str(finding.source.value if hasattr(finding.source, "value") else finding.source),
+            impact,
+            category,
+            detail,
         )
 
     console.print(table)
 
-    # Owner summary
+    # Owner summary (LLM layer, if present) — layers on top of the baseline.
     if report.owner_summary and report.owner_summary.risk_summary:
         console.print()
         console.print(Panel(
@@ -819,7 +871,8 @@ def _generate_badge_svg(grade: str, critical: int, high: int, total: int) -> str
         "D": "#fe7d37",   # Orange
         "F": "#e05d44",   # Red
     }
-    color = GRADE_COLORS.get(grade, "#9f9f9f")
+    # Grades are now granular (A+, A-, C+, ...); color by the base letter.
+    color = GRADE_COLORS.get(grade[:1], "#9f9f9f")
 
     label = "security"
     value = grade
