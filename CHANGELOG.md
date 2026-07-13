@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0](https://github.com/jaurakunal/isitsecure/compare/v0.2.1...v0.3.0) (2026-07-13)
+
+
+### Features
+
+* **cli:** friendlier first-run — pre-flight checks, human errors, smart mode ([ab864d6](https://github.com/jaurakunal/isitsecure/commit/ab864d63f15b86a01b331e0d7728f9b160f2f2d4))
+* **cli:** lead scan results with launch verdict + plain-English framing ([c1b0efa](https://github.com/jaurakunal/isitsecure/commit/c1b0efabcc6575d53040b2a389419b7dbc5cc7a6))
+* **reporting:** add rule-based plain-English framing layer (no LLM) ([3732422](https://github.com/jaurakunal/isitsecure/commit/373242280b1ad0e39ed7acdedd72cded590c9301))
+* **reporting:** wire plain-English layer into report + HTML output ([2f40003](https://github.com/jaurakunal/isitsecure/commit/2f40003c4a1e9d25fa02c0a636ab78dbf6dbe773))
+* **server,ui:** surface Wave 1 plain-English layer in the web report ([876cb1e](https://github.com/jaurakunal/isitsecure/commit/876cb1e0e413eb8b67ce266cd497cd28381dfbc1))
+
 ## [0.2.1](https://github.com/jaurakunal/isitsecure/compare/v0.2.0...v0.2.1) (2026-07-12)
 
 
