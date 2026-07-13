@@ -46,6 +46,9 @@ class ReportGenerator:
         verdict = plain_english.launch_verdict(
             report.critical_count, report.high_count, report.medium_count
         )
+        # Detected stack — threaded into per-finding remediation so DAST/
+        # config findings get stack-tailored, copy-pasteable snippets (#48).
+        stack = (report.framework, report.backend)
 
         return {
             "title": ReportConfig.REPORT_TITLE,
@@ -71,22 +74,28 @@ class ReportGenerator:
             "themes": self._build_themes(report),
             "finding_counts": self._build_finding_counts(report),
             "critical_findings": self._format_findings(
-                [f for f in report.findings if f.severity == SeverityLevel.CRITICAL]
+                [f for f in report.findings if f.severity == SeverityLevel.CRITICAL],
+                stack,
             ),
             "high_findings": self._format_findings(
-                [f for f in report.findings if f.severity == SeverityLevel.HIGH]
+                [f for f in report.findings if f.severity == SeverityLevel.HIGH],
+                stack,
             ),
             "medium_findings": self._format_findings(
-                [f for f in report.findings if f.severity == SeverityLevel.MEDIUM]
+                [f for f in report.findings if f.severity == SeverityLevel.MEDIUM],
+                stack,
             ),
             "low_findings": self._format_findings(
-                [f for f in report.findings if f.severity == SeverityLevel.LOW]
+                [f for f in report.findings if f.severity == SeverityLevel.LOW],
+                stack,
             ),
-            "dast_findings": self._format_findings(report.dast_findings),
-            "sast_findings": self._format_findings(report.sast_findings),
+            "dast_findings": self._format_findings(report.dast_findings, stack),
+            "sast_findings": self._format_findings(report.sast_findings, stack),
             "cross_referenced_findings": self._format_findings(
-                report.cross_referenced_findings
+                report.cross_referenced_findings, stack
             ),
+            "framework": report.framework,
+            "backend": report.backend,
             "endpoints_discovered": report.total_endpoints_discovered,
             "remediation_checklist": self._build_remediation_checklist(report),
         }
@@ -234,19 +243,42 @@ class ReportGenerator:
             "cross_referenced": len(report.cross_referenced_findings),
         }
 
-    def _format_findings(self, findings: list[DeepFinding]) -> list[dict]:
+    def _format_findings(
+        self,
+        findings: list[DeepFinding],
+        stack: tuple[str, str] = ("", ""),
+    ) -> list[dict]:
         """Format findings for report output.
 
         Args:
             findings: List of DeepFinding objects to format.
+            stack: ``(framework, backend)`` for the scanned app, used to pick
+                stack-tailored remediation snippets (#48).
 
         Returns:
             List of JSON-serializable finding dicts.
         """
+        framework, backend = stack
         formatted = []
         for f in findings:
             # #41 — rule-based, LLM-free plain-English explanation.
             explanation = plain_english.explain_finding(f)
+            # #47/#48 — specific + stack-tailored remediation (single source
+            # of truth). Prefer the finding's own guidance (LLM-enriched) when
+            # present, else fall back to the rule-based detail.
+            remediation = (
+                f.remediation_guidance
+                or plain_english.remediation_detail(
+                    f.category, framework, backend
+                )
+            )
+            # #48 — the stack-tailored snippet, exposed separately so the UI
+            # can render it as a distinct copy-pasteable block.
+            snippet = plain_english.framework_remediation(
+                f.category, framework, backend
+            )
+            # #49 — numbered step-by-step walkthrough for the top-4 fixes.
+            walkthrough = plain_english.walkthrough_for(f.category)
             formatted.append({
                 "id": f.id,
                 "severity": f.severity.value,
@@ -263,12 +295,16 @@ class ReportGenerator:
                 }
                 if f.code_location
                 else None,
-                "remediation_guidance": f.remediation_guidance,
+                "remediation_guidance": remediation,
+                # #48 — stack-tailored, copy-pasteable snippet (or None).
+                "remediation_snippet": snippet,
                 "confidence": f.confidence,
                 # #41 — three-part jargon-free explanation.
                 "plain_explanation": explanation.as_dict(),
                 # #44 — consequence-first, owner-facing one-liner.
                 "business_impact": plain_english.business_impact(f.category),
+                # #49 — expandable "How to fix, step by step" (or None).
+                "walkthrough": walkthrough.as_dict() if walkthrough else None,
                 # #42 — glossary terms present in the title (for tooltips).
                 "glossary": self._glossary_for(f),
             })

@@ -166,6 +166,10 @@ def _enrich_report(raw_report: dict) -> dict:
     # rule-based plain_english layer. Deriving it here (rather than from
     # generate()'s severity groups) guarantees EVERY finding is covered,
     # including INFO-severity ones the report groups omit.
+    # Detected stack drives the stack-tailored remediation snippets (#48).
+    framework = enriched.get("framework", "")
+    backend = enriched.get("backend", "")
+
     raw_findings = enriched.get("findings")
     if isinstance(raw_findings, list):
         merged_findings = []
@@ -177,6 +181,20 @@ def _enrich_report(raw_report: dict) -> dict:
                 merged["plain_explanation"] = explanation.as_dict()
                 merged["business_impact"] = plain_english.business_impact(category)
                 merged["glossary"] = _glossary_for_finding(f, plain_english)
+                # #47/#48 — specific + stack-tailored remediation. Prefer the
+                # finding's own (LLM-enriched) guidance when present.
+                merged["remediation_guidance"] = (
+                    f.get("remediation_guidance")
+                    or plain_english.remediation_detail(
+                        category, framework, backend
+                    )
+                )
+                merged["remediation_snippet"] = plain_english.framework_remediation(
+                    category, framework, backend
+                )
+                # #49 — numbered step-by-step walkthrough for the top-4 fixes.
+                walk = plain_english.walkthrough_for(category)
+                merged["walkthrough"] = walk.as_dict() if walk else None
             except Exception:
                 logger.exception("Failed to enrich finding %s", f.get("id"))
             merged_findings.append(merged)
