@@ -20,6 +20,18 @@ It provides the rule-based capabilities behind Wave 1:
 * :func:`launch_verdict` — the go/no-go launch-readiness line rendered at
   the very top of every report.  (#57)
 
+It is also the single source of truth for Wave 2 remediation:
+
+* :func:`remediation_for` / :data:`_CATEGORY_REMEDIATION` — specific,
+  concrete fix guidance for every ``FindingCategory`` (no generic
+  fallback for any of the 18 known categories).  (#47)
+* :func:`framework_remediation` / :func:`remediation_detail` — stack-tailored,
+  copy-pasteable snippets for config/DAST findings (Express / Next / FastAPI
+  / Django / Flask / Supabase), with a generic fallback.  (#48)
+* :func:`walkthrough_for` / :data:`_WALKTHROUGHS` — numbered step-by-step
+  walkthroughs for the top-4 fixes (enable Supabase RLS · lock down CORS ·
+  add an ownership check · rotate an exposed secret).  (#49)
+
 The existing LLM owner-summary can still layer on top of this baseline, but
 this baseline is human-readable on its own and works with ``--llm none``.
 """
@@ -506,6 +518,565 @@ def business_impact(category: FindingCategory | str) -> str:
     """Return the consequence-first, owner-facing one-liner for a category."""
     key = category.value if isinstance(category, FindingCategory) else str(category)
     return _CATEGORY_BUSINESS_IMPACT.get(key, _GENERIC_BUSINESS_IMPACT)
+
+
+# ---------------------------------------------------------------------------
+# #47 — Specific remediation guidance for ALL 18 categories
+# ---------------------------------------------------------------------------
+#
+# This is the SINGLE SOURCE OF TRUTH for remediation guidance. The triage
+# service (``llm_triage_service._category_remediation``) and the report/CLI/UI
+# renderers all delegate here so there is exactly one copy of every string.
+#
+# Each entry is SPECIFIC and concrete: it names the actual control to apply,
+# the command to run, or the pattern to adopt — never a generic "review this
+# finding". Guidance is rule-based and works with ``--llm none``.
+
+
+def _key(category: FindingCategory | str) -> str:
+    """Normalise a category (enum or string) to its ``.value`` key."""
+    return category.value if isinstance(category, FindingCategory) else str(category)
+
+
+_CATEGORY_REMEDIATION: dict[str, str] = {
+    FindingCategory.EXPOSED_SECRETS.value: (
+        "Rotate the exposed secret now so the leaked value stops working, "
+        "then move it out of code and into an environment variable or a "
+        "secrets manager (e.g. AWS Secrets Manager, Doppler, Vault). Scrub "
+        "it from git history (git filter-repo / BFG) and, if it shipped to "
+        "the browser, from your built bundle. Add a pre-commit secret scanner "
+        "(gitleaks) so it can't be re-committed."
+    ),
+    FindingCategory.MISSING_HEADERS.value: (
+        "Add the standard security response headers — Content-Security-Policy, "
+        "X-Content-Type-Options: nosniff, X-Frame-Options: DENY (or "
+        "frame-ancestors 'none' in CSP), Strict-Transport-Security, and "
+        "Referrer-Policy. Most stacks set these with one middleware (e.g. "
+        "Helmet on Express, next.config headers() on Next.js, "
+        "SecurityMiddleware on Django)."
+    ),
+    FindingCategory.DEAD_FUNCTIONALITY.value: (
+        "Delete the unused code path, route, or feature flag rather than "
+        "leaving it disabled — dead code still ships and still runs if "
+        "reached. Remove its routes, its tests, and any config that keeps "
+        "it wired up, then redeploy so the attack surface actually shrinks."
+    ),
+    FindingCategory.DEPENDENCY_VULNERABILITY.value: (
+        "Upgrade the affected package to the first patched version listed in "
+        "the advisory. Run your package manager's audit-and-fix "
+        "(`npm audit fix`, `pnpm audit --fix`, `pip-audit`, or "
+        "`poetry update <pkg>`), verify nothing breaks, and redeploy. If no "
+        "fix exists yet, pin to a safe version or apply the advisory's "
+        "workaround."
+    ),
+    FindingCategory.CLIENT_EXPOSURE.value: (
+        "Move the sensitive value off the client. Keep secrets and private "
+        "data server-side and expose only what the UI must render, through "
+        "an authenticated API. In bundlers, only variables with a public "
+        "prefix (NEXT_PUBLIC_, VITE_, REACT_APP_) should ever reach the "
+        "browser — audit those, and rotate anything already leaked."
+    ),
+    FindingCategory.SOURCE_MAP_LEAK.value: (
+        "Stop publishing source maps to production. Turn off source-map "
+        "emission for prod builds (`productionBrowserSourceMaps: false` in "
+        "Next.js, `build.sourcemap: false` in Vite, `devtool: false` in "
+        "Webpack), or upload them privately to your error tracker (Sentry) "
+        "and block `.map` files at the CDN/edge so they aren't publicly "
+        "downloadable."
+    ),
+    FindingCategory.AUTH_WEAKNESS.value: (
+        "Add a server-side authentication and authorization check on the "
+        "affected route: verify the request carries a valid session/token, "
+        "then confirm that user is allowed to perform this action on this "
+        "specific resource. Enforce it in middleware or a shared guard, not "
+        "per-handler, and back it with a database-level constraint so it "
+        "can't be bypassed."
+    ),
+    FindingCategory.INJECTION_RISK.value: (
+        "Never build queries or commands by concatenating user input. Use "
+        "parameterized queries / prepared statements (or your ORM's safe "
+        "query builder), and validate input against an allow-list of the "
+        "shape you expect. For shell calls, pass an argument array instead "
+        "of a string and avoid a shell entirely where possible."
+    ),
+    FindingCategory.RLS_MISCONFIGURATION.value: (
+        "Enable Row-Level Security on the table (`ALTER TABLE <t> ENABLE ROW "
+        "LEVEL SECURITY;`) and add a policy that scopes every row to its "
+        "owner, e.g. `USING (auth.uid() = user_id)`. Add policies for each "
+        "of SELECT/INSERT/UPDATE/DELETE you allow — with RLS on and no "
+        "policy, access is denied by default, which is the safe state."
+    ),
+    FindingCategory.UNENCRYPTED_PII.value: (
+        "Encrypt personal data at rest. Turn on your database's encryption "
+        "(e.g. Postgres pgcrypto or a managed KMS-backed volume) and apply "
+        "application-level field encryption to the most sensitive columns. "
+        "Store keys in a KMS, not in the app, and confirm backups are "
+        "encrypted too — this is required for GDPR/CCPA."
+    ),
+    FindingCategory.CORS_MISCONFIGURATION.value: (
+        "Replace any wildcard `Access-Control-Allow-Origin: *` (and any "
+        "origin-reflecting logic) with an explicit allow-list of the exact "
+        "origins you trust. Never combine a wildcard origin with "
+        "`Allow-Credentials: true`. Limit allowed methods and headers to "
+        "what your API actually uses."
+    ),
+    FindingCategory.OPEN_REDIRECT.value: (
+        "Don't redirect to a raw user-supplied URL. Validate the target "
+        "against an allow-list of in-app paths (or a set of trusted hosts), "
+        "and prefer redirecting to a relative path that starts with a single "
+        "`/`. Reject absolute URLs, protocol-relative `//evil.com`, and "
+        "anything that resolves off-site."
+    ),
+    FindingCategory.EXPOSED_API_ENDPOINT.value: (
+        "Put the endpoint behind authentication and authorization, or block "
+        "it at the network edge (firewall, security group, WAF, or an "
+        "ingress allow-list) if it isn't meant to be public. Remove any "
+        "debug/admin/internal route from the public deployment entirely."
+    ),
+    FindingCategory.MISSING_SRI.value: (
+        "Add a Subresource Integrity hash to every third-party <script> and "
+        "<link> tag: `integrity=\"sha384-...\" crossorigin=\"anonymous\"`. "
+        "Generate the hash with `openssl dgst -sha384 -binary file.js | "
+        "openssl base64 -A`. Better still, self-host the asset so its "
+        "contents can't change under you."
+    ),
+    FindingCategory.MIXED_CONTENT.value: (
+        "Load every subresource over HTTPS — change `http://` URLs for "
+        "scripts, styles, images, and fetch calls to `https://` (or "
+        "protocol-relative `//`). Add `Content-Security-Policy: "
+        "upgrade-insecure-requests` so the browser auto-upgrades any "
+        "remaining HTTP requests, and fix the origin of the asset."
+    ),
+    FindingCategory.INFO_DISCLOSURE.value: (
+        "Return only the fields the client needs — apply explicit field "
+        "projection / a serializer allow-list and strip internal IDs and "
+        "metadata. Disable stack traces and verbose errors in production "
+        "(generic 500 responses), and remove server/framework version "
+        "banners from responses."
+    ),
+    FindingCategory.IDOR.value: (
+        "On every request that takes a record ID, confirm the authenticated "
+        "user owns (or is authorized for) that specific record before "
+        "returning or modifying it — e.g. scope the query with "
+        "`WHERE id = :id AND user_id = :current_user`. Prefer that a lookup "
+        "for someone else's record returns 404/403, and consider "
+        "non-guessable IDs (UUIDs) as defence in depth."
+    ),
+    FindingCategory.PRIVILEGE_ESCALATION.value: (
+        "Enforce the required role on the server for every privileged action "
+        "— never trust a role, flag, or `isAdmin` value sent by the client. "
+        "Check the role against the session/token on the backend, keep the "
+        "authoritative role in the database, and deny by default when the "
+        "role is missing or unrecognised."
+    ),
+}
+
+
+_GENERIC_REMEDIATION = (
+    "Apply the appropriate security control for this issue type: validate "
+    "and restrict the affected input, action, or exposure, and confirm the "
+    "fix on the running app before launch."
+)
+
+
+def remediation_for(category: FindingCategory | str) -> str:
+    """Return the specific, concrete remediation guidance for a category.
+
+    Single source of truth for #47. Falls back to a safe generic string only
+    for a genuinely unknown category (never for one of the 18 known ones).
+    """
+    return _CATEGORY_REMEDIATION.get(_key(category), _GENERIC_REMEDIATION)
+
+
+# ---------------------------------------------------------------------------
+# #48 — Framework-aware remediation for DAST (config/instructional) findings
+# ---------------------------------------------------------------------------
+#
+# DAST findings have no code location, so their fix is configuration or an
+# instruction. Where we know the stack (framework/backend from the report), we
+# emit a concrete, copy-pasteable snippet TAILORED to it; otherwise we return
+# ``None`` and callers fall back to the generic ``remediation_for`` text.
+#
+# Keyed as _STACK_REMEDIATION[category][stack_key]. ``stack_key`` matches a
+# FrameworkType / BackendType ``.value`` (e.g. "express", "nextjs", "fastapi",
+# "django", "flask", "supabase").
+
+
+def _normalize_stack(value: str | None) -> str:
+    """Lower-case, trimmed stack token; '' when unknown/empty."""
+    v = (value or "").strip().lower()
+    return "" if v in ("", "unknown", "custom", "none") else v
+
+
+# Category -> { framework_or_backend_key -> copy-pasteable snippet }.
+_STACK_REMEDIATION: dict[str, dict[str, str]] = {
+    FindingCategory.MISSING_HEADERS.value: {
+        "express": (
+            "Install and mount Helmet — it sets the core security headers in "
+            "one line:\n"
+            "    import helmet from 'helmet';\n"
+            "    app.use(helmet());"
+        ),
+        "nextjs": (
+            "Add the headers in next.config.js so they apply to every route:\n"
+            "    async headers() {\n"
+            "      return [{ source: '/:path*', headers: [\n"
+            "        { key: 'X-Content-Type-Options', value: 'nosniff' },\n"
+            "        { key: 'X-Frame-Options', value: 'DENY' },\n"
+            "        { key: 'Strict-Transport-Security',\n"
+            "          value: 'max-age=63072000; includeSubDomains; preload' },\n"
+            "        { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },\n"
+            "      ]}];\n"
+            "    }"
+        ),
+        "fastapi": (
+            "Add a middleware that stamps the headers on every response:\n"
+            "    @app.middleware('http')\n"
+            "    async def security_headers(request, call_next):\n"
+            "        resp = await call_next(request)\n"
+            "        resp.headers['X-Content-Type-Options'] = 'nosniff'\n"
+            "        resp.headers['X-Frame-Options'] = 'DENY'\n"
+            "        resp.headers['Strict-Transport-Security'] = 'max-age=63072000; includeSubDomains'\n"
+            "        return resp"
+        ),
+        "flask": (
+            "Set the headers in an after_request hook (or use flask-talisman):\n"
+            "    @app.after_request\n"
+            "    def set_secure_headers(resp):\n"
+            "        resp.headers['X-Content-Type-Options'] = 'nosniff'\n"
+            "        resp.headers['X-Frame-Options'] = 'DENY'\n"
+            "        resp.headers['Strict-Transport-Security'] = 'max-age=63072000; includeSubDomains'\n"
+            "        return resp"
+        ),
+        "django": (
+            "Django ships these — set in settings.py:\n"
+            "    SECURE_HSTS_SECONDS = 63072000\n"
+            "    SECURE_CONTENT_TYPE_NOSNIFF = True\n"
+            "    X_FRAME_OPTIONS = 'DENY'\n"
+            "    SECURE_SSL_REDIRECT = True\n"
+            "and keep django.middleware.security.SecurityMiddleware enabled."
+        ),
+    },
+    FindingCategory.CORS_MISCONFIGURATION.value: {
+        "express": (
+            "Configure the cors package with an explicit origin allow-list — "
+            "not '*':\n"
+            "    import cors from 'cors';\n"
+            "    app.use(cors({\n"
+            "      origin: ['https://app.example.com'],\n"
+            "      credentials: true,\n"
+            "    }));"
+        ),
+        "nextjs": (
+            "In your route handler, echo back only allowed origins — never '*' "
+            "with credentials:\n"
+            "    const ALLOWED = new Set(['https://app.example.com']);\n"
+            "    const origin = req.headers.get('origin') ?? '';\n"
+            "    if (ALLOWED.has(origin)) {\n"
+            "      res.headers.set('Access-Control-Allow-Origin', origin);\n"
+            "      res.headers.set('Access-Control-Allow-Credentials', 'true');\n"
+            "    }"
+        ),
+        "fastapi": (
+            "Use CORSMiddleware with explicit origins (a list, never ['*'] "
+            "alongside credentials):\n"
+            "    from fastapi.middleware.cors import CORSMiddleware\n"
+            "    app.add_middleware(CORSMiddleware,\n"
+            "        allow_origins=['https://app.example.com'],\n"
+            "        allow_credentials=True,\n"
+            "        allow_methods=['GET', 'POST'],\n"
+            "        allow_headers=['Authorization', 'Content-Type'])"
+        ),
+        "flask": (
+            "Use flask-cors scoped to specific origins:\n"
+            "    from flask_cors import CORS\n"
+            "    CORS(app, origins=['https://app.example.com'],\n"
+            "         supports_credentials=True)"
+        ),
+        "django": (
+            "With django-cors-headers, allow-list explicit origins in "
+            "settings.py (never CORS_ALLOW_ALL_ORIGINS = True with "
+            "credentials):\n"
+            "    CORS_ALLOWED_ORIGINS = ['https://app.example.com']\n"
+            "    CORS_ALLOW_CREDENTIALS = True"
+        ),
+    },
+    FindingCategory.OPEN_REDIRECT.value: {
+        "express": (
+            "Validate the redirect target against an allow-list before "
+            "res.redirect():\n"
+            "    const ALLOWED = new Set(['/dashboard', '/settings']);\n"
+            "    const to = String(req.query.next || '');\n"
+            "    res.redirect(ALLOWED.has(to) ? to : '/');"
+        ),
+        "nextjs": (
+            "Only redirect to in-app relative paths; reject absolute/"
+            "protocol-relative URLs:\n"
+            "    const to = searchParams.get('next') ?? '/';\n"
+            "    const safe = to.startsWith('/') && !to.startsWith('//');\n"
+            "    redirect(safe ? to : '/');"
+        ),
+        "fastapi": (
+            "Allow-list redirect targets rather than trusting the parameter:\n"
+            "    ALLOWED = {'/dashboard', '/settings'}\n"
+            "    target = request.query_params.get('next', '/')\n"
+            "    return RedirectResponse(target if target in ALLOWED else '/')"
+        ),
+        "flask": (
+            "Check the target is a local path before redirecting:\n"
+            "    from urllib.parse import urlparse\n"
+            "    target = request.args.get('next', '/')\n"
+            "    if urlparse(target).netloc or not target.startswith('/'):\n"
+            "        target = '/'\n"
+            "    return redirect(target)"
+        ),
+        "django": (
+            "Use Django's built-in safe-URL check:\n"
+            "    from django.utils.http import url_has_allowed_host_and_scheme\n"
+            "    nxt = request.GET.get('next', '')\n"
+            "    if not url_has_allowed_host_and_scheme(nxt, {request.get_host()}):\n"
+            "        nxt = '/'\n"
+            "    return redirect(nxt)"
+        ),
+    },
+    FindingCategory.IDOR.value: {
+        "express": (
+            "Scope the lookup to the current user so another user's ID can't "
+            "be fetched:\n"
+            "    const row = await db.order.findFirst({\n"
+            "      where: { id: req.params.id, userId: req.user.id },\n"
+            "    });\n"
+            "    if (!row) return res.sendStatus(404);"
+        ),
+        "nextjs": (
+            "In the route handler, filter by the session user, not just the "
+            "id:\n"
+            "    const session = await auth();\n"
+            "    const row = await db.order.findFirst({\n"
+            "      where: { id: params.id, userId: session.user.id },\n"
+            "    });\n"
+            "    if (!row) return new Response(null, { status: 404 });"
+        ),
+        "fastapi": (
+            "Add the ownership predicate to the query and 404 on a miss:\n"
+            "    row = db.query(Order).filter(\n"
+            "        Order.id == order_id,\n"
+            "        Order.user_id == current_user.id,\n"
+            "    ).first()\n"
+            "    if row is None:\n"
+            "        raise HTTPException(status_code=404)"
+        ),
+        "django": (
+            "Filter the queryset by the request user (or use get_object_or_404 "
+            "with the owner):\n"
+            "    order = get_object_or_404(Order, id=pk, user=request.user)"
+        ),
+        "supabase": (
+            "Let Row-Level Security enforce ownership at the database so the "
+            "id alone can't reach another user's row:\n"
+            "    alter table orders enable row level security;\n"
+            "    create policy owner_read on orders\n"
+            "      for select using (auth.uid() = user_id);"
+        ),
+    },
+    FindingCategory.PRIVILEGE_ESCALATION.value: {
+        "express": (
+            "Gate privileged routes with a server-side role check middleware "
+            "— never trust a client-sent role:\n"
+            "    const requireAdmin = (req, res, next) =>\n"
+            "      req.user?.role === 'admin' ? next() : res.sendStatus(403);\n"
+            "    app.post('/admin/:x', requireAdmin, handler);"
+        ),
+        "nextjs": (
+            "Check the role from the server session inside the handler:\n"
+            "    const session = await auth();\n"
+            "    if (session?.user.role !== 'admin')\n"
+            "      return new Response(null, { status: 403 });"
+        ),
+        "fastapi": (
+            "Enforce the role with a dependency on every privileged route:\n"
+            "    def require_admin(user=Depends(get_current_user)):\n"
+            "        if user.role != 'admin':\n"
+            "            raise HTTPException(status_code=403)\n"
+            "        return user\n"
+            "    @app.post('/admin/x')\n"
+            "    def action(admin=Depends(require_admin)): ..."
+        ),
+        "django": (
+            "Protect the view with a permission check against the DB role:\n"
+            "    from django.contrib.auth.decorators import "
+            "permission_required\n"
+            "    @permission_required('app.admin_action', raise_exception=True)\n"
+            "    def admin_action(request): ..."
+        ),
+    },
+    FindingCategory.MISSING_SRI.value: {
+        "nextjs": (
+            "Next.js can add SRI to its own build output — enable it, and "
+            "self-host third-party scripts where possible:\n"
+            "    // next.config.js\n"
+            "    experimental: { sri: { algorithm: 'sha384' } }\n"
+            "For external <script> tags, add integrity + crossorigin by hand."
+        ),
+    },
+    FindingCategory.SOURCE_MAP_LEAK.value: {
+        "nextjs": (
+            "Disable browser source maps for production builds:\n"
+            "    // next.config.js\n"
+            "    module.exports = { productionBrowserSourceMaps: false };"
+        ),
+    },
+    FindingCategory.CLIENT_EXPOSURE.value: {
+        "nextjs": (
+            "Only NEXT_PUBLIC_-prefixed env vars are sent to the browser — "
+            "rename anything sensitive to drop that prefix and read it only in "
+            "server components / route handlers, then rotate the leaked value."
+        ),
+    },
+}
+
+
+def framework_remediation(
+    category: FindingCategory | str,
+    framework: str | None = None,
+    backend: str | None = None,
+) -> str | None:
+    """Return a stack-tailored remediation snippet for a DAST category, or None.
+
+    Prefers a match on ``backend`` (e.g. Supabase RLS/IDOR) then ``framework``
+    (Express/Next/FastAPI/…). Returns ``None`` when the stack is unknown or no
+    tailored snippet exists — callers then fall back to ``remediation_for``.
+    """
+    per_category = _STACK_REMEDIATION.get(_key(category))
+    if not per_category:
+        return None
+    for token in (_normalize_stack(backend), _normalize_stack(framework)):
+        if token and token in per_category:
+            return per_category[token]
+    return None
+
+
+def remediation_detail(
+    category: FindingCategory | str,
+    framework: str | None = None,
+    backend: str | None = None,
+) -> str:
+    """Full remediation text: generic guidance + a stack-tailored snippet.
+
+    This is the one call renderers use. It always returns the specific #47
+    guidance, and appends the #48 stack-tailored, copy-pasteable snippet when
+    the framework/backend is known and a snippet exists.
+    """
+    base = remediation_for(category)
+    snippet = framework_remediation(category, framework, backend)
+    if snippet:
+        return f"{base}\n\nFor your stack:\n{snippet}"
+    return base
+
+
+# ---------------------------------------------------------------------------
+# #49 — Step-by-step walkthroughs for the top 4 fixes
+# ---------------------------------------------------------------------------
+#
+# Structured, numbered-step walkthroughs (data, not prose) for the four fixes
+# owners hit most. Rendered as an expandable "How to fix, step by step" block
+# on the HTML report, the web UI, and the CLI.
+
+
+@dataclass(frozen=True)
+class Walkthrough:
+    """An ordered, numbered how-to for a specific fix."""
+
+    title: str
+    steps: tuple[str, ...]
+
+    def as_dict(self) -> dict:
+        return {"title": self.title, "steps": list(self.steps)}
+
+
+# Keyed by FindingCategory.value. Only the top-4 fixes have a walkthrough;
+# everything else relies on the (already specific) remediation text.
+_WALKTHROUGHS: dict[str, Walkthrough] = {
+    FindingCategory.RLS_MISCONFIGURATION.value: Walkthrough(
+        title="Enable Supabase Row-Level Security",
+        steps=(
+            "Open your Supabase project → Table Editor, and pick the table "
+            "that holds per-user data (e.g. `orders`).",
+            "Turn on RLS for it: in SQL, run "
+            "`alter table orders enable row level security;` (or toggle "
+            "\"Enable RLS\" in the table's settings).",
+            "Add a policy that limits each row to its owner, e.g. "
+            "`create policy owner_all on orders for all "
+            "using (auth.uid() = user_id) with check (auth.uid() = user_id);`.",
+            "Make sure the table actually has the owner column the policy "
+            "references (e.g. `user_id uuid references auth.users`), and "
+            "backfill it on existing rows.",
+            "Test as a real logged-in user: you should see only your own "
+            "rows, and a query for someone else's id should return nothing.",
+            "Repeat for every table with user data — with RLS on and no "
+            "matching policy, access is denied, which is the safe default.",
+        ),
+    ),
+    FindingCategory.CORS_MISCONFIGURATION.value: Walkthrough(
+        title="Lock down CORS to trusted origins",
+        steps=(
+            "Find where your API sets CORS (a `cors()` call, a middleware, or "
+            "an `Access-Control-Allow-Origin` header).",
+            "Replace any `*` wildcard or origin-reflecting logic with an "
+            "explicit allow-list of the exact origins you own "
+            "(e.g. `https://app.example.com`).",
+            "If your API uses cookies or auth headers, keep "
+            "`Allow-Credentials: true` — but ONLY alongside an explicit "
+            "origin, never with `*`.",
+            "Restrict allowed methods and headers to what your API really "
+            "uses (e.g. GET, POST + Authorization, Content-Type).",
+            "Redeploy, then from a browser on a DIFFERENT origin confirm the "
+            "request is now blocked, while your real frontend still works.",
+        ),
+    ),
+    FindingCategory.IDOR.value: Walkthrough(
+        title="Add an ownership check",
+        steps=(
+            "Locate the handler that reads an ID from the URL or body "
+            "(e.g. `/orders/:id`).",
+            "Identify the column that ties a record to its owner "
+            "(commonly `user_id`).",
+            "Change the lookup so it filters by BOTH the id and the current "
+            "user, e.g. `where id = :id and user_id = :currentUser`.",
+            "When no row matches, return 404 (or 403) — don't reveal that the "
+            "record exists for someone else.",
+            "Do the same for update and delete on that resource, not just "
+            "read.",
+            "Verify: log in as user A, note one of their record ids, then as "
+            "user B try to open it — you should get denied.",
+        ),
+    ),
+    FindingCategory.EXPOSED_SECRETS.value: Walkthrough(
+        title="Rotate an exposed secret",
+        steps=(
+            "Treat the secret as compromised: in the provider's dashboard "
+            "(Stripe, AWS, etc.) generate a NEW key/secret.",
+            "Update your app to use the new value from an environment variable "
+            "or secrets manager — never hard-code it back into the source.",
+            "Revoke/delete the OLD secret so the leaked value stops working.",
+            "Remove the secret from git history with git filter-repo or BFG, "
+            "then force-push, and rotate again if others may have cloned it.",
+            "If it shipped to the browser, rebuild so it's gone from your "
+            "bundle, and check it isn't in any source map.",
+            "Add a pre-commit secret scanner (e.g. gitleaks) so a secret "
+            "can't be committed again.",
+        ),
+    ),
+}
+
+
+def walkthrough_for(category: FindingCategory | str) -> Walkthrough | None:
+    """Return the step-by-step walkthrough for a category, or None.
+
+    Only the top-4 fixes (#49) have a walkthrough; other categories rely on
+    their specific remediation text.
+    """
+    return _WALKTHROUGHS.get(_key(category))
 
 
 # ---------------------------------------------------------------------------
