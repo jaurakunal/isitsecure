@@ -27,6 +27,14 @@ function ReportContent() {
   const [fixProgress, setFixProgress] = useState({ current: 0, total: 0, message: "" });
   const [fixResult, setFixResult] = useState<FixAllResult | null>(null);
   const [fixErr, setFixErr] = useState("");
+  const [githubToken, setGithubToken] = useState("");
+
+  // A remote git URL (not a local file:// path) → the PR flow is available.
+  const repoUrl = report?.repo_url || "";
+  const isRemoteRepo =
+    !!repoUrl && !repoUrl.startsWith("file://") &&
+    (repoUrl.includes("://") || /^[\w.-]+@[\w.-]+:/.test(repoUrl));
+  const isGithub = /github\.com/i.test(repoUrl);
 
   useEffect(() => {
     if (!scanId) return;
@@ -37,7 +45,10 @@ function ReportContent() {
     setFixState("running"); setFixErr(""); setFixResult(null);
     setFixProgress({ current: 0, total: 0, message: "Starting…" });
     try {
-      const { job_id } = await startFixAll(scanId, ["critical", "high"]);
+      const opts = isRemoteRepo && githubToken.trim()
+        ? { githubToken: githubToken.trim() }
+        : undefined;
+      const { job_id } = await startFixAll(scanId, ["critical", "high"], opts);
       streamFixAll(job_id, (ev) => {
         if (ev.type === "progress") setFixProgress({ current: ev.current || 0, total: ev.total || 0, message: ev.message || "" });
         else if (ev.type === "done" && ev.result) { setFixResult(ev.result); setFixState("done"); }
@@ -155,16 +166,49 @@ function ReportContent() {
               <p className="text-xs text-text-muted leading-relaxed">
                 Generate AI fixes for the {criticals + highs} critical &amp; high findings. Unlike the
                 security scan, fixes use AI &mdash; they&rsquo;ll use API tokens on your key (usually a
-                few cents per finding). If this scan targeted a local git repo, they&rsquo;re committed
-                to a new branch &mdash; your current branch and files stay untouched. Otherwise you get
-                a downloadable fix plan.
+                few cents per finding).{" "}
+                {isRemoteRepo && isGithub ? (
+                  <>This scan targeted a remote GitHub repo, so isitsecure clones it and opens
+                  <strong> pull requests grouped by vulnerability category</strong> (one commit per
+                  fix). It never pushes to your default branch.</>
+                ) : isRemoteRepo ? (
+                  <>This scan targeted a non-GitHub remote repo &mdash; only GitHub PRs are supported,
+                  so you&rsquo;ll get a downloadable fix plan instead.</>
+                ) : (
+                  <>If this scan targeted a local git repo, they&rsquo;re committed to a new branch
+                  &mdash; your current branch and files stay untouched. Otherwise you get a
+                  downloadable fix plan.</>
+                )}
               </p>
             </div>
             {fixState === "idle" && (
-              <button onClick={handleFixAll} className="btn-primary shrink-0">Fix Critical &amp; High</button>
+              <button
+                onClick={handleFixAll}
+                disabled={isRemoteRepo && isGithub && !githubToken.trim()}
+                className="btn-primary shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isRemoteRepo && isGithub ? "Fix & Open PRs" : "Fix Critical & High"}
+              </button>
             )}
             {fixState === "running" && <span className="text-xs text-text-muted shrink-0">Working&hellip;</span>}
           </div>
+
+          {/* GitHub token input for the remote PR flow */}
+          {isRemoteRepo && isGithub && fixState === "idle" && (
+            <div className="mt-3">
+              <label className="block text-xs text-text-muted mb-1">
+                GitHub token (repo scope) &mdash; used once to push branches &amp; open PRs, never stored
+              </label>
+              <input
+                type="password"
+                autoComplete="off"
+                value={githubToken}
+                onChange={(e) => setGithubToken(e.target.value)}
+                placeholder="ghp_…"
+                className="w-full bg-bg-secondary border border-border rounded-lg px-3 py-2 text-xs font-mono text-text focus:border-text-accent outline-none"
+              />
+            </div>
+          )}
 
           {fixState === "running" && (
             <div className="mt-4">
@@ -205,6 +249,41 @@ function ReportContent() {
                   {fixResult.files_changed && fixResult.files_changed.length > 0 && (
                     <ul className="text-text-muted font-mono space-y-0.5">
                       {fixResult.files_changed.map(f => <li key={f}>• {f}</li>)}
+                    </ul>
+                  )}
+                </div>
+              )}
+              {fixResult.mode === "pull_requests" && (
+                <div className="space-y-2">
+                  <p className="text-text">
+                    ✓ {fixResult.summary || `Opened ${fixResult.pull_requests?.length || 0} pull request(s).`}
+                  </p>
+                  {fixResult.pull_requests && fixResult.pull_requests.length > 0 && (
+                    <ul className="space-y-1.5">
+                      {fixResult.pull_requests.map((pr) => (
+                        <li key={pr.branch} className="flex items-start gap-2">
+                          <span className="text-text-muted">•</span>
+                          <div>
+                            <a href={pr.url} target="_blank" rel="noopener noreferrer"
+                               className="text-text-accent hover:underline break-all">
+                              {pr.title}
+                            </a>
+                            <span className="text-text-muted/60 ml-2">
+                              ({pr.finding_count} fix{pr.finding_count === 1 ? "" : "es"}
+                              {pr.is_low_batch ? ", low-severity batch" : ""})
+                            </span>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <p className="text-text-muted">
+                    Review each PR, run your tests, then merge. isitsecure never pushes to your
+                    default branch.
+                  </p>
+                  {fixResult.errors && fixResult.errors.length > 0 && (
+                    <ul className="text-medium space-y-0.5">
+                      {fixResult.errors.map((e, i) => <li key={i}>• {e}</li>)}
                     </ul>
                   )}
                 </div>

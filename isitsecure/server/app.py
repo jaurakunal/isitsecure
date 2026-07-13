@@ -291,6 +291,11 @@ async def generate_fix(request: FixRequest):
 class FixAllRequest(BaseModel):
     scan_id: str
     severities: Optional[list[str]] = None
+    # Remote-repo → pull-request flow (GitHub only). The token is used for the
+    # push + PR API and is NEVER persisted or logged.
+    github_token: Optional[str] = None
+    pr_strategy: Optional[str] = None
+    max_prs: Optional[int] = None
 
 
 @app.post("/api/fix-all")
@@ -300,7 +305,11 @@ async def start_fix_all(request: FixAllRequest):
     if not scan or not scan.get("report"):
         raise HTTPException(status_code=404, detail="Scan report not found")
 
-    from isitsecure.server.fix_service import DEFAULT_SEVERITIES
+    from isitsecure.server.fix_service import (
+        DEFAULT_SEVERITIES,
+        DEFAULT_MAX_PRS,
+        DEFAULT_STRATEGY,
+    )
 
     job_id = str(uuid.uuid4())[:8]
     _fix_jobs[job_id] = {"status": "running", "events": [], "result": None}
@@ -312,7 +321,15 @@ async def start_fix_all(request: FixAllRequest):
         provider = "anthropic"
 
     asyncio.create_task(
-        _run_fix_all_job(job_id, scan["report"], provider, severities)
+        _run_fix_all_job(
+            job_id,
+            scan["report"],
+            provider,
+            severities,
+            github_token=request.github_token,
+            pr_strategy=request.pr_strategy or DEFAULT_STRATEGY,
+            max_prs=request.max_prs or DEFAULT_MAX_PRS,
+        )
     )
     return {"job_id": job_id}
 
@@ -348,7 +365,16 @@ async def stream_fix_all(job_id: str):
     )
 
 
-async def _run_fix_all_job(job_id, report, provider, severities):
+async def _run_fix_all_job(
+    job_id,
+    report,
+    provider,
+    severities,
+    *,
+    github_token=None,
+    pr_strategy="per-category",
+    max_prs=8,
+):
     """Run the batch fix service, streaming progress into the job store."""
     from isitsecure.server.fix_service import run_fix_all
 
@@ -361,6 +387,9 @@ async def _run_fix_all_job(job_id, report, provider, severities):
             llm_provider=provider,
             severities=severities,
             emit=emit,
+            github_token=github_token,
+            pr_strategy=pr_strategy,
+            max_prs=max_prs,
         )
         _fix_jobs[job_id]["result"] = result
         _fix_jobs[job_id]["status"] = "complete"
