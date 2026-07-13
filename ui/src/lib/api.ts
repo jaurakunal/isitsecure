@@ -28,6 +28,12 @@ export interface PlainExplanation {
   what_to_do: string;
 }
 
+/** Numbered step-by-step walkthrough for a top-4 fix (Wave 2, #49). */
+export interface Walkthrough {
+  title: string;
+  steps: string[];
+}
+
 export interface Finding {
   id: string;
   source: string;
@@ -54,6 +60,11 @@ export interface Finding {
   plain_explanation?: PlainExplanation | null;
   business_impact?: string | null;
   glossary?: Record<string, string> | null;
+  // --- Wave 2 remediation enrichment (added by the server) ---
+  /** Stack-tailored, copy-pasteable remediation snippet (#48). */
+  remediation_snippet?: string | null;
+  /** Numbered step-by-step walkthrough for the top-4 fixes (#49). */
+  walkthrough?: Walkthrough | null;
 }
 
 /** Go/no-go launch-readiness verdict shown at the top of the report. */

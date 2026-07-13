@@ -7,6 +7,7 @@ import { GlossaryText } from "./GlossaryText";
 
 export function FindingCard({ finding, index }: { finding: Finding; index: number }) {
   const [expanded, setExpanded] = useState(false);
+  const [stepsOpen, setStepsOpen] = useState(false);
   const [fixLoading, setFixLoading] = useState(false);
   const [fix, setFix] = useState<FixResult | null>(null);
   const [fixError, setFixError] = useState("");
@@ -121,6 +122,43 @@ export function FindingCard({ finding, index }: { finding: Finding; index: numbe
             <div>
               <h4 className="text-text-accent text-xs font-semibold mb-1 uppercase tracking-wider">Remediation</h4>
               <p className="text-text-muted whitespace-pre-wrap leading-relaxed">{finding.remediation_guidance}</p>
+            </div>
+          )}
+          {finding.remediation_snippet && (
+            <div>
+              <h4 className="text-text-accent text-xs font-semibold mb-1 uppercase tracking-wider">For your stack</h4>
+              <pre className="bg-bg-secondary border border-border rounded-xl p-3 text-xs overflow-x-auto font-mono text-text-muted whitespace-pre">
+                {finding.remediation_snippet}
+              </pre>
+            </div>
+          )}
+          {finding.walkthrough && finding.walkthrough.steps.length > 0 && (
+            <div>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setStepsOpen(!stepsOpen);
+                }}
+                className="flex items-center gap-2 text-text-accent text-xs font-semibold uppercase tracking-wider"
+              >
+                <span
+                  className="transition-transform"
+                  style={{ transform: stepsOpen ? "rotate(45deg)" : "none" }}
+                >
+                  +
+                </span>
+                How to fix, step by step
+              </button>
+              {stepsOpen && (
+                <div className="mt-2 rounded-xl bg-bg-secondary/50 border border-border p-3">
+                  <p className="text-text text-xs font-medium mb-2">{finding.walkthrough.title}</p>
+                  <ol className="list-decimal list-inside space-y-1.5 text-text-muted text-xs leading-relaxed">
+                    {finding.walkthrough.steps.map((step, i) => (
+                      <li key={i} className="whitespace-pre-wrap">{step}</li>
+                    ))}
+                  </ol>
+                </div>
+              )}
             </div>
           )}
           {finding.code_location?.code_snippet && (

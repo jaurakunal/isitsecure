@@ -610,6 +610,29 @@ def _print_report_table(report) -> None:
 
     console.print(table)
 
+    # #49 — step-by-step walkthroughs for the top-4 fixes, as numbered lists.
+    # One walkthrough per category present (deduped), so a repo with several
+    # IDOR findings shows the "add an ownership check" steps once.
+    seen_walkthroughs: set[str] = set()
+    for finding in ordered:
+        walkthrough = plain_english.walkthrough_for(finding.category)
+        if walkthrough is None:
+            continue
+        cat = finding.category.value if hasattr(finding.category, "value") else str(finding.category)
+        if cat in seen_walkthroughs:
+            continue
+        seen_walkthroughs.add(cat)
+        steps = "\n".join(
+            f"[bold]{i}.[/bold] {step}"
+            for i, step in enumerate(walkthrough.steps, 1)
+        )
+        console.print()
+        console.print(Panel(
+            steps,
+            title=f"How to fix, step by step: {walkthrough.title}",
+            border_style="cyan",
+        ))
+
     # Owner summary (LLM layer, if present) — layers on top of the baseline.
     if report.owner_summary and report.owner_summary.risk_summary:
         console.print()
