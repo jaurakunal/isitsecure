@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1](https://github.com/jaurakunal/isitsecure/compare/v0.4.0...v0.4.1) (2026-07-14)
+
+
+### Documentation
+
+* document Wave 2 fix→PR flow, new CLI commands, and remediation pipeline ([aedbd8f](https://github.com/jaurakunal/isitsecure/commit/aedbd8f70b554795eb140ed5ecf2a159ddce7691))
+
 ## [0.4.0](https://github.com/jaurakunal/isitsecure/compare/v0.3.0...v0.4.0) (2026-07-14)
 
 
