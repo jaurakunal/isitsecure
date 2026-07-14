@@ -4,6 +4,27 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0](https://github.com/jaurakunal/isitsecure/compare/v0.3.0...v0.4.0) (2026-07-14)
+
+
+### Features
+
+* **fixes:** remote-repo fix → per-category pull requests ([#62](https://github.com/jaurakunal/isitsecure/issues/62)) ([c551f52](https://github.com/jaurakunal/isitsecure/commit/c551f527d00ea1e6c5a8398da5db38f40cc3f130))
+* **fix:** git-free fix & verify flow with plain-language results ([#50](https://github.com/jaurakunal/isitsecure/issues/50)) ([adf3f88](https://github.com/jaurakunal/isitsecure/commit/adf3f88bf48af1b49d3ed2873c4c34bd9bf1130a))
+* **remediation:** framework-aware remediation for DAST findings ([#48](https://github.com/jaurakunal/isitsecure/issues/48)) ([cd152db](https://github.com/jaurakunal/isitsecure/commit/cd152db618f97cbdf0e1df2f6df473ca1bc4e67d))
+* **remediation:** specific fix guidance for all 18 categories ([#47](https://github.com/jaurakunal/isitsecure/issues/47)) ([f67ade4](https://github.com/jaurakunal/isitsecure/commit/f67ade4e3432a1e4aac7daa692c314b959c59071))
+* **remediation:** step-by-step walkthroughs for the top-4 fixes ([#49](https://github.com/jaurakunal/isitsecure/issues/49)) ([acb1927](https://github.com/jaurakunal/isitsecure/commit/acb1927bbf0223b83920f268fadf2043d29cabde))
+
+
+### Bug Fixes
+
+* **fixes:** capture uncommitted work in git safety net + add restore round-trip tests ([469103d](https://github.com/jaurakunal/isitsecure/commit/469103d9f7d38bcb5494b3692e90664f827b0f09))
+
+
+### Documentation
+
+* **fixes,triage:** correct safety-net docstring and surface copy-mode restore ([8e5a41b](https://github.com/jaurakunal/isitsecure/commit/8e5a41bf7d0f9b2230bd6fc5176b48dcc4865e34))
+
 ## [0.3.0](https://github.com/jaurakunal/isitsecure/compare/v0.2.1...v0.3.0) (2026-07-13)
 
 
