@@ -313,6 +313,21 @@ class TestTriageEnrichment:
         result = await service.triage([finding], ScanMode.CODE_ONLY)
         assert result.triaged_findings[0].remediation_guidance == "Use parameterized queries."
 
+    def test_category_remediation_delegates_to_plain_english(self) -> None:
+        """#47 — the triage fallback is the single-source-of-truth text.
+
+        No local, duplicated remediation strings: the service delegates to
+        ``plain_english`` and never emits a generic 'review this finding'
+        line for a known category.
+        """
+        from isitsecure.engine.reporting import plain_english
+
+        for category in FindingCategory:
+            finding = _make_finding(category=category)
+            guidance = LLMTriageService._category_remediation(finding)
+            assert guidance == plain_english.remediation_detail(category)
+            assert guidance != plain_english._GENERIC_REMEDIATION
+
     @pytest.mark.asyncio
     async def test_severity_adjustment(self) -> None:
         dev_resp = _build_dev_triage_response(

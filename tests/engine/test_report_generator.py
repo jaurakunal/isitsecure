@@ -116,6 +116,8 @@ class TestReportGenerator:
 
     def test_format_findings(self) -> None:
         """Findings should include all required fields."""
+        from isitsecure.engine.reporting import plain_english
+
         code_loc = CodeLocation(
             file_path="src/api/route.ts",
             line_number=42,
@@ -137,7 +139,13 @@ class TestReportGenerator:
         assert f["severity"] == "high"
         assert f["source"] == FindingSource.SAST_CODE.value
         assert f["endpoint_url"] == "https://example.com/api/users"
-        assert f["remediation_guidance"] == ""  # filled by triage layer, empty by default
+        # #47 — when a finding carries no LLM-enriched guidance, the report now
+        # fills it with the specific rule-based remediation for its category
+        # (single source of truth in plain_english), never a blank string.
+        assert f["remediation_guidance"] == plain_english.remediation_detail(
+            FindingCategory.MISSING_HEADERS
+        )
+        assert f["remediation_guidance"].strip()
         assert f["confidence"] == 0.9
         assert f["code_location"]["file"] == "src/api/route.ts"
         assert f["code_location"]["line"] == 42

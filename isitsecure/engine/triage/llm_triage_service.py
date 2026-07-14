@@ -43,6 +43,7 @@ from isitsecure.engine.models import (
     RemediationPhase,
     SecurityTheme,
 )
+from isitsecure.engine.reporting import plain_english
 from isitsecure.engine.triage.priority_calculator import (
     calculate_priority,
 )
@@ -464,54 +465,17 @@ class LLMTriageService:
                 f.severity = SeverityLevel.CRITICAL
                 f.priority = 1
 
-    # Category-specific remediation templates
-    _REMEDIATION_BY_CATEGORY = {
-        "auth_weakness": (
-            "Implement authorization checks to verify the requesting user "
-            "has permission to perform this action on this resource. Use "
-            "database-level constraints as the authoritative guard."
-        ),
-        "exposed_secrets": (
-            "Encrypt secrets at rest using application-level encryption "
-            "(e.g., AES-256-GCM) or a managed KMS. Never store raw secret "
-            "values in database columns."
-        ),
-        "info_disclosure": (
-            "Apply explicit field projection to API responses — return "
-            "only the fields the client needs. Remove internal identifiers "
-            "and metadata from public-facing outputs."
-        ),
-        "injection_risk": (
-            "Validate and sanitize all user-supplied inputs before passing "
-            "them to interpreters, queries, or system commands. Use "
-            "parameterized queries for database access."
-        ),
-        "unencrypted_pii": (
-            "Encrypt PII columns at rest using application-level encryption. "
-            "Consider field-level encryption with a managed KMS to comply "
-            "with GDPR/CCPA requirements."
-        ),
-        "dependency_vuln": (
-            "Update the affected dependency to the latest patched version. "
-            "Run `npm audit fix` or manually update the version in "
-            "package.json and verify no breaking changes."
-        ),
-        "exposed_api_endpoint": (
-            "Restrict access to this endpoint using network-level controls "
-            "(firewall, security groups) or add authentication. Ensure "
-            "the endpoint is not accessible from untrusted networks."
-        ),
-    }
-
     @classmethod
     def _category_remediation(cls, finding: DeepFinding) -> str:
-        """Generate category-specific remediation guidance."""
-        cat = finding.category.value if hasattr(finding.category, "value") else str(finding.category)
-        return cls._REMEDIATION_BY_CATEGORY.get(
-            cat,
-            f"Review the {finding.severity.value}-severity finding and "
-            f"apply the appropriate security control for this issue type.",
-        )
+        """Generate category-specific remediation guidance.
+
+        Delegates to ``plain_english`` — the single source of truth for
+        remediation content (#47) — so there is exactly one copy of every
+        string. Triage works per-finding and has no access to the detected
+        stack (framework/backend live on the report), so the stack-tailored
+        snippet (#48) is added later by the report/UI renderers, which do.
+        """
+        return plain_english.remediation_detail(finding.category)
 
     # ------------------------------------------------------------------
     # Phase 1.7: Theme detection

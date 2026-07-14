@@ -208,3 +208,145 @@ class TestLaunchVerdict:
         assert v.as_line() == f"{v.headline} {v.detail}"
         clean = plain_english.launch_verdict(0, 0, 0)
         assert clean.as_line() == clean.headline
+
+
+# ---------------------------------------------------------------------------
+# #47 — specific remediation for ALL 18 categories (no generic fallback)
+# ---------------------------------------------------------------------------
+
+class TestCategoryRemediation:
+    def test_every_category_has_specific_remediation(self) -> None:
+        """No FindingCategory may fall through to the generic fallback (#47)."""
+        for category in FindingCategory:
+            text = plain_english.remediation_for(category)
+            assert text.strip(), category
+            assert text != plain_english._GENERIC_REMEDIATION, category
+
+    def test_all_eighteen_categories_are_covered(self) -> None:
+        """Sanity-check that all 18 known categories have an explicit entry."""
+        keys = set(plain_english._CATEGORY_REMEDIATION)
+        assert keys == {c.value for c in FindingCategory}
+        assert len(keys) == 18
+
+    def test_remediation_is_concrete_not_boilerplate(self) -> None:
+        """Guidance names the actual control, not a vague 'review this'."""
+        rls = plain_english.remediation_for(FindingCategory.RLS_MISCONFIGURATION)
+        assert "row level security" in rls.lower()
+        dep = plain_english.remediation_for(FindingCategory.DEPENDENCY_VULNERABILITY)
+        assert "audit" in dep.lower()
+
+    def test_unknown_category_uses_generic_fallback(self) -> None:
+        assert (
+            plain_english.remediation_for("not_a_real_category")
+            == plain_english._GENERIC_REMEDIATION
+        )
+
+    def test_accepts_enum_or_string(self) -> None:
+        assert (
+            plain_english.remediation_for(FindingCategory.IDOR)
+            == plain_english.remediation_for("idor")
+        )
+
+
+# ---------------------------------------------------------------------------
+# #48 — framework-aware remediation for DAST/config findings
+# ---------------------------------------------------------------------------
+
+class TestFrameworkRemediation:
+    def test_tailors_headers_snippet_per_framework(self) -> None:
+        express = plain_english.framework_remediation(
+            FindingCategory.MISSING_HEADERS, framework="express"
+        )
+        nextjs = plain_english.framework_remediation(
+            FindingCategory.MISSING_HEADERS, framework="nextjs"
+        )
+        fastapi = plain_english.framework_remediation(
+            FindingCategory.MISSING_HEADERS, framework="fastapi"
+        )
+        assert express and "helmet" in express.lower()
+        assert nextjs and "next.config" in nextjs.lower()
+        assert fastapi and "middleware" in fastapi.lower()
+        # The snippets are genuinely different per stack.
+        assert express != nextjs != fastapi
+
+    def test_cors_snippet_differs_by_stack(self) -> None:
+        express = plain_english.framework_remediation(
+            FindingCategory.CORS_MISCONFIGURATION, framework="express"
+        )
+        django = plain_english.framework_remediation(
+            FindingCategory.CORS_MISCONFIGURATION, framework="django"
+        )
+        assert express and "cors(" in express.lower()
+        assert django and "cors_allowed_origins" in django.lower()
+
+    def test_backend_takes_precedence_for_idor(self) -> None:
+        """Supabase backend yields an RLS snippet even with a JS framework."""
+        snippet = plain_english.framework_remediation(
+            FindingCategory.IDOR, framework="nextjs", backend="supabase"
+        )
+        assert snippet and "row level security" in snippet.lower()
+
+    def test_unknown_stack_returns_none(self) -> None:
+        assert (
+            plain_english.framework_remediation(
+                FindingCategory.MISSING_HEADERS, framework="unknown", backend="unknown"
+            )
+            is None
+        )
+        # A category with no stack table at all also returns None.
+        assert (
+            plain_english.framework_remediation(
+                FindingCategory.EXPOSED_SECRETS, framework="express"
+            )
+            is None
+        )
+
+    def test_remediation_detail_appends_snippet_when_known(self) -> None:
+        detail = plain_english.remediation_detail(
+            FindingCategory.CORS_MISCONFIGURATION, framework="express"
+        )
+        assert plain_english.remediation_for(
+            FindingCategory.CORS_MISCONFIGURATION
+        ) in detail
+        assert "For your stack:" in detail
+        assert "cors(" in detail.lower()
+
+    def test_remediation_detail_generic_when_stack_unknown(self) -> None:
+        detail = plain_english.remediation_detail(
+            FindingCategory.MISSING_HEADERS, framework="unknown"
+        )
+        assert "For your stack:" not in detail
+        assert detail == plain_english.remediation_for(
+            FindingCategory.MISSING_HEADERS
+        )
+
+
+# ---------------------------------------------------------------------------
+# #49 — step-by-step walkthroughs for the top-4 fixes
+# ---------------------------------------------------------------------------
+
+class TestWalkthroughs:
+    TOP_FOUR = [
+        FindingCategory.RLS_MISCONFIGURATION,
+        FindingCategory.CORS_MISCONFIGURATION,
+        FindingCategory.IDOR,
+        FindingCategory.EXPOSED_SECRETS,
+    ]
+
+    def test_top_four_have_walkthroughs(self) -> None:
+        for category in self.TOP_FOUR:
+            w = plain_english.walkthrough_for(category)
+            assert w is not None, category
+            assert w.title.strip(), category
+            assert len(w.steps) >= 3, category
+            assert all(step.strip() for step in w.steps), category
+
+    def test_walkthrough_as_dict_is_serializable(self) -> None:
+        w = plain_english.walkthrough_for(FindingCategory.IDOR)
+        d = w.as_dict()
+        assert set(d) == {"title", "steps"}
+        assert isinstance(d["steps"], list)
+
+    def test_other_categories_have_no_walkthrough(self) -> None:
+        assert plain_english.walkthrough_for(FindingCategory.MIXED_CONTENT) is None
+        assert plain_english.walkthrough_for("not_a_real_category") is None

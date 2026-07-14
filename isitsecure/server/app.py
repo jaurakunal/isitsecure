@@ -166,6 +166,10 @@ def _enrich_report(raw_report: dict) -> dict:
     # rule-based plain_english layer. Deriving it here (rather than from
     # generate()'s severity groups) guarantees EVERY finding is covered,
     # including INFO-severity ones the report groups omit.
+    # Detected stack drives the stack-tailored remediation snippets (#48).
+    framework = enriched.get("framework", "")
+    backend = enriched.get("backend", "")
+
     raw_findings = enriched.get("findings")
     if isinstance(raw_findings, list):
         merged_findings = []
@@ -177,6 +181,20 @@ def _enrich_report(raw_report: dict) -> dict:
                 merged["plain_explanation"] = explanation.as_dict()
                 merged["business_impact"] = plain_english.business_impact(category)
                 merged["glossary"] = _glossary_for_finding(f, plain_english)
+                # #47/#48 — specific + stack-tailored remediation. Prefer the
+                # finding's own (LLM-enriched) guidance when present.
+                merged["remediation_guidance"] = (
+                    f.get("remediation_guidance")
+                    or plain_english.remediation_detail(
+                        category, framework, backend
+                    )
+                )
+                merged["remediation_snippet"] = plain_english.framework_remediation(
+                    category, framework, backend
+                )
+                # #49 — numbered step-by-step walkthrough for the top-4 fixes.
+                walk = plain_english.walkthrough_for(category)
+                merged["walkthrough"] = walk.as_dict() if walk else None
             except Exception:
                 logger.exception("Failed to enrich finding %s", f.get("id"))
             merged_findings.append(merged)
@@ -280,8 +298,16 @@ async def generate_fix(request: FixRequest):
     finding = DeepFinding.model_validate(finding_data)
     result = await generator.generate_fix(finding, request.file_content)
 
+    # Plain-language verify status for the UI (#50). A single-finding fix is
+    # generated but not applied/re-scanned here, so a successful fix is
+    # "needs_review" (a human should look before trusting it), and a failure is
+    # "couldnt_fix".
+    from isitsecure.engine.fixes import plain_results
+    status = plain_results.status_for_single(result.success, verified=None)
+
     return {
         "success": result.success,
+        "status": status,
         "diff": result.diff,
         "explanation": result.explanation,
         "error": result.error,
@@ -291,6 +317,11 @@ async def generate_fix(request: FixRequest):
 class FixAllRequest(BaseModel):
     scan_id: str
     severities: Optional[list[str]] = None
+    # Remote-repo → pull-request flow (GitHub only). The token is used for the
+    # push + PR API and is NEVER persisted or logged.
+    github_token: Optional[str] = None
+    pr_strategy: Optional[str] = None
+    max_prs: Optional[int] = None
 
 
 @app.post("/api/fix-all")
@@ -300,7 +331,11 @@ async def start_fix_all(request: FixAllRequest):
     if not scan or not scan.get("report"):
         raise HTTPException(status_code=404, detail="Scan report not found")
 
-    from isitsecure.server.fix_service import DEFAULT_SEVERITIES
+    from isitsecure.server.fix_service import (
+        DEFAULT_SEVERITIES,
+        DEFAULT_MAX_PRS,
+        DEFAULT_STRATEGY,
+    )
 
     job_id = str(uuid.uuid4())[:8]
     _fix_jobs[job_id] = {"status": "running", "events": [], "result": None}
@@ -312,7 +347,15 @@ async def start_fix_all(request: FixAllRequest):
         provider = "anthropic"
 
     asyncio.create_task(
-        _run_fix_all_job(job_id, scan["report"], provider, severities)
+        _run_fix_all_job(
+            job_id,
+            scan["report"],
+            provider,
+            severities,
+            github_token=request.github_token,
+            pr_strategy=request.pr_strategy or DEFAULT_STRATEGY,
+            max_prs=request.max_prs or DEFAULT_MAX_PRS,
+        )
     )
     return {"job_id": job_id}
 
@@ -348,7 +391,16 @@ async def stream_fix_all(job_id: str):
     )
 
 
-async def _run_fix_all_job(job_id, report, provider, severities):
+async def _run_fix_all_job(
+    job_id,
+    report,
+    provider,
+    severities,
+    *,
+    github_token=None,
+    pr_strategy="per-category",
+    max_prs=8,
+):
     """Run the batch fix service, streaming progress into the job store."""
     from isitsecure.server.fix_service import run_fix_all
 
@@ -361,12 +413,21 @@ async def _run_fix_all_job(job_id, report, provider, severities):
             llm_provider=provider,
             severities=severities,
             emit=emit,
+            github_token=github_token,
+            pr_strategy=pr_strategy,
+            max_prs=max_prs,
         )
         _fix_jobs[job_id]["result"] = result
         _fix_jobs[job_id]["status"] = "complete"
     except Exception as e:
-        logger.exception(f"Fix-all job {job_id} failed")
-        _fix_jobs[job_id]["error"] = str(e)
+        # Defense-in-depth: the GitHub token must never surface to the client or
+        # the log. pr_flow scrubs its own git/GitHub errors, but any unexpected
+        # exception that bubbles up here gets scrubbed once more before storing.
+        logger.exception("Fix-all job %s failed", job_id)
+        msg = str(e)
+        if github_token and github_token in msg:
+            msg = msg.replace(github_token, "***")
+        _fix_jobs[job_id]["error"] = msg
         _fix_jobs[job_id]["status"] = "failed"
 
 

@@ -116,7 +116,9 @@ class TestLLMCodeReviewer:
         assert len(findings) == 1
         assert findings[0].severity == SeverityLevel.CRITICAL
         assert findings[0].title == "Missing ownership check"
-        assert findings[0].category == FindingCategory.AUTH_WEAKNESS
+        # Classified from the finding text: a missing ownership check is an
+        # access-control / IDOR issue, not the AUTH_WEAKNESS catch-all.
+        assert findings[0].category == FindingCategory.IDOR
         assert findings[0].line_number == 5
         assert findings[0].confidence == LLMCodeReviewConfig.CONFIDENCE_LLM_FINDING
         mock_llm.generate_with_system.assert_called_once()

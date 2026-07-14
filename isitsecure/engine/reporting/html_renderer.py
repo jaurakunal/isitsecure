@@ -171,6 +171,14 @@ class HTMLReportRenderer:
             f"cursor: help; }}\n"
             f"    .glossary-list {{ font-size: 12px; color: {self._MUTED_TEXT_COLOR}; "
             f"margin: 6px 0 0 0; }}\n"
+            # #49 — expandable step-by-step walkthrough block.
+            f"    .walkthrough {{ background: #f9fafb; border: 1px solid "
+            f"{self._BORDER_COLOR}; border-radius: 6px; padding: 8px 14px; "
+            f"margin: 8px 0; }}\n"
+            f"    .walkthrough summary {{ cursor: pointer; color: "
+            f"{self._RISK_CALLOUT_ACCENT}; }}\n"
+            f"    .walkthrough ol {{ margin: 8px 0 4px 0; padding-left: 22px; }}\n"
+            f"    .walkthrough li {{ margin: 4px 0; }}\n"
             "  </style>\n"
             "</head>\n"
             f"<body>\n{body}\n</body>\n"
@@ -405,6 +413,8 @@ class HTMLReportRenderer:
         endpoint = finding.get("endpoint_url")
         code_loc = finding.get("code_location")
         remediation = finding.get("remediation_guidance")
+        remediation_snippet = finding.get("remediation_snippet")
+        walkthrough = finding.get("walkthrough") or {}
         confidence = finding.get("confidence", 0)
         impact = finding.get("business_impact", "")
         explanation = finding.get("plain_explanation") or {}
@@ -465,8 +475,40 @@ class HTMLReportRenderer:
                 f"  <p>{escape(remediation)}</p>"
             )
 
+        # #48 — stack-tailored, copy-pasteable remediation snippet.
+        if remediation_snippet:
+            parts.append(
+                f"  <p><strong>For your stack:</strong></p>"
+                f"  <div class=\"code-snippet\">{escape(remediation_snippet)}</div>"
+            )
+
+        # #49 — expandable step-by-step walkthrough for the top-4 fixes.
+        walk_html = self._render_walkthrough(walkthrough)
+        if walk_html:
+            parts.append(walk_html)
+
         parts.append("</div>")
         return "\n".join(parts)
+
+    def _render_walkthrough(self, walkthrough: dict) -> str:
+        """Render the numbered "How to fix, step by step" block (#49).
+
+        Uses <details>/<summary> so it's collapsed by default and expandable,
+        matching the "expandable" requirement on the HTML surface. Returns an
+        empty string when there is no walkthrough for the finding.
+        """
+        steps = walkthrough.get("steps") or []
+        if not steps:
+            return ""
+        title = escape(walkthrough.get("title", "How to fix, step by step"))
+        items = "".join(f"<li>{escape(str(step))}</li>" for step in steps)
+        return (
+            f"  <details class=\"walkthrough\">"
+            f"<summary><strong>How to fix, step by step:</strong> {title}"
+            f"</summary>"
+            f"<ol>{items}</ol>"
+            f"</details>"
+        )
 
     def _render_plain_explanation(self, explanation: dict) -> str:
         """Render the three-part plain-English explanation block (#41)."""

@@ -28,6 +28,12 @@ export interface PlainExplanation {
   what_to_do: string;
 }
 
+/** Numbered step-by-step walkthrough for a top-4 fix (Wave 2, #49). */
+export interface Walkthrough {
+  title: string;
+  steps: string[];
+}
+
 export interface Finding {
   id: string;
   source: string;
@@ -54,6 +60,11 @@ export interface Finding {
   plain_explanation?: PlainExplanation | null;
   business_impact?: string | null;
   glossary?: Record<string, string> | null;
+  // --- Wave 2 remediation enrichment (added by the server) ---
+  /** Stack-tailored, copy-pasteable remediation snippet (#48). */
+  remediation_snippet?: string | null;
+  /** Numbered step-by-step walkthrough for the top-4 fixes (#49). */
+  walkthrough?: Walkthrough | null;
 }
 
 /** Go/no-go launch-readiness verdict shown at the top of the report. */
@@ -151,8 +162,12 @@ export function reportHtmlUrl(scanId: string): string {
   return `${API_BASE}/api/scan/${scanId}/report.html`;
 }
 
+/** Plain-language verify status for a single finding's fix (#50). */
+export type FixStatus = "fixed" | "needs_review" | "couldnt_fix";
+
 export interface FixResult {
   success: boolean;
+  status?: FixStatus;
   diff: string;
   explanation: string;
   error: string | null;
@@ -198,8 +213,27 @@ export interface FixVerification {
   error: string;
 }
 
+/** Git-free, plain-language summary of a fix-all run (#50). */
+export interface FixPlain {
+  summary: string;
+  next_step: string;
+  fixed: number;
+  needs_review: number;
+  couldnt_fix: number;
+}
+
+/** A pull request opened by the remote-repo fix flow (#62). */
+export interface OpenedPR {
+  category: string;
+  title: string;
+  branch: string;
+  url: string;
+  finding_count: number;
+  is_low_batch: boolean;
+}
+
 export interface FixAllResult {
-  mode: "applied" | "plan" | "none";
+  mode: "applied" | "plan" | "none" | "pull_requests";
   applied?: boolean;
   branch?: string;
   base_branch?: string;
@@ -210,6 +244,13 @@ export interface FixAllResult {
   reason?: string;
   message?: string;
   verification?: FixVerification | null;
+  // Plain-language layer — the UI leads with this and hides git mechanics.
+  plain?: FixPlain | null;
+  // Remote-repo pull-request flow
+  repo?: string;
+  summary?: string;
+  errors?: string[];
+  pull_requests?: OpenedPR[];
 }
 
 export interface FixAllEvent {
@@ -220,15 +261,33 @@ export interface FixAllEvent {
   result?: FixAllResult;
 }
 
-/** Start a batch fix job for a scan's findings. Returns a job id for streaming. */
+/** Options for the remote-repo → pull-request fix flow (GitHub only). */
+export interface FixAllOptions {
+  githubToken?: string;
+  prStrategy?: "per-category" | "per-file" | "per-finding" | "single";
+  maxPrs?: number;
+}
+
+/** Start a batch fix job for a scan's findings. Returns a job id for streaming.
+ *
+ * For a remote GitHub scan, pass a `githubToken` in `opts` to open per-category
+ * pull requests. The token is sent once to the local server for the push + PR
+ * and is never persisted. */
 export async function startFixAll(
   scanId: string,
-  severities?: string[]
+  severities?: string[],
+  opts?: FixAllOptions
 ): Promise<{ job_id: string }> {
   const res = await fetch(`${API_BASE}/api/fix-all`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ scan_id: scanId, severities }),
+    body: JSON.stringify({
+      scan_id: scanId,
+      severities,
+      github_token: opts?.githubToken,
+      pr_strategy: opts?.prStrategy,
+      max_prs: opts?.maxPrs,
+    }),
   });
   if (!res.ok) {
     let msg = res.statusText;

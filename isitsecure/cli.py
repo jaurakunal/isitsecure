@@ -610,6 +610,29 @@ def _print_report_table(report) -> None:
 
     console.print(table)
 
+    # #49 — step-by-step walkthroughs for the top-4 fixes, as numbered lists.
+    # One walkthrough per category present (deduped), so a repo with several
+    # IDOR findings shows the "add an ownership check" steps once.
+    seen_walkthroughs: set[str] = set()
+    for finding in ordered:
+        walkthrough = plain_english.walkthrough_for(finding.category)
+        if walkthrough is None:
+            continue
+        cat = finding.category.value if hasattr(finding.category, "value") else str(finding.category)
+        if cat in seen_walkthroughs:
+            continue
+        seen_walkthroughs.add(cat)
+        steps = "\n".join(
+            f"[bold]{i}.[/bold] {step}"
+            for i, step in enumerate(walkthrough.steps, 1)
+        )
+        console.print()
+        console.print(Panel(
+            steps,
+            title=f"How to fix, step by step: {walkthrough.title}",
+            border_style="cyan",
+        ))
+
     # Owner summary (LLM layer, if present) — layers on top of the baseline.
     if report.owner_summary and report.owner_summary.risk_summary:
         console.print()
@@ -660,14 +683,27 @@ def launch(
 
 @app.command()
 def fix(
-    repo: str = typer.Option(..., "--repo", "-r", help="Path to local repo to fix"),
+    repo: str = typer.Option(..., "--repo", "-r", help="Local repo path, OR a remote GitHub URL to open PRs against"),
     llm_provider: str = typer.Option("anthropic", "--llm", help="LLM provider: anthropic|google"),
     api_key: Optional[str] = typer.Option(None, "--api-key", envvar="ANTHROPIC_API_KEY"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show fixes without applying them"),
     severity: str = typer.Option("critical,high", "--severity", help="Severities to fix: critical,high,medium"),
+    technical: bool = typer.Option(
+        False, "--technical",
+        help="Show the git details (backup ref, diff/test commands) instead of the plain-language summary",
+    ),
+    github_token: Optional[str] = typer.Option(None, "--github-token", envvar="GITHUB_TOKEN", help="GitHub token for remote-repo pull requests (never stored/logged)"),
+    pr_strategy: str = typer.Option("per-category", "--pr-strategy", help="Group PRs by: per-category|per-file|per-finding|single"),
+    max_prs: int = typer.Option(8, "--max-prs", help="Cap on PRs; excess low-severity categories batch into one PR"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
-    """Scan, generate AI fixes, and apply them to your code in one command."""
+    """Scan your code, fix the issues, and re-check — in plain language.
+
+    A local ``--repo`` path gets fixes applied in place, git-free by default —
+    your original is safely backed up under the hood; pass --technical for the
+    git details. A remote GitHub ``--repo`` URL (with ``--github-token``) is
+    cloned and gets per-category pull requests opened instead.
+    """
     if verbose:
         logging.basicConfig(level=logging.DEBUG)
     else:
@@ -686,6 +722,21 @@ def fix(
 
     from isitsecure.llm.adapters import create_llm_client
     llm_client = create_llm_client(llm_provider, resolved_key)
+
+    # Remote GitHub URL → clone + per-category pull requests.
+    from isitsecure.engine.fixes.pr_flow import is_remote_url
+    if is_remote_url(repo):
+        _run_remote_pr_fix(
+            repo_url=repo,
+            llm_client=llm_client,
+            llm_provider=llm_provider,
+            github_token=github_token,
+            severity=severity,
+            pr_strategy=pr_strategy,
+            max_prs=max_prs,
+            dry_run=dry_run,
+        )
+        return
 
     # Resolve repo path
     import os
@@ -759,81 +810,106 @@ def fix(
     # the same file are chained into a single rewrite (no clobbering).
     from difflib import unified_diff
     n_files = len(fix_plan.files)
-    console.print(
-        f"\n[bold]Step 3/3:[/bold] {'Previewing' if dry_run else 'Applying'} "
-        f"fixes for {fix_plan.fixed_count} findings across {n_files} file(s)..."
-    )
 
-    applied = 0
-    failed = 0
-    for path, fixed_content in fix_plan.files.items():
-        console.print(f"\n  [bold]{path}[/bold]")
-        if dry_run:
+    # --- Dry run: just preview the diffs, change nothing. ---
+    if dry_run:
+        console.print(
+            f"\n[bold]Step 3/3:[/bold] Previewing fixes for {fix_plan.fixed_count} "
+            f"findings across {n_files} file(s)..."
+        )
+        for path, fixed_content in fix_plan.files.items():
+            console.print(f"\n  [bold]{path}[/bold]")
             original = file_contents.get(path, "")
             diff = "\n".join(unified_diff(
                 original.splitlines(), fixed_content.splitlines(),
                 fromfile=f"a/{path}", tofile=f"b/{path}", lineterm="",
             ))
             console.print(f"  [dim]{diff[:800]}[/dim]")
-            applied += 1
-        else:
-            from isitsecure.engine.shared.safe_path import resolve_within
-            try:
-                full_path = resolve_within(repo_path, path)
-                with open(full_path, "w") as f:
-                    f.write(fixed_content)
-                console.print(f"  [green]Applied[/green]")
-                applied += 1
-            except Exception as e:
-                console.print(f"  [red]Failed to write: {e}[/red]")
-                failed += 1
+        console.print(
+            f"\n[dim]Run without --dry-run to apply these fixes: "
+            f"isitsecure fix --repo {repo}[/dim]"
+        )
+        raise typer.Exit(0)
 
-    # Summary
+    # --- Apply for real: take a safety net first, then write files in place. ---
+    console.print(
+        f"\n[bold]Step 3/3:[/bold] Applying fixes for {fix_plan.fixed_count} "
+        f"findings across {n_files} file(s)..."
+    )
+
+    from isitsecure.engine.fixes.safety_net import create_safety_net
+    from isitsecure.engine.shared.safe_path import resolve_within
+
+    net = create_safety_net(repo_path, list(fix_plan.files.keys()))
+
+    applied = 0
+    failed = 0
+    for path, fixed_content in fix_plan.files.items():
+        try:
+            full_path = resolve_within(repo_path, path)
+            with open(full_path, "w") as f:
+                f.write(fixed_content)
+            applied += 1
+        except Exception as e:
+            console.print(f"  [red]Couldn't update {path}: {e}[/red]")
+            failed += 1
+
+    # Re-scan the fixed code to confirm the findings are actually gone.
+    from isitsecure.engine.fixes.verifier import verify_findings_resolved
+    from isitsecure.engine.fixes import plain_results
+
+    fixed_findings = [
+        f for f in fixable
+        if f.code_location and f.code_location.file_path in fix_plan.files
+    ]
+    console.print("[bold]Re-checking your code...[/bold]")
+    vr = asyncio.run(verify_findings_resolved(repo_path, fixed_findings))
+
+    # Fold everything into the three plain-language buckets. "couldn't fix" =
+    # findings we tried but produced no fix for (failed generation + write
+    # failures).
+    fix_failed = (len(fixable) - fix_plan.fixed_count) + failed
+    counts = plain_results.classify_verification(
+        attempted=len(fixable),
+        fix_failed=fix_failed,
+        verification=vr.to_dict(),
+    )
+
     console.print()
-    action = "previewed" if dry_run else "applied"
     console.print(Panel(
-        f"[bold]{fix_plan.fixed_count} findings fixed across {applied} file(s) {action}[/bold]  |  "
-        f"{failed} failed  |  "
-        f"{len(fix_plan.skipped)} skipped  |  "
-        f"{fix_plan.total_findings} total findings",
-        title="Fix Summary",
-        border_style="green" if failed == 0 else "yellow",
+        f"[bold]{plain_results.summarize(counts)}[/bold]",
+        title="Done",
+        border_style="green" if counts.needs_review == 0 and counts.couldnt_fix == 0 else "yellow",
     ))
 
-    if not dry_run and applied > 0:
-        # Re-scan the fixed code to confirm the findings are actually gone.
-        from isitsecure.engine.fixes.verifier import verify_findings_resolved
-        fixed_findings = [
-            f for f in fixable
-            if f.code_location and f.code_location.file_path in fix_plan.files
-        ]
-        console.print("\n[bold]Verifying fixes (re-scanning)...[/bold]")
-        vr = asyncio.run(verify_findings_resolved(repo_path, fixed_findings))
-        if vr.checked:
-            console.print(
-                f"  [green]{vr.resolved} of {vr.checked} findings confirmed resolved "
-                f"by re-scan[/green]"
-            )
-            if vr.still_present:
-                console.print(
-                    f"  [yellow]{vr.still_present} still flagged — this can be a partial "
-                    f"fix, or a valid fix the scanner can't confirm. Review the diff:[/yellow]"
-                )
-                for t in vr.still_present_titles:
-                    console.print(f"    [yellow]• {t}[/yellow]")
-        if vr.unverifiable:
-            console.print(
-                f"  [dim]{vr.unverifiable} finding(s) can't be auto-verified "
-                f"(business-logic/DAST) — review manually[/dim]"
-            )
+    hint = plain_results.next_step_hint(counts, saved_hint=net.restore_hint)
+    if hint:
+        console.print(f"\n[dim]{hint}[/dim]")
 
-        console.print("\n[bold]Next steps:[/bold]")
+    if counts.needs_review and vr.still_present_titles:
+        console.print("\n[bold]Worth a look:[/bold]")
+        for t in vr.still_present_titles:
+            console.print(f"  [yellow]•[/yellow] {t}")
+
+    # --- Power-user / technical view: the git mechanics, on request. ---
+    if technical:
+        console.print("\n[bold]Technical details:[/bold]")
+        if net.kind == "git":
+            console.print(
+                f"  Backup ref: [dim]{net.location}[/dim] "
+                f"[dim](restore original: git checkout {net.location} -- .)[/dim]"
+            )
+        elif net.kind == "copy":
+            console.print(
+                f"  Backup copy: [dim]{net.location}[/dim] "
+                f"[dim](restore original: cp -a {net.location}/. .)[/dim]"
+            )
         console.print("  1. Review changes: [dim]git diff[/dim]")
         console.print("  2. Run your tests")
-        console.print("  3. Add isitsecure to CI so it can't regress "
-                      "([dim]see examples/github-action.yml[/dim])")
-    elif dry_run:
-        console.print(f"\n[dim]Run without --dry-run to apply fixes: isitsecure fix --repo {repo}[/dim]")
+        console.print(
+            "  3. Add isitsecure to CI so it can't regress "
+            "([dim]see examples/github-action.yml[/dim])"
+        )
 
 
 async def _run_fix_generation(llm_client, findings, file_contents):
@@ -842,6 +918,142 @@ async def _run_fix_generation(llm_client, findings, file_contents):
 
     generator = FixGenerator(llm_client)
     return await generator.generate_file_fixes(findings, file_contents)
+
+
+def _run_remote_pr_fix(
+    *,
+    repo_url: str,
+    llm_client,
+    llm_provider: str,
+    github_token: Optional[str],
+    severity: str,
+    pr_strategy: str,
+    max_prs: int,
+    dry_run: bool,
+) -> None:
+    """Scan a REMOTE GitHub repo and open per-category pull requests with fixes."""
+    from isitsecure.engine.fixes.pr_flow import (
+        parse_github_url,
+        group_findings,
+        PRFlow,
+    )
+
+    # Parse + guard the host up front so we fail clearly before scanning.
+    try:
+        ref = parse_github_url(repo_url)
+    except ValueError as exc:
+        err_console.print(f"[red]Couldn't parse that repo URL:[/red] {exc}")
+        raise typer.Exit(1)
+
+    if not ref.is_github:
+        err_console.print(
+            f"[yellow]{ref.host} pull requests aren't supported yet — GitHub only.[/yellow]\n"
+            "[dim]Scan locally and run 'isitsecure fix --repo <path>' to apply fixes in place.[/dim]"
+        )
+        raise typer.Exit(1)
+
+    if not github_token:
+        err_console.print(
+            "[red]Opening pull requests on a remote repo needs a GitHub token.[/red]\n"
+            "[bold]Fix:[/bold] pass [dim]--github-token[/dim] (or set GITHUB_TOKEN). "
+            "It's used only for the push + PR and is never stored or logged."
+        )
+        raise typer.Exit(1)
+
+    console.print(Panel(
+        f"[bold]isitsecure fix (remote)[/bold]\n"
+        f"Repo: {ref.slug}  |  LLM: {llm_provider}  |  Strategy: {pr_strategy}  |  Max PRs: {max_prs}",
+        title="Remote Auto-Fix → Pull Requests",
+        border_style="bright_magenta",
+    ))
+
+    # Step 1: Scan the remote repo (SAST — code-only).
+    from isitsecure.engine.factory import (
+        create_deep_security_scan_agent,
+        create_repo_ingestion_service,
+    )
+    repo_service = create_repo_ingestion_service()
+    agent = create_deep_security_scan_agent(
+        llm_client=llm_client,
+        judgment_llm_client=llm_client,
+        repo_ingestion_service=repo_service,
+    )
+
+    console.print("\n[bold]Step 1/2:[/bold] Scanning the remote repo for vulnerabilities...")
+    from isitsecure.engine.enums import ScanMode
+    report = asyncio.run(
+        _run_scan(agent=agent, repo_url=repo_url, scan_mode=ScanMode.CODE_ONLY)
+    )
+    _print_report_table(report)
+
+    target_severities = {s.strip().lower() for s in severity.split(",")}
+    fixable = [
+        f for f in report.findings
+        if f.code_location and f.code_location.file_path
+        and (f.severity.value if hasattr(f.severity, "value") else str(f.severity)) in target_severities
+    ]
+    if not fixable:
+        console.print("\n[green]No fixable findings at the selected severity levels.[/green]")
+        raise typer.Exit(0)
+
+    if dry_run:
+        # Show the PR plan without cloning/pushing.
+        groups = group_findings(fixable, strategy=pr_strategy, max_prs=max_prs)
+        console.print(f"\n[bold]Dry run — would open {len(groups)} pull request(s):[/bold]")
+        for g in groups:
+            label = "low-severity cleanup" if g.is_low_batch else g.title_label
+            console.print(f"  • [cyan]isitsecure/fix-{g.branch_suffix}[/cyan] — {label} "
+                          f"({len(g.findings)} finding(s))")
+        console.print("\n[dim]Run without --dry-run to clone, push branches, and open the PRs.[/dim]")
+        raise typer.Exit(0)
+
+    # Step 2: Clone → fix → group → push → open PRs.
+    console.print(f"\n[bold]Step 2/2:[/bold] Generating fixes and opening pull requests...")
+
+    from isitsecure.engine.fixes.fix_generator import FixGenerator
+
+    async def _emit(event: dict) -> None:
+        msg = event.get("message", "")
+        if msg:
+            console.print(f"  [dim]{msg}[/dim]")
+
+    async def _go():
+        flow = PRFlow(FixGenerator(llm_client))
+        return await flow.run(
+            repo_url=repo_url,
+            findings=fixable,
+            github_token=github_token,
+            strategy=pr_strategy,
+            max_prs=max_prs,
+            emit=_emit,
+        )
+
+    try:
+        result = asyncio.run(_go())
+    except ValueError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+
+    # Report
+    console.print()
+    if result.opened_prs:
+        console.print("[bold green]Pull requests opened:[/bold green]")
+        for pr in result.opened_prs:
+            console.print(f"  • {pr.title}")
+            console.print(f"    [cyan]{pr.url}[/cyan]")
+    console.print(Panel(
+        f"[bold]{result.summary}[/bold]\n"
+        f"{result.fixed_count} finding(s) fixed  |  "
+        f"{len(result.skipped)} skipped  |  {len(result.errors)} error(s)",
+        title="Remote Fix Summary",
+        border_style="green" if not result.errors else "yellow",
+    ))
+    if result.errors:
+        for e in result.errors:
+            console.print(f"  [yellow]• {e}[/yellow]")
+    if result.skipped and logging.getLogger().isEnabledFor(logging.DEBUG):
+        for s in result.skipped:
+            console.print(f"  [dim]Skipped: {s}[/dim]")
 
 
 # ---------------------------------------------------------------------------

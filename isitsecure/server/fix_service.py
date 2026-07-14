@@ -23,6 +23,13 @@ from isitsecure.config import load_api_key
 from isitsecure.engine.shared.safe_path import resolve_within
 from isitsecure.engine.fixes.fix_generator import FixGenerator, FixPlan
 from isitsecure.engine.fixes.markdown_exporter import FixPlanMarkdownExporter
+from isitsecure.engine.fixes.pr_flow import (
+    DEFAULT_MAX_PRS,
+    DEFAULT_STRATEGY,
+    PRFlow,
+    is_remote_url,
+    parse_github_url,
+)
 from isitsecure.engine.models import DeepFinding
 
 logger = logging.getLogger(__name__)
@@ -121,11 +128,19 @@ async def run_fix_all(
     llm_provider: str,
     severities: tuple[str, ...] = DEFAULT_SEVERITIES,
     emit: Emit,
+    github_token: str | None = None,
+    pr_strategy: str = DEFAULT_STRATEGY,
+    max_prs: int = DEFAULT_MAX_PRS,
 ) -> dict:
     """Generate and (when possible) apply fixes for a scan's findings.
 
     Emits progress events via ``emit`` and returns a result dict describing
-    what happened (mode "applied" or "plan").
+    what happened (mode "applied", "plan", "pull_requests", or "none").
+
+    When the scan target is a REMOTE GitHub URL and a ``github_token`` is
+    supplied, fixes are grouped into per-category pull requests and opened on
+    GitHub (delegated to :class:`PRFlow`). Local-path targets keep the existing
+    in-place apply behavior.
     """
     api_key = load_api_key(llm_provider)
     if not api_key:
@@ -141,6 +156,29 @@ async def run_fix_all(
     if not findings:
         return {"mode": "none", "message": "No fixable findings at the selected severities.",
                 "fixed_count": 0, "skipped": []}
+
+    # ---- REMOTE PR MODE: remote GitHub URL + token → per-category PRs ----
+    repo_target = report.get("repo_url")
+    if github_token and is_remote_url(repo_target):
+        try:
+            ref = parse_github_url(repo_target)
+        except ValueError as exc:
+            return {"mode": "none", "message": f"Could not parse repo URL: {exc}",
+                    "fixed_count": 0, "skipped": []}
+        if ref.is_github:
+            flow = PRFlow(generator)
+            result = await flow.run(
+                repo_url=repo_target,
+                findings=findings,
+                github_token=github_token,
+                strategy=pr_strategy,
+                max_prs=max_prs,
+                emit=emit,
+            )
+            return result.to_dict()
+        # Non-GitHub host → fall through to the fix-plan behavior below.
+        await emit({"type": "progress",
+                    "message": f"{ref.host} is not GitHub — generating a fix plan instead."})
 
     local_repo = _resolve_local_repo(report.get("repo_url"))
     can_apply = bool(local_repo) and await _is_git_repo(local_repo)
@@ -218,6 +256,29 @@ async def run_fix_all(
             # Return the user to their original branch no matter what.
             await _git(local_repo, "checkout", "--force", base_branch)
 
+        # Plain-language layer (#50): translate the fix + verify outcome into
+        # git-free language the UI can show directly. The branch mechanics stay
+        # in the payload for power users / backward-compat, but the UI leads
+        # with `plain`.
+        from isitsecure.engine.fixes import plain_results
+
+        attempted = len(findings)
+        fix_failed = attempted - fixed_count
+        counts = plain_results.classify_verification(
+            attempted=attempted,
+            fix_failed=fix_failed,
+            verification=verification,
+        )
+        plain = {
+            "summary": plain_results.summarize(counts),
+            "next_step": plain_results.next_step_hint(
+                counts, saved_hint="Your original code is safely backed up."
+            ),
+            "fixed": counts.fixed,
+            "needs_review": counts.needs_review,
+            "couldnt_fix": counts.couldnt_fix,
+        }
+
         return {
             "mode": "applied",
             "applied": True,
@@ -227,6 +288,7 @@ async def run_fix_all(
             "fixed_count": fixed_count,
             "skipped": skipped,
             "verification": verification,
+            "plain": plain,
         }
 
     # ---- PLAN MODE: no local files (URL / remote repo) or dirty tree ----
