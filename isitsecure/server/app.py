@@ -420,8 +420,14 @@ async def _run_fix_all_job(
         _fix_jobs[job_id]["result"] = result
         _fix_jobs[job_id]["status"] = "complete"
     except Exception as e:
-        logger.exception(f"Fix-all job {job_id} failed")
-        _fix_jobs[job_id]["error"] = str(e)
+        # Defense-in-depth: the GitHub token must never surface to the client or
+        # the log. pr_flow scrubs its own git/GitHub errors, but any unexpected
+        # exception that bubbles up here gets scrubbed once more before storing.
+        logger.exception("Fix-all job %s failed", job_id)
+        msg = str(e)
+        if github_token and github_token in msg:
+            msg = msg.replace(github_token, "***")
+        _fix_jobs[job_id]["error"] = msg
         _fix_jobs[job_id]["status"] = "failed"
 
 

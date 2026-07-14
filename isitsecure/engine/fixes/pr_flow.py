@@ -16,6 +16,8 @@ Design (SRP / DIP / OCP):
 
 SAFETY (see the module tests):
     * NEVER pushes to the default branch — always a feature branch + PR.
+    * NEVER force-pushes: a pre-existing ``isitsecure/fix-*`` branch on the
+      remote is reported, not clobbered.
     * The GitHub token is passed in, never persisted, never logged (git remote
       errors are scrubbed of the token before surfacing).
     * The temp clone is removed on success AND on error.
@@ -193,6 +195,9 @@ class PRGroup:
     branch_suffix: str
     findings: list[DeepFinding] = field(default_factory=list)
     is_low_batch: bool = False
+    # True when a capped "batch" PR actually contains critical/high findings
+    # (i.e. the priority groups themselves overflowed ``max_prs``).
+    contains_priority: bool = False
 
     @property
     def top_severity(self) -> SeverityLevel:
@@ -244,10 +249,11 @@ def group_findings(
 
     Cap + prioritize (``max_prs``): if grouping would exceed the cap, PRs whose
     findings include a critical/high issue are opened first; the remaining
-    lower-severity groups are merged into a SINGLE "low-severity cleanup" PR so
-    nothing is dropped. If even the priority groups exceed the cap they are
-    truncated to the cap by severity (documented in the returned summary by the
-    caller), but a low-batch is always preferred over dropping.
+    groups are merged into a SINGLE batch PR so nothing is EVER dropped. If even
+    the priority groups exceed the cap, the overflow priority groups land in the
+    batch too — in that case the batch is flagged ``contains_priority`` and
+    titled "batched security fixes" (not "low-severity cleanup") so its urgency
+    is not under-signalled.
 
     Returns an ordered list of :class:`PRGroup` (highest priority first).
     """
@@ -372,12 +378,27 @@ def _apply_cap(groups: list[PRGroup], max_prs: int) -> list[PRGroup]:
         # Everything fit in the priority slots; no batch needed.
         return kept[:max_prs]
 
+    # If even the priority groups overflowed the cap, the batch will contain
+    # critical/high findings. Label it honestly — a PR titled "low-severity
+    # cleanup" that actually carries critical fixes would dangerously
+    # under-signal urgency to a reviewer.
+    has_priority = any(
+        f.severity in _PRIORITY_SEVERITIES for f in batch_findings
+    )
+    if has_priority:
+        title_label = "batched security fixes"
+        branch_suffix = "batched-fixes"
+    else:
+        title_label = "low-severity cleanup"
+        branch_suffix = "low-severity-cleanup"
+
     batch = PRGroup(
         key=_LOW_BATCH_KEY,
-        title_label="low-severity cleanup",
-        branch_suffix="low-severity-cleanup",
+        title_label=title_label,
+        branch_suffix=branch_suffix,
         findings=_sort_findings(batch_findings),
         is_low_batch=True,
+        contains_priority=has_priority,
     )
     return kept + [batch]
 
@@ -398,15 +419,24 @@ def _commit_message(finding: DeepFinding) -> str:
 def pr_title(group: PRGroup) -> str:
     n = len(group.findings)
     plural = "issue" if n == 1 else "issues"
-    if group.is_low_batch:
+    if group.is_low_batch and not group.contains_priority:
         return f"isitsecure: low-severity cleanup ({n} {plural})"
+    if group.is_low_batch:  # batch that overflowed the cap with priority issues
+        return f"isitsecure: batched security fixes ({n} {plural})"
     return f"isitsecure: fix {group.title_label} ({n} {plural})"
 
 
 def pr_body(group: PRGroup) -> str:
     """Human-readable PR body: the class + a per-finding checklist."""
     lines: list[str] = []
-    if group.is_low_batch:
+    if group.is_low_batch and group.contains_priority:
+        lines.append(
+            "**This PR includes critical/high-severity fixes.** Several "
+            "vulnerability categories were batched into one pull request to stay "
+            "under the configured PR cap — review it with the same urgency as a "
+            "dedicated high-severity PR."
+        )
+    elif group.is_low_batch:
         lines.append(
             "Batched low-severity fixes grouped into a single pull request "
             "to keep the number of PRs manageable."
@@ -442,6 +472,21 @@ def pr_body(group: PRGroup) -> str:
 
 class GitError(RuntimeError):
     """A git command failed. The message is already token-scrubbed."""
+
+
+def _is_non_fast_forward(git_error: str) -> bool:
+    """True when a push was rejected because the remote branch already exists.
+
+    Detects git's rejection wording so we can report "branch already exists"
+    instead of the raw error (and never fall back to a clobbering force-push).
+    """
+    lowered = git_error.lower()
+    return (
+        "non-fast-forward" in lowered
+        or "fetch first" in lowered
+        or "failed to push some refs" in lowered
+        or "rejected" in lowered
+    )
 
 
 class GitRunner:
@@ -730,13 +775,25 @@ class PRFlow:
             return
 
         # SAFETY: push the FEATURE branch only, never base_branch.
+        # We do NOT force-push: a non-force push of a *new* branch succeeds, but
+        # if an ``isitsecure/fix-*`` branch already exists on the remote (e.g. a
+        # prior run with work the user hasn't merged) git rejects the push rather
+        # than silently clobbering it. We surface that clearly instead of forcing.
         try:
             await git.run(
-                clone_dir, "push", "--force", "origin",
+                clone_dir, "push", "origin",
                 f"HEAD:refs/heads/{branch}",
             )
         except GitError as e:
-            result.errors.append(f"{group.key}: git push failed — {e}")
+            msg = str(e)
+            if _is_non_fast_forward(msg):
+                result.errors.append(
+                    f"{group.key}: branch {branch!r} already exists on the remote "
+                    "with different commits — refusing to overwrite it. Delete or "
+                    "merge that branch, then re-run."
+                )
+            else:
+                result.errors.append(f"{group.key}: git push failed — {e}")
             return
 
         try:

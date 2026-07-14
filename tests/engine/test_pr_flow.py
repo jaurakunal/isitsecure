@@ -13,6 +13,7 @@ from isitsecure.engine.models import CodeLocation, DeepFinding, FindingSource
 from isitsecure.engine.fixes.fix_generator import FixResult
 from isitsecure.engine.fixes import pr_flow
 from isitsecure.engine.fixes.pr_flow import (
+    GitError,
     GitRunner,
     OpenedPR,
     PRFlow,
@@ -244,6 +245,39 @@ class TestCapAndPrioritize:
         assert groups[0].is_low_batch
         assert len(groups[0].findings) == 2
 
+    def test_priority_overflow_batch_is_labelled_honestly(self):
+        """More critical/high categories than max_prs → batch must NOT be
+        titled 'low-severity cleanup' since it carries critical fixes."""
+        cats = [
+            FindingCategory.INJECTION_RISK, FindingCategory.IDOR,
+            FindingCategory.AUTH_WEAKNESS, FindingCategory.PRIVILEGE_ESCALATION,
+            FindingCategory.OPEN_REDIRECT, FindingCategory.CORS_MISCONFIGURATION,
+        ]
+        findings = [
+            _finding(c, SeverityLevel.CRITICAL, title=f"crit{i}", file_path=f"a{i}.ts")
+            for i, c in enumerate(cats)
+        ]
+        groups = group_findings(findings, strategy="per-category", max_prs=3)
+        # Nothing dropped.
+        assert sum(len(g.findings) for g in groups) == len(findings)
+        batch = next(g for g in groups if g.is_low_batch)
+        assert batch.contains_priority is True
+        title = pr_title(batch)
+        assert "low-severity" not in title.lower()
+        assert "batched security fixes" in title.lower()
+        body = pr_body(batch)
+        assert "critical/high" in body.lower()
+
+    def test_low_only_batch_is_not_flagged_priority(self):
+        findings = [
+            _finding(FindingCategory.MISSING_HEADERS, SeverityLevel.LOW, title="h"),
+            _finding(FindingCategory.CLIENT_EXPOSURE, SeverityLevel.LOW, title="c"),
+        ]
+        groups = group_findings(findings, strategy="per-category", max_prs=1)
+        assert groups[0].is_low_batch
+        assert groups[0].contains_priority is False
+        assert "low-severity cleanup" in pr_title(groups[0]).lower()
+
 
 # ---------------------------------------------------------------------------
 # PR title / body generation
@@ -437,6 +471,36 @@ class TestPRFlowOrchestration:
         )
         assert secret not in caplog.text
 
+    async def test_token_not_leaked_into_surfaced_errors(self, tmp_path):
+        """A git failure whose message echoes the tokened remote URL must be
+        scrubbed before it lands in result.errors (surfaced to the client)."""
+        secret = "ghp_SUPERSECRET_TOKEN_VALUE"
+
+        class LeakyGit(GitRunner):
+            # Use the REAL GitRunner scrub, but simulate git echoing the token.
+            async def run(self, cwd, *args):
+                if args and args[0] == "push":
+                    raise GitError(
+                        self._scrub(
+                            "fatal: unable to access "
+                            f"'https://x-access-token:{secret}@github.com/o/r/': 403"
+                        )
+                    )
+                return ""
+
+        flow, _git, github, gen, clone_files = _make_flow(
+            tmp_path, git=LeakyGit(secret)
+        )
+        clone_files.add("a.ts")
+        result = await flow.run(
+            repo_url="https://github.com/octo/app",
+            findings=[_finding(file_path="a.ts", title="sqli")],
+            github_token=secret,
+        )
+        blob = " ".join(result.errors) + " ".join(result.skipped) + result.summary
+        assert secret not in blob
+        assert result.errors  # the (scrubbed) push error was surfaced
+
     async def test_non_github_host_raises(self, tmp_path):
         flow, *_ = _make_flow(tmp_path)
         with pytest.raises(ValueError):
@@ -508,6 +572,50 @@ class TestPRFlowOrchestration:
                 findings=[_finding(file_path="a.ts")], github_token="T",
             )
         assert not os.path.exists(created["dir"])
+
+    async def test_push_is_not_force(self, tmp_path):
+        """We must never force-push — that would clobber a pre-existing
+        isitsecure/fix-* branch the user hasn't merged."""
+        findings = [_finding(file_path="a.ts", title="sqli")]
+        flow, git, github, gen, clone_files = _make_flow(tmp_path)
+        clone_files.add("a.ts")
+        await flow.run(
+            repo_url="https://github.com/octo/app",
+            findings=findings, github_token="T", strategy="per-category", max_prs=8,
+        )
+        pushes = [c for c in git.calls if c and c[0] == "push"]
+        assert pushes, "expected a push"
+        for p in pushes:
+            assert "--force" not in p
+            assert "--force-with-lease" not in p
+            assert "-f" not in p
+
+    async def test_existing_remote_branch_not_clobbered(self, tmp_path):
+        """A non-fast-forward push rejection surfaces a clear 'already exists'
+        error and opens no PR (rather than overwriting the branch)."""
+        from isitsecure.engine.fixes.pr_flow import GitError
+
+        class RejectingGit(FakeGit):
+            async def run(self, cwd, *args):
+                self.calls.append(args)
+                if args and args[0] == "push":
+                    raise GitError(
+                        "! [rejected] HEAD -> isitsecure/fix-injection "
+                        "(non-fast-forward)\nerror: failed to push some refs"
+                    )
+                return ""
+
+        git = RejectingGit()
+        flow, _git, github, gen, clone_files = _make_flow(tmp_path, git=git)
+        clone_files.add("a.ts")
+        result = await flow.run(
+            repo_url="https://github.com/octo/app",
+            findings=[_finding(file_path="a.ts", title="sqli")],
+            github_token="T",
+        )
+        assert result.opened_prs == []
+        assert github.opened == []
+        assert any("already exists" in e for e in result.errors)
 
     async def test_summary_reports_cap_batching(self, tmp_path):
         findings = []
