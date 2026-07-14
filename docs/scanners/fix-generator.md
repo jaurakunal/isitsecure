@@ -12,10 +12,15 @@ Generates code patches for security findings using LLM. For each critical and hi
 4. Generates a unified diff between original and fixed code
 5. Includes an explanation of what changed and why
 
-Output is a Markdown fix plan with diffs that can be:
-- **Pasted into Cursor/Claude Code** — "Apply all the security fixes in this document"
-- **Applied manually** — `git apply fix.patch`
-- **Reviewed in PRs** — each diff is a standalone change
+Fixes are delivered three ways:
+- **Markdown fix plan** (`scan --output fixes`) — diffs + explanations to paste
+  into Cursor/Claude Code, `git apply`, or review manually.
+- **Local apply + verify** (`fix --repo <path>`) — writes fixes in place
+  (git-free), after backing up the working tree, then **re-scans to confirm each
+  finding is resolved** and reports a plain-language summary.
+- **Remote clone → per-category PRs** (`fix --repo <github-url>`) — clones,
+  fixes, and opens one pull request per finding category (one commit per
+  finding) onto feature branches.
 
 ## Why It Matters
 
@@ -44,12 +49,26 @@ The system prompt includes common fix patterns:
 ## Usage
 
 ```bash
-# Generate fixes for all critical/high findings
+# 1. Just give me a plan (Markdown, paste into Cursor / Claude Code)
 isitsecure scan --repo ./my-app --output fixes -f fixes.md
 
-# Paste into Cursor
-# "Apply all the security fixes in this document"
+# 2. Apply fixes in place on a local repo (git-free; auto-backup + re-scan verify)
+isitsecure fix --repo ./my-app
+isitsecure fix --repo ./my-app --dry-run          # preview without writing
+isitsecure fix --repo ./my-app --severity critical
+isitsecure fix --repo ./my-app --technical         # show git/backup details
+
+# 3. Fix a remote GitHub repo → open per-category pull requests
+isitsecure fix --repo https://github.com/you/your-app --github-token $GITHUB_TOKEN
+isitsecure fix --repo <github-url> --pr-strategy per-file --max-prs 5
 ```
+
+The local apply flow backs up the working tree first, then re-scans to verify
+findings are resolved and prints how many were fixed / need review / couldn't be
+fixed. The remote flow never pushes to the default branch — fixes land on
+feature branches as pull requests; `--max-prs` caps the count (default 8) and
+excess low-severity categories batch into one PR. The GitHub token is used only
+for the push + PR and is never stored or logged.
 
 ## Configuration
 

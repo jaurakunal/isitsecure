@@ -250,7 +250,7 @@ The scan narrates each phase and every scanner as it runs (with elapsed time), s
 | Semantic Rule Verifier | Logical errors in RLS policies and Firebase rules (wrong column references, tenant isolation bugs) |
 | LLM Business Logic Scanner | Attack planning: price manipulation, double-spend, privilege escalation via application logic |
 | LLM Triage Service | Deduplicates findings, assigns priority, generates plain-language owner summary with A–F grade |
-| AI Fix Generator | Generates code patches (unified diffs) for each finding — paste into Cursor/Claude Code to fix |
+| AI Fix Generator | Generates code patches for each finding — paste into Cursor/Claude Code, apply in place with `isitsecure fix`, or open per-category PRs on a remote repo |
 
 ### Cross-Referencing + Guided DAST
 
@@ -287,8 +287,16 @@ isitsecure scan URL --output fixes   # AI-generated fix plan (Markdown with diff
 
 ## Auto-Fix: One Command to Fix Your App
 
+`fix` works two ways depending on what you point it at:
+
+- **Local path** → fixes are applied **in place** (git-free), with an automatic
+  backup and a re-scan to confirm each finding is actually resolved.
+- **Remote GitHub URL** (with a token) → the repo is cloned, fixed, and the
+  changes are opened as **per-category pull requests** — nothing is pushed to
+  your default branch.
+
 ```bash
-# Scan your code and apply AI-generated fixes automatically
+# Local: scan your code and apply AI-generated fixes in place
 isitsecure fix --repo ./my-app
 
 # Preview fixes without applying (dry run)
@@ -296,16 +304,37 @@ isitsecure fix --repo ./my-app --dry-run
 
 # Only fix critical issues
 isitsecure fix --repo ./my-app --severity critical
+
+# See the git/backup details instead of the plain-language summary
+isitsecure fix --repo ./my-app --technical
 ```
 
-What it does:
-1. Scans your repo with all SAST scanners
-2. For each critical/high finding with a code location, sends the file to the LLM
-3. Generates a fixed version of the file
-4. Writes the fixed code directly to your files
-5. Shows a summary of what changed
+**Fix a remote repo → pull requests**
 
-After running, check `git diff` to review the changes, run your tests, and commit.
+```bash
+# Clone a GitHub repo, generate fixes, and open per-category PRs
+isitsecure fix --repo https://github.com/you/your-app --github-token $GITHUB_TOKEN
+
+# Control how fixes are grouped into PRs (default: one PR per finding category)
+isitsecure fix --repo <github-url> --pr-strategy per-file --max-prs 5
+```
+
+Each PR groups related fixes (by category, by default), one commit per finding,
+onto a feature branch — never your default branch. `--max-prs` caps the number
+of PRs (default 8); excess low-severity categories are batched into a single PR
+so nothing is silently dropped. The token is used only for the push + PR and is
+never stored or logged (env var `GITHUB_TOKEN` also works).
+
+What the local flow does:
+1. Scans your repo with all SAST scanners
+2. Backs up the working tree, then for each critical/high finding with a code
+   location, sends the file to the LLM and writes a fixed version
+3. **Re-scans the fixed code** to confirm each finding is resolved
+4. Prints a plain-language summary of what was fixed, needs review, or couldn't
+   be fixed (pass `--technical` for the git diff / backup-restore details)
+
+Your original files are backed up automatically; the summary tells you how to
+review and restore if needed.
 
 ## Security Badge
 
@@ -464,7 +493,24 @@ Options:
   --auth-email-b TEXT    Second user's email — enables cross-user IDOR/BOLA testing
   --auth-password-b TEXT Second user's password (paired with --auth-email-b)
   --login-url TEXT       Explicit login endpoint (else auto-discovered)
-  --github-token TEXT    GitHub token for private repos
+  --github-token TEXT    GitHub token for cloning private repos
+  -v, --verbose          Enable debug logging
+
+isitsecure fix [OPTIONS]
+  -r, --repo TEXT        Local repo path, OR a remote GitHub URL to open PRs against [required]
+  --llm TEXT             LLM provider: anthropic|google [default: anthropic]
+  --api-key TEXT         API key (env ANTHROPIC_API_KEY)
+  --dry-run              Show fixes without applying them
+  --severity TEXT        Severities to fix: critical,high,medium [default: critical,high]
+  --technical            Show git/backup details instead of the plain-language summary
+  --github-token TEXT    GitHub token for remote-repo pull requests (env GITHUB_TOKEN; never stored)
+  --pr-strategy TEXT     Group PRs by: per-category|per-file|per-finding|single [default: per-category]
+  --max-prs INT          Cap on PRs; excess low-severity categories batch into one [default: 8]
+  -v, --verbose          Enable debug logging
+
+isitsecure badge [OPTIONS]
+  -r, --repo TEXT        Path to local repo to scan [required]
+  -o, --output TEXT      Output SVG file [default: isitsecure-badge.svg]
   -v, --verbose          Enable debug logging
 
 isitsecure launch [OPTIONS]

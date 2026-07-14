@@ -190,16 +190,29 @@ The triage service processes all findings through four stages:
 
 ### Phase 11: AI Fix Generation (Optional)
 
-When `--output fixes` is used, the scanner generates code patches:
+Fix generation (`isitsecure/engine/fixes/`) turns findings into applied code
+changes. For each critical/high finding with a code location, the full source
+file plus finding details are sent to the LLM with a security-aware system
+prompt, and the fixed file is parsed back out. There are three delivery modes:
 
-1. For each critical/high finding with a code location, read the full source file
-2. Send the finding details + file content to the LLM with a security-aware system prompt
-3. Parse the LLM response to extract the fixed code
-4. Generate a unified diff between original and fixed code
-5. Export as a Markdown fix plan with diffs and explanations
+**a) Markdown fix plan** — `scan --output fixes` exports a unified diff +
+explanation per finding, designed to paste directly into Cursor or Claude Code
+("Apply all the security fixes in this document").
 
-The fix plan is designed to be pasted directly into Cursor or Claude Code:
-> "Apply all the security fixes in this document"
+**b) Local apply + verify** (`isitsecure fix --repo <path>`) — git-free:
+`fixes/safety_net.py` snapshots the working tree first (git-stash-create ref or
+file-copy backup), the fixes are written in place, then the code is **re-scanned
+to verify each finding is resolved**. `fixes/plain_results.py` classifies the
+outcome (fixed / needs review / couldn't fix) into a plain-language summary
+(`--technical` surfaces the git/backup mechanics).
+
+**c) Remote clone → per-category PRs** (`isitsecure fix --repo <github-url>`) —
+`fixes/pr_flow.py` clones the repo, groups fixed findings (per-category by
+default; also per-file / per-finding / single), and opens one pull request per
+group — one commit per finding, onto a feature branch, never the default branch.
+`--max-prs` caps the count; excess low-severity categories batch into one PR.
+Grouping relies on findings carrying their true `FindingCategory`, which for
+LLM-review findings is assigned by `code_analysis/category_classifier.py`.
 
 ### Language-Specific Route Mapping
 
@@ -292,11 +305,13 @@ isitsecure/
 │   ├── scan_config.py          # User-configurable scan settings
 │   ├── scanners/               # 15 DAST scanners + special scanners
 │   ├── code_analysis/          # 17 SAST scanners + route mappers + LSP
+│   │   └── category_classifier.py  # Maps LLM-review findings to their FindingCategory
+│   ├── fixes/                  # AI fix gen: safety_net, verifier, plain_results, pr_flow
 │   ├── guided_dast/            # SAST → DAST test generation (6 strategies)
 │   ├── auth/                   # Auth providers (Supabase, Firebase, Browser, Token)
 │   ├── shared/                 # Rate limiter, OOB callbacks, JWT utils
 │   ├── triage/                 # LLM triage + priority calculator
-│   ├── reporting/              # Report generation (JSON, HTML)
+│   ├── reporting/              # Report gen (JSON, HTML) + plain_english remediation layer
 │   ├── ingestion/              # URL snapshot capture
 │   ├── verification/           # Ownership verification
 │   ├── projects/               # Project + certification management
@@ -307,7 +322,7 @@ isitsecure/
 ├── server/                     # FastAPI server for web UI
 │   ├── app.py                  # API routes + SSE streaming
 │   └── static/                 # Pre-built Next.js UI (bundled)
-└── cli.py                      # Typer CLI (scan, launch, setup)
+└── cli.py                      # Typer CLI (scan, fix, badge, launch, setup)
 ```
 
 ## Data Flow
