@@ -28,6 +28,10 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
+# Local isitsecure config (holds the LLM API key) — the real file lives in
+# $HOME/.isitsecure/, but never let a copy be committed from inside the repo.
+.isitsecure/
+config.toml
 
 # Test / coverage
 .pytest_cache/
@@ -46,7 +50,6 @@ next-env.d.ts
 package-lock.json
 
 # Scan data (user-generated)
-~/.isitsecure/
 *.scan.json
 
 # SQLite local storage
