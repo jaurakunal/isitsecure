@@ -46,9 +46,13 @@ llm = [
     "anthropic>=0.116.0",
     "google-genai>=2.11.0",
 ]
+# Local MCP server (`isitsecure mcp`) for AI coding tools
+mcp = [
+    "mcp>=1.2",
+]
 # Everything
 all = [
-    "isitsecure[browser,oob,llm]",
+    "isitsecure[browser,oob,llm,mcp]",
 ]
 # Development
 dev = [

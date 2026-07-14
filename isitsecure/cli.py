@@ -154,9 +154,13 @@ def _print_welcome() -> None:
 
 
 @app.callback()
-def _main() -> None:
+def _main(ctx: typer.Context) -> None:
     """AI-powered security scanner. Runs before every command."""
-    _print_welcome()
+    # The MCP server speaks JSON-RPC over stdio; the banner already goes to
+    # stderr (stdout stays clean), but MCP clients pipe stderr into their logs,
+    # so skip the decorative banner for `mcp` to keep those logs quiet.
+    if ctx.invoked_subcommand != "mcp":
+        _print_welcome()
 
 
 # ---------------------------------------------------------------------------
@@ -1156,6 +1160,26 @@ def _generate_badge_svg(grade: str, critical: int, high: int, total: int) -> str
 def version() -> None:
     """Show version information."""
     console.print(f"isitsecure v{__version__}")
+
+
+@app.command()
+def mcp() -> None:
+    """Run the local MCP server (stdio) so AI coding tools can call `scan`.
+
+    Point Cursor / Claude Code / Claude Desktop at this command in their MCP
+    config; the tool spawns it as a subprocess and talks to it over stdio.
+    Nothing is hosted or exposed on the network.
+
+        {"mcpServers": {"isitsecure": {"command": "isitsecure", "args": ["mcp"]}}}
+    """
+    from isitsecure.mcp_server import run_stdio
+
+    try:
+        run_stdio()
+    except RuntimeError as exc:
+        # Missing optional 'mcp' dependency — surface the install hint, not a trace.
+        err_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
 
 
 # ---------------------------------------------------------------------------

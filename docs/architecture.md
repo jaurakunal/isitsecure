@@ -322,7 +322,8 @@ isitsecure/
 ├── server/                     # FastAPI server for web UI
 │   ├── app.py                  # API routes + SSE streaming
 │   └── static/                 # Pre-built Next.js UI (bundled)
-└── cli.py                      # Typer CLI (scan, fix, badge, launch, setup)
+├── mcp_server.py               # Local stdio MCP server (`scan` tool for AI coding tools)
+└── cli.py                      # Typer CLI (scan, fix, badge, launch, mcp, setup)
 ```
 
 ## Data Flow
