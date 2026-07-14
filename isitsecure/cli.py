@@ -980,7 +980,10 @@ def _run_remote_pr_fix(
     )
 
     console.print("\n[bold]Step 1/2:[/bold] Scanning the remote repo for vulnerabilities...")
-    report = asyncio.run(_run_scan(agent=agent, repo_url=repo_url, scan_mode="code-only"))
+    from isitsecure.engine.enums import ScanMode
+    report = asyncio.run(
+        _run_scan(agent=agent, repo_url=repo_url, scan_mode=ScanMode.CODE_ONLY)
+    )
     _print_report_table(report)
 
     target_severities = {s.strip().lower() for s in severity.split(",")}

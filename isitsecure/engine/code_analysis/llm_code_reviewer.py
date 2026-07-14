@@ -47,6 +47,9 @@ from isitsecure.engine.constants import (
 from isitsecure.engine.enums import ReviewTriggerType
 from isitsecure.llm.protocol import LLMClientProtocol
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
+from isitsecure.engine.code_analysis.category_classifier import (
+    classify_finding_category,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -281,8 +284,16 @@ class LLMCodeReviewer:
             self._total_tokens_used += (
                 len(response) // LLMCodeReviewConfig.CHARS_PER_TOKEN_ESTIMATE
             )
+            # Injection-triggered reviews default to INJECTION_RISK; general
+            # route reviews default to AUTH_WEAKNESS. Per-finding keyword
+            # classification refines both.
+            default_category = (
+                FindingCategory.INJECTION_RISK
+                if trigger_type == ReviewTriggerType.INJECTION_PATTERN_FLAG
+                else FindingCategory.AUTH_WEAKNESS
+            )
             return self._parse_llm_findings(
-                response, route.file_path, route.content
+                response, route.file_path, route.content, default_category
             )
 
         except Exception as e:
@@ -432,7 +443,9 @@ class LLMCodeReviewer:
                 len(response) // LLMCodeReviewConfig.CHARS_PER_TOKEN_ESTIMATE
             )
             return self._parse_llm_findings(
-                response, RLSPolicyAnalyzerConfig.DEFAULT_MIGRATION_DIR
+                response,
+                RLSPolicyAnalyzerConfig.DEFAULT_MIGRATION_DIR,
+                default_category=FindingCategory.RLS_MISCONFIGURATION,
             )
 
         except Exception as e:
@@ -448,9 +461,20 @@ class LLMCodeReviewer:
     # ------------------------------------------------------------------
 
     def _parse_llm_findings(
-        self, response: str, file_path: str, content: str = ""
+        self,
+        response: str,
+        file_path: str,
+        content: str = "",
+        default_category: FindingCategory = FindingCategory.AUTH_WEAKNESS,
     ) -> list[CodeFinding]:
-        """Parse LLM JSON response into CodeFinding objects."""
+        """Parse LLM JSON response into CodeFinding objects.
+
+        Each finding's category is inferred from its title/description via
+        :func:`classify_finding_category`, falling back to ``default_category``
+        (chosen by the review trigger) when no keyword rule matches. This keeps
+        SQLi/XSS/IDOR/etc. out of the ``AUTH_WEAKNESS`` catch-all so
+        category-based PR grouping stays meaningful.
+        """
         from isitsecure.engine.shared.code_context import (
             CodeContextExtractor,
         )
@@ -491,16 +515,22 @@ class LLMCodeReviewer:
                 content, line_number, item.get("description", "")
             )
 
+            title = item.get(
+                "title",
+                LLMCodeReviewConfig.FALLBACK_FINDING_TITLE,
+            )
+            description = item.get("description", "")
+            category = classify_finding_category(
+                f"{title} {description}", default=default_category
+            )
+
             findings.append(
                 CodeFinding(
                     scanner_name=self.scanner_name,
                     severity=severity,
-                    category=FindingCategory.AUTH_WEAKNESS,
-                    title=item.get(
-                        "title",
-                        LLMCodeReviewConfig.FALLBACK_FINDING_TITLE,
-                    ),
-                    description=item.get("description", ""),
+                    category=category,
+                    title=title,
+                    description=description,
                     file_path=file_path,
                     line_number=line_number,
                     code_snippet=CodeContextExtractor.extract(

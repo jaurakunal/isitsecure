@@ -935,7 +935,7 @@ class DeepSecurityScanAgent:
                 repo_snapshot.framework if repo_snapshot else None
             ),
             backend=backend,
-            scan_mode=mode.value if mode else "",
+            scan_mode=self._safe_enum_value(mode),
             total_endpoints_discovered=len(endpoints),
             endpoints_with_ids=len(endpoints_with_ids),
             endpoints_tested=len(idor_results),
@@ -2229,14 +2229,19 @@ class DeepSecurityScanAgent:
 
     @staticmethod
     def _safe_enum_value(enum_val) -> str:
-        """Safely extract .value from an enum, returning '' on failure."""
+        """Safely extract .value from an enum, returning '' on failure.
+
+        Already-string inputs are passed through unchanged, so callers may
+        hand us either an enum or a plain string (e.g. a scan mode) safely.
+        """
         if enum_val is None:
             return ""
         try:
             val = enum_val.value
             return val if isinstance(val, str) else str(val)
         except (AttributeError, TypeError):
-            return ""
+            # A plain string (no .value) is already the value we want.
+            return enum_val if isinstance(enum_val, str) else ""
 
     def _build_summary(self, report: DeepScanReport) -> str:
         """Build a human-readable final summary."""
