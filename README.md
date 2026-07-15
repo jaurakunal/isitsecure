@@ -570,6 +570,9 @@ Now ask your agent to check your code. It calls the `scan` tool:
 Code-only scans finish in seconds — the natural fit for the AI-coding loop.
 (Live-URL/DAST scanning over MCP is planned separately.)
 
+The MCP is growing toward the full scan → understand → plan → fix loop. See
+[docs/mcp.md](docs/mcp.md) for the design and roadmap.
+
 ## Try It on the Test App
 
 The repo includes **VibeTasks** — an intentionally vulnerable Next.js + Supabase app with ~50 security issues. All commands below are run from the repo root.
