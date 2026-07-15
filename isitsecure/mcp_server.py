@@ -14,7 +14,11 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any
+
+# Pydantic (used by FastMCP to build the tool's output schema) requires
+# typing_extensions.TypedDict, not typing.TypedDict, on Python < 3.12.
+from typing_extensions import TypedDict
 
 logger = logging.getLogger(__name__)
 
