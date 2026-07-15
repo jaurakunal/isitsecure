@@ -51,7 +51,8 @@ would guess the thresholds. The fix is not a "grading tool" — it is putting th
 ```
 scan(path, mode="code-only", min_severity="medium")   → report + grade model + themes
 explain(scan_id, finding_id)                           → deep dive: plain + technical + walkthrough
-fix(scan_id, finding_id, apply=false)                  → propose a diff; apply only on confirmation
+fix(scan_id, finding_id)                               → return a diff + metadata; the HOST LLM applies it
+fix(scan_id, finding_id, apply=true)                   → (optional fallback) apply via our safety-net pipeline
 verify(scan_id)                                        → re-scan, report findings cleared + grade movement
 ```
 
@@ -64,8 +65,10 @@ verify(scan_id)                                        → re-scan, report findi
 - **`explain`** *(proposed, #59).* Deep dive on one finding: full plain-English +
   technical detail + step-by-step walkthrough + framework-aware remediation
   (Wave 2 already produces all of this — the tool surfaces it per finding).
-- **`fix`** *(proposed, #59).* Generates a fix for one finding. **Defaults to a
-  proposed diff** (`apply=false`); applies to disk only on explicit confirmation.
+- **`fix`** *(proposed, #59).* Generates a fix for one finding and **returns a
+  diff + the metadata to apply it well** — the host LLM does the writing (see
+  "Who applies the fix" below). An optional `apply=true` is a fallback that
+  applies via our own safety-net pipeline.
 - **`verify`** *(proposed, #53/#50).* Re-scans and reports which findings are now
   resolved and how the grade moved — the visible reward that closes the loop.
 
@@ -82,17 +85,50 @@ survive a restart). `explain`/`fix`/`verify` take `(scan_id, finding_id)` and lo
 findings up. Without this layer, the loop breaks the moment the user references
 "that one." This is the single biggest new piece beyond the thin slice.
 
-## Fix safety: need 4 mutates the user's code
+## Who applies the fix (the central decision)
 
-An agent applying diffs to a user's repo is the riskiest capability here.
-Non-negotiables (the machinery already exists from the Wave 2 fix flow):
+Need 4 mutates the user's code — the riskiest capability here. **In the MCP
+context, `fix` returns a diff + metadata and the *host LLM* applies it. The MCP
+does not write files by default.** Reasoning:
 
-- `fix` **defaults to proposing a diff** (`apply=false`); it writes to disk only
-  on an explicit confirming call.
-- One finding at a time — no "fix everything" via MCP.
-- The working tree is **backed up** (safety net) before any write.
-- After applying, **re-scan to verify** the finding is actually resolved, and
-  report the result (and grade movement) rather than assuming success.
+1. **The host tool already has world-class edit UX** (Cursor, Claude Code) —
+   diff review, apply, undo, approval gates. Writing files ourselves bypasses all
+   of it and fights the environment the user chose.
+2. **Single writer = coherence.** If the agent applies the change, its context
+   still matches disk. If we silently rewrite files, the agent's mental model
+   drifts and its later advice goes wrong.
+3. **Less scary.** "Here's the fix, want me to apply it?" in the user's normal
+   review flow beats "the security tool rewrote 5 of your files." Matches the
+   Wave 2 dry-run-by-default philosophy.
+4. **A fix applied *with understanding* beats a blind patch.** Applying with our
+   metadata (the vuln, the fix pattern, framework context, constraints), the host
+   LLM adapts imports/style to the surrounding code — often better-integrated
+   than pasting our diff verbatim.
+
+**The diff is a reference implementation, not a mandate.** `fix` therefore returns:
+a unified diff, the full fixed-file content (so the agent *can* apply verbatim),
+the vulnerability explanation, the fix pattern, constraints (e.g. "preserve the
+public API"), the `finding_id`, and a confidence score.
+
+**Quality is preserved by `verify`, not by applying.** Whoever holds the pen,
+`verify(scan_id)` re-scans and confirms the finding is actually gone and reports
+grade movement (F → D). This **decouples the quality gate from who does the
+writing**, which is exactly what makes "let the host apply" safe. No assuming
+success.
+
+### Why this differs from the CLI
+
+`isitsecure fix` on the CLI has **no host LLM**, so it *must* apply the fix itself
+(safety-net backup → write → re-scan verify). The MCP **always** has a capable
+agent, so it defers the write. Same product, opposite right-answer per context —
+recorded here so the divergence is intentional, not an inconsistency.
+
+### `apply=true` — the optional fallback
+
+For headless/non-agent callers, or a user who explicitly wants us to do it,
+`fix(..., apply=true)` writes via our Wave 2 pipeline: **back up the working tree
+(safety net) → write one finding's fix → re-scan to verify**. Still one finding at
+a time; never a "fix everything" over MCP.
 
 ## Skill-level adaptation
 
