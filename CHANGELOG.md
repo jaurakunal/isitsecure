@@ -4,6 +4,23 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0](https://github.com/jaurakunal/isitsecure/compare/v0.4.1...v0.5.0) (2026-07-15)
+
+
+### Features
+
+* **mcp:** local stdio MCP server exposing `scan` ([#58](https://github.com/jaurakunal/isitsecure/issues/58)) ([39b6cce](https://github.com/jaurakunal/isitsecure/commit/39b6cce2ae801dcea545822c43ab413b291d0784))
+
+
+### Bug Fixes
+
+* **mcp:** use typing_extensions.TypedDict (Py3.11 CI) + widen CI matrix ([c339dd7](https://github.com/jaurakunal/isitsecure/commit/c339dd79bb88cc3b9a269cdececc66478dfedca4))
+
+
+### Documentation
+
+* **mcp:** add MCP design doc — the scan → understand → plan → fix journey ([abf9dad](https://github.com/jaurakunal/isitsecure/commit/abf9dad9cbd1d21e9107450d7173b9e2683bbc73))
+
 ## [0.4.1](https://github.com/jaurakunal/isitsecure/compare/v0.4.0...v0.4.1) (2026-07-14)
 
 
