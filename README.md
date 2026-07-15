@@ -30,7 +30,7 @@ Built for developers and **vibe coders** shipping web apps who need to know if t
 - [Auto-Fix](#auto-fix-one-command-to-fix-your-app) · [Security Badge](#security-badge)
 - [How We Compare](#how-we-compare) · [What It Does NOT Cover](#what-it-does-not-cover)
 - [Configuration](#configuration) — [API Keys](#api-keys) · [OOB Callbacks](#oob-callbacks-blind-vulnerability-detection) · [Authenticated Scanning](#authenticated-scanning)
-- [CLI Reference](#cli-reference) · [Web UI](#web-ui) · [Try It on the Test App](#try-it-on-the-test-app)
+- [CLI Reference](#cli-reference) · [Web UI](#web-ui) · [MCP (AI coding tools)](#use-inside-your-ai-coding-tool-mcp) · [Try It on the Test App](#try-it-on-the-test-app)
 - [Benchmarks](#benchmarks) · [Privacy](#privacy) · [Architecture](#architecture)
 - [Scanner Documentation](#scanner-documentation) · [LSP Setup](#lsp-setup-optional-reduces-false-positives)
 - [Contributing](#contributing) · [License](#license) · [Acknowledgements](#acknowledgements)
@@ -517,6 +517,7 @@ isitsecure launch [OPTIONS]
   -p, --port INT         Port for web UI [default: 3000]
   --host TEXT            Host to bind [default: 127.0.0.1]
 
+isitsecure mcp            Run the local MCP server (stdio) for AI coding tools
 isitsecure setup          Interactive first-time setup
 isitsecure version        Show version
 ```
@@ -540,6 +541,37 @@ The UI provides:
 - **Scan history** — recent scans are remembered locally in your browser
 
 The web server resolves your LLM API key the same way the CLI does (`ANTHROPIC_API_KEY`, a `.env` file, or `isitsecure setup`), so scans and fixes work without pasting a key into the browser. You can still enter one in the scan form to override it.
+
+## Use Inside Your AI Coding Tool (MCP)
+
+`isitsecure` ships a local [MCP](https://modelcontextprotocol.io) server so your
+AI coding tool (Cursor, Claude Code, Claude Desktop) can scan your code as a
+tool — right in the loop where you're writing it. Nothing is hosted: the tool
+spawns `isitsecure mcp` as a subprocess and talks to it over stdio.
+
+Install the extra, then add one snippet to your tool's MCP config:
+
+```bash
+pip install "isitsecure[mcp]"   # or isitsecure[all]
+```
+
+```json
+{"mcpServers": {"isitsecure": {"command": "isitsecure", "args": ["mcp"]}}}
+```
+
+Now ask your agent to check your code. It calls the `scan` tool:
+
+- **`scan(path, min_severity="medium")`** — runs a fast **code-only (SAST)** scan
+  on a local repo and returns a security grade, a go/no-go launch verdict,
+  severity counts, and a trimmed list of findings. Each finding carries a
+  plain-English explanation (what it is, what an attacker could do, how to fix
+  it) — guidance the agent can act on, not jargon.
+
+Code-only scans finish in seconds — the natural fit for the AI-coding loop.
+(Live-URL/DAST scanning over MCP is planned separately.)
+
+The MCP is growing toward the full scan → understand → plan → fix loop. See
+[docs/mcp.md](docs/mcp.md) for the design and roadmap.
 
 ## Try It on the Test App
 
