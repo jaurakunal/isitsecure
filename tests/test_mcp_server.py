@@ -10,6 +10,7 @@ Covered without running a full scan (fast + deterministic):
 
 import asyncio
 import builtins
+from collections import OrderedDict
 
 import pytest
 
@@ -18,6 +19,7 @@ from isitsecure.engine.models import (
     DeepFinding,
     DeepScanReport,
     FindingSource,
+    SecurityTheme,
 )
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
 from isitsecure import mcp_server
@@ -83,9 +85,10 @@ def test_trim_report_shape_and_plain_english():
     report = _report([
         _finding(SeverityLevel.CRITICAL, FindingCategory.INJECTION_RISK, "SQL injection via id"),
     ])
-    out = mcp_server._trim_report(report, "medium")
+    out = mcp_server._trim_report(report, "medium", "sid")
 
     # Top-level summary fields
+    assert out["scan_id"] == "sid"
     assert out["grade"]  # F for a critical
     assert out["safe_to_launch"] is False
     assert out["counts"]["critical"] == 1
@@ -95,8 +98,8 @@ def test_trim_report_shape_and_plain_english():
     # Each finding carries the trimmed + plain-English fields, no raw bloat.
     f = out["findings"][0]
     assert set(f) == {
-        "id", "severity", "category", "title",
-        "file", "line", "what_it_is", "attacker_could", "fix",
+        "id", "severity", "category", "title", "file", "line",
+        "priority", "what_it_is", "attacker_could", "fix",
     }
     assert f["severity"] == "critical"
     assert f["category"] == "injection_risk"
@@ -109,7 +112,7 @@ def test_min_severity_filter_excludes_lower():
         _finding(SeverityLevel.CRITICAL, FindingCategory.INJECTION_RISK, "crit"),
         _finding(SeverityLevel.LOW, FindingCategory.MISSING_HEADERS, "low"),
     ])
-    out = mcp_server._trim_report(report, "high")
+    out = mcp_server._trim_report(report, "high", "sid")
     # counts reflect ALL findings; returned list only those >= high
     assert out["counts"]["critical"] == 1 and out["counts"]["low"] == 1
     assert out["returned_findings"] == 1
@@ -121,7 +124,7 @@ def test_info_severity_counted_and_totals_reconcile():
         _finding(SeverityLevel.CRITICAL, FindingCategory.INJECTION_RISK, "crit"),
         _finding(SeverityLevel.INFO, FindingCategory.INFO_DISCLOSURE, "informational"),
     ])
-    out = mcp_server._trim_report(report, "low")
+    out = mcp_server._trim_report(report, "low", "sid")
     # info is bucketed (not lost) and counts reconcile with total_findings
     assert out["counts"]["info"] == 1
     assert sum(out["counts"].values()) == out["total_findings"] == 2
@@ -133,7 +136,7 @@ def test_min_severity_boundary_is_inclusive():
     report = _report([
         _finding(SeverityLevel.MEDIUM, FindingCategory.INFO_DISCLOSURE, "med"),
     ])
-    out = mcp_server._trim_report(report, "medium")  # exactly at threshold
+    out = mcp_server._trim_report(report, "medium", "sid")  # exactly at threshold
     assert out["returned_findings"] == 1
 
 
@@ -143,8 +146,61 @@ def test_findings_ordered_by_severity():
         _finding(SeverityLevel.CRITICAL, FindingCategory.INJECTION_RISK, "crit"),
         _finding(SeverityLevel.HIGH, FindingCategory.IDOR, "high"),
     ])
-    out = mcp_server._trim_report(report, "low")
+    out = mcp_server._trim_report(report, "low", "sid")
     assert [f["severity"] for f in out["findings"]] == ["critical", "high", "medium"]
+
+
+def test_path_to_next_grade_in_output():
+    # 1 critical → grade F; the first step up is D by clearing that critical.
+    report = _report([
+        _finding(SeverityLevel.CRITICAL, FindingCategory.INJECTION_RISK, "crit"),
+    ])
+    out = mcp_server._trim_report(report, "low", "sid")
+    path = out["path_to_next_grade"]
+    assert path[0]["grade"] == "D"
+    assert path[0]["clear_at_least"] == 1
+    assert path[-1]["grade"] == "A"          # ladder tops out at A
+    assert "critical" in path[0]["requires"]
+
+
+def test_themes_surfaced_in_output():
+    report = DeepScanReport(
+        findings=[_finding(SeverityLevel.HIGH, FindingCategory.IDOR, "x")],
+        themes=[SecurityTheme(
+            theme_id="payment-integrity", title="Payment Processing Integrity",
+            description="…", severity="critical", finding_count=3,
+            finding_ids=["a", "b", "c"],
+        )],
+    )
+    out = mcp_server._trim_report(report, "low", "sid")
+    assert out["themes"][0]["theme_id"] == "payment-integrity"
+    assert out["themes"][0]["finding_count"] == 3
+
+
+@pytest.fixture
+def isolated_cache(monkeypatch):
+    """Run against a fresh scan cache so these tests can't leak the module global."""
+    monkeypatch.setattr(mcp_server, "_SCAN_CACHE", OrderedDict())
+
+
+def test_scan_cache_roundtrip_and_finding_identity(isolated_cache):
+    report = _report([_finding(SeverityLevel.HIGH, FindingCategory.IDOR, "x")])
+    fid = report.findings[0].id
+    sid = mcp_server._cache_report(report)
+    assert mcp_server.get_cached_report(sid) is report
+    assert mcp_server.get_finding(sid, fid).id == fid          # resolves
+    assert mcp_server.get_finding(sid, "no-such-finding") is None
+    assert mcp_server.get_finding("no-such-scan", fid) is None
+
+
+def test_scan_cache_evicts_oldest_past_cap(isolated_cache):
+    ids = [
+        mcp_server._cache_report(_report([]))
+        for _ in range(mcp_server._SCAN_CACHE_MAX + 3)
+    ]
+    assert mcp_server.get_cached_report(ids[0]) is None        # oldest evicted
+    assert mcp_server.get_cached_report(ids[-1]) is not None   # newest kept
+    assert len(mcp_server._SCAN_CACHE) == mcp_server._SCAN_CACHE_MAX
 
 
 def test_missing_mcp_dependency_gives_friendly_message(monkeypatch):

@@ -13,8 +13,10 @@ clear "install isitsecure[mcp]" message rather than a traceback.
 from __future__ import annotations
 
 import logging
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 # Pydantic (used by FastMCP to build the tool's output schema) requires
 # typing_extensions.TypedDict, not typing.TypedDict, on Python < 3.12.
@@ -32,14 +34,33 @@ class McpFinding(TypedDict):
     title: str
     file: str | None
     line: int | None
+    priority: int | None
     what_it_is: str
     attacker_could: str
     fix: str
 
 
+class GradeStepDict(TypedDict):
+    """One rung on the climb to a better grade."""
+
+    grade: str
+    requires: str
+    clear_at_least: int
+
+
+class ThemeSummary(TypedDict):
+    """A root-cause grouping of related findings."""
+
+    theme_id: str
+    title: str
+    severity: str
+    finding_count: int
+
+
 class ScanResult(TypedDict):
     """The `scan` tool's structured result — drives the MCP output schema."""
 
+    scan_id: str
     grade: str
     grade_label: str
     safe_to_launch: bool
@@ -48,6 +69,8 @@ class ScanResult(TypedDict):
     total_findings: int
     returned_findings: int
     min_severity: str
+    path_to_next_grade: list[GradeStepDict]
+    themes: list[ThemeSummary]
     findings: list[McpFinding]
 
 
@@ -58,6 +81,44 @@ MCP_MISSING_MSG = (
 
 # Severity ranking for the min-severity filter and result ordering.
 _SEVERITY_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
+
+# In-process cache of full scan reports, keyed by scan_id, so later tools
+# (explain/fix/verify) can resolve a finding from a *prior* scan within the same
+# session — the `scan` tool returns only trimmed findings, but these keep the
+# full report. Bounded to the most recent scans to cap memory. This is the #69
+# foundation; the consuming tools land in #70/#59/#71.
+_SCAN_CACHE: "OrderedDict[str, Any]" = OrderedDict()
+_SCAN_CACHE_MAX = 20
+
+
+def _cache_report(report) -> str:
+    """Store a full report under a fresh scan_id; evict oldest past the cap.
+
+    Synchronous with no ``await`` inside, so insert+evict is atomic w.r.t. other
+    coroutines on the event loop — keep it that way (an ``async`` refactor would
+    reintroduce an interleaving race on the shared cache).
+    """
+    scan_id = uuid4().hex[:12]
+    _SCAN_CACHE[scan_id] = report
+    while len(_SCAN_CACHE) > _SCAN_CACHE_MAX:
+        _SCAN_CACHE.popitem(last=False)
+    return scan_id
+
+
+def get_cached_report(scan_id: str):
+    """Return the full DeepScanReport for a scan_id, or None if unknown/evicted."""
+    return _SCAN_CACHE.get(scan_id)
+
+
+def get_finding(scan_id: str, finding_id: str):
+    """Resolve a single finding from a prior scan (for explain/fix/verify).
+
+    Returns None if the scan_id is unknown/evicted or the finding_id isn't in it.
+    """
+    report = _SCAN_CACHE.get(scan_id)
+    if report is None:
+        return None
+    return next((f for f in report.findings if f.id == finding_id), None)
 
 
 def _require_fastmcp():
@@ -114,11 +175,12 @@ async def _run_scan_silent(path: Path, scan_mode) -> Any:
     return report
 
 
-def _trim_report(report, min_severity: str) -> ScanResult:
+def _trim_report(report, min_severity: str, scan_id: str) -> ScanResult:
     """Collapse a full DeepScanReport into a compact, agent-friendly payload."""
     from isitsecure.engine.reporting.plain_english import (
         calculate_grade,
         explain_finding,
+        grade_path,
         launch_verdict,
     )
 
@@ -146,6 +208,7 @@ def _trim_report(report, min_severity: str) -> ScanResult:
                 "title": finding.title,
                 "file": loc.file_path if loc else None,
                 "line": loc.line_number if loc else None,
+                "priority": finding.priority,
                 "what_it_is": explanation.what_it_is,
                 "attacker_could": explanation.attacker_could,
                 "fix": explanation.what_to_do,
@@ -159,7 +222,26 @@ def _trim_report(report, min_severity: str) -> ScanResult:
     )
     verdict = launch_verdict(counts["critical"], counts["high"], counts["medium"])
 
+    # What it takes to climb to each better grade — so an assistant can answer
+    # "what gets me to a C?" without reading isitsecure's grader (#68).
+    path = [
+        {"grade": s.grade, "requires": s.requires, "clear_at_least": s.clear_at_least}
+        for s in grade_path(
+            counts["critical"], counts["high"], counts["medium"], counts["low"]
+        )
+    ]
+    themes = [
+        {
+            "theme_id": t.theme_id,
+            "title": t.title,
+            "severity": t.severity,
+            "finding_count": t.finding_count,
+        }
+        for t in (report.themes or [])
+    ]
+
     return {
+        "scan_id": scan_id,
         "grade": grade.grade,
         "grade_label": grade.label,
         "safe_to_launch": verdict.ready,
@@ -168,6 +250,8 @@ def _trim_report(report, min_severity: str) -> ScanResult:
         "total_findings": len(report.findings),
         "returned_findings": len(findings_out),
         "min_severity": min_severity,
+        "path_to_next_grade": path,
+        "themes": themes,
         "findings": findings_out,
     }
 
@@ -198,7 +282,10 @@ async def scan_repo(
     report = await _run_scan_silent(resolved, scan_mode)
     if report is None:
         return {"error": "Scan completed but produced no report."}
-    return _trim_report(report, min_severity)
+    # Cache the full report so explain/fix/verify can resolve findings by
+    # (scan_id, finding_id) in later turns of the same session (#69).
+    scan_id = _cache_report(report)
+    return _trim_report(report, min_severity, scan_id)
 
 
 def build_server():

@@ -56,12 +56,12 @@ fix(scan_id, finding_id, apply=true)                   → (optional fallback) a
 verify(scan_id)                                        → re-scan, report findings cleared + grade movement
 ```
 
-- **`scan`** *(implemented, #58 — to be enriched).* Runs a fast code-only (SAST)
-  scan on a local repo. Returns a typed result: grade, launch verdict, severity
-  counts, and trimmed findings, each with a plain-English explanation
-  (what-it-is / attacker-could / how-to-fix). **To add:** the grade model +
-  path-to-next-grade, root-cause themes, and per-finding priority rationale, so
-  needs 2–3 are grounded.
+- **`scan`** *(implemented, #58 + #68).* Runs a fast code-only (SAST) scan on a
+  local repo. Returns a typed result: a `scan_id`, grade, launch verdict,
+  severity counts, **`path_to_next_grade`** (what it takes to reach each better
+  grade — so an assistant answers "what gets me to a C?" without our grader),
+  root-cause **themes**, and trimmed findings each with a plain-English
+  explanation (what-it-is / attacker-could / how-to-fix) and a priority.
 - **`explain`** *(proposed, #59).* Deep dive on one finding: full plain-English +
   technical detail + step-by-step walkthrough + framework-aware remediation
   (Wave 2 already produces all of this — the tool surfaces it per finding).
@@ -77,13 +77,14 @@ verify(scan_id)                                        → re-scan, report findi
 The conversational loop assumes the user can say *"explain the SQLi one"* or
 *"fix #3"* across turns. That requires **stable finding IDs that persist across
 the conversation**, and `explain`/`fix`/`verify` must resolve a finding from a
-**prior** scan. Today `scan` returns fresh UUIDs each call with no memory.
+**prior** scan.
 
-**Design:** `scan` persists its result under a `scan_id` (in the spawned server
-process for the session; optionally `~/.isitsecure/scans/<scan_id>.json` to
-survive a restart). `explain`/`fix`/`verify` take `(scan_id, finding_id)` and look
-findings up. Without this layer, the loop breaks the moment the user references
-"that one." This is the single biggest new piece beyond the thin slice.
+**Implemented (#69):** `scan` returns a `scan_id` and caches the full report in
+the spawned server process, bounded to the most recent scans. `get_finding(scan_id,
+finding_id)` resolves a finding from a prior scan — the foundation the
+`explain`/`fix`/`verify` tools build on. (On-disk persistence under
+`~/.isitsecure/scans/<scan_id>.json` to survive a restart is a possible later
+add; in-process is enough for a single session's scan → fix loop.)
 
 ## Who applies the fix (the central decision)
 

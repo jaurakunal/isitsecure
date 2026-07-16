@@ -1133,6 +1133,11 @@ def calculate_grade(
     ``hardened`` reserves A+ for a clean result that also passed extra
     hardening checks; callers that can't determine this pass False and a
     clean scan grades as a plain A.
+
+    NOTE: :func:`grade_path` / :data:`_GRADE_CEILINGS` encode the *inverse* of
+    these thresholds (what it takes to reach each grade). If you change the
+    numbers here, update them there — a property test in ``test_plain_english``
+    brute-forces the two against each other and will fail on drift.
     """
     if critical > 0:
         grade = "F"
@@ -1164,6 +1169,55 @@ def grade_base_letter(grade: str) -> str:
     Used for coloring so 'A+', 'A', 'A-' all share the 'A' color, etc.
     """
     return grade[0] if grade else "?"
+
+
+@dataclass(frozen=True)
+class GradeStep:
+    """One rung on the climb to a better grade: the target and what it takes."""
+
+    grade: str            # e.g. "C"
+    requires: str         # human-readable ceiling, e.g. "0 critical, 0 high"
+    clear_at_least: int   # minimum findings to remove to reach this grade
+
+
+# Ceiling counts to reach *at least* each grade, derived from calculate_grade's
+# ladder (first-match-from-worst). None = that severity is unbounded at this
+# grade. Ordered easiest → hardest, which is also increasing clear_at_least.
+_GRADE_CEILINGS: tuple[tuple[str, int | None, int | None, int | None, int | None, str], ...] = (
+    ("D",  0, None, None, None, "0 critical"),
+    ("C",  0, 0,    None, None, "0 critical, 0 high"),
+    ("C+", 0, 0,    2,    None, "0 critical, 0 high, at most 2 medium"),
+    ("B",  0, 0,    0,    None, "0 critical, 0 high, 0 medium"),
+    ("B+", 0, 0,    0,    5,    "0 critical, 0 high, 0 medium, at most 5 low"),
+    ("A-", 0, 0,    0,    2,    "0 critical, 0 high, 0 medium, at most 2 low"),
+    ("A",  0, 0,    0,    0,    "no findings"),
+)
+
+
+def grade_path(critical: int, high: int, medium: int, low: int) -> list[GradeStep]:
+    """Steps to climb from the current severity counts to each better grade.
+
+    Returns one :class:`GradeStep` per grade above the current one, easiest
+    first. ``clear_at_least`` is the minimum number of findings to remove to
+    reach that grade (kept consistent with :func:`calculate_grade`). Empty when
+    already at A. A+ is omitted — it needs the hardened flag, not a count change.
+
+    This is the data an assistant needs to answer "what gets me to a C?" without
+    reading isitsecure's grader — the same computation, handed over.
+    """
+    counts = (critical, high, medium, low)
+    steps: list[GradeStep] = []
+    for grade, *ceilings, requires in _GRADE_CEILINGS:
+        to_clear = sum(
+            max(0, count - cap)
+            for count, cap in zip(counts, ceilings)
+            if cap is not None
+        )
+        if to_clear > 0:  # not yet at this grade → it's a step up
+            steps.append(
+                GradeStep(grade=grade, requires=requires, clear_at_least=to_clear)
+            )
+    return steps
 
 
 # ---------------------------------------------------------------------------
