@@ -79,6 +79,22 @@ MCP_MISSING_MSG = (
     "Install it with:  pip install 'isitsecure[mcp]'   (or 'isitsecure[all]')."
 )
 
+# Surfaced to the host LLM in the MCP initialize response so it knows *when* to
+# reach for these tools on its own — users say "run a security audit", not
+# "call the isitsecure scan tool".
+_SERVER_INSTRUCTIONS = (
+    "isitsecure runs a security review of the user's own code. Reach for the "
+    "`scan` tool whenever the user wants to check their code for security "
+    "problems — e.g. \"run a security audit\", \"scan for vulnerabilities\", "
+    "\"is this safe to ship/launch\", \"review my code for security issues\", "
+    "\"any security bugs?\", or before a release — even when they don't name "
+    "isitsecure. It runs a local static analysis (SAST) on a repository path and "
+    "returns a letter grade, a launch verdict, findings with plain-English "
+    "explanations, and what it takes to reach a better grade. Prefer it over "
+    "reading the code yourself for security posture. Do NOT use it for general "
+    "code review, style, or non-security bugs."
+)
+
 # Severity ranking for the min-severity filter and result ordering.
 _SEVERITY_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
 
@@ -291,21 +307,27 @@ async def scan_repo(
 def build_server():
     """Construct the FastMCP server exposing the ``scan`` tool."""
     FastMCP = _require_fastmcp()
-    server = FastMCP("isitsecure")
+    server = FastMCP("isitsecure", instructions=_SERVER_INSTRUCTIONS)
 
     @server.tool()
     async def scan(path: str, min_severity: str = "medium") -> ScanResult:
-        """Run a fast code-only (SAST) security scan on a local repository.
+        """Security audit / vulnerability scan of a local code repository (SAST).
+
+        Use this whenever the user asks to check, audit, scan, or review their
+        code for security issues or vulnerabilities, or asks whether their app is
+        safe to ship or launch — not only when they name isitsecure. Runs fast
+        static analysis on the given path; no network or running app needed.
 
         Args:
             path: Path to the local repo/directory to scan.
             min_severity: Only return findings at or above this severity
                 (critical | high | medium | low). Default: medium.
 
-        Returns a security grade, a go/no-go launch verdict, severity counts, and
-        a list of findings — each with a plain-English explanation of what it is,
-        what an attacker could do, and how to fix it. Raises a tool error if the
-        path does not exist or is not a directory.
+        Returns a security grade, a go/no-go launch verdict, severity counts,
+        the steps to reach a better grade (`path_to_next_grade`), root-cause
+        themes, and a list of findings — each with a plain-English explanation of
+        what it is, what an attacker could do, and how to fix it. Raises a tool
+        error if the path does not exist or is not a directory.
         """
         from mcp.server.fastmcp.exceptions import ToolError
 

@@ -46,6 +46,25 @@ would guess the thresholds. The fix is not a "grading tool" — it is putting th
 | 3 | Plan the fixes | **Host LLM** | per-finding remediation + walkthroughs + fix ordering / dependency hints |
 | 4 | Run individual fixes | MCP tools (`explain`, `fix`, `verify`) | deep-dive text, a proposed/applied diff, and re-scan verification |
 
+## Discoverability: the agent must invoke it on its own
+
+Real users don't say "call the isitsecure scan tool." They say *"run a security
+audit"*, *"scan for vulnerabilities"*, or *"is this safe to ship?"* and expect
+the agent to reach for the tool unprompted. Whether that happens is driven by the
+metadata the server advertises, in priority order:
+
+1. **Server `instructions`** (surfaced in the MCP initialize response) — a
+   when-to-use / when-not-to-use blurb telling the host LLM to use `scan` for any
+   security-audit/vulnerability/"safe to ship" request, even when isitsecure
+   isn't named. Set via `FastMCP("isitsecure", instructions=...)`.
+2. **Tool description** — leads with "Security audit / vulnerability scan …" and
+   the trigger phrases, not just "scan a repo".
+3. **Tool name** — namespaced as `isitsecure/scan`.
+
+Honest caveat: this maximizes the odds but can't *guarantee* invocation — it's
+ultimately the host LLM's call and varies by client (Cursor / Claude Code /
+Claude Desktop), some of which also gate tools behind user approval.
+
 ## Tool surface
 
 ```
