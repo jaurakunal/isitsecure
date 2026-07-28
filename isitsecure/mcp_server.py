@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 from collections import OrderedDict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -100,6 +101,26 @@ class FindingDetail(TypedDict):
     walkthrough: list[str]
 
 
+class FixProposal(TypedDict):
+    """A proposed fix for one finding — the `fix` tool's output schema.
+
+    The MCP does NOT write files: it returns the change for the host LLM to
+    apply with its own editor (see docs/mcp.md "Who applies the fix"). Carries a
+    unified diff AND the full fixed file so the agent can apply either way.
+    """
+
+    finding_id: str
+    file: str
+    title: str
+    category: str
+    severity: str
+    diff: str
+    fixed_file: str
+    explanation: str
+    applied: bool
+    next_step: str
+
+
 MCP_MISSING_MSG = (
     "The MCP server needs the optional 'mcp' dependency.\n"
     "Install it with:  pip install 'isitsecure[mcp]'   (or 'isitsecure[all]')."
@@ -120,30 +141,44 @@ _SERVER_INSTRUCTIONS = (
     "reading the code yourself for security posture. Do NOT use it for general "
     "code review, style, or non-security bugs. After a scan, use `explain` with "
     "the scan_id and a finding's id to dig into a specific finding (\"explain the "
-    "SQL injection one\", \"why does this matter\", \"how do I fix it\")."
+    "SQL injection one\", \"why does this matter\"). Use `fix` with the scan_id "
+    "and a finding's id to get a proposed patch (\"fix the SQL injection\", \"patch "
+    "finding X\") — it returns a diff for YOU to apply with your editor; the MCP "
+    "does not write files."
 )
 
 # Severity ranking for the min-severity filter and result ordering.
 _SEVERITY_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
 
-# In-process cache of full scan reports, keyed by scan_id, so later tools
-# (explain/fix/verify) can resolve a finding from a *prior* scan within the same
-# session — the `scan` tool returns only trimmed findings, but these keep the
-# full report. Bounded to the most recent scans to cap memory. This is the #69
-# foundation; the consuming tools land in #70/#59/#71.
-_SCAN_CACHE: "OrderedDict[str, Any]" = OrderedDict()
+@dataclass(frozen=True)
+class _CachedScan:
+    """A cached scan: the full report plus the local path that was scanned.
+
+    The path lets `fix`/`verify` read the actual source files a finding refers to
+    (findings carry a repo-relative path, not file contents).
+    """
+
+    report: Any
+    repo_path: str | None
+
+
+# In-process cache of scans, keyed by scan_id, so later tools (explain/fix/
+# verify) can resolve a finding — and its source file — from a *prior* scan
+# within the same session. The `scan` tool returns only trimmed findings, but
+# these keep the full report. Bounded to the most recent scans to cap memory.
+_SCAN_CACHE: "OrderedDict[str, _CachedScan]" = OrderedDict()
 _SCAN_CACHE_MAX = 20
 
 
-def _cache_report(report) -> str:
-    """Store a full report under a fresh scan_id; evict oldest past the cap.
+def _cache_report(report, repo_path: str | None = None) -> str:
+    """Store a scan under a fresh scan_id; evict oldest past the cap.
 
     Synchronous with no ``await`` inside, so insert+evict is atomic w.r.t. other
     coroutines on the event loop — keep it that way (an ``async`` refactor would
     reintroduce an interleaving race on the shared cache).
     """
     scan_id = uuid4().hex[:12]
-    _SCAN_CACHE[scan_id] = report
+    _SCAN_CACHE[scan_id] = _CachedScan(report=report, repo_path=repo_path)
     while len(_SCAN_CACHE) > _SCAN_CACHE_MAX:
         _SCAN_CACHE.popitem(last=False)
     return scan_id
@@ -151,7 +186,14 @@ def _cache_report(report) -> str:
 
 def get_cached_report(scan_id: str):
     """Return the full DeepScanReport for a scan_id, or None if unknown/evicted."""
-    return _SCAN_CACHE.get(scan_id)
+    entry = _SCAN_CACHE.get(scan_id)
+    return entry.report if entry else None
+
+
+def get_scan_path(scan_id: str) -> str | None:
+    """Return the local path that was scanned for a scan_id, or None."""
+    entry = _SCAN_CACHE.get(scan_id)
+    return entry.repo_path if entry else None
 
 
 def get_finding(scan_id: str, finding_id: str):
@@ -159,10 +201,10 @@ def get_finding(scan_id: str, finding_id: str):
 
     Returns None if the scan_id is unknown/evicted or the finding_id isn't in it.
     """
-    report = _SCAN_CACHE.get(scan_id)
-    if report is None:
+    entry = _SCAN_CACHE.get(scan_id)
+    if entry is None:
         return None
-    return next((f for f in report.findings if f.id == finding_id), None)
+    return next((f for f in entry.report.findings if f.id == finding_id), None)
 
 
 def _require_fastmcp():
@@ -343,6 +385,81 @@ def _finding_detail(finding, report) -> FindingDetail:
     }
 
 
+def _resolve_scan_and_finding(scan_id: str, finding_id: str):
+    """Resolve (report, finding) from the cache, or raise a ToolError.
+
+    Shared by explain/fix so the two distinct not-found errors (unknown scan vs
+    unknown finding) stay identical and DRY.
+    """
+    from mcp.server.fastmcp.exceptions import ToolError
+
+    report = get_cached_report(scan_id)
+    if report is None:
+        raise ToolError(
+            f"Unknown scan_id '{scan_id}'. Run a scan first — its result "
+            "includes the scan_id to pass here."
+        )
+    finding = next((f for f in report.findings if f.id == finding_id), None)
+    if finding is None:
+        raise ToolError(
+            f"No finding '{finding_id}' in scan '{scan_id}'. Use a finding "
+            "id from that scan's results."
+        )
+    return report, finding
+
+
+def _read_finding_file(finding, repo_path: str | None) -> str:
+    """Read the source file a finding points at, guarding against traversal.
+
+    Raises ValueError with an actionable message when the path is unknown or the
+    file can't be read.
+    """
+    loc = finding.code_location
+    rel = loc.file_path if loc else ""
+    if not rel:
+        raise ValueError("This finding has no source file to fix.")
+    if not repo_path:
+        raise ValueError(
+            "The scanned path is no longer known for this scan_id — re-run scan, "
+            "then fix using the new scan_id."
+        )
+    root = Path(repo_path).resolve()
+    target = (root / rel).resolve()
+    if target != root and root not in target.parents:
+        raise ValueError(f"Refusing to read a path outside the scanned repo: {rel}")
+    if not target.is_file():
+        raise ValueError(f"Source file not found: {rel}")
+    # Size-guard before reading (shares FixGenerator's threshold so they can't
+    # drift), and never let a raw OS error escape with the absolute path.
+    from isitsecure.engine.fixes.fix_generator import FixGenerator
+
+    if target.stat().st_size > FixGenerator.MAX_FILE_SIZE:
+        raise ValueError(f"Source file too large to fix: {rel}")
+    try:
+        return target.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        raise ValueError(f"Could not read source file: {rel}") from exc
+
+
+def _fix_proposal(finding, result) -> FixProposal:
+    """Map a FixResult into the agent-facing FixProposal (the host applies it)."""
+    return {
+        "finding_id": finding.id,
+        "file": result.file_path,
+        "title": finding.title,
+        "category": finding.category.value,
+        "severity": finding.severity.value.lower(),
+        "diff": result.diff,
+        "fixed_file": result.fixed_code,
+        "explanation": result.explanation,
+        "applied": False,
+        "next_step": (
+            "Review the diff and apply it with your editor (the MCP does not "
+            "write files). Then re-scan to confirm the finding is resolved."
+        ),
+    }
+
+
 async def scan_repo(
     path: str, mode: str = "code-only", min_severity: str = "medium"
 ) -> dict:
@@ -369,9 +486,9 @@ async def scan_repo(
     report = await _run_scan_silent(resolved, scan_mode)
     if report is None:
         return {"error": "Scan completed but produced no report."}
-    # Cache the full report so explain/fix/verify can resolve findings by
-    # (scan_id, finding_id) in later turns of the same session (#69).
-    scan_id = _cache_report(report)
+    # Cache the full report + scanned path so explain/fix/verify can resolve
+    # findings (and their source files) by (scan_id, finding_id) later (#69).
+    scan_id = _cache_report(report, repo_path=str(resolved))
     return _trim_report(report, min_severity, scan_id)
 
 
@@ -418,23 +535,42 @@ def build_server():
         technical detail, evidence, and vulnerable code, plus business impact and
         step-by-step remediation (stack-tailored when the framework is known).
         """
+        report, finding = _resolve_scan_and_finding(scan_id, finding_id)
+        return _finding_detail(finding, report)
+
+    @server.tool()
+    async def fix(scan_id: str, finding_id: str) -> FixProposal:
+        """Propose a fix for one finding — returns a diff for YOU (the host) to apply.
+
+        Use after a scan when the user wants to fix a specific finding ("fix the
+        SQL injection", "fix finding X", "patch this"). Pass the `scan_id` and the
+        finding's `id`. Returns a unified diff, the full fixed file, and an
+        explanation. The MCP does NOT write files — apply the change with your own
+        editor, then re-scan to confirm the finding is resolved.
+        """
         from mcp.server.fastmcp.exceptions import ToolError
 
-        report = get_cached_report(scan_id)
-        if report is None:
+        _, finding = _resolve_scan_and_finding(scan_id, finding_id)
+
+        llm_client = _maybe_llm_client()
+        if llm_client is None:
             raise ToolError(
-                f"Unknown scan_id '{scan_id}'. Run a scan first — its result "
-                "includes the scan_id to pass here."
+                "Generating a fix needs an LLM API key. Set ANTHROPIC_API_KEY or "
+                "run `isitsecure setup`."
             )
-        finding = next(
-            (f for f in report.findings if f.id == finding_id), None
-        )
-        if finding is None:
+        try:
+            file_content = _read_finding_file(finding, get_scan_path(scan_id))
+        except ValueError as exc:
+            raise ToolError(str(exc))
+
+        from isitsecure.engine.fixes.fix_generator import FixGenerator
+
+        result = await FixGenerator(llm_client).generate_fix(finding, file_content)
+        if not result.success:
             raise ToolError(
-                f"No finding '{finding_id}' in scan '{scan_id}'. Use a finding "
-                "id from that scan's results."
+                f"Couldn't generate a fix: {result.error or 'unknown error'}"
             )
-        return _finding_detail(finding, report)
+        return _fix_proposal(finding, result)
 
     return server
 

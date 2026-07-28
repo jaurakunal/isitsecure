@@ -569,6 +569,9 @@ Now ask your agent to check your code. It calls the `scan` tool:
 - **`explain(scan_id, finding_id)`** — after a scan, dig into one finding: its
   specific description, the vulnerable code, and step-by-step remediation. Ask
   "explain the SQL injection one" and the agent calls it for you.
+- **`fix(scan_id, finding_id)`** — proposes a patch for one finding (a unified
+  diff + the fixed file). Your AI tool applies it with its own editor — the MCP
+  never writes files. Ask "fix the SQL injection."
 
 Code-only scans finish in seconds — the natural fit for the AI-coding loop.
 (Live-URL/DAST scanning over MCP is planned separately.)
