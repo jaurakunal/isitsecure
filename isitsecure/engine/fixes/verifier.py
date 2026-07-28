@@ -51,7 +51,7 @@ class VerifyResult:
         }
 
 
-def _sig_obj(f: DeepFinding) -> tuple:
+def sig_obj(f: DeepFinding) -> tuple:
     cat = f.category.value if hasattr(f.category, "value") else str(f.category)
     fp = f.code_location.file_path if f.code_location else ""
     return (f.scanner_name, cat, fp, f.title)
@@ -62,7 +62,7 @@ def _sig_dict(d: dict) -> tuple:
     return (d.get("scanner_name"), str(d.get("category")), loc.get("file_path", ""), d.get("title"))
 
 
-def _is_verifiable(f: DeepFinding) -> bool:
+def is_verifiable(f: DeepFinding) -> bool:
     return bool(
         f.code_location
         and f.code_location.file_path
@@ -104,7 +104,7 @@ async def verify_findings_resolved(
     `fixed_findings` are the findings whose files were successfully rewritten.
     """
     result = VerifyResult()
-    verifiable = [f for f in fixed_findings if _is_verifiable(f)]
+    verifiable = [f for f in fixed_findings if is_verifiable(f)]
     result.unverifiable = len(fixed_findings) - len(verifiable)
     if not verifiable:
         return result
@@ -119,7 +119,7 @@ async def verify_findings_resolved(
 
     present = {_sig_dict(d) for d in rescan}
     for f in verifiable:
-        if _sig_obj(f) in present:
+        if sig_obj(f) in present:
             result.still_present += 1
             result.still_present_titles.append(f.title)
         else:

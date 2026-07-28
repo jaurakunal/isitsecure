@@ -25,7 +25,7 @@ from isitsecure.engine.enums import FindingCategory, SeverityLevel
 from isitsecure import mcp_server
 
 
-def _finding(severity, category, title, *, file="app/api/x.ts", line=10):
+def _finding(severity, category, title, *, file="app/api/x.ts", line=10, scanner="route_auth_analyzer"):
     return DeepFinding(
         source=FindingSource.SAST_CODE,
         category=category,
@@ -33,7 +33,7 @@ def _finding(severity, category, title, *, file="app/api/x.ts", line=10):
         title=title,
         description=f"{title} — details",
         confidence=0.9,
-        scanner_name="test_scanner",
+        scanner_name=scanner,
         code_location=CodeLocation(file_path=file, line_number=line),
     )
 
@@ -45,10 +45,11 @@ def _report(findings):
 def test_tools_registered_with_schema():
     server = mcp_server.build_server()
     tools = {t.name: t for t in asyncio.run(server.list_tools())}
-    assert set(tools) == {"scan", "explain", "fix"}
+    assert set(tools) == {"scan", "explain", "fix", "verify"}
     assert set(tools["scan"].inputSchema.get("properties", {})) >= {"path", "min_severity"}
     assert set(tools["explain"].inputSchema.get("properties", {})) == {"scan_id", "finding_id"}
     assert set(tools["fix"].inputSchema.get("properties", {})) == {"scan_id", "finding_id"}
+    assert set(tools["verify"].inputSchema.get("properties", {})) == {"scan_id"}
 
 
 async def test_bad_path_returns_error_dict_not_raise():
@@ -364,6 +365,107 @@ async def test_fix_tool_unknown_finding_raises(isolated_cache):
     with pytest.raises(Exception) as exc:
         await server.call_tool("fix", {"scan_id": sid, "finding_id": "no-such"})
     assert "no finding" in str(exc.value).lower()
+
+
+def test_verify_result_reports_resolved_and_grade_movement():
+    old = _report([
+        _finding(SeverityLevel.CRITICAL, FindingCategory.INJECTION_RISK, "SQLi in db.ts", file="db.ts"),
+        _finding(SeverityLevel.HIGH, FindingCategory.AUTH_WEAKNESS, "Missing auth", file="route.ts"),
+    ])
+    # re-scan: the critical SQLi is gone, the high remains
+    new = _report([
+        _finding(SeverityLevel.HIGH, FindingCategory.AUTH_WEAKNESS, "Missing auth", file="route.ts"),
+    ])
+    r = mcp_server._verify_result(old, new, "newsid")
+    assert r["scan_id"] == "newsid"
+    assert r["resolved_count"] == 1 and "SQLi in db.ts" in r["resolved"]
+    assert r["still_present_count"] == 1 and "Missing auth" in r["still_present"]
+    assert r["previous_grade"] == "F" and r["grade"] == "D"   # critical cleared: F → D
+    assert r["grade_improved"] is True
+
+
+def test_verify_result_marks_llm_findings_unverifiable():
+    old = _report([
+        _finding(SeverityLevel.CRITICAL, FindingCategory.INJECTION_RISK, "SQLi", file="db.ts"),
+        _finding(SeverityLevel.HIGH, FindingCategory.BUSINESS_LOGIC, "Race", file="pay.ts",
+                 scanner="llm_code_reviewer"),  # LLM findings can't be signature-verified
+    ])
+    new = _report([])  # re-scan finds nothing
+    r = mcp_server._verify_result(old, new, "sid")
+    assert r["unverifiable_count"] == 1       # the LLM finding
+    assert r["resolved_count"] == 1           # only the rule-based SQLi is claimed resolved
+
+
+def test_verify_grade_ignores_unverifiable_llm_variance():
+    # Original: one HIGH LLM finding → grade D. The user changes NOTHING.
+    old = _report([
+        _finding(SeverityLevel.HIGH, FindingCategory.BUSINESS_LOGIC, "Race", file="pay.ts",
+                 scanner="llm_code_reviewer"),
+    ])
+    # Re-scan: the non-deterministic LLM finding simply doesn't re-appear.
+    new = _report([])
+    r = mcp_server._verify_result(old, new, "sid")
+    # The grade must NOT improve — nothing was verifiably fixed.
+    assert r["previous_grade"] == "D" and r["grade"] == "D"
+    assert r["grade_improved"] is False
+    assert r["resolved_count"] == 0 and r["unverifiable_count"] == 1
+
+
+def test_verify_real_fix_credited_despite_llm_hallucination():
+    # Rule-based critical fixed; the re-scan's LLM hallucinates a NEW high.
+    old = _report([_finding(SeverityLevel.CRITICAL, FindingCategory.INJECTION_RISK, "SQLi", file="db.ts")])
+    new = _report([
+        _finding(SeverityLevel.HIGH, FindingCategory.BUSINESS_LOGIC, "New race", file="x.ts",
+                 scanner="llm_code_reviewer"),
+    ])
+    r = mcp_server._verify_result(old, new, "sid")
+    # Verified fix is credited; the new unverifiable finding doesn't hurt the grade.
+    assert r["resolved_count"] == 1
+    assert r["previous_grade"] == "F" and r["grade"] == "A"
+    assert r["grade_improved"] is True
+
+
+def test_verify_signature_collision_credits_one_resolved():
+    def sqli(line):
+        return _finding(SeverityLevel.HIGH, FindingCategory.INJECTION_RISK,
+                        "SQL injection", file="db.ts", line=line)
+
+    old = _report([sqli(10), sqli(20)])   # two of the same bug in one file
+    new = _report([sqli(20)])             # one fixed, one remains
+    r = mcp_server._verify_result(old, new, "sid")
+    assert r["resolved_count"] == 1 and r["still_present_count"] == 1
+
+
+async def test_verify_tool_rescans_and_reports(isolated_cache, tmp_path, monkeypatch):
+    old = _report([_finding(SeverityLevel.CRITICAL, FindingCategory.INJECTION_RISK, "SQLi", file="db.ts")])
+    sid = mcp_server._cache_report(old, repo_path=str(tmp_path))
+    new = _report([])  # re-scan finds nothing
+
+    async def fake_rescan(path, mode):
+        return new
+
+    monkeypatch.setattr(mcp_server, "_run_scan_silent", fake_rescan)
+    server = mcp_server.build_server()
+    # in-process structured tool call returns (content_blocks, structured_dict)
+    _, res = await server.call_tool("verify", {"scan_id": sid})
+    assert res["resolved_count"] == 1
+    assert res["grade_improved"] is True
+    assert res["scan_id"] != sid              # a fresh scan_id for the new state
+
+
+async def test_verify_tool_unknown_scan_raises(isolated_cache):
+    server = mcp_server.build_server()
+    with pytest.raises(Exception) as exc:
+        await server.call_tool("verify", {"scan_id": "nope"})
+    assert "scan_id" in str(exc.value).lower()
+
+
+async def test_verify_tool_missing_path_raises(isolated_cache):
+    sid = mcp_server._cache_report(_report([]))  # no repo_path
+    server = mcp_server.build_server()
+    with pytest.raises(Exception) as exc:
+        await server.call_tool("verify", {"scan_id": sid})
+    assert "path" in str(exc.value).lower()
 
 
 def test_missing_mcp_dependency_gives_friendly_message(monkeypatch):

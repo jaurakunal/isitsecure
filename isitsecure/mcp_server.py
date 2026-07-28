@@ -121,6 +121,31 @@ class FixProposal(TypedDict):
     next_step: str
 
 
+class VerifyResult(TypedDict):
+    """Result of re-scanning after fixes — the `verify` tool's output schema.
+
+    Re-scans the same path and reports which findings cleared and how the grade
+    moved. resolved/still_present cover only *verifiable* rule-based SAST findings
+    (LLM/DAST findings can't be reliably re-checked by a code re-scan → counted
+    as unverifiable). Carries a fresh `scan_id` for the re-scanned state so the
+    fix loop can continue.
+    """
+
+    scan_id: str
+    previous_grade: str
+    grade: str
+    grade_improved: bool
+    previous_counts: dict[str, int]
+    counts: dict[str, int]
+    safe_to_launch: bool
+    resolved_count: int
+    resolved: list[str]
+    still_present_count: int
+    still_present: list[str]
+    unverifiable_count: int
+    summary: str
+
+
 MCP_MISSING_MSG = (
     "The MCP server needs the optional 'mcp' dependency.\n"
     "Install it with:  pip install 'isitsecure[mcp]'   (or 'isitsecure[all]')."
@@ -144,7 +169,9 @@ _SERVER_INSTRUCTIONS = (
     "SQL injection one\", \"why does this matter\"). Use `fix` with the scan_id "
     "and a finding's id to get a proposed patch (\"fix the SQL injection\", \"patch "
     "finding X\") — it returns a diff for YOU to apply with your editor; the MCP "
-    "does not write files."
+    "does not write files. After the user applies fixes, use `verify` with the "
+    "scan_id to re-scan and report what cleared and how the grade moved (\"did "
+    "that work?\", \"verify my fixes\", \"what's my grade now?\")."
 )
 
 # Severity ranking for the min-severity filter and result ordering.
@@ -261,6 +288,29 @@ async def _run_scan_silent(path: Path, scan_mode) -> Any:
     return report
 
 
+# Grades best → worst, for "did the grade improve?" comparisons.
+_GRADE_ORDER = ("A+", "A", "A-", "B+", "B", "C+", "C", "D", "F")
+
+
+def _grade_rank(grade: str) -> int:
+    return _GRADE_ORDER.index(grade) if grade in _GRADE_ORDER else len(_GRADE_ORDER)
+
+
+def _count_by_severity(findings) -> dict[str, int]:
+    """Count a list of findings by severity (every bucket, reconciles with len)."""
+    counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+    for finding in findings:
+        sev = finding.severity.value.lower()
+        if sev in counts:
+            counts[sev] += 1
+    return counts
+
+
+def _severity_counts(report) -> dict[str, int]:
+    """Count a report's findings by severity."""
+    return _count_by_severity(report.findings)
+
+
 def _trim_report(report, min_severity: str, scan_id: str) -> ScanResult:
     """Collapse a full DeepScanReport into a compact, agent-friendly payload."""
     from isitsecure.engine.reporting.plain_english import (
@@ -271,13 +321,7 @@ def _trim_report(report, min_severity: str, scan_id: str) -> ScanResult:
     )
 
     threshold = _SEVERITY_RANK.get(min_severity.lower(), _SEVERITY_RANK["medium"])
-
-    # Count every severity so the buckets reconcile with total_findings.
-    counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
-    for finding in report.findings:
-        sev = finding.severity.value.lower()
-        if sev in counts:
-            counts[sev] += 1
+    counts = _severity_counts(report)
 
     findings_out: list[dict] = []
     for finding in report.findings:
@@ -460,6 +504,78 @@ def _fix_proposal(finding, result) -> FixProposal:
     }
 
 
+def _verify_result(old_report, new_report, new_scan_id: str) -> VerifyResult:
+    """Compare an original scan to a re-scan: what cleared + grade movement.
+
+    Only rule-based SAST findings are verifiable (LLM/DAST findings aren't
+    deterministically reproducible). Crucially, the grade too reflects **verified
+    change only**: the re-scan's verifiable findings plus the original scan's
+    unverifiable findings (held constant, since a code re-scan can't confirm those
+    cleared) — so LLM non-determinism can never inflate or deflate the grade.
+    """
+    from collections import Counter
+
+    from isitsecure.engine.fixes.verifier import is_verifiable, sig_obj
+    from isitsecure.engine.reporting.plain_english import calculate_grade, launch_verdict
+
+    # Resolved vs still-present, matched as MULTISETS so duplicate signatures
+    # (two of the same bug in one file) are credited correctly: if 2 old findings
+    # share a signature and only 1 remains in the re-scan, that's 1 resolved.
+    old_verifiable = [f for f in old_report.findings if is_verifiable(f)]
+    new_sig_counts = Counter(sig_obj(f) for f in new_report.findings)
+    seen: Counter = Counter()
+    resolved: list[str] = []
+    still: list[str] = []
+    for f in old_verifiable:
+        sig = sig_obj(f)
+        seen[sig] += 1
+        if seen[sig] <= new_sig_counts.get(sig, 0):
+            still.append(f.title)
+        else:
+            resolved.append(f.title)
+    unverifiable = len(old_report.findings) - len(old_verifiable)
+
+    # Grade movement = verified change only. Old unverifiable findings are assumed
+    # to persist (we can't confirm they cleared), so they never move the grade.
+    effective = [f for f in new_report.findings if is_verifiable(f)] + [
+        f for f in old_report.findings if not is_verifiable(f)
+    ]
+    prev = _severity_counts(old_report)
+    cur = _count_by_severity(effective)
+    prev_grade = calculate_grade(prev["critical"], prev["high"], prev["medium"], prev["low"]).grade
+    grade = calculate_grade(cur["critical"], cur["high"], cur["medium"], cur["low"]).grade
+    verdict = launch_verdict(cur["critical"], cur["high"], cur["medium"])
+
+    if resolved and grade != prev_grade:
+        summary = (
+            f"Resolved {len(resolved)} of {len(old_verifiable)} checkable finding(s). "
+            f"Grade {prev_grade} → {grade}."
+        )
+    elif resolved:
+        summary = (
+            f"Resolved {len(resolved)} of {len(old_verifiable)} checkable finding(s); "
+            f"grade still {grade} ({len(still)} still present)."
+        )
+    else:
+        summary = f"No checkable findings resolved yet — grade {grade}."
+
+    return {
+        "scan_id": new_scan_id,
+        "previous_grade": prev_grade,
+        "grade": grade,
+        "grade_improved": _grade_rank(grade) < _grade_rank(prev_grade),
+        "previous_counts": prev,
+        "counts": cur,
+        "safe_to_launch": verdict.ready,
+        "resolved_count": len(resolved),
+        "resolved": resolved[:20],
+        "still_present_count": len(still),
+        "still_present": still[:20],
+        "unverifiable_count": unverifiable,
+        "summary": summary,
+    }
+
+
 async def scan_repo(
     path: str, mode: str = "code-only", min_severity: str = "medium"
 ) -> dict:
@@ -571,6 +687,39 @@ def build_server():
                 f"Couldn't generate a fix: {result.error or 'unknown error'}"
             )
         return _fix_proposal(finding, result)
+
+    @server.tool()
+    async def verify(scan_id: str) -> VerifyResult:
+        """Re-scan after applying fixes and report what cleared + grade movement.
+
+        Use after the user has applied one or more fixes ("did that work?", "re-check",
+        "verify my fixes", "what's my grade now?"). Pass the `scan_id` of the scan you
+        fixed against. Re-scans the same path, reports which findings are resolved vs
+        still present, the grade before → after, and a fresh `scan_id` for the new
+        state so you can keep fixing.
+        """
+        from isitsecure.engine.enums import ScanMode
+        from mcp.server.fastmcp.exceptions import ToolError
+
+        old_report = get_cached_report(scan_id)
+        if old_report is None:
+            raise ToolError(f"Unknown scan_id '{scan_id}'. Run a scan first.")
+        repo_path = get_scan_path(scan_id)
+        if not repo_path:
+            raise ToolError(
+                "The scanned path is no longer known for this scan_id — run scan "
+                "again to get a fresh scan_id, then verify against that."
+            )
+        if not Path(repo_path).is_dir():
+            raise ToolError(
+                f"The scanned path no longer exists ({repo_path}) — run scan again."
+            )
+
+        new_report = await _run_scan_silent(Path(repo_path), ScanMode.CODE_ONLY)
+        if new_report is None:
+            raise ToolError("Re-scan completed but produced no report.")
+        new_scan_id = _cache_report(new_report, repo_path=repo_path)
+        return _verify_result(old_report, new_report, new_scan_id)
 
     return server
 
