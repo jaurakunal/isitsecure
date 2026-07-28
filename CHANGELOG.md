@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0](https://github.com/jaurakunal/isitsecure/compare/v0.6.0...v0.7.0) (2026-07-28)
+
+
+### Features
+
+* **mcp:** export tool ([#88](https://github.com/jaurakunal/isitsecure/issues/88)) — render a cached scan, host writes it ([2d94add](https://github.com/jaurakunal/isitsecure/commit/2d94add35d777e1244793ecc5be83769efc027d8))
+* **mcp:** fix tool ([#59](https://github.com/jaurakunal/isitsecure/issues/59)) — propose a patch, host LLM applies ([e5882fc](https://github.com/jaurakunal/isitsecure/commit/e5882fcf3777f16358418fe332f582e0c15b3d73))
+* **mcp:** verify tool ([#71](https://github.com/jaurakunal/isitsecure/issues/71)) — re-scan, report what cleared + grade movement ([f88fe28](https://github.com/jaurakunal/isitsecure/commit/f88fe281b41debbebdd0f5de9f85621c79f2174f))
+
+
+### Bug Fixes
+
+* **mcp:** pin mcp&lt;2 — 2.0.0 removed mcp.server.fastmcp (broke CI) ([5ee596f](https://github.com/jaurakunal/isitsecure/commit/5ee596f106026a2adbb8ccfe7dd8cd8c69d25030))
+
 ## [0.6.0](https://github.com/jaurakunal/isitsecure/compare/v0.5.1...v0.6.0) (2026-07-28)
 
 
