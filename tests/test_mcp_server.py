@@ -45,9 +45,10 @@ def _report(findings):
 def test_tools_registered_with_schema():
     server = mcp_server.build_server()
     tools = {t.name: t for t in asyncio.run(server.list_tools())}
-    assert set(tools) == {"scan", "explain"}
+    assert set(tools) == {"scan", "explain", "fix"}
     assert set(tools["scan"].inputSchema.get("properties", {})) >= {"path", "min_severity"}
     assert set(tools["explain"].inputSchema.get("properties", {})) == {"scan_id", "finding_id"}
+    assert set(tools["fix"].inputSchema.get("properties", {})) == {"scan_id", "finding_id"}
 
 
 async def test_bad_path_returns_error_dict_not_raise():
@@ -259,6 +260,109 @@ async def test_explain_tool_raises_on_unknown_finding(isolated_cache):
     server = mcp_server.build_server()
     with pytest.raises(Exception) as exc:
         await server.call_tool("explain", {"scan_id": sid, "finding_id": "no-such"})
+    assert "no finding" in str(exc.value).lower()
+
+
+def test_fix_proposal_maps_result_and_never_marks_applied():
+    from isitsecure.engine.fixes.fix_generator import FixResult
+
+    f = _finding(SeverityLevel.CRITICAL, FindingCategory.INJECTION_RISK, "SQLi", file="db.ts")
+    result = FixResult(
+        finding_id=f.id, file_path="db.ts", success=True,
+        original_code="raw", fixed_code="parameterized",
+        diff="--- a/db.ts\n+++ b/db.ts\n", explanation="Parameterized the query.",
+    )
+    p = mcp_server._fix_proposal(f, result)
+    assert p["applied"] is False                       # MCP never writes
+    assert p["diff"].startswith("--- a/db.ts")
+    assert p["fixed_file"] == "parameterized"
+    assert "Parameterized" in p["explanation"]
+    assert set(p) == {
+        "finding_id", "file", "title", "category", "severity",
+        "diff", "fixed_file", "explanation", "applied", "next_step",
+    }
+
+
+def _f_file(name):  # a finding pointing at a given relative file
+    return _finding(SeverityLevel.HIGH, FindingCategory.INJECTION_RISK, "x", file=name)
+
+
+def test_read_finding_file_reads_and_guards(tmp_path):
+    (tmp_path / "app.js").write_text("const x = 1;\n")
+    (tmp_path / "src" / "lib").mkdir(parents=True)
+    (tmp_path / "src" / "lib" / "db.ts").write_text("const q = 1;\n")
+
+    # legit top-level and nested paths read fine
+    assert "const x" in mcp_server._read_finding_file(_f_file("app.js"), str(tmp_path))
+    assert "const q" in mcp_server._read_finding_file(_f_file("src/lib/db.ts"), str(tmp_path))
+
+    # escapes are refused: parent traversal AND absolute paths
+    with pytest.raises(ValueError):
+        mcp_server._read_finding_file(_f_file("../secret"), str(tmp_path))
+    with pytest.raises(ValueError):
+        mcp_server._read_finding_file(_f_file("/etc/passwd"), str(tmp_path))
+
+    # missing file / unknown scanned path
+    with pytest.raises(ValueError):
+        mcp_server._read_finding_file(_f_file("nope.js"), str(tmp_path))
+    with pytest.raises(ValueError):
+        mcp_server._read_finding_file(_f_file("app.js"), None)
+
+
+def test_read_finding_file_rejects_too_large(tmp_path):
+    from isitsecure.engine.fixes.fix_generator import FixGenerator
+    (tmp_path / "big.js").write_text("x" * (FixGenerator.MAX_FILE_SIZE + 1))
+    with pytest.raises(ValueError):
+        mcp_server._read_finding_file(_f_file("big.js"), str(tmp_path))
+
+
+async def test_fix_tool_returns_proposal(isolated_cache, tmp_path, monkeypatch):
+    from isitsecure.engine.fixes import fix_generator as fg
+
+    (tmp_path / "db.ts").write_text("const q = `SELECT ... ${id}`;\n")
+    f = _finding(SeverityLevel.CRITICAL, FindingCategory.INJECTION_RISK, "SQLi in getById", file="db.ts")
+    sid = mcp_server._cache_report(_report([f]), repo_path=str(tmp_path))
+
+    async def fake_generate_fix(self, finding, content):
+        return fg.FixResult(
+            finding_id=finding.id, file_path="db.ts", success=True,
+            fixed_code="const q = db.query('... WHERE id=$1', [id]);",
+            diff="--- a/db.ts\n+++ b/db.ts\n", explanation="Parameterized the query.",
+        )
+
+    monkeypatch.setattr(fg.FixGenerator, "generate_fix", fake_generate_fix)
+    monkeypatch.setattr(mcp_server, "_maybe_llm_client", lambda: object())
+
+    server = mcp_server.build_server()
+    res = await server.call_tool("fix", {"scan_id": sid, "finding_id": f.id})
+    assert "parameterized" in str(res).lower()
+
+
+async def test_fix_tool_needs_llm_key(isolated_cache, tmp_path, monkeypatch):
+    (tmp_path / "db.ts").write_text("x")
+    f = _finding(SeverityLevel.CRITICAL, FindingCategory.INJECTION_RISK, "x", file="db.ts")
+    sid = mcp_server._cache_report(_report([f]), repo_path=str(tmp_path))
+    monkeypatch.setattr(mcp_server, "_maybe_llm_client", lambda: None)
+    server = mcp_server.build_server()
+    with pytest.raises(Exception) as exc:
+        await server.call_tool("fix", {"scan_id": sid, "finding_id": f.id})
+    assert "api key" in str(exc.value).lower() or "llm" in str(exc.value).lower()
+
+
+async def test_fix_tool_unknown_scan_raises(isolated_cache):
+    server = mcp_server.build_server()
+    with pytest.raises(Exception) as exc:
+        await server.call_tool("fix", {"scan_id": "nope", "finding_id": "x"})
+    assert "scan_id" in str(exc.value).lower()
+
+
+async def test_fix_tool_unknown_finding_raises(isolated_cache):
+    sid = mcp_server._cache_report(
+        _report([_finding(SeverityLevel.HIGH, FindingCategory.IDOR, "x")])
+    )
+    server = mcp_server.build_server()
+    with pytest.raises(Exception) as exc:
+        await server.call_tool("fix", {"scan_id": sid, "finding_id": "no-such"})
     assert "no finding" in str(exc.value).lower()
 
 

@@ -1,9 +1,10 @@
 # isitsecure MCP — Design
 
 Status: **living design doc.** Implemented so far: `scan` (#58 + #68 enrichment),
-the scan-cache/identity layer (#69), and `explain` (#70). Still proposed: `fix`
-(#59), `verify` (#71), and DAST-over-MCP (#60). This doc is the contract we build
-to — argue it here before writing code.
+the scan-cache/identity layer (#69), `explain` (#70), and `fix` (#59, propose
+mode). Still proposed: `verify` (#71), `fix`'s optional `apply=true` fallback,
+and DAST-over-MCP (#60). This doc is the contract we build to — argue it here
+before writing code.
 
 ## Goal: the remediation journey, inside the user's AI coding tool
 
@@ -45,7 +46,7 @@ would guess the thresholds. The fix is not a "grading tool" — it is putting th
 | 1 | Scan → report | MCP tool (`scan`) | findings + grade + counts |
 | 2 | Converse about meaning / priority | **Host LLM** | payload it can reason over without guessing: plain **and** technical register, priority rationale, **grade model + path-to-grade**, root-cause themes |
 | 3 | Plan the fixes | **Host LLM** | per-finding remediation + walkthroughs + fix ordering / dependency hints |
-| 4 | Run individual fixes | MCP tools (`explain`, `fix`, `verify`) | deep-dive text, a proposed/applied diff, and re-scan verification |
+| 4 | Run individual fixes | MCP tools (`explain`, `fix`, `verify`) | deep-dive text, a proposed diff (host applies), and re-scan verification |
 
 ## Discoverability: the agent must invoke it on its own
 
@@ -91,10 +92,12 @@ verify(scan_id)                                        → re-scan, report findi
   #64 added the `BUSINESS_LOGIC` category and tightened the classifier so
   payment/idempotency/race findings and error-disclosure land in the right
   bucket instead of the `auth`/`injection` catch-alls.)
-- **`fix`** *(proposed, #59).* Generates a fix for one finding and **returns a
-  diff + the metadata to apply it well** — the host LLM does the writing (see
-  "Who applies the fix" below). An optional `apply=true` is a fallback that
-  applies via our own safety-net pipeline.
+- **`fix`** *(implemented, #59).* `fix(scan_id, finding_id)` reads the finding's
+  source file and returns a **proposed patch** — a unified `diff`, the full
+  `fixed_file`, and an `explanation` — with `applied: false`. The **host LLM
+  applies it** with its own editor; the MCP does not write files (see "Who
+  applies the fix" below). Needs an LLM key. *Not yet built:* the optional
+  `apply=true` safety-net fallback for headless callers.
 - **`verify`** *(proposed, #53/#50).* Re-scans and reports which findings are now
   resolved and how the grade moved — the visible reward that closes the loop.
 
@@ -132,10 +135,11 @@ does not write files by default.** Reasoning:
    LLM adapts imports/style to the surrounding code — often better-integrated
    than pasting our diff verbatim.
 
-**The diff is a reference implementation, not a mandate.** `fix` therefore returns:
-a unified diff, the full fixed-file content (so the agent *can* apply verbatim),
-the vulnerability explanation, the fix pattern, constraints (e.g. "preserve the
-public API"), the `finding_id`, and a confidence score.
+**The diff is a reference implementation, not a mandate.** `fix` returns a unified
+`diff`, the full `fixed_file` (so the agent *can* apply verbatim), an
+`explanation`, `applied: false`, and finding metadata (`finding_id`, `file`,
+`title`, `category`, `severity`). *Planned:* an explicit fix-pattern label,
+constraints (e.g. "preserve the public API"), and a confidence score.
 
 **Quality is preserved by `verify`, not by applying.** Whoever holds the pen,
 `verify(scan_id)` re-scans and confirms the finding is actually gone and reports
