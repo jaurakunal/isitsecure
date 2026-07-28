@@ -26,11 +26,28 @@ updates:
     commit-message:
       prefix: "deps"
 
-  # UI dependencies (Next.js app)
+  # UI dependencies (Next.js app) — version updates disabled on purpose.
+  #
+  # ui/ is SOURCE ONLY. The UI that actually ships is the prebuilt bundle
+  # committed at isitsecure/server/static/, which `isitsecure launch` serves via
+  # FastAPI StaticFiles. Regenerating it is a deliberate manual step (npm run
+  # build -> copy ui/out/. -> commit both source and output; see ui/README.md).
+  # Nothing in CI or in the wheel build (packages = ["isitsecure"]) does it
+  # automatically, and no CI job builds ui/ at all.
+  #
+  # So merging a ui/package.json bump changes a version string in a directory
+  # that is not built, not packaged, and not served — while widening the drift
+  # against the shipped bundle. `open-pull-requests-limit: 0` stops that PR
+  # class; UI dependencies are updated by rebuilding the bundle intentionally.
+  #
+  # NOTE: this disables VERSION updates only. Dependabot SECURITY updates are
+  # repo-wide and unaffected by this limit — they will still open PRs here (and
+  # for test-app/, which isn't even a configured ecosystem). Those are dismissed
+  # as `not_used`; see .github/codeql/codeql-config.yml for the rationale.
   - package-ecosystem: "npm"
     directory: "/ui"
     schedule:
       interval: "weekly"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 0
     commit-message:
       prefix: "deps"
