@@ -74,6 +74,32 @@ class ScanResult(TypedDict):
     findings: list[McpFinding]
 
 
+class FindingDetail(TypedDict):
+    """Deep dive on one finding — the `explain` tool's output schema.
+
+    Leads with the finding's OWN generated text (description / technical detail /
+    evidence / the vulnerable snippet) so it's specific to this finding, not the
+    category-level blurb the `scan` list carries.
+    """
+
+    id: str
+    severity: str
+    category: str
+    title: str
+    file: str | None
+    line: int | None
+    code_snippet: str | None
+    description: str
+    technical_detail: str
+    evidence: str
+    what_it_is: str
+    attacker_could: str
+    business_impact: str
+    remediation: str
+    stack_remediation: str
+    walkthrough: list[str]
+
+
 MCP_MISSING_MSG = (
     "The MCP server needs the optional 'mcp' dependency.\n"
     "Install it with:  pip install 'isitsecure[mcp]'   (or 'isitsecure[all]')."
@@ -92,7 +118,9 @@ _SERVER_INSTRUCTIONS = (
     "returns a letter grade, a launch verdict, findings with plain-English "
     "explanations, and what it takes to reach a better grade. Prefer it over "
     "reading the code yourself for security posture. Do NOT use it for general "
-    "code review, style, or non-security bugs."
+    "code review, style, or non-security bugs. After a scan, use `explain` with "
+    "the scan_id and a finding's id to dig into a specific finding (\"explain the "
+    "SQL injection one\", \"why does this matter\", \"how do I fix it\")."
 )
 
 # Severity ranking for the min-severity filter and result ordering.
@@ -272,6 +300,49 @@ def _trim_report(report, min_severity: str, scan_id: str) -> ScanResult:
     }
 
 
+def _finding_detail(finding, report) -> FindingDetail:
+    """Build the deep-dive payload for one finding (the `explain` tool core)."""
+    from isitsecure.engine.reporting.plain_english import (
+        business_impact,
+        explain_finding,
+        remediation_detail,
+        walkthrough_for,
+    )
+
+    explanation = explain_finding(finding)
+    loc = finding.code_location
+    walkthrough = walkthrough_for(finding.category)
+
+    # Stack-tailored category guidance (#47/#48), using the scan's detected stack.
+    stack_remediation = remediation_detail(
+        finding.category,
+        framework=getattr(report, "framework", None) or None,
+        backend=getattr(report, "backend", None) or None,
+    )
+    # Prefer this finding's OWN generated remediation when present; else the
+    # stack-tailored category guidance.
+    finding_specific = (finding.remediation_guidance or "").strip()
+
+    return {
+        "id": finding.id,
+        "severity": finding.severity.value.lower(),
+        "category": finding.category.value,
+        "title": finding.title,
+        "file": loc.file_path if loc else None,
+        "line": loc.line_number if loc else None,
+        "code_snippet": (loc.code_snippet if loc else None) or None,
+        "description": finding.description or "",
+        "technical_detail": finding.technical_detail or "",
+        "evidence": finding.evidence or "",
+        "what_it_is": explanation.what_it_is,
+        "attacker_could": explanation.attacker_could,
+        "business_impact": business_impact(finding.category),
+        "remediation": finding_specific or stack_remediation,
+        "stack_remediation": stack_remediation,
+        "walkthrough": list(walkthrough.steps) if walkthrough else [],
+    }
+
+
 async def scan_repo(
     path: str, mode: str = "code-only", min_severity: str = "medium"
 ) -> dict:
@@ -335,6 +406,35 @@ def build_server():
         if "error" in result:
             raise ToolError(result["error"])
         return result  # type: ignore[return-value]  # shape matches ScanResult
+
+    @server.tool()
+    async def explain(scan_id: str, finding_id: str) -> FindingDetail:
+        """Deep dive on one finding from a prior scan.
+
+        Use after a scan when the user wants to understand a specific finding —
+        "explain the SQL injection one", "tell me more about that", "why does
+        this matter", "how do I fix finding X". Pass the `scan_id` from the scan
+        result and the finding's `id`. Returns the finding's own description,
+        technical detail, evidence, and vulnerable code, plus business impact and
+        step-by-step remediation (stack-tailored when the framework is known).
+        """
+        from mcp.server.fastmcp.exceptions import ToolError
+
+        report = get_cached_report(scan_id)
+        if report is None:
+            raise ToolError(
+                f"Unknown scan_id '{scan_id}'. Run a scan first — its result "
+                "includes the scan_id to pass here."
+            )
+        finding = next(
+            (f for f in report.findings if f.id == finding_id), None
+        )
+        if finding is None:
+            raise ToolError(
+                f"No finding '{finding_id}' in scan '{scan_id}'. Use a finding "
+                "id from that scan's results."
+            )
+        return _finding_detail(finding, report)
 
     return server
 

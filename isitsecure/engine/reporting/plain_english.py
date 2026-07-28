@@ -427,6 +427,23 @@ _CATEGORY_EXPLANATIONS: dict[str, PlainExplanation] = {
             "and never trust a role sent by the client."
         ),
     ),
+    FindingCategory.BUSINESS_LOGIC.value: PlainExplanation(
+        what_it_is=(
+            "A step in your app's money or workflow logic can be skipped, "
+            "repeated, or tricked — like setting your own price, paying $0, "
+            "or redeeming credits twice at once."
+        ),
+        attacker_could=(
+            "Get paid features for free, drain a credit or balance, place "
+            "orders that were never really paid for, or otherwise cheat the "
+            "rules your business depends on."
+        ),
+        what_to_do=(
+            "Decide prices, amounts, and 'paid' status on the server from "
+            "trusted data — never the client — and guard against repeats and "
+            "races (idempotency keys, atomic checks) before granting anything."
+        ),
+    ),
 }
 
 
@@ -507,6 +524,9 @@ _CATEGORY_BUSINESS_IMPACT: dict[str, str] = {
         "Someone could read or change other customers' data by changing an ID.",
     FindingCategory.PRIVILEGE_ESCALATION.value:
         "A regular user could give themselves admin powers.",
+    FindingCategory.BUSINESS_LOGIC.value:
+        "Someone could pay less than they should, get paid features free, or "
+        "drain credits — directly costing you money.",
 }
 
 _GENERIC_BUSINESS_IMPACT = (
@@ -668,6 +688,16 @@ _CATEGORY_REMEDIATION: dict[str, str] = {
         "Check the role against the session/token on the backend, keep the "
         "authoritative role in the database, and deny by default when the "
         "role is missing or unrecognised."
+    ),
+    FindingCategory.BUSINESS_LOGIC.value: (
+        "Move every money- and workflow-critical decision to the server and "
+        "base it on trusted data, not client input: compute prices and amounts "
+        "server-side, verify payment status with the payment provider before "
+        "granting anything, reject negative/zero/non-numeric amounts, and make "
+        "credit/order operations idempotent and atomic (an idempotency key plus "
+        "a transactional `SELECT ... FOR UPDATE` or conditional update) so they "
+        "can't be replayed or raced. Confirm on the running app that a tampered "
+        "price, a repeated request, and a concurrent redemption are all rejected."
     ),
 }
 

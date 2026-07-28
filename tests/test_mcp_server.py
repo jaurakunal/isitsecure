@@ -42,12 +42,12 @@ def _report(findings):
     return DeepScanReport(findings=findings)
 
 
-def test_scan_tool_registered_with_schema():
+def test_tools_registered_with_schema():
     server = mcp_server.build_server()
-    tools = asyncio.run(server.list_tools())
-    assert [t.name for t in tools] == ["scan"]
-    props = tools[0].inputSchema.get("properties", {})
-    assert "path" in props and "min_severity" in props
+    tools = {t.name: t for t in asyncio.run(server.list_tools())}
+    assert set(tools) == {"scan", "explain"}
+    assert set(tools["scan"].inputSchema.get("properties", {})) >= {"path", "min_severity"}
+    assert set(tools["explain"].inputSchema.get("properties", {})) == {"scan_id", "finding_id"}
 
 
 async def test_bad_path_returns_error_dict_not_raise():
@@ -201,6 +201,65 @@ def test_scan_cache_evicts_oldest_past_cap(isolated_cache):
     assert mcp_server.get_cached_report(ids[0]) is None        # oldest evicted
     assert mcp_server.get_cached_report(ids[-1]) is not None   # newest kept
     assert len(mcp_server._SCAN_CACHE) == mcp_server._SCAN_CACHE_MAX
+
+
+def test_finding_detail_surfaces_finding_specific_text(isolated_cache):
+    f = DeepFinding(
+        source=FindingSource.SAST_CODE,
+        category=FindingCategory.INJECTION_RISK,
+        severity=SeverityLevel.CRITICAL,
+        title="SQL injection in getById",
+        description="Concatenates req.params.id into a raw SQL string.",
+        technical_detail="Line 67 builds `SELECT * FROM t WHERE id=${id}`.",
+        evidence="const q = `SELECT ... ${id}`",
+        confidence=0.9,
+        scanner_name="llm_code_reviewer",
+        remediation_guidance="Use a parameterized query: db.query('... WHERE id=$1', [id]).",
+        code_location=CodeLocation(
+            file_path="src/lib/db.ts", line_number=67, code_snippet="const q = `... ${id}`",
+        ),
+    )
+    report = DeepScanReport(findings=[f], framework="nextjs")
+    detail = mcp_server._finding_detail(f, report)
+
+    # The finding's OWN generated text is surfaced (not the category blurb)
+    assert detail["description"].startswith("Concatenates")
+    assert detail["technical_detail"] and detail["evidence"]
+    assert detail["code_snippet"]
+    # remediation prefers the finding-specific guidance
+    assert "parameterized" in detail["remediation"].lower()
+    # full deep-dive schema present
+    assert set(detail) >= {
+        "id", "severity", "category", "title", "file", "line", "code_snippet",
+        "description", "technical_detail", "evidence", "what_it_is",
+        "attacker_could", "business_impact", "remediation", "stack_remediation",
+        "walkthrough",
+    }
+
+
+async def test_explain_tool_resolves_cached_finding(isolated_cache):
+    f = _finding(SeverityLevel.HIGH, FindingCategory.IDOR, "IDOR on tasks")
+    sid = mcp_server._cache_report(_report([f]))
+    server = mcp_server.build_server()
+    result = await server.call_tool("explain", {"scan_id": sid, "finding_id": f.id})
+    assert "idor" in str(result).lower()          # resolved and returned the finding
+
+
+async def test_explain_tool_raises_on_unknown_scan(isolated_cache):
+    server = mcp_server.build_server()
+    with pytest.raises(Exception) as exc:
+        await server.call_tool("explain", {"scan_id": "nope", "finding_id": "x"})
+    assert "scan_id" in str(exc.value).lower()
+
+
+async def test_explain_tool_raises_on_unknown_finding(isolated_cache):
+    sid = mcp_server._cache_report(_report([
+        _finding(SeverityLevel.HIGH, FindingCategory.IDOR, "x"),
+    ]))
+    server = mcp_server.build_server()
+    with pytest.raises(Exception) as exc:
+        await server.call_tool("explain", {"scan_id": sid, "finding_id": "no-such"})
+    assert "no finding" in str(exc.value).lower()
 
 
 def test_missing_mcp_dependency_gives_friendly_message(monkeypatch):

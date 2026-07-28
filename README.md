@@ -566,6 +566,9 @@ Now ask your agent to check your code. It calls the `scan` tool:
   severity counts, and a trimmed list of findings. Each finding carries a
   plain-English explanation (what it is, what an attacker could do, how to fix
   it) — guidance the agent can act on, not jargon.
+- **`explain(scan_id, finding_id)`** — after a scan, dig into one finding: its
+  specific description, the vulnerable code, and step-by-step remediation. Ask
+  "explain the SQL injection one" and the agent calls it for you.
 
 Code-only scans finish in seconds — the natural fit for the AI-coding loop.
 (Live-URL/DAST scanning over MCP is planned separately.)

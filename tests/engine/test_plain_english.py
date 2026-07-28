@@ -39,6 +39,12 @@ class TestPlainExplanation:
         assert exp is plain_english._GENERIC_EXPLANATION
         assert exp.what_it_is.strip()
 
+    def test_explanations_cover_every_category(self) -> None:
+        # Strict: a new category can't silently fall back to the generic block.
+        assert set(plain_english._CATEGORY_EXPLANATIONS) == {
+            c.value for c in FindingCategory
+        }
+
     def test_explain_finding_duck_types_on_category(self) -> None:
         class _F:
             category = FindingCategory.RLS_MISCONFIGURATION
@@ -167,6 +173,11 @@ class TestBusinessImpact:
     def test_unknown_category_uses_generic(self) -> None:
         assert plain_english.business_impact("nope") == plain_english._GENERIC_BUSINESS_IMPACT
 
+    def test_business_impact_covers_every_category(self) -> None:
+        assert set(plain_english._CATEGORY_BUSINESS_IMPACT) == {
+            c.value for c in FindingCategory
+        }
+
 
 # ---------------------------------------------------------------------------
 # #57 — launch verdict
@@ -222,11 +233,11 @@ class TestCategoryRemediation:
             assert text.strip(), category
             assert text != plain_english._GENERIC_REMEDIATION, category
 
-    def test_all_eighteen_categories_are_covered(self) -> None:
-        """Sanity-check that all 18 known categories have an explicit entry."""
+    def test_all_categories_are_covered(self) -> None:
+        """Every FindingCategory must have an explicit remediation entry."""
         keys = set(plain_english._CATEGORY_REMEDIATION)
         assert keys == {c.value for c in FindingCategory}
-        assert len(keys) == 18
+        assert len(keys) == len(FindingCategory)
 
     def test_remediation_is_concrete_not_boilerplate(self) -> None:
         """Guidance names the actual control, not a vague 'review this'."""
@@ -422,3 +433,23 @@ class TestGradePath:
                             assert s.clear_at_least == brute_min_clears(
                                 c, h, m, low, s.grade
                             ), (c, h, m, low, s.grade)
+
+
+class TestBusinessLogicContent:
+    """#64 — BUSINESS_LOGIC must have real content, not the generic fallback."""
+
+    def test_explanation_is_specific(self) -> None:
+        ex = plain_english.explain_finding_category(FindingCategory.BUSINESS_LOGIC)
+        assert ex is not plain_english._GENERIC_EXPLANATION
+        assert any(w in ex.what_it_is.lower() for w in ("price", "paid", "credit"))
+
+    def test_business_impact_is_specific(self) -> None:
+        assert (
+            plain_english.business_impact(FindingCategory.BUSINESS_LOGIC)
+            != plain_english._GENERIC_BUSINESS_IMPACT
+        )
+
+    def test_remediation_is_specific(self) -> None:
+        rem = plain_english.remediation_for(FindingCategory.BUSINESS_LOGIC)
+        assert rem != plain_english._GENERIC_REMEDIATION
+        assert "idempot" in rem.lower() or "server" in rem.lower()

@@ -1,8 +1,9 @@
 # isitsecure MCP — Design
 
-Status: **living design doc.** The `scan` tool (thin slice, #58) is implemented;
-everything past it is proposed and subject to change. This doc is the contract we
-build to — argue it here before writing code.
+Status: **living design doc.** Implemented so far: `scan` (#58 + #68 enrichment),
+the scan-cache/identity layer (#69), and `explain` (#70). Still proposed: `fix`
+(#59), `verify` (#71), and DAST-over-MCP (#60). This doc is the contract we build
+to — argue it here before writing code.
 
 ## Goal: the remediation journey, inside the user's AI coding tool
 
@@ -81,9 +82,15 @@ verify(scan_id)                                        → re-scan, report findi
   grade — so an assistant answers "what gets me to a C?" without our grader),
   root-cause **themes**, and trimmed findings each with a plain-English
   explanation (what-it-is / attacker-could / how-to-fix) and a priority.
-- **`explain`** *(proposed, #59).* Deep dive on one finding: full plain-English +
-  technical detail + step-by-step walkthrough + framework-aware remediation
-  (Wave 2 already produces all of this — the tool surfaces it per finding).
+- **`explain`** *(implemented, #70).* `explain(scan_id, finding_id)` — deep dive
+  on one finding resolved from the scan cache. Leads with the finding's **own**
+  generated text (description, technical detail, evidence, the vulnerable
+  snippet) so it's specific to that finding, not the category blurb the scan list
+  carries; plus business impact, stack-tailored remediation, and a step-by-step
+  walkthrough. (Its per-finding accuracy relies on correct categorization —
+  #64 added the `BUSINESS_LOGIC` category and tightened the classifier so
+  payment/idempotency/race findings and error-disclosure land in the right
+  bucket instead of the `auth`/`injection` catch-alls.)
 - **`fix`** *(proposed, #59).* Generates a fix for one finding and **returns a
   diff + the metadata to apply it well** — the host LLM does the writing (see
   "Who applies the fix" below). An optional `apply=true` is a fallback that

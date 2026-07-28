@@ -70,6 +70,7 @@ _CATEGORY_LABELS: dict[str, str] = {
     "idor": "IDOR / broken access control",
     "auth_weakness": "Authentication weakness",
     "privilege_escalation": "Privilege escalation",
+    "business_logic": "Business logic",
     "rls_misconfiguration": "Row-level security",
     "cors_misconfiguration": "CORS misconfiguration",
     "open_redirect": "Open redirect",
