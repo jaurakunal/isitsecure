@@ -46,9 +46,11 @@ llm = [
     "anthropic>=0.116.0",
     "google-genai>=2.11.0",
 ]
-# Local MCP server (`isitsecure mcp`) for AI coding tools
+# Local MCP server (`isitsecure mcp`) for AI coding tools.
+# Pinned <2: mcp 2.0.0 removed `mcp.server.fastmcp` (breaking); we use the 1.x
+# FastMCP API. Revisit for a 2.x migration separately.
 mcp = [
-    "mcp>=1.28.1",
+    "mcp>=1.28.1,<2",
 ]
 # Everything
 all = [
