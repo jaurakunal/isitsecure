@@ -1,8 +1,17 @@
 version: 2
 updates:
   # Python dependencies (declared in pyproject.toml)
+  #
+  # pyproject.toml declares open lower bounds (`httpx>=0.25`, `rich>=13.0`, ...),
+  # not pins. Dependabot's default pip strategy ("increase") raises those floors
+  # on every release even though the existing range already permits the new
+  # version — so the PR changes nothing about what actually gets installed and
+  # only forbids older versions. "increase-if-necessary" raises a floor only when
+  # the declared range genuinely excludes the new release, which is the case we
+  # actually want a PR for.
   - package-ecosystem: "pip"
     directory: "/"
+    versioning-strategy: increase-if-necessary
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
