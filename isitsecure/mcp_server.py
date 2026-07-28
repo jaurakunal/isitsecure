@@ -146,6 +146,19 @@ class VerifyResult(TypedDict):
     summary: str
 
 
+class ExportResult(TypedDict):
+    """A rendered, shareable report — the `export` tool's output schema.
+
+    Returns the report *content* for the host to save; the MCP does not write
+    files (same stance as `fix`).
+    """
+
+    format: str
+    content: str
+    suggested_filename: str
+    next_step: str
+
+
 MCP_MISSING_MSG = (
     "The MCP server needs the optional 'mcp' dependency.\n"
     "Install it with:  pip install 'isitsecure[mcp]'   (or 'isitsecure[all]')."
@@ -171,7 +184,10 @@ _SERVER_INSTRUCTIONS = (
     "finding X\") — it returns a diff for YOU to apply with your editor; the MCP "
     "does not write files. After the user applies fixes, use `verify` with the "
     "scan_id to re-scan and report what cleared and how the grade moved (\"did "
-    "that work?\", \"verify my fixes\", \"what's my grade now?\")."
+    "that work?\", \"verify my fixes\", \"what's my grade now?\"). Use `export` "
+    "with the scan_id to render a shareable report (html/sarif/json/markdown) to "
+    "save or attach — it returns the content for YOU to write; the MCP does not "
+    "write files."
 )
 
 # Severity ranking for the min-severity filter and result ordering.
@@ -576,6 +592,72 @@ def _verify_result(old_report, new_report, new_scan_id: str) -> VerifyResult:
     }
 
 
+def _render_markdown(report) -> str:
+    """A compact, deterministic Markdown report — a shareable summary (no LLM)."""
+    from isitsecure.engine.reporting.plain_english import (
+        calculate_grade,
+        explain_finding,
+        launch_verdict,
+    )
+
+    counts = _severity_counts(report)
+    grade = calculate_grade(
+        counts["critical"], counts["high"], counts["medium"], counts["low"]
+    )
+    verdict = launch_verdict(counts["critical"], counts["high"], counts["medium"])
+
+    lines = [
+        f"# Security Report — Grade {grade.grade}",
+        "",
+        verdict.headline,
+        "",
+        f"**Findings:** {counts['critical']} critical · {counts['high']} high · "
+        f"{counts['medium']} medium · {counts['low']} low",
+        "",
+        "## Findings",
+        "",
+    ]
+    for finding in sorted(
+        report.findings,
+        key=lambda f: -_SEVERITY_RANK.get(f.severity.value.lower(), 0),
+    ):
+        loc = finding.code_location
+        where = ""
+        if loc and loc.file_path:
+            fp = loc.file_path.replace("`", "'")
+            where = f" — `{fp}`" + (f":{loc.line_number}" if loc.line_number else "")
+        explanation = explain_finding(finding)
+        # Neutralise backticks in the title so they can't break the heading.
+        title = finding.title.replace("`", "'")
+        lines += [
+            f"### [{finding.severity.value.upper()}] {title}{where}",
+            "",
+            explanation.what_it_is,
+            "",
+            f"**Fix:** {explanation.what_to_do}",
+            "",
+        ]
+    return "\n".join(lines)
+
+
+def _render_report(report, fmt: str) -> str:
+    """Render a cached report in the requested format, reusing engine renderers."""
+    if fmt == "json":
+        return report.model_dump_json(indent=2)
+    if fmt == "markdown":
+        return _render_markdown(report)
+    if fmt == "sarif":
+        from isitsecure.engine.reporting.sarif_renderer import SARIFRenderer
+
+        return SARIFRenderer().render(report)
+    if fmt == "html":
+        from isitsecure.engine.reporting.html_renderer import HTMLReportRenderer
+        from isitsecure.engine.reporting.report_generator import ReportGenerator
+
+        return HTMLReportRenderer().render(ReportGenerator().generate(report))
+    raise ValueError(f"Unknown format '{fmt}'. Use one of: html, sarif, json, markdown.")
+
+
 async def scan_repo(
     path: str, mode: str = "code-only", min_severity: str = "medium"
 ) -> dict:
@@ -720,6 +802,39 @@ def build_server():
             raise ToolError("Re-scan completed but produced no report.")
         new_scan_id = _cache_report(new_report, repo_path=repo_path)
         return _verify_result(old_report, new_report, new_scan_id)
+
+    @server.tool()
+    async def export(scan_id: str, format: str = "markdown") -> ExportResult:
+        """Render a prior scan as a shareable report and return its content.
+
+        Use when the user wants to save, share, or attach the results ("export the
+        report", "give me a SARIF file for CI", "save an HTML report", "a summary
+        for the PR"). Renders the cached scan (no re-scan) in `format` =
+        html | sarif | json | markdown, and RETURNS the content as a string — YOU
+        save it with your editor; the MCP does not write files.
+        """
+        from mcp.server.fastmcp.exceptions import ToolError
+
+        report = get_cached_report(scan_id)
+        if report is None:
+            raise ToolError(f"Unknown scan_id '{scan_id}'. Run a scan first.")
+        fmt = (format or "markdown").lower()
+        try:
+            content = _render_report(report, fmt)
+        except ValueError as exc:  # unknown format
+            raise ToolError(str(exc))
+        except Exception as exc:  # renderer failure — keep the tool surface clean
+            raise ToolError(f"Failed to render the {fmt} report: {exc}")
+        ext = {"html": "html", "sarif": "sarif", "json": "json", "markdown": "md"}[fmt]
+        return {
+            "format": fmt,
+            "content": content,
+            "suggested_filename": f"isitsecure-report.{ext}",
+            "next_step": (
+                f"Save this to isitsecure-report.{ext} with your editor "
+                "(the MCP does not write files)."
+            ),
+        }
 
     return server
 
