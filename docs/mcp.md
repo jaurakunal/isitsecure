@@ -1,10 +1,10 @@
 # isitsecure MCP — Design
 
 Status: **living design doc.** Implemented so far: `scan` (#58 + #68 enrichment),
-the scan-cache/identity layer (#69), `explain` (#70), and `fix` (#59, propose
-mode). Still proposed: `verify` (#71), `fix`'s optional `apply=true` fallback,
-and DAST-over-MCP (#60). This doc is the contract we build to — argue it here
-before writing code.
+the scan-cache/identity layer (#69), `explain` (#70), `fix` (#59, propose mode),
+and `verify` (#71) — the scan → understand → plan → fix → verify loop is complete.
+Still proposed: `fix`'s optional `apply=true` fallback and DAST-over-MCP (#60).
+This doc is the contract we build to — argue it here before writing code.
 
 ## Goal: the remediation journey, inside the user's AI coding tool
 
@@ -98,8 +98,13 @@ verify(scan_id)                                        → re-scan, report findi
   applies it** with its own editor; the MCP does not write files (see "Who
   applies the fix" below). Needs an LLM key. *Not yet built:* the optional
   `apply=true` safety-net fallback for headless callers.
-- **`verify`** *(proposed, #53/#50).* Re-scans and reports which findings are now
-  resolved and how the grade moved — the visible reward that closes the loop.
+- **`verify`** *(implemented, #71).* `verify(scan_id)` re-scans the same path and
+  reports which findings cleared vs. still present, the grade **before → after**,
+  and a fresh `scan_id` for the new state so the loop continues. Both the
+  resolved/still-present counts and the grade movement reflect only *verifiable*
+  rule-based SAST findings; LLM/DAST findings are counted `unverifiable` and held
+  constant (a code re-scan can't reliably reproduce them), so LLM non-determinism
+  can never inflate or deflate the grade. The visible reward that closes the loop.
 
 ## State & identity: the scan cache
 
@@ -142,8 +147,10 @@ does not write files by default.** Reasoning:
 constraints (e.g. "preserve the public API"), and a confidence score.
 
 **Quality is preserved by `verify`, not by applying.** Whoever holds the pen,
-`verify(scan_id)` re-scans and confirms the finding is actually gone and reports
-grade movement (F → D). This **decouples the quality gate from who does the
+`verify(scan_id)` re-scans and confirms the finding is actually gone **for
+rule-based findings** (LLM/DAST findings are reported `unverifiable`), and reports
+grade movement (F → D) attributable to that verified change. This **decouples the
+quality gate from who does the
 writing**, which is exactly what makes "let the host apply" safe. No assuming
 success.
 
