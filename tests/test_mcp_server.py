@@ -45,11 +45,12 @@ def _report(findings):
 def test_tools_registered_with_schema():
     server = mcp_server.build_server()
     tools = {t.name: t for t in asyncio.run(server.list_tools())}
-    assert set(tools) == {"scan", "explain", "fix", "verify"}
+    assert set(tools) == {"scan", "explain", "fix", "verify", "export"}
     assert set(tools["scan"].inputSchema.get("properties", {})) >= {"path", "min_severity"}
     assert set(tools["explain"].inputSchema.get("properties", {})) == {"scan_id", "finding_id"}
     assert set(tools["fix"].inputSchema.get("properties", {})) == {"scan_id", "finding_id"}
     assert set(tools["verify"].inputSchema.get("properties", {})) == {"scan_id"}
+    assert set(tools["export"].inputSchema.get("properties", {})) == {"scan_id", "format"}
 
 
 async def test_bad_path_returns_error_dict_not_raise():
@@ -466,6 +467,63 @@ async def test_verify_tool_missing_path_raises(isolated_cache):
     with pytest.raises(Exception) as exc:
         await server.call_tool("verify", {"scan_id": sid})
     assert "path" in str(exc.value).lower()
+
+
+def test_render_report_each_format():
+    import json as _json
+    report = _report([
+        _finding(SeverityLevel.CRITICAL, FindingCategory.INJECTION_RISK, "SQLi in db.ts", file="db.ts"),
+    ])
+    md = mcp_server._render_report(report, "markdown")
+    assert md.startswith("# Security Report") and "SQLi in db.ts" in md
+    assert "findings" in _json.loads(mcp_server._render_report(report, "json"))
+    sarif = mcp_server._render_report(report, "sarif")
+    assert "$schema" in sarif and "sarif" in sarif.lower()
+    assert mcp_server._render_report(report, "html").lstrip().startswith("<!DOCTYPE")
+
+
+def test_render_report_unknown_format_raises():
+    with pytest.raises(ValueError):
+        mcp_server._render_report(_report([]), "pdf")
+
+
+def test_render_markdown_clean_report_and_backtick_title():
+    # Clean scan renders without crashing.
+    assert mcp_server._render_report(_report([]), "markdown").startswith("# Security Report")
+    # A title containing backticks must not break the markdown (they're neutralised).
+    md = mcp_server._render_report(
+        _report([_finding(SeverityLevel.HIGH, FindingCategory.INJECTION_RISK,
+                          "SQLi in `db.ts` via ${x}", file="db.ts")]),
+        "markdown",
+    )
+    assert "SQLi in 'db.ts' via ${x}" in md      # title backticks neutralised to quotes
+    assert "SQLi in `db.ts` via" not in md        # the raw backtick title is gone
+
+
+async def test_export_tool_returns_content_and_filename(isolated_cache):
+    sid = mcp_server._cache_report(
+        _report([_finding(SeverityLevel.HIGH, FindingCategory.IDOR, "IDOR on tasks", file="a.ts")])
+    )
+    server = mcp_server.build_server()
+    _, res = await server.call_tool("export", {"scan_id": sid, "format": "markdown"})
+    assert res["format"] == "markdown"
+    assert "IDOR on tasks" in res["content"]
+    assert res["suggested_filename"] == "isitsecure-report.md"
+
+
+async def test_export_tool_unknown_scan_raises(isolated_cache):
+    server = mcp_server.build_server()
+    with pytest.raises(Exception) as exc:
+        await server.call_tool("export", {"scan_id": "nope", "format": "html"})
+    assert "scan_id" in str(exc.value).lower()
+
+
+async def test_export_tool_unknown_format_raises(isolated_cache):
+    sid = mcp_server._cache_report(_report([]))
+    server = mcp_server.build_server()
+    with pytest.raises(Exception) as exc:
+        await server.call_tool("export", {"scan_id": sid, "format": "pdf"})
+    assert "format" in str(exc.value).lower()
 
 
 def test_missing_mcp_dependency_gives_friendly_message(monkeypatch):

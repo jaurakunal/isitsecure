@@ -574,6 +574,9 @@ Now ask your agent to check your code. It calls the `scan` tool:
   never writes files. Ask "fix the SQL injection."
 - **`verify(scan_id)`** — after you apply fixes, re-scans and reports what
   cleared and any grade movement (e.g. F → D). Ask "did that work?"
+- **`export(scan_id, format)`** — render the scan as HTML / SARIF / JSON /
+  Markdown to share or attach (SARIF feeds GitHub code scanning). Ask "export the
+  report" — your tool saves the returned file.
 
 Code-only scans finish in seconds — the natural fit for the AI-coding loop.
 (Live-URL/DAST scanning over MCP is planned separately.)

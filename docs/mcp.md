@@ -2,8 +2,9 @@
 
 Status: **living design doc.** Implemented so far: `scan` (#58 + #68 enrichment),
 the scan-cache/identity layer (#69), `explain` (#70), `fix` (#59, propose mode),
-and `verify` (#71) — the scan → understand → plan → fix → verify loop is complete.
-Still proposed: `fix`'s optional `apply=true` fallback and DAST-over-MCP (#60).
+`verify` (#71), and `export` (#88) — the scan → understand → plan → fix → verify
+loop is complete. Still proposed: `fix`'s optional `apply=true` fallback and
+DAST-over-MCP (#60).
 This doc is the contract we build to — argue it here before writing code.
 
 ## Goal: the remediation journey, inside the user's AI coding tool
@@ -75,6 +76,7 @@ explain(scan_id, finding_id)                           → deep dive: plain + te
 fix(scan_id, finding_id)                               → return a diff + metadata; the HOST LLM applies it
 fix(scan_id, finding_id, apply=true)                   → (optional fallback) apply via our safety-net pipeline
 verify(scan_id)                                        → re-scan, report findings cleared + grade movement
+export(scan_id, format="markdown")                     → render html/sarif/json/markdown; the HOST writes it
 ```
 
 - **`scan`** *(implemented, #58 + #68).* Runs a fast code-only (SAST) scan on a
@@ -105,6 +107,12 @@ verify(scan_id)                                        → re-scan, report findi
   rule-based SAST findings; LLM/DAST findings are counted `unverifiable` and held
   constant (a code re-scan can't reliably reproduce them), so LLM non-determinism
   can never inflate or deflate the grade. The visible reward that closes the loop.
+- **`export`** *(implemented, #88).* `export(scan_id, format)` renders a **cached**
+  scan (no re-scan) as `html` | `sarif` | `json` | `markdown` and **returns the
+  content** for the host to save — the MCP does not write files (same stance as
+  `fix`). Reuses the engine's HTML/SARIF renderers; SARIF feeds GitHub code
+  scanning. Rendering from the cache is why this lives in the MCP and not only the
+  stateless CLI.
 
 ## State & identity: the scan cache
 
