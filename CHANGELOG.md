@@ -4,6 +4,25 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1](https://github.com/jaurakunal/isitsecure/compare/v0.5.0...v0.5.1) (2026-07-28)
+
+
+### Dependencies
+
+* Bump actions/setup-python from 6 to 7 ([#77](https://github.com/jaurakunal/isitsecure/issues/77)) ([93d153f](https://github.com/jaurakunal/isitsecure/commit/93d153f68b9adfaed506f2c3c83e7055ba2781f2))
+* Bump react from 19.2.7 to 19.2.8 in /ui ([#80](https://github.com/jaurakunal/isitsecure/issues/80)) ([8778270](https://github.com/jaurakunal/isitsecure/commit/87782708602640578620fe39ec01fa3c4ea20142))
+* Bump react-dom from 19.2.7 to 19.2.8 in /ui ([#78](https://github.com/jaurakunal/isitsecure/issues/78)) ([caa90ce](https://github.com/jaurakunal/isitsecure/commit/caa90ce99725b8b78d54c47d42ca5fb9432fef5f))
+* Update httpx requirement from &gt;=0.25 to &gt;=0.28.1 ([#73](https://github.com/jaurakunal/isitsecure/issues/73)) ([e0efae4](https://github.com/jaurakunal/isitsecure/commit/e0efae474dbe02bc75ca48846f9cdc52b6b7c80d))
+* Update mcp requirement from &gt;=1.2 to &gt;=1.28.1 ([#76](https://github.com/jaurakunal/isitsecure/issues/76)) ([aa59068](https://github.com/jaurakunal/isitsecure/commit/aa5906826207ded1b1bb1697b745c2c575273a4e))
+* Update pytest-asyncio requirement from &gt;=0.23 to &gt;=1.4.0 ([#72](https://github.com/jaurakunal/isitsecure/issues/72)) ([aa95c0f](https://github.com/jaurakunal/isitsecure/commit/aa95c0f4125ea55205dcaaa510fad9d27723d181))
+* Update rich requirement from &gt;=13.0 to &gt;=15.0.0 ([#75](https://github.com/jaurakunal/isitsecure/issues/75)) ([79c6ef6](https://github.com/jaurakunal/isitsecure/commit/79c6ef679c7a9d33c344d77e5b52c9119b188c9d))
+* Update ruff requirement from &gt;=0.15.21 to &gt;=0.15.22 ([#74](https://github.com/jaurakunal/isitsecure/issues/74)) ([3a6b08a](https://github.com/jaurakunal/isitsecure/commit/3a6b08a34003c4404cf6280acf328d79bbee49ba))
+
+
+### Documentation
+
+* **mcp:** record the fix design — host LLM applies, MCP verifies ([433edfc](https://github.com/jaurakunal/isitsecure/commit/433edfcafeed4c28d70e70b1ba179882691c6910))
+
 ## [0.5.0](https://github.com/jaurakunal/isitsecure/compare/v0.4.1...v0.5.0) (2026-07-15)
 
 
