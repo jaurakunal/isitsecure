@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0](https://github.com/jaurakunal/isitsecure/compare/v0.5.1...v0.6.0) (2026-07-28)
+
+
+### Features
+
+* **mcp:** explain tool ([#70](https://github.com/jaurakunal/isitsecure/issues/70)) + BUSINESS_LOGIC category & classifier fixes ([#64](https://github.com/jaurakunal/isitsecure/issues/64)) ([18af523](https://github.com/jaurakunal/isitsecure/commit/18af523bd1d031f35f334406b9110cb714d55f41))
+* **mcp:** make scan self-advertise so agents auto-invoke it ([30d2b2e](https://github.com/jaurakunal/isitsecure/commit/30d2b2ef10d4a4565eb3044cb465a69959f15bd1))
+
 ## [0.5.1](https://github.com/jaurakunal/isitsecure/compare/v0.5.0...v0.5.1) (2026-07-28)
 
 
