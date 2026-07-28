@@ -118,6 +118,7 @@ class LLMTriageService:
         "injection_risk": ImpactCategory.DATA_BREACH,
         "auth_weakness": ImpactCategory.DATA_BREACH,
         "exposed_api_endpoint": ImpactCategory.OPERATIONAL,
+        "business_logic": ImpactCategory.FINANCIAL,
     }
 
     # Rule-based likelihood by severity

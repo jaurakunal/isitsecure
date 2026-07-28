@@ -13,8 +13,10 @@ clear "install isitsecure[mcp]" message rather than a traceback.
 from __future__ import annotations
 
 import logging
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 # Pydantic (used by FastMCP to build the tool's output schema) requires
 # typing_extensions.TypedDict, not typing.TypedDict, on Python < 3.12.
@@ -32,14 +34,33 @@ class McpFinding(TypedDict):
     title: str
     file: str | None
     line: int | None
+    priority: int | None
     what_it_is: str
     attacker_could: str
     fix: str
 
 
+class GradeStepDict(TypedDict):
+    """One rung on the climb to a better grade."""
+
+    grade: str
+    requires: str
+    clear_at_least: int
+
+
+class ThemeSummary(TypedDict):
+    """A root-cause grouping of related findings."""
+
+    theme_id: str
+    title: str
+    severity: str
+    finding_count: int
+
+
 class ScanResult(TypedDict):
     """The `scan` tool's structured result — drives the MCP output schema."""
 
+    scan_id: str
     grade: str
     grade_label: str
     safe_to_launch: bool
@@ -48,7 +69,35 @@ class ScanResult(TypedDict):
     total_findings: int
     returned_findings: int
     min_severity: str
+    path_to_next_grade: list[GradeStepDict]
+    themes: list[ThemeSummary]
     findings: list[McpFinding]
+
+
+class FindingDetail(TypedDict):
+    """Deep dive on one finding — the `explain` tool's output schema.
+
+    Leads with the finding's OWN generated text (description / technical detail /
+    evidence / the vulnerable snippet) so it's specific to this finding, not the
+    category-level blurb the `scan` list carries.
+    """
+
+    id: str
+    severity: str
+    category: str
+    title: str
+    file: str | None
+    line: int | None
+    code_snippet: str | None
+    description: str
+    technical_detail: str
+    evidence: str
+    what_it_is: str
+    attacker_could: str
+    business_impact: str
+    remediation: str
+    stack_remediation: str
+    walkthrough: list[str]
 
 
 MCP_MISSING_MSG = (
@@ -56,8 +105,64 @@ MCP_MISSING_MSG = (
     "Install it with:  pip install 'isitsecure[mcp]'   (or 'isitsecure[all]')."
 )
 
+# Surfaced to the host LLM in the MCP initialize response so it knows *when* to
+# reach for these tools on its own — users say "run a security audit", not
+# "call the isitsecure scan tool".
+_SERVER_INSTRUCTIONS = (
+    "isitsecure runs a security review of the user's own code. Reach for the "
+    "`scan` tool whenever the user wants to check their code for security "
+    "problems — e.g. \"run a security audit\", \"scan for vulnerabilities\", "
+    "\"is this safe to ship/launch\", \"review my code for security issues\", "
+    "\"any security bugs?\", or before a release — even when they don't name "
+    "isitsecure. It runs a local static analysis (SAST) on a repository path and "
+    "returns a letter grade, a launch verdict, findings with plain-English "
+    "explanations, and what it takes to reach a better grade. Prefer it over "
+    "reading the code yourself for security posture. Do NOT use it for general "
+    "code review, style, or non-security bugs. After a scan, use `explain` with "
+    "the scan_id and a finding's id to dig into a specific finding (\"explain the "
+    "SQL injection one\", \"why does this matter\", \"how do I fix it\")."
+)
+
 # Severity ranking for the min-severity filter and result ordering.
 _SEVERITY_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
+
+# In-process cache of full scan reports, keyed by scan_id, so later tools
+# (explain/fix/verify) can resolve a finding from a *prior* scan within the same
+# session — the `scan` tool returns only trimmed findings, but these keep the
+# full report. Bounded to the most recent scans to cap memory. This is the #69
+# foundation; the consuming tools land in #70/#59/#71.
+_SCAN_CACHE: "OrderedDict[str, Any]" = OrderedDict()
+_SCAN_CACHE_MAX = 20
+
+
+def _cache_report(report) -> str:
+    """Store a full report under a fresh scan_id; evict oldest past the cap.
+
+    Synchronous with no ``await`` inside, so insert+evict is atomic w.r.t. other
+    coroutines on the event loop — keep it that way (an ``async`` refactor would
+    reintroduce an interleaving race on the shared cache).
+    """
+    scan_id = uuid4().hex[:12]
+    _SCAN_CACHE[scan_id] = report
+    while len(_SCAN_CACHE) > _SCAN_CACHE_MAX:
+        _SCAN_CACHE.popitem(last=False)
+    return scan_id
+
+
+def get_cached_report(scan_id: str):
+    """Return the full DeepScanReport for a scan_id, or None if unknown/evicted."""
+    return _SCAN_CACHE.get(scan_id)
+
+
+def get_finding(scan_id: str, finding_id: str):
+    """Resolve a single finding from a prior scan (for explain/fix/verify).
+
+    Returns None if the scan_id is unknown/evicted or the finding_id isn't in it.
+    """
+    report = _SCAN_CACHE.get(scan_id)
+    if report is None:
+        return None
+    return next((f for f in report.findings if f.id == finding_id), None)
 
 
 def _require_fastmcp():
@@ -114,11 +219,12 @@ async def _run_scan_silent(path: Path, scan_mode) -> Any:
     return report
 
 
-def _trim_report(report, min_severity: str) -> ScanResult:
+def _trim_report(report, min_severity: str, scan_id: str) -> ScanResult:
     """Collapse a full DeepScanReport into a compact, agent-friendly payload."""
     from isitsecure.engine.reporting.plain_english import (
         calculate_grade,
         explain_finding,
+        grade_path,
         launch_verdict,
     )
 
@@ -146,6 +252,7 @@ def _trim_report(report, min_severity: str) -> ScanResult:
                 "title": finding.title,
                 "file": loc.file_path if loc else None,
                 "line": loc.line_number if loc else None,
+                "priority": finding.priority,
                 "what_it_is": explanation.what_it_is,
                 "attacker_could": explanation.attacker_could,
                 "fix": explanation.what_to_do,
@@ -159,7 +266,26 @@ def _trim_report(report, min_severity: str) -> ScanResult:
     )
     verdict = launch_verdict(counts["critical"], counts["high"], counts["medium"])
 
+    # What it takes to climb to each better grade — so an assistant can answer
+    # "what gets me to a C?" without reading isitsecure's grader (#68).
+    path = [
+        {"grade": s.grade, "requires": s.requires, "clear_at_least": s.clear_at_least}
+        for s in grade_path(
+            counts["critical"], counts["high"], counts["medium"], counts["low"]
+        )
+    ]
+    themes = [
+        {
+            "theme_id": t.theme_id,
+            "title": t.title,
+            "severity": t.severity,
+            "finding_count": t.finding_count,
+        }
+        for t in (report.themes or [])
+    ]
+
     return {
+        "scan_id": scan_id,
         "grade": grade.grade,
         "grade_label": grade.label,
         "safe_to_launch": verdict.ready,
@@ -168,7 +294,52 @@ def _trim_report(report, min_severity: str) -> ScanResult:
         "total_findings": len(report.findings),
         "returned_findings": len(findings_out),
         "min_severity": min_severity,
+        "path_to_next_grade": path,
+        "themes": themes,
         "findings": findings_out,
+    }
+
+
+def _finding_detail(finding, report) -> FindingDetail:
+    """Build the deep-dive payload for one finding (the `explain` tool core)."""
+    from isitsecure.engine.reporting.plain_english import (
+        business_impact,
+        explain_finding,
+        remediation_detail,
+        walkthrough_for,
+    )
+
+    explanation = explain_finding(finding)
+    loc = finding.code_location
+    walkthrough = walkthrough_for(finding.category)
+
+    # Stack-tailored category guidance (#47/#48), using the scan's detected stack.
+    stack_remediation = remediation_detail(
+        finding.category,
+        framework=getattr(report, "framework", None) or None,
+        backend=getattr(report, "backend", None) or None,
+    )
+    # Prefer this finding's OWN generated remediation when present; else the
+    # stack-tailored category guidance.
+    finding_specific = (finding.remediation_guidance or "").strip()
+
+    return {
+        "id": finding.id,
+        "severity": finding.severity.value.lower(),
+        "category": finding.category.value,
+        "title": finding.title,
+        "file": loc.file_path if loc else None,
+        "line": loc.line_number if loc else None,
+        "code_snippet": (loc.code_snippet if loc else None) or None,
+        "description": finding.description or "",
+        "technical_detail": finding.technical_detail or "",
+        "evidence": finding.evidence or "",
+        "what_it_is": explanation.what_it_is,
+        "attacker_could": explanation.attacker_could,
+        "business_impact": business_impact(finding.category),
+        "remediation": finding_specific or stack_remediation,
+        "stack_remediation": stack_remediation,
+        "walkthrough": list(walkthrough.steps) if walkthrough else [],
     }
 
 
@@ -198,27 +369,36 @@ async def scan_repo(
     report = await _run_scan_silent(resolved, scan_mode)
     if report is None:
         return {"error": "Scan completed but produced no report."}
-    return _trim_report(report, min_severity)
+    # Cache the full report so explain/fix/verify can resolve findings by
+    # (scan_id, finding_id) in later turns of the same session (#69).
+    scan_id = _cache_report(report)
+    return _trim_report(report, min_severity, scan_id)
 
 
 def build_server():
     """Construct the FastMCP server exposing the ``scan`` tool."""
     FastMCP = _require_fastmcp()
-    server = FastMCP("isitsecure")
+    server = FastMCP("isitsecure", instructions=_SERVER_INSTRUCTIONS)
 
     @server.tool()
     async def scan(path: str, min_severity: str = "medium") -> ScanResult:
-        """Run a fast code-only (SAST) security scan on a local repository.
+        """Security audit / vulnerability scan of a local code repository (SAST).
+
+        Use this whenever the user asks to check, audit, scan, or review their
+        code for security issues or vulnerabilities, or asks whether their app is
+        safe to ship or launch — not only when they name isitsecure. Runs fast
+        static analysis on the given path; no network or running app needed.
 
         Args:
             path: Path to the local repo/directory to scan.
             min_severity: Only return findings at or above this severity
                 (critical | high | medium | low). Default: medium.
 
-        Returns a security grade, a go/no-go launch verdict, severity counts, and
-        a list of findings — each with a plain-English explanation of what it is,
-        what an attacker could do, and how to fix it. Raises a tool error if the
-        path does not exist or is not a directory.
+        Returns a security grade, a go/no-go launch verdict, severity counts,
+        the steps to reach a better grade (`path_to_next_grade`), root-cause
+        themes, and a list of findings — each with a plain-English explanation of
+        what it is, what an attacker could do, and how to fix it. Raises a tool
+        error if the path does not exist or is not a directory.
         """
         from mcp.server.fastmcp.exceptions import ToolError
 
@@ -226,6 +406,35 @@ def build_server():
         if "error" in result:
             raise ToolError(result["error"])
         return result  # type: ignore[return-value]  # shape matches ScanResult
+
+    @server.tool()
+    async def explain(scan_id: str, finding_id: str) -> FindingDetail:
+        """Deep dive on one finding from a prior scan.
+
+        Use after a scan when the user wants to understand a specific finding —
+        "explain the SQL injection one", "tell me more about that", "why does
+        this matter", "how do I fix finding X". Pass the `scan_id` from the scan
+        result and the finding's `id`. Returns the finding's own description,
+        technical detail, evidence, and vulnerable code, plus business impact and
+        step-by-step remediation (stack-tailored when the framework is known).
+        """
+        from mcp.server.fastmcp.exceptions import ToolError
+
+        report = get_cached_report(scan_id)
+        if report is None:
+            raise ToolError(
+                f"Unknown scan_id '{scan_id}'. Run a scan first — its result "
+                "includes the scan_id to pass here."
+            )
+        finding = next(
+            (f for f in report.findings if f.id == finding_id), None
+        )
+        if finding is None:
+            raise ToolError(
+                f"No finding '{finding_id}' in scan '{scan_id}'. Use a finding "
+                "id from that scan's results."
+            )
+        return _finding_detail(finding, report)
 
     return server
 

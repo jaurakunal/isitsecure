@@ -76,3 +76,42 @@ def test_specific_beats_generic_ordering():
         classify_finding_category("Broken authentication enables SQL injection")
         == C.INJECTION_RISK
     )
+
+
+@pytest.mark.parametrize(
+    "title, expected",
+    [
+        # #64 — business-logic findings the live scan mislabeled as auth_weakness
+        ("Client-controlled price allows arbitrary payment amounts", C.BUSINESS_LOGIC),
+        ("Missing idempotency allows duplicate charges/orders", C.BUSINESS_LOGIC),
+        ("TOCTOU race condition in credit redemption enables balance overdraft", C.BUSINESS_LOGIC),
+        ("Order marked 'paid' with no payment processor integration", C.BUSINESS_LOGIC),
+        ("Missing validation of redemption amount allows negative/non-numeric values", C.BUSINESS_LOGIC),
+        # #64 — error disclosure was falling into injection_risk
+        ("Internal error message disclosure", C.INFO_DISCLOSURE),
+    ],
+)
+def test_business_logic_and_error_disclosure(title, expected):
+    assert classify_finding_category(title) == expected
+
+
+def test_injection_still_wins_over_business_logic():
+    # "SQL injection in the checkout" is injection, not business logic.
+    assert (
+        classify_finding_category("SQL injection via userId in credit redemption")
+        == C.INJECTION_RISK
+    )
+
+
+@pytest.mark.parametrize(
+    "title, must_not_be",
+    [
+        # #64 review — broadened rules must not over-capture these:
+        ("Endpoint links to our responsible disclosure policy", C.INFO_DISCLOSURE),
+        ("Missing authentication check on internal error reporting route", C.INFO_DISCLOSURE),
+        ("No payment card numbers should be stored in plaintext logs", C.BUSINESS_LOGIC),
+        ("Function may return a negative value when the cache misses", C.BUSINESS_LOGIC),
+    ],
+)
+def test_tightened_rules_avoid_false_positives(title, must_not_be):
+    assert classify_finding_category(title) != must_not_be

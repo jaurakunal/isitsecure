@@ -55,6 +55,20 @@ _RULES: tuple[tuple[FindingCategory, tuple[str, ...]], ...] = (
         "arbitrary role", "user_id spoofing", "elevate privilege",
         "become admin", "grant admin",
     )),
+    # Business-logic / integrity flaws (payments, credits, ordering, workflow).
+    # Kept after the high-signal classes so "SQL injection in checkout" still
+    # classifies as injection, not business logic.
+    (FindingCategory.BUSINESS_LOGIC, (
+        "idempotency", "duplicate charge", "duplicate order", "toctou",
+        "race condition", "double-spend", "double spend", "client-controlled price",
+        "client controlled price", "price manipulation", "arbitrary price",
+        "arbitrary payment", "arbitrary amount", "negative amount",
+        "negative quantity", "negative/non-numeric",
+        "negative or non-numeric", "non-numeric value", "without payment",
+        "marked paid", "paid without", "payment verification",
+        "payment processor", "amount validation", "overdraft", "balance manipulation",
+        "workflow bypass", "business logic",
+    )),
     (FindingCategory.EXPOSED_SECRETS, (
         "hardcoded credential", "hardcoded secret", "hardcoded password",
         "hardcoded api key", "hardcoded default admin", "default admin credential",
@@ -88,8 +102,9 @@ _RULES: tuple[tuple[FindingCategory, tuple[str, ...]], ...] = (
         "over-exposure", "over-exposed", "data over-exposure",
         "returned in response", "returned in the response",
         "internal response content", "sensitive user record", "stack trace",
-        "verbose error", "token returned in", "reset token returned",
-        "leaks internal", "exposes internal",
+        "verbose error", "error message disclosure", "error message leak",
+        "token returned in", "reset token returned", "leaks internal",
+        "exposes internal",
     )),
 )
 

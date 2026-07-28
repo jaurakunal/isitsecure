@@ -39,6 +39,12 @@ class TestPlainExplanation:
         assert exp is plain_english._GENERIC_EXPLANATION
         assert exp.what_it_is.strip()
 
+    def test_explanations_cover_every_category(self) -> None:
+        # Strict: a new category can't silently fall back to the generic block.
+        assert set(plain_english._CATEGORY_EXPLANATIONS) == {
+            c.value for c in FindingCategory
+        }
+
     def test_explain_finding_duck_types_on_category(self) -> None:
         class _F:
             category = FindingCategory.RLS_MISCONFIGURATION
@@ -167,6 +173,11 @@ class TestBusinessImpact:
     def test_unknown_category_uses_generic(self) -> None:
         assert plain_english.business_impact("nope") == plain_english._GENERIC_BUSINESS_IMPACT
 
+    def test_business_impact_covers_every_category(self) -> None:
+        assert set(plain_english._CATEGORY_BUSINESS_IMPACT) == {
+            c.value for c in FindingCategory
+        }
+
 
 # ---------------------------------------------------------------------------
 # #57 — launch verdict
@@ -222,11 +233,11 @@ class TestCategoryRemediation:
             assert text.strip(), category
             assert text != plain_english._GENERIC_REMEDIATION, category
 
-    def test_all_eighteen_categories_are_covered(self) -> None:
-        """Sanity-check that all 18 known categories have an explicit entry."""
+    def test_all_categories_are_covered(self) -> None:
+        """Every FindingCategory must have an explicit remediation entry."""
         keys = set(plain_english._CATEGORY_REMEDIATION)
         assert keys == {c.value for c in FindingCategory}
-        assert len(keys) == 18
+        assert len(keys) == len(FindingCategory)
 
     def test_remediation_is_concrete_not_boilerplate(self) -> None:
         """Guidance names the actual control, not a vague 'review this'."""
@@ -350,3 +361,95 @@ class TestWalkthroughs:
     def test_other_categories_have_no_walkthrough(self) -> None:
         assert plain_english.walkthrough_for(FindingCategory.MIXED_CONTENT) is None
         assert plain_english.walkthrough_for("not_a_real_category") is None
+
+
+class TestGradePath:
+    """`grade_path` must stay consistent with `calculate_grade`'s ladder (#68)."""
+
+    def test_reaching_c_clears_all_critical_and_high(self) -> None:
+        # The exact question from a real MCP session: 32 crit + 17 high → C.
+        steps = plain_english.grade_path(critical=32, high=17, medium=15, low=4)
+        by_grade = {s.grade: s for s in steps}
+        assert by_grade["D"].clear_at_least == 32          # drop criticals
+        assert by_grade["C"].clear_at_least == 32 + 17     # + drop highs
+        assert by_grade["C"].requires == "0 critical, 0 high"
+
+    def test_clean_scan_has_empty_path(self) -> None:
+        assert plain_english.grade_path(0, 0, 0, 0) == []
+
+    def test_steps_are_easiest_first_and_monotonic(self) -> None:
+        steps = plain_english.grade_path(3, 2, 4, 7)
+        clears = [s.clear_at_least for s in steps]
+        assert clears == sorted(clears)                    # non-decreasing
+        assert steps[-1].grade == "A"
+
+    def test_only_grades_above_current_are_returned(self) -> None:
+        # 2 highs → grade D; path must start at C (D already achieved).
+        assert plain_english.calculate_grade(0, 2, 0, 0).grade == "D"
+        grades = [s.grade for s in plain_english.grade_path(0, 2, 0, 0)]
+        assert "D" not in grades and grades[0] == "C"
+
+    def test_low_only_grade_gates(self) -> None:
+        # 7 low → grade B; B+ needs ≤5 low (clear 2), A- ≤2 (clear 5), A clear 7.
+        steps = {s.grade: s.clear_at_least for s in plain_english.grade_path(0, 0, 0, 7)}
+        assert steps["B+"] == 2 and steps["A-"] == 5 and steps["A"] == 7
+
+    def test_grade_path_matches_grader_no_drift(self) -> None:
+        """Drift guard: grade_path must equal a brute-force min derived ONLY from
+        calculate_grade. If someone changes the grader's thresholds without
+        updating _GRADE_CEILINGS, this fails — the two can't silently diverge.
+        """
+        # Best → worst; lower index = better. "At least G" = index <= index(G).
+        order = ["A+", "A", "A-", "B+", "B", "C+", "C", "D", "F"]
+        rank = {g: i for i, g in enumerate(order)}
+
+        def brute_min_clears(c, h, m, l, target):
+            """Smallest total findings to remove to reach at least `target`,
+            using calculate_grade as the only source of truth."""
+            best = None
+            for dc in range(c + 1):
+                for dh in range(h + 1):
+                    for dm in range(m + 1):
+                        for dl in range(l + 1):
+                            g = plain_english.calculate_grade(
+                                c - dc, h - dh, m - dm, l - dl
+                            ).grade
+                            if rank[g] <= rank[target]:
+                                total = dc + dh + dm + dl
+                                if best is None or total < best:
+                                    best = total
+            return best
+
+        for c in range(3):
+            for h in range(3):
+                for m in range(5):
+                    for low in range(8):
+                        steps = plain_english.grade_path(c, h, m, low)
+                        cur = plain_english.calculate_grade(c, h, m, low).grade
+                        for s in steps:
+                            # every step is strictly better than current
+                            assert rank[s.grade] < rank[cur]
+                            # and its clear_at_least is the true minimum
+                            assert s.clear_at_least == brute_min_clears(
+                                c, h, m, low, s.grade
+                            ), (c, h, m, low, s.grade)
+
+
+class TestBusinessLogicContent:
+    """#64 — BUSINESS_LOGIC must have real content, not the generic fallback."""
+
+    def test_explanation_is_specific(self) -> None:
+        ex = plain_english.explain_finding_category(FindingCategory.BUSINESS_LOGIC)
+        assert ex is not plain_english._GENERIC_EXPLANATION
+        assert any(w in ex.what_it_is.lower() for w in ("price", "paid", "credit"))
+
+    def test_business_impact_is_specific(self) -> None:
+        assert (
+            plain_english.business_impact(FindingCategory.BUSINESS_LOGIC)
+            != plain_english._GENERIC_BUSINESS_IMPACT
+        )
+
+    def test_remediation_is_specific(self) -> None:
+        rem = plain_english.remediation_for(FindingCategory.BUSINESS_LOGIC)
+        assert rem != plain_english._GENERIC_REMEDIATION
+        assert "idempot" in rem.lower() or "server" in rem.lower()

@@ -1,8 +1,9 @@
 # isitsecure MCP — Design
 
-Status: **living design doc.** The `scan` tool (thin slice, #58) is implemented;
-everything past it is proposed and subject to change. This doc is the contract we
-build to — argue it here before writing code.
+Status: **living design doc.** Implemented so far: `scan` (#58 + #68 enrichment),
+the scan-cache/identity layer (#69), and `explain` (#70). Still proposed: `fix`
+(#59), `verify` (#71), and DAST-over-MCP (#60). This doc is the contract we build
+to — argue it here before writing code.
 
 ## Goal: the remediation journey, inside the user's AI coding tool
 
@@ -46,6 +47,25 @@ would guess the thresholds. The fix is not a "grading tool" — it is putting th
 | 3 | Plan the fixes | **Host LLM** | per-finding remediation + walkthroughs + fix ordering / dependency hints |
 | 4 | Run individual fixes | MCP tools (`explain`, `fix`, `verify`) | deep-dive text, a proposed/applied diff, and re-scan verification |
 
+## Discoverability: the agent must invoke it on its own
+
+Real users don't say "call the isitsecure scan tool." They say *"run a security
+audit"*, *"scan for vulnerabilities"*, or *"is this safe to ship?"* and expect
+the agent to reach for the tool unprompted. Whether that happens is driven by the
+metadata the server advertises, in priority order:
+
+1. **Server `instructions`** (surfaced in the MCP initialize response) — a
+   when-to-use / when-not-to-use blurb telling the host LLM to use `scan` for any
+   security-audit/vulnerability/"safe to ship" request, even when isitsecure
+   isn't named. Set via `FastMCP("isitsecure", instructions=...)`.
+2. **Tool description** — leads with "Security audit / vulnerability scan …" and
+   the trigger phrases, not just "scan a repo".
+3. **Tool name** — namespaced as `isitsecure/scan`.
+
+Honest caveat: this maximizes the odds but can't *guarantee* invocation — it's
+ultimately the host LLM's call and varies by client (Cursor / Claude Code /
+Claude Desktop), some of which also gate tools behind user approval.
+
 ## Tool surface
 
 ```
@@ -56,15 +76,21 @@ fix(scan_id, finding_id, apply=true)                   → (optional fallback) a
 verify(scan_id)                                        → re-scan, report findings cleared + grade movement
 ```
 
-- **`scan`** *(implemented, #58 — to be enriched).* Runs a fast code-only (SAST)
-  scan on a local repo. Returns a typed result: grade, launch verdict, severity
-  counts, and trimmed findings, each with a plain-English explanation
-  (what-it-is / attacker-could / how-to-fix). **To add:** the grade model +
-  path-to-next-grade, root-cause themes, and per-finding priority rationale, so
-  needs 2–3 are grounded.
-- **`explain`** *(proposed, #59).* Deep dive on one finding: full plain-English +
-  technical detail + step-by-step walkthrough + framework-aware remediation
-  (Wave 2 already produces all of this — the tool surfaces it per finding).
+- **`scan`** *(implemented, #58 + #68).* Runs a fast code-only (SAST) scan on a
+  local repo. Returns a typed result: a `scan_id`, grade, launch verdict,
+  severity counts, **`path_to_next_grade`** (what it takes to reach each better
+  grade — so an assistant answers "what gets me to a C?" without our grader),
+  root-cause **themes**, and trimmed findings each with a plain-English
+  explanation (what-it-is / attacker-could / how-to-fix) and a priority.
+- **`explain`** *(implemented, #70).* `explain(scan_id, finding_id)` — deep dive
+  on one finding resolved from the scan cache. Leads with the finding's **own**
+  generated text (description, technical detail, evidence, the vulnerable
+  snippet) so it's specific to that finding, not the category blurb the scan list
+  carries; plus business impact, stack-tailored remediation, and a step-by-step
+  walkthrough. (Its per-finding accuracy relies on correct categorization —
+  #64 added the `BUSINESS_LOGIC` category and tightened the classifier so
+  payment/idempotency/race findings and error-disclosure land in the right
+  bucket instead of the `auth`/`injection` catch-alls.)
 - **`fix`** *(proposed, #59).* Generates a fix for one finding and **returns a
   diff + the metadata to apply it well** — the host LLM does the writing (see
   "Who applies the fix" below). An optional `apply=true` is a fallback that
@@ -77,13 +103,14 @@ verify(scan_id)                                        → re-scan, report findi
 The conversational loop assumes the user can say *"explain the SQLi one"* or
 *"fix #3"* across turns. That requires **stable finding IDs that persist across
 the conversation**, and `explain`/`fix`/`verify` must resolve a finding from a
-**prior** scan. Today `scan` returns fresh UUIDs each call with no memory.
+**prior** scan.
 
-**Design:** `scan` persists its result under a `scan_id` (in the spawned server
-process for the session; optionally `~/.isitsecure/scans/<scan_id>.json` to
-survive a restart). `explain`/`fix`/`verify` take `(scan_id, finding_id)` and look
-findings up. Without this layer, the loop breaks the moment the user references
-"that one." This is the single biggest new piece beyond the thin slice.
+**Implemented (#69):** `scan` returns a `scan_id` and caches the full report in
+the spawned server process, bounded to the most recent scans. `get_finding(scan_id,
+finding_id)` resolves a finding from a prior scan — the foundation the
+`explain`/`fix`/`verify` tools build on. (On-disk persistence under
+`~/.isitsecure/scans/<scan_id>.json` to survive a restart is a possible later
+add; in-process is enough for a single session's scan → fix loop.)
 
 ## Who applies the fix (the central decision)
 
