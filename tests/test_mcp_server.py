@@ -643,7 +643,11 @@ async def test_scan_url_eviction_protects_running_jobs(isolated_cache, monkeypat
     assert handle["job_id"] in mcp_server._JOBS
 
 
-async def test_fix_on_dast_scan_id_errors_cleanly(isolated_cache):
+async def test_fix_on_dast_scan_id_errors_cleanly(isolated_cache, monkeypatch):
+    # Pretend a key is configured so we reach the DAST-specific path (no source
+    # file) rather than the LLM-key check — otherwise this test's outcome would
+    # depend on whether the environment happens to have an API key (it doesn't in CI).
+    monkeypatch.setattr(mcp_server, "_maybe_llm_client", lambda: object())
     # A DAST finding has no code_location and its scan has no repo_path.
     dast = DeepFinding(
         source=FindingSource.DAST_URL, category=FindingCategory.MISSING_HEADERS,
