@@ -3,8 +3,8 @@
 Status: **living design doc.** Implemented so far: `scan` (#58 + #68 enrichment),
 the scan-cache/identity layer (#69), `explain` (#70), `fix` (#59, propose mode),
 `verify` (#71), and `export` (#88) — the scan → understand → plan → fix → verify
-loop is complete. Still proposed: `fix`'s optional `apply=true` fallback and
-DAST-over-MCP (#60).
+loop is complete, and `scan_url`/`scan_status` add DAST (#60). Still proposed:
+`fix`'s optional `apply=true` fallback.
 This doc is the contract we build to — argue it here before writing code.
 
 ## Goal: the remediation journey, inside the user's AI coding tool
@@ -77,6 +77,8 @@ fix(scan_id, finding_id)                               → return a diff + metad
 fix(scan_id, finding_id, apply=true)                   → (optional fallback) apply via our safety-net pipeline
 verify(scan_id)                                        → re-scan, report findings cleared + grade movement
 export(scan_id, format="markdown")                     → render html/sarif/json/markdown; the HOST writes it
+scan_url(url, min_severity="medium")                   → start a DAST (live-URL) scan; returns a job_id
+scan_status(job_id)                                    → poll a DAST job; the full result when done
 ```
 
 - **`scan`** *(implemented, #58 + #68).* Runs a fast code-only (SAST) scan on a
@@ -113,6 +115,13 @@ export(scan_id, format="markdown")                     → render html/sarif/jso
   `fix`). Reuses the engine's HTML/SARIF renderers; SARIF feeds GitHub code
   scanning. Rendering from the cache is why this lives in the MCP and not only the
   stateless CLI.
+- **`scan_url` / `scan_status`** *(implemented, #60).* DAST (live-URL) scanning
+  takes minutes, so it uses a **job handle** rather than one long blocking call:
+  `scan_url(url)` starts a background url-only DAST scan and returns a `job_id`
+  immediately; `scan_status(job_id)` returns `running | done | error` with a 0–1
+  `progress`, and — once done — the full result (same shape as `scan`, whose
+  `scan_id` works with `explain`/`export`). The URL must be reachable from the
+  machine running the server.
 
 ## State & identity: the scan cache
 
@@ -195,10 +204,10 @@ findings at once.
 
 ## Out of scope (for now)
 
-- **DAST over MCP** (live-URL scanning with progress streaming) — tracked
-  separately (#60); code-only SAST is the fast, natural fit for the coding loop.
 - **Hosted / multi-user MCP** — this is a local stdio server, spawned per user by
   their own tool. Nothing is hosted.
+- **Authenticated / full DAST over MCP** — `scan_url` does *url-only* DAST;
+  authenticated crawls (credentials) and full SAST+DAST runs stay CLI-side for now.
 
 ## Open questions
 

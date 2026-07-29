@@ -577,9 +577,13 @@ Now ask your agent to check your code. It calls the `scan` tool:
 - **`export(scan_id, format)`** — render the scan as HTML / SARIF / JSON /
   Markdown to share or attach (SARIF feeds GitHub code scanning). Ask "export the
   report" — your tool saves the returned file.
+- **`scan_url(url)` / `scan_status(job_id)`** — DAST-scan a *running* app. DAST
+  takes minutes, so `scan_url` returns a job id and `scan_status` polls it. Ask
+  "scan my app at http://localhost:3000".
 
-Code-only scans finish in seconds — the natural fit for the AI-coding loop.
-(Live-URL/DAST scanning over MCP is planned separately.)
+Code-only scans finish in seconds — the natural fit for the AI-coding loop;
+`scan_url`/`scan_status` add live-URL/DAST scanning (which takes minutes) when
+you need it.
 
 The MCP is growing toward the full scan → understand → plan → fix loop. See
 [docs/mcp.md](docs/mcp.md) for the design and roadmap.

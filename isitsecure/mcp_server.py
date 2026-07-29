@@ -159,6 +159,29 @@ class ExportResult(TypedDict):
     next_step: str
 
 
+class ScanJobHandle(TypedDict):
+    """Handle returned by `scan_url` for a started DAST job."""
+
+    job_id: str
+    status: str
+    message: str
+
+
+class ScanJobStatus(TypedDict):
+    """Status of a DAST scan job — the `scan_status` tool's output schema.
+
+    `result` is null until `status == "done"`, then it's the same shape as a
+    `scan` result (grade, counts, path_to_next_grade, findings, …).
+    """
+
+    job_id: str
+    status: str          # "running" | "done" | "error"
+    progress: float      # 0.0–1.0
+    message: str
+    result: ScanResult | None
+    error: str
+
+
 MCP_MISSING_MSG = (
     "The MCP server needs the optional 'mcp' dependency.\n"
     "Install it with:  pip install 'isitsecure[mcp]'   (or 'isitsecure[all]')."
@@ -187,7 +210,9 @@ _SERVER_INSTRUCTIONS = (
     "that work?\", \"verify my fixes\", \"what's my grade now?\"). Use `export` "
     "with the scan_id to render a shareable report (html/sarif/json/markdown) to "
     "save or attach — it returns the content for YOU to write; the MCP does not "
-    "write files."
+    "write files. To scan a RUNNING app/site (DAST), use `scan_url` with an "
+    "http(s) URL — it returns a job_id immediately (DAST takes minutes); then poll "
+    "`scan_status(job_id)` for progress and the result."
 )
 
 # Severity ranking for the min-severity filter and result ordering.
@@ -248,6 +273,24 @@ def get_finding(scan_id: str, finding_id: str):
     if entry is None:
         return None
     return next((f for f in entry.report.findings if f.id == finding_id), None)
+
+
+@dataclass
+class _ScanJob:
+    """A background DAST scan job (#60). DAST takes minutes, so `scan_url` starts
+    one of these and returns a job_id; `scan_status` polls it."""
+
+    status: str            # "running" | "done" | "error"
+    progress: float
+    message: str
+    result: Any = None     # a ScanResult once done
+    error: str = ""
+    task: Any = None       # the asyncio.Task running the scan
+
+
+# Background DAST jobs, keyed by job_id, bounded like the scan cache.
+_JOBS: "OrderedDict[str, _ScanJob]" = OrderedDict()
+_JOBS_MAX = 20
 
 
 def _require_fastmcp():
@@ -658,6 +701,45 @@ def _render_report(report, fmt: str) -> str:
     raise ValueError(f"Unknown format '{fmt}'. Use one of: html, sarif, json, markdown.")
 
 
+async def _run_dast_job(job: "_ScanJob", url: str, min_severity: str) -> None:
+    """Run a URL-only DAST scan in the background, updating the job as it goes."""
+    try:
+        # Imports inside the try so even an import failure sets job.error rather
+        # than wedging the job in "running" (the task is fire-and-forget).
+        from isitsecure.engine.enums import ScanMode
+        from isitsecure.engine.factory import (
+            create_deep_security_scan_agent,
+            create_repo_ingestion_service,
+        )
+        from isitsecure.engine.models import DeepScanReport
+
+        llm_client = _maybe_llm_client()
+        agent = create_deep_security_scan_agent(
+            llm_client=llm_client,
+            judgment_llm_client=llm_client,
+            repo_ingestion_service=create_repo_ingestion_service(),
+        )
+        report = None
+        async for event in agent.scan(target_url=url, scan_mode=ScanMode.URL_ONLY):
+            data = getattr(event, "data", None) or {}
+            if "report" in data:
+                report = DeepScanReport.model_validate(data["report"])
+                continue
+            # Engine progress is an int 0–100; normalise to 0–1.
+            p = getattr(event, "progress", 0) or 0
+            job.progress = max(0.0, min(1.0, p / 100))
+            job.message = getattr(event, "message", "") or job.message
+        if report is None:
+            job.status, job.error = "error", "Scan completed but produced no report."
+            return
+        scan_id = _cache_report(report, repo_path=None)  # DAST has no local path
+        job.result = _trim_report(report, min_severity, scan_id)
+        job.status, job.progress, job.message = "done", 1.0, "Scan complete."
+    except Exception as exc:  # keep the job's error, never crash the server
+        logger.warning("DAST scan job failed: %s", exc)
+        job.status, job.error = "error", str(exc)
+
+
 async def scan_repo(
     path: str, mode: str = "code-only", min_severity: str = "medium"
 ) -> dict:
@@ -834,6 +916,77 @@ def build_server():
                 f"Save this to isitsecure-report.{ext} with your editor "
                 "(the MCP does not write files)."
             ),
+        }
+
+    @server.tool()
+    async def scan_url(url: str, min_severity: str = "medium") -> ScanJobHandle:
+        """Start a DAST (live-URL) security scan of a running app.
+
+        Use when the user wants to scan a running site/API ("scan my app at
+        http://localhost:3000", "DAST scan this URL", "test my live app"). DAST
+        takes minutes, so this returns a `job_id` immediately — then call
+        `scan_status(job_id)` to poll progress and get the result. The URL must be
+        reachable from this machine.
+        """
+        import asyncio
+
+        from mcp.server.fastmcp.exceptions import ToolError
+
+        if not (url.startswith("http://") or url.startswith("https://")):
+            raise ToolError(
+                "Provide an http(s) URL to scan, e.g. http://localhost:3000."
+            )
+        job_id = uuid4().hex[:12]
+        job = _ScanJob(status="running", progress=0.0, message=f"Starting DAST scan of {url}…")
+        _JOBS[job_id] = job
+        # Evict oldest FINISHED jobs past the cap; never orphan a running scan
+        # (its handle would vanish while the task is still going).
+        for jid in list(_JOBS):
+            if len(_JOBS) <= _JOBS_MAX:
+                break
+            if _JOBS[jid].status != "running":
+                del _JOBS[jid]
+        job.task = asyncio.create_task(_run_dast_job(job, url, min_severity))
+
+        # Safety net: if the task dies before _run_dast_job's own try/except can
+        # set a status (or is cancelled), don't leave the job stuck "running".
+        def _finalize(task: "asyncio.Task", job: "_ScanJob" = job) -> None:
+            if task.cancelled():
+                return
+            exc = task.exception()
+            if exc is not None and job.status == "running":
+                job.status, job.error = "error", str(exc)
+
+        job.task.add_done_callback(_finalize)
+        return {
+            "job_id": job_id,
+            "status": "running",
+            "message": (
+                f"DAST scan of {url} started. Poll scan_status(\"{job_id}\") for "
+                "progress; the result appears when status is \"done\"."
+            ),
+        }
+
+    @server.tool()
+    async def scan_status(job_id: str) -> ScanJobStatus:
+        """Check a DAST scan job started by `scan_url`.
+
+        Returns status (running | done | error), progress (0–1), and — once done —
+        the full result (grade, findings, path_to_next_grade, …), whose `scan_id`
+        works with `explain` and `export`.
+        """
+        from mcp.server.fastmcp.exceptions import ToolError
+
+        job = _JOBS.get(job_id)
+        if job is None:
+            raise ToolError(f"Unknown job_id '{job_id}'. Start one with scan_url.")
+        return {
+            "job_id": job_id,
+            "status": job.status,
+            "progress": round(job.progress, 3),
+            "message": job.message,
+            "result": job.result,
+            "error": job.error,
         }
 
     return server
