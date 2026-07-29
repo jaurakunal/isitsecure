@@ -25,7 +25,7 @@ Built for developers and **vibe coders** shipping web apps who need to know if t
 - [Demo](#demo) · [What It Does](#what-it-does)
 - [Install](#install) · [Quick Start](#quick-start) · [What It Costs](#what-it-costs)
 - [Scan Modes](#scan-modes) · [Scan Depth](#scan-depth)
-- [What It Scans](#what-it-scans) — [DAST](#dast-scanners--tests-your-live-app) · [Special DAST](#special-dast-scanners-8) · [SAST](#sast-scanners-17--analyzes-your-code) · [LLM](#llm-powered-analysis-requires-api-key) · [Cross-Referencing](#cross-referencing--guided-dast)
+- [What It Scans](#what-it-scans) — [DAST](#dast-scanners--tests-your-live-app) · [Special DAST](#special-dast-scanners-8) · [SAST](#sast-scanners-18--analyzes-your-code) · [LLM](#llm-powered-analysis-requires-api-key) · [Cross-Referencing](#cross-referencing--guided-dast)
 - [Language Support](#language-support) · [Output Formats](#output-formats)
 - [Auto-Fix](#auto-fix-one-command-to-fix-your-app) · [Security Badge](#security-badge)
 - [How We Compare](#how-we-compare) · [What It Does NOT Cover](#what-it-does-not-cover)
@@ -37,7 +37,7 @@ Built for developers and **vibe coders** shipping web apps who need to know if t
 
 ## What It Does
 
-isitsecure runs **40 rule-based scanners by default** — up to **44 with `--depth deep`** — (plus optional AI code review) against your web app in a single command. It combines four approaches that commercial tools sell separately:
+isitsecure runs **41 rule-based scanners by default** — up to **45 with `--depth deep`** — (plus optional AI code review) against your web app in a single command. It combines four approaches that commercial tools sell separately:
 
 - **SAST (Static Analysis)** — scans your source code for vulnerabilities without running it
 - **DAST (Dynamic Analysis)** — tests your live app by sending real HTTP requests
@@ -103,7 +103,8 @@ isitsecure setup
 | `pip install -e .` | SAST / code-only scans only (`--mode code-only`) |
 | `pip install -e ".[browser]"` | Adds DAST / live-URL scanning (requires `isitsecure setup` to install Chromium) |
 | `pip install -e ".[llm]"` | Adds LLM code review, triage, and AI fixes (requires an API key) |
-| `pip install -e ".[all]"` | Everything |
+| `pip install -e ".[all]"` | Everything except `[taint]` (see below) |
+| `pip install -e ".[taint]"` | Deterministic Semgrep taint/injection SAST for JS/TS. **Install separately** — semgrep's pinned dependencies don't co-resolve with `[all]`. The analyzer only needs the `semgrep` binary on PATH, so `pipx install semgrep` (or brew) works too; it falls back to LLM-only if absent |
 
 URL/DAST scanning needs the `[browser]` extra — without it, `isitsecure scan <url>` exits with a message telling you to install it.
 
@@ -146,7 +147,7 @@ isitsecure is free and open source. The only cost is LLM API tokens for the AI-p
 | **Code-only + LLM review** | Yes | ~$5–8 |
 | **Full scan** (SAST + DAST + LLM) | Yes | ~$10–15 |
 
-Without an API key, you still get all rule-based scanners — **40 in the default `quick` depth** (15 DAST + 8 special DAST + 17 SAST), or **44 with `--depth deep`** (which adds 4 slower/aggressive DAST scanners). The LLM adds business logic review, semantic rule verification, and intelligent triage — things no pattern matcher can do.
+Without an API key, you still get all rule-based scanners — **41 in the default `quick` depth** (15 DAST + 8 special DAST + 18 SAST), or **45 with `--depth deep`** (which adds 4 slower/aggressive DAST scanners). The LLM adds business logic review, semantic rule verification, and intelligent triage — things no pattern matcher can do.
 
 **Supported LLM providers:** Anthropic (Claude), Google (Gemini)
 
@@ -220,10 +221,11 @@ The scan narrates each phase and every scanner as it runs (with elapsed time), s
 | DOM XSS Scanner | Playwright-based sink hooking (innerHTML, eval, location.assign) |
 | Body Param Fuzzer | Prototype pollution, type confusion, injection via JSON body fields |
 
-### SAST Scanners (17) — Analyzes Your Code
+### SAST Scanners (18) — Analyzes Your Code
 
 | Scanner | What It Finds |
 |---|---|
+| Semgrep Taint Analyzer | Deterministic source→sink injection for JS/TS — SQLi, reflected/DOM XSS, SSRF, path traversal, command injection (a reproducible floor beneath the LLM reviewer; needs the `[taint]` extra, no-ops without the `semgrep` binary) |
 | Git Secret Scanner | API keys, tokens, and credentials in git history (not just HEAD) |
 | Route Auth Analyzer | Next.js/Express/Django/FastAPI/Spring routes missing authentication |
 | RLS Policy Analyzer | Supabase tables without Row Level Security enabled |
@@ -367,7 +369,7 @@ isitsecure is not a replacement for enterprise security platforms. It's designed
 
 | Need | Best specialized tool | How isitsecure compares |
 |---|---|---|
-| Deep SAST (30+ languages) | [Semgrep](https://semgrep.dev) | We cover 3 languages with regex+LLM (no taint analysis) |
+| Deep SAST (30+ languages) | [Semgrep](https://semgrep.dev) | We embed Semgrep for deterministic JS/TS injection taint (opt-in `[taint]`) and add LLM review on top; Semgrep's own registry covers far more languages and rules |
 | DAST with advanced exploitation | [OWASP ZAP](https://zaproxy.org) / [Burp Suite](https://portswigger.net) | Our DAST is simpler — fewer payloads, no WAF evasion |
 | Secret scanning (800+ patterns) | [TruffleHog](https://github.com/trufflesecurity/trufflehog) / [Gitleaks](https://github.com/gitleaks/gitleaks) | Our git scanner covers common patterns, not exhaustive |
 | Container + IaC scanning | [Trivy](https://github.com/aquasecurity/trivy) / [Checkov](https://github.com/bridgecrewio/checkov) | Our IaC/Docker scanners are basic — use Trivy for depth |
@@ -388,7 +390,7 @@ isitsecure works well alongside other tools. Run `isitsecure scan` for the combi
 
 ## What It Does NOT Cover
 
-- **Formal taint analysis** — No dataflow tracking across function boundaries. Uses regex + LLM reasoning instead
+- **Inter-procedural taint analysis** — The opt-in Semgrep taint layer (`[taint]`) does intra-file source→sink dataflow for JS/TS injection; cross-function/cross-file tracking (Semgrep Pro territory) still falls back to LLM reasoning
 - **WAF evasion** — DAST payloads don't include advanced bypass techniques
 - **Compliance mapping** — No OWASP Top 10, CWE, or PCI-DSS tagging (yet)
 - **Network-level scanning** — No port scanning, TLS analysis, or infrastructure enumeration

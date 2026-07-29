@@ -17,6 +17,7 @@ class ScannerTimeouts:
     IDOR_CROSS_USER_SECONDS = 120
     PRIVILEGE_ESCALATION_SECONDS = 180  # 8 tests: differential, mutation replay, object write, etc.
     GIT_SECRET_SCAN_SECONDS = 90
+    SEMGREP_TAINT_SECONDS = 150  # above SemgrepAnalyzer's own 120s subprocess timeout
     LLM_CODE_REVIEW_SECONDS = 900  # 15 min — reviews in parallel batches (includes import-graph files)
     LSP_VALIDATION_SECONDS = 120   # 2 min — LSP init + auth flow tracing
     TRIAGE_SECONDS = 900           # 15 min — batched LLM triage + themes + owner summary

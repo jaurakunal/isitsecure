@@ -52,7 +52,15 @@ llm = [
 mcp = [
     "mcp>=1.28.1,<2",
 ]
-# Everything
+# Deterministic taint/injection SAST via Semgrep (#4). Kept SEPARATE from [all]:
+# semgrep pins a heavy, tightly-constrained dependency tree (rich/click/boltons/
+# colorama) that cannot co-resolve with isitsecure's [all] stack. The analyzer
+# only needs the `semgrep` binary on PATH, so install it in isolation (this extra,
+# `pipx install semgrep`, brew, …); it no-ops gracefully when the binary is absent.
+taint = [
+    "semgrep>=1.100,<2",
+]
+# Everything (except [taint] — see the note above; semgrep won't co-resolve here)
 all = [
     "isitsecure[browser,oob,llm,mcp]",
 ]

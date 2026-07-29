@@ -20,7 +20,7 @@ from isitsecure.engine.scanners.protocols import DASTScannerProtocol
 EXPECTED_DAST_SCANNER_COUNT_QUICK = 15
 EXPECTED_DAST_SCANNER_COUNT_DEEP = 19
 # Expected SAST scanner count based on factory.py sast_scanners list (without LLM)
-EXPECTED_SAST_SCANNER_COUNT = 17
+EXPECTED_SAST_SCANNER_COUNT = 18
 
 
 class TestFactory:
@@ -112,6 +112,7 @@ class TestFactory:
         assert "iac_scanner" in scanner_names
         assert "docker_scanner" in scanner_names
         assert "shell_script_scanner" in scanner_names
+        assert "semgrep_taint" in scanner_names  # #4 taint/injection floor
 
 
 class TestRepoIngestionFactory:

@@ -1,0 +1,126 @@
+# isitsecure taint/sink rules for JavaScript/TypeScript injection (#4).
+# Rules target FRAMEWORK/LIBRARY APIs (sources) and dangerous library sinks —
+# they apply to any app on these stacks, not to a specific app.
+rules:
+  # ---- SQL injection: dangerous raw-query sinks (pattern) ----
+  - id: isitsecure-sqli-raw-query
+    languages: [typescript, javascript]
+    severity: ERROR
+    metadata: {category: injection_risk, isitsecure-severity: critical}
+    message: "Raw SQL built from an interpolated/concatenated string — SQL injection. Use a parameterized query."
+    # Only unambiguously-SQL sink APIs are matched as bare patterns. A generic
+    # `.query(...)` is too broad (analytics/metrics/GraphQL clients also expose it),
+    # so `db.query` is covered by the taint rule below, which requires a real source.
+    patterns:
+      - pattern-either:
+          - pattern: $SQL.unsafe(`...${...}...`)
+          - pattern: $SQL.unsafe($A + $B)
+          - pattern: $DB.$queryRawUnsafe(`...${...}...`)
+          - pattern: $DB.$executeRawUnsafe(`...${...}...`)
+          - pattern: $D.raw(`...${...}...`)
+          - pattern: knex.raw(`...${...}...`)
+
+  # ---- SQL injection: user input → raw sink (intra-file taint) ----
+  - id: isitsecure-sqli-taint
+    mode: taint
+    languages: [typescript, javascript]
+    severity: ERROR
+    metadata: {category: injection_risk, isitsecure-severity: critical}
+    message: "User input flows into a raw SQL query — SQL injection."
+    pattern-sources: &user_input
+      - pattern: req.query
+      - pattern: req.params
+      - pattern: req.body
+      - pattern: searchParams.get(...)
+      - pattern: $U.searchParams.get(...)
+      - pattern: (await $R.json())
+    pattern-sinks:
+      - pattern: $SQL.unsafe(...)
+      - pattern: $DB.$queryRawUnsafe(...)
+      - pattern: $D.raw(...)
+      - pattern: $D.query(...)
+    pattern-sanitizers:
+      - pattern: parseInt(...)
+      - pattern: Number(...)
+
+  # ---- Reflected XSS: user input → HTML response ----
+  - id: isitsecure-reflected-xss
+    mode: taint
+    languages: [typescript, javascript]
+    severity: ERROR
+    metadata: {category: injection_risk, isitsecure-severity: high}
+    message: "User input reflected into an HTML response without escaping — reflected XSS."
+    pattern-sources: *user_input
+    pattern-sinks:
+      - pattern: new Response($HTML, ...)
+      - pattern: $RES.send(...)
+      - pattern: $RES.write(...)
+    pattern-sanitizers:
+      - pattern: encodeURIComponent(...)
+      - pattern: escapeHtml(...)
+
+  # ---- DOM XSS: location.* → innerHTML / document.write ----
+  - id: isitsecure-dom-xss
+    mode: taint
+    languages: [typescript, javascript]
+    severity: ERROR
+    metadata: {category: injection_risk, isitsecure-severity: high}
+    message: "User-controlled input flows into the DOM (innerHTML / document.write) — DOM XSS."
+    pattern-sources:
+      - pattern: location.hash
+      - pattern: location.search
+      - pattern: window.location.hash
+      - pattern: window.location.search
+      - pattern: document.location.$X
+    pattern-sinks:
+      - pattern: $EL.innerHTML = $S
+      - pattern: $EL.outerHTML = $S
+      - pattern: document.write(...)
+
+  # ---- SSRF: user input → outbound request ----
+  - id: isitsecure-ssrf
+    mode: taint
+    languages: [typescript, javascript]
+    severity: ERROR
+    metadata: {category: injection_risk, isitsecure-severity: high}
+    message: "User-controlled URL flows into an outbound request (fetch/axios/http) — SSRF."
+    pattern-sources: *user_input
+    pattern-sinks:
+      - pattern: fetch(...)
+      - pattern: axios.get(...)
+      - pattern: axios(...)
+      - pattern: http.get(...)
+      - pattern: https.get(...)
+
+  # ---- Path traversal / unrestricted upload: request-derived path → fs write ----
+  - id: isitsecure-path-traversal
+    languages: [typescript, javascript]
+    severity: WARNING
+    metadata: {category: injection_risk, isitsecure-severity: high}
+    message: "Filesystem write using a request-derived filename — path traversal / unrestricted upload."
+    patterns:
+      - pattern-either:
+          - pattern: writeFile(path.join(..., $F), ...)
+          - pattern: fs.writeFile(path.join(..., $F), ...)
+          - pattern: fs.writeFileSync(path.join(..., $F), ...)
+          - pattern: createWriteStream(path.join(..., $F))
+      # Exclude constant paths — a string-literal final segment isn't user-derived
+      # (e.g. path.join(__dirname, "out.txt")), so it isn't traversal. Require $F
+      # to start with a non-quote char (an identifier/expression, not a literal).
+      - metavariable-regex:
+          metavariable: $F
+          regex: '^[^"\x27`]'
+
+  # ---- Command injection: user input → shell ----
+  - id: isitsecure-command-injection
+    mode: taint
+    languages: [typescript, javascript]
+    severity: ERROR
+    metadata: {category: injection_risk, isitsecure-severity: critical}
+    message: "User input flows into a shell command — command injection."
+    pattern-sources: *user_input
+    pattern-sinks:
+      - pattern: exec(...)
+      - pattern: execSync(...)
+      - pattern: spawn(...)
+      - pattern: spawnSync(...)
