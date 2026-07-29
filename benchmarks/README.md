@@ -1,19 +1,23 @@
 # isitsecure benchmark harness
 
 Repeatable **recall + false-positive** scoring against deliberately-vulnerable
-apps. Each run spins the app up in Docker, runs an isitsecure DAST scan, scores
-the findings against a known ground truth, and tears the app down.
+apps. Most targets spin the app up in Docker, run an isitsecure DAST scan, score
+the findings against a known ground truth, and tear the app down. One target —
+`sast-injection` — is **code-only** (no Docker): it scores the deterministic
+Semgrep taint layer against a local injection fixture (see below).
 
 ```bash
 pip install -e ".[all]"          # isitsecure on PATH + browser deps
-python benchmarks/run_benchmarks.py            # default: VAmPI (both builds)
+python benchmarks/run_benchmarks.py            # default: VAmPI (both builds) + sast-injection
 python benchmarks/run_benchmarks.py juiceshop  # OWASP Juice Shop — the headline recall number
 python benchmarks/run_benchmarks.py --all      # + NodeGoat + crAPI + Juice Shop (heavy)
 python benchmarks/run_benchmarks.py crapi      # a single target
+python benchmarks/run_benchmarks.py sast-injection            # taint recall/FP, no Docker
 python benchmarks/run_benchmarks.py --keep vampi-vulnerable   # leave it running
 ```
 
-Requires Docker running.
+Docker is required for every target **except** `sast-injection`, which instead
+needs the `semgrep` binary (`pipx install semgrep` or `pip install semgrep`).
 
 ## What it measures
 
@@ -42,6 +46,7 @@ For each target the scorecard reports two things — both matter:
 | `crapi` | microservices | upstream compose (auto-cloned) | OWASP API Top 10; IDOR/BAC/auth depth |
 | `juiceshop` | Angular/Express SPA | single image | **headline recall** — scored per-challenge vs the app's own `/api/Challenges` |
 | `juiceshop-auth` | same, authenticated | single image | adds the login-gated challenges (the `~40%` number) |
+| `sast-injection` | JS/TS fixtures | **none** (code-only) | **taint layer recall/FP** — deterministic SAST injection floor (#4) |
 
 VAmPI is a single container and runs in the default set. NodeGoat and crAPI are
 heavier (compose, mongo, several GB for crAPI) — run them individually. They are
@@ -62,6 +67,36 @@ seeded from `/api/Challenges`): recall over the **45 DAST-detectable** challenge
 (of 113), broken down per class, with each finding required to land on the right
 endpoint. `run_benchmarks.py juiceshop` runs this end to end; you can also score a
 saved scan by hand with `python benchmarks/score.py juiceshop findings.json`.
+
+## SAST injection benchmark (`sast-injection`)
+
+The deterministic Semgrep taint layer (#4) has its own **code-only** scorecard,
+separate from the DAST targets. It scans a local fixture tree and scores taint
+recall + false positives — the gate for the taint layer and every future
+rule-pack change (#93/#94).
+
+```bash
+python benchmarks/run_benchmarks.py sast-injection   # via the harness (fails non-zero on any miss/FP)
+python benchmarks/sast_injection.py                  # standalone, same scorecard
+python benchmarks/sast_injection.py findings.json    # score an existing code-only scan JSON
+```
+
+The fixtures **are** the ground truth (no separate file to drift):
+
+- `fixtures/sast-injection/vulnerable/*` — each line tagged `// EXPECT <class>`
+  (`sqli | reflected-xss | dom-xss | ssrf | path-traversal | command-injection`)
+  is a bug the taint layer must flag (recall).
+- `fixtures/sast-injection/safe/*` — benign near-misses (parameterized queries,
+  constant-path writes, non-DB `.query()`, escaped output, fixed-URL fetch). Any
+  injection finding here — or on an unmarked line in a vulnerable file — is a
+  **false positive**.
+
+The scorer (`sast_injection.py`) matches findings to expected bugs by file and
+line (±1, since Semgrep can report the statement head), reports per-class recall,
+and **exits non-zero unless recall is 100% and FP is 0**. It needs the `semgrep`
+binary; scoring an existing `findings.json` needs neither Docker nor semgrep.
+This is an *independent* fixture (not `test-app`, which the rules were tuned on),
+so it's a genuine second data point.
 
 ## Authenticated cross-user IDOR (BOLA)
 

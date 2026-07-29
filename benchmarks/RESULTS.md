@@ -18,6 +18,24 @@ _Runs: 2026-07 · `--llm none` (pure DAST detection, no LLM) · Juice Shop pinne
 | `vampi-vulnerable` | url-only | **3/3** (SQLi, IDOR, headers) | — | 14–16 |
 | `vampi-secure` | url-only | — | **2** (IDOR) | 13–15 |
 | `nodegoat-auth` | authenticated | **2/3** (headers, XSS; injection missed) | unmeasured | 28 |
+| `sast-injection` | code-only | **12/12 (100%)** — taint, per-class, deterministic | **0** | 12 |
+
+### SAST injection (`sast-injection`, code-only, taint layer #4)
+
+The deterministic Semgrep taint layer scored on an independent JS/TS injection
+fixture (not `test-app`, which the rules were tuned on). Recall **12/12** with
+**0 false positives** across all six classes, deterministic across runs:
+
+| Class | Found / expected | Class | Found / expected |
+|---|--:|---|--:|
+| sqli | **5/5** | ssrf | **1/1** |
+| reflected-xss | **2/2** | path-traversal | **1/1** |
+| dom-xss | **2/2** | command-injection | **1/1** |
+
+The FP side is exercised by benign near-misses (parameterized queries,
+constant-path writes, non-DB `.query()`, escaped output, fixed-URL fetch) — none
+flagged. This is the baseline the taint layer and future rule packs (#93/#94)
+must hold.
 
 > Juice Shop recall is scored **per challenge** — a finding must match the class
 > signature AND land on the right endpoint — over the 45 DAST-detectable

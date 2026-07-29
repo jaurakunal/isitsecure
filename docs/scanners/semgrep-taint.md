@@ -38,7 +38,7 @@ It is **best-effort and self-contained**:
 
 Before this analyzer, injection detection (SQLi/XSS/SSRF/path-traversal/command-injection) rested **entirely on the LLM**, which is non-deterministic (finding counts wobble run-to-run), costs tokens, and is slow. The Semgrep layer gives a reproducible, instant, free floor for the mechanical source→sink cases, while the LLM keeps covering business-logic flaws and the long tail of libraries without rules.
 
-See [docs/taint-analysis.md](../taint-analysis.md) for the full design rationale, the spike results, and the per-stack rule model.
+See [docs/taint-analysis.md](../taint-analysis.md) for the full design rationale, the spike results, and the per-stack rule model. The layer has its own recall/FP scorecard — **12/12 recall, 0 false positives** on an independent JS/TS injection fixture — via `python benchmarks/run_benchmarks.py sast-injection` (see [benchmarks/RESULTS.md](../../benchmarks/RESULTS.md)).
 
 ## What Vulnerable Code Looks Like
 
