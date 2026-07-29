@@ -619,11 +619,12 @@ isitsecure ships a repeatable benchmark harness that scores **recall** (of the v
 
 ```bash
 python benchmarks/run_benchmarks.py juiceshop   # OWASP Juice Shop — the headline recall number
-python benchmarks/run_benchmarks.py             # VAmPI (vulnerable + secure builds)
+python benchmarks/run_benchmarks.py             # VAmPI (vulnerable + secure builds) + sast-injection
+python benchmarks/run_benchmarks.py sast-injection  # taint recall/FP (code-only, no Docker)
 python benchmarks/run_benchmarks.py --all       # + NodeGoat + crAPI + Juice Shop (heavy)
 ```
 
-Each run spins the target up in Docker, runs a DAST scan, scores against a known ground truth, and tears it down (requires Docker). Measured results are tracked in [benchmarks/RESULTS.md](benchmarks/RESULTS.md); see [benchmarks/README.md](benchmarks/README.md) for targets and how scoring works.
+Most targets spin the app up in Docker, run a DAST scan, score against a known ground truth, and tear it down (require Docker). The `sast-injection` target is **code-only** (no Docker) — it scores the deterministic Semgrep taint layer on a JS/TS injection fixture (**12/12 recall, 0 FP**) and needs the `semgrep` binary instead; it's included in the default run. Measured results are tracked in [benchmarks/RESULTS.md](benchmarks/RESULTS.md); see [benchmarks/README.md](benchmarks/README.md) for targets and how scoring works.
 
 ## Privacy
 

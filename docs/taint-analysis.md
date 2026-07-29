@@ -159,9 +159,11 @@ anything ships:
   catches) without introducing FP noise.
 - Discuss results and get explicit go-ahead before commit/push.
 
-Note: today's benchmark is DAST-oriented; part of this work is a **SAST
-injection benchmark** (a fixture set with known source→sink bugs) so the taint
-layer has a recall/FP scorecard of its own.
+Note: the original benchmark was DAST-oriented, so this work added a **SAST
+injection benchmark** — a fixture set with known source→sink bugs giving the taint
+layer its own recall/FP scorecard. **Delivered** (#92): `benchmarks/sast_injection.py`
++ `benchmarks/fixtures/sast-injection/`, run via `python benchmarks/run_benchmarks.py
+sast-injection`. Baseline **12/12 recall, 0 FP** ([benchmarks/RESULTS.md](../benchmarks/RESULTS.md)).
 
 ## Risks & open questions
 
@@ -176,10 +178,11 @@ layer has a recall/FP scorecard of its own.
 
 ## Phasing
 
-1. **SAST injection benchmark fixtures** + a recall/FP harness (so we can measure).
-2. **`SemgrepAnalyzer`** (subprocess → parse → `CodeFinding`) with a first rule
-   pack for the top stack (Next.js/Express + postgres/Prisma/Drizzle + DOM).
-3. **Benchmark**: prove it adds recall without FP vs. LLM-only. Discuss, then ship.
+1. ✅ **SAST injection benchmark fixtures** + a recall/FP harness (#92) — the
+   `sast-injection` target, baseline 12/12 recall / 0 FP.
+2. ✅ **`SemgrepAnalyzer`** (subprocess → parse → `CodeFinding`) with a first rule
+   pack for the top stack (Next.js/Express + postgres/Prisma/Drizzle + DOM) — #4.
+3. ✅ **Benchmark**: proved it adds recall without FP vs. LLM-only. Shipped in #4.
 4. **Broaden rule packs** (FastAPI/Flask/Django, more libraries) iteratively, each
-   gated by the benchmark.
+   gated by the benchmark — tracked in #93.
 5. **Keep the LLM layer** as the long-tail + business-logic backstop throughout.

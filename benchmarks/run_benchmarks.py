@@ -386,24 +386,67 @@ def print_scorecard(results: list[dict]) -> None:
                 print(f"    {n:>2}  {label}")
 
 
+# The SAST injection benchmark is not a Docker/DAST target — it scores a
+# code-only scan of a local fixture tree (see sast_injection.py). It's exposed
+# here as a pseudo-target so it runs from the same entrypoint (and by default).
+SAST_INJECTION = "sast-injection"
+
+
+def resolve_selection(targets: list[str], all_flag: bool) -> tuple[list[str], bool, list[str]]:
+    """Plan a run from the CLI args (pure — no Docker, no side effects).
+
+    Returns (docker target names to run, whether to run sast-injection, unknown names).
+    The SAST pseudo-target runs when named, with --all, or in the default (no-arg) set.
+    """
+    valid = {t.name for t in TARGETS}
+    want_sast = SAST_INJECTION in targets or all_flag or not targets
+    docker_names = [n for n in targets if n != SAST_INJECTION]
+    if docker_names:
+        unknown = [n for n in docker_names if n not in valid]
+        return [n for n in docker_names if n in valid], want_sast, unknown
+    if all_flag:
+        return [t.name for t in TARGETS], want_sast, []
+    if targets:  # only sast-injection was requested
+        return [], want_sast, []
+    return ["vampi-vulnerable", "vampi-secure"], want_sast, []
+
+
+def run_sast_injection() -> int:
+    """Run the SAST injection benchmark; return 0 on full recall + 0 FP, else 1.
+
+    Skips (returns 0) if the semgrep binary is absent — like the Docker targets
+    can't run without Docker, this one can't run without semgrep.
+    """
+    import sast_injection as si
+
+    print(f"\n=== {SAST_INJECTION} ===\n    code-only taint recall / FP on the "
+          f"injection fixtures (no Docker; needs the semgrep binary)")
+    if not si.semgrep_available():
+        print("    SKIPPED — semgrep binary not found (pipx install semgrep).")
+        return 0
+    try:
+        findings = si.run_scan()
+    except Exception as e:  # noqa: BLE001 - surface, don't crash the whole suite
+        print(f"    SAST injection scan failed: {e}")
+        return 1
+    r = si.score(findings)
+    si.print_report(r)
+    return 0 if si.passed(r) else 1
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("targets", nargs="*", help="target names (default: vampi both)")
+    ap.add_argument("targets", nargs="*", help="target names (default: vampi + sast-injection)")
     ap.add_argument("--keep", action="store_true", help="don't tear down containers")
     ap.add_argument("--all", action="store_true", help="include heavy compose targets")
     args = ap.parse_args()
 
     by_name = {t.name: t for t in TARGETS}
-    if args.targets:
-        selected = [by_name[n] for n in args.targets if n in by_name]
-        missing = [n for n in args.targets if n not in by_name]
-        if missing:
-            print(f"Unknown targets: {missing}. Available: {list(by_name)}")
-            return 2
-    elif args.all:
-        selected = TARGETS
-    else:
-        selected = [by_name["vampi-vulnerable"], by_name["vampi-secure"]]
+    docker_names, want_sast, unknown = resolve_selection(args.targets, args.all)
+    if unknown:
+        print(f"Unknown targets: {unknown}. Available: {list(by_name) + [SAST_INJECTION]}")
+        return 2
+    selected = [by_name[n] for n in docker_names]
 
     results = [run_target(t, args.keep) for t in selected]
     print_scorecard(results)
@@ -413,9 +456,13 @@ def main() -> int:
         len(r.get("scorecard", {}).get("regression_failures", []))
         for r in results
     )
+    sast_rc = run_sast_injection() if want_sast else 0
     if regressions:
         print(f"\n✗ {regressions} regression failure(s) — a finding the scanner "
               f"reliably catches was dropped by the full scan. See ⚠ REGRESSION above.")
+        return 1
+    if sast_rc:
+        print("\n✗ SAST injection benchmark failed (recall < 100% or FP > 0).")
         return 1
     return 0
 
