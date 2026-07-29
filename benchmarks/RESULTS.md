@@ -18,24 +18,30 @@ _Runs: 2026-07 · `--llm none` (pure DAST detection, no LLM) · Juice Shop pinne
 | `vampi-vulnerable` | url-only | **3/3** (SQLi, IDOR, headers) | — | 14–16 |
 | `vampi-secure` | url-only | — | **2** (IDOR) | 13–15 |
 | `nodegoat-auth` | authenticated | **2/3** (headers, XSS; injection missed) | unmeasured | 28 |
-| `sast-injection` | code-only | **12/12 (100%)** — taint, per-class, deterministic | **0** | 12 |
+| `sast-injection` | code-only | **27/27 (100%)** — taint, per-class, deterministic | **0** | 27 |
 
-### SAST injection (`sast-injection`, code-only, taint layer #4)
+### SAST injection (`sast-injection`, code-only, taint layer #4 + #93)
 
-The deterministic Semgrep taint layer scored on an independent JS/TS injection
-fixture (not `test-app`, which the rules were tuned on). Recall **12/12** with
-**0 false positives** across all six classes, deterministic across runs:
+The deterministic Semgrep taint layer scored on an independent injection fixture
+(not `test-app`, which the JS rules were tuned on) covering **JS/TS (#4)** and
+**Python (#93)**. Recall **27/27** with **0 false positives** across all classes,
+deterministic across runs:
 
-| Class | Found / expected | Class | Found / expected |
-|---|--:|---|--:|
-| sqli | **5/5** | ssrf | **1/1** |
-| reflected-xss | **2/2** | path-traversal | **1/1** |
-| dom-xss | **2/2** | command-injection | **1/1** |
+| Class | JS/TS | Python | Class | JS/TS | Python |
+|---|--:|--:|---|--:|--:|
+| sqli | 5/5 | 7/7 | path-traversal | 1/1 | 2/2 |
+| reflected-xss | 2/2 | — | command-injection | 1/1 | 3/3 |
+| dom-xss | 2/2 | — | ssti | — | 1/1 |
+| ssrf | 1/1 | 2/2 | | | |
 
-The FP side is exercised by benign near-misses (parameterized queries,
-constant-path writes, non-DB `.query()`, escaped output, fixed-URL fetch) — none
-flagged. This is the baseline the taint layer and future rule packs (#93/#94)
-must hold.
+The FP side is exercised by benign near-misses in both languages — parameterized
+queries, constant-path writes, non-DB `.query()`, escaped output, fixed-URL
+fetch (JS); parameterized/bound queries (including request-derived values in the
+params tuple), a bare `text()` i18n alias, `subprocess` without `shell=True`,
+constant-path `open()`, fixed-URL requests (Python) — none flagged. Cross-checked
+against isitsecure's own 164 Python files (which contain real `subprocess`,
+`requests`/`httpx`, and `open()` call sites): **0 false positives**. This is the
+baseline the taint layer and future rule packs (#94) must hold.
 
 > Juice Shop recall is scored **per challenge** — a finding must match the class
 > signature AND land on the right endpoint — over the 45 DAST-detectable

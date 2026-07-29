@@ -225,7 +225,7 @@ The scan narrates each phase and every scanner as it runs (with elapsed time), s
 
 | Scanner | What It Finds |
 |---|---|
-| Semgrep Taint Analyzer | Deterministic source→sink injection for JS/TS — SQLi, reflected/DOM XSS, SSRF, path traversal, command injection (a reproducible floor beneath the LLM reviewer; needs the `[taint]` extra, no-ops without the `semgrep` binary) |
+| Semgrep Taint Analyzer | Deterministic source→sink injection for JS/TS and Python — SQLi, XSS, SSRF, path traversal, command injection, SSTI (a reproducible floor beneath the LLM reviewer; needs the `[taint]` extra, no-ops without the `semgrep` binary) |
 | Git Secret Scanner | API keys, tokens, and credentials in git history (not just HEAD) |
 | Route Auth Analyzer | Next.js/Express/Django/FastAPI/Spring routes missing authentication |
 | RLS Policy Analyzer | Supabase tables without Row Level Security enabled |
@@ -390,7 +390,7 @@ isitsecure works well alongside other tools. Run `isitsecure scan` for the combi
 
 ## What It Does NOT Cover
 
-- **Inter-procedural taint analysis** — The opt-in Semgrep taint layer (`[taint]`) does intra-file source→sink dataflow for JS/TS injection; cross-function/cross-file tracking (Semgrep Pro territory) still falls back to LLM reasoning
+- **Inter-procedural taint analysis** — The opt-in Semgrep taint layer (`[taint]`) does intra-file source→sink dataflow for JS/TS and Python injection; cross-function/cross-file tracking (Semgrep Pro territory) still falls back to LLM reasoning
 - **WAF evasion** — DAST payloads don't include advanced bypass techniques
 - **Compliance mapping** — No OWASP Top 10, CWE, or PCI-DSS tagging (yet)
 - **Network-level scanning** — No port scanning, TLS analysis, or infrastructure enumeration
@@ -624,7 +624,7 @@ python benchmarks/run_benchmarks.py sast-injection  # taint recall/FP (code-only
 python benchmarks/run_benchmarks.py --all       # + NodeGoat + crAPI + Juice Shop (heavy)
 ```
 
-Most targets spin the app up in Docker, run a DAST scan, score against a known ground truth, and tear it down (require Docker). The `sast-injection` target is **code-only** (no Docker) — it scores the deterministic Semgrep taint layer on a JS/TS injection fixture (**12/12 recall, 0 FP**) and needs the `semgrep` binary instead; it's included in the default run. Measured results are tracked in [benchmarks/RESULTS.md](benchmarks/RESULTS.md); see [benchmarks/README.md](benchmarks/README.md) for targets and how scoring works.
+Most targets spin the app up in Docker, run a DAST scan, score against a known ground truth, and tear it down (require Docker). The `sast-injection` target is **code-only** (no Docker) — it scores the deterministic Semgrep taint layer on a JS/TS + Python injection fixture (**27/27 recall, 0 FP**) and needs the `semgrep` binary instead; it's included in the default run. Measured results are tracked in [benchmarks/RESULTS.md](benchmarks/RESULTS.md); see [benchmarks/README.md](benchmarks/README.md) for targets and how scoring works.
 
 ## Privacy
 

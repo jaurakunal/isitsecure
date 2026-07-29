@@ -83,20 +83,24 @@ python benchmarks/sast_injection.py findings.json    # score an existing code-on
 
 The fixtures **are** the ground truth (no separate file to drift):
 
-- `fixtures/sast-injection/vulnerable/*` — each line tagged `// EXPECT <class>`
-  (`sqli | reflected-xss | dom-xss | ssrf | path-traversal | command-injection`)
-  is a bug the taint layer must flag (recall).
-- `fixtures/sast-injection/safe/*` — benign near-misses (parameterized queries,
-  constant-path writes, non-DB `.query()`, escaped output, fixed-URL fetch). Any
-  injection finding here — or on an unmarked line in a vulnerable file — is a
-  **false positive**.
+- `fixtures/sast-injection/vulnerable/*` — each sink line tagged with a trailing
+  `EXPECT <class>` marker (`//` for JS/TS, `#` for Python; classes: `sqli |
+  reflected-xss | dom-xss | ssrf | path-traversal | command-injection | ssti`)
+  is a bug the taint layer must flag (recall). Covers **JS/TS (#4)** and
+  **Python (#93)**.
+- `fixtures/sast-injection/safe/*` — benign near-misses. JS: parameterized
+  queries, constant-path writes, non-DB `.query()`, escaped output, fixed-URL
+  fetch. Python: bound/parameterized queries (including request-derived values in
+  the params tuple), a bare `text()` i18n alias, `subprocess` without
+  `shell=True`, constant-path `open()`, fixed-URL requests. Any injection finding
+  here — or on an unmarked line in a vulnerable file — is a **false positive**.
 
 The scorer (`sast_injection.py`) matches findings to expected bugs by file and
 line (±1, since Semgrep can report the statement head), reports per-class recall,
 and **exits non-zero unless recall is 100% and FP is 0**. It needs the `semgrep`
 binary; scoring an existing `findings.json` needs neither Docker nor semgrep.
-This is an *independent* fixture (not `test-app`, which the rules were tuned on),
-so it's a genuine second data point.
+This is an *independent* fixture (not `test-app`, which the JS rules were tuned
+on), so it's a genuine second data point.
 
 ## Authenticated cross-user IDOR (BOLA)
 
