@@ -45,7 +45,9 @@ def _report(findings):
 def test_tools_registered_with_schema():
     server = mcp_server.build_server()
     tools = {t.name: t for t in asyncio.run(server.list_tools())}
-    assert set(tools) == {"scan", "explain", "fix", "verify", "export"}
+    assert set(tools) == {"scan", "explain", "fix", "verify", "export", "scan_url", "scan_status"}
+    assert set(tools["scan_url"].inputSchema.get("properties", {})) == {"url", "min_severity"}
+    assert set(tools["scan_status"].inputSchema.get("properties", {})) == {"job_id"}
     assert set(tools["scan"].inputSchema.get("properties", {})) >= {"path", "min_severity"}
     assert set(tools["explain"].inputSchema.get("properties", {})) == {"scan_id", "finding_id"}
     assert set(tools["fix"].inputSchema.get("properties", {})) == {"scan_id", "finding_id"}
@@ -182,8 +184,9 @@ def test_themes_surfaced_in_output():
 
 @pytest.fixture
 def isolated_cache(monkeypatch):
-    """Run against a fresh scan cache so these tests can't leak the module global."""
+    """Run against fresh module state (scan cache + DAST jobs) so tests can't leak."""
     monkeypatch.setattr(mcp_server, "_SCAN_CACHE", OrderedDict())
+    monkeypatch.setattr(mcp_server, "_JOBS", OrderedDict())
 
 
 def test_scan_cache_roundtrip_and_finding_identity(isolated_cache):
@@ -524,6 +527,134 @@ async def test_export_tool_unknown_format_raises(isolated_cache):
     with pytest.raises(Exception) as exc:
         await server.call_tool("export", {"scan_id": sid, "format": "pdf"})
     assert "format" in str(exc.value).lower()
+
+
+async def test_scan_url_starts_job_and_status_polls(isolated_cache, monkeypatch):
+    # Replace the background runner with a fast one that marks the job done with a
+    # real (schema-valid) ScanResult.
+    async def fake_runner(job, url, min_severity):
+        job.result = mcp_server._trim_report(_report([]), "medium", "dast1")
+        job.status, job.progress, job.message = "done", 1.0, "Scan complete."
+
+    monkeypatch.setattr(mcp_server, "_run_dast_job", fake_runner)
+    server = mcp_server.build_server()
+
+    _, handle = await server.call_tool("scan_url", {"url": "http://localhost:3000"})
+    assert handle["status"] == "running" and handle["job_id"]
+
+    await asyncio.sleep(0.05)  # let the background task run
+    _, status = await server.call_tool("scan_status", {"job_id": handle["job_id"]})
+    assert status["status"] == "done"
+    assert status["result"]["scan_id"] == "dast1" and status["result"]["grade"] == "A"
+
+
+async def test_scan_url_rejects_non_http(isolated_cache):
+    server = mcp_server.build_server()
+    with pytest.raises(Exception) as exc:
+        await server.call_tool("scan_url", {"url": "ftp://nope"})
+    assert "http" in str(exc.value).lower()
+
+
+async def test_scan_status_unknown_job_raises(isolated_cache):
+    server = mcp_server.build_server()
+    with pytest.raises(Exception) as exc:
+        await server.call_tool("scan_status", {"job_id": "no-such-job"})
+    assert "job_id" in str(exc.value).lower()
+
+
+async def test_run_dast_job_consumes_scan_and_caches(isolated_cache, monkeypatch):
+    from isitsecure.engine import factory
+
+    # A DAST finding has no code_location (it's a live-URL finding).
+    dast_finding = DeepFinding(
+        source=FindingSource.DAST_URL, category=FindingCategory.MISSING_HEADERS,
+        severity=SeverityLevel.MEDIUM, title="Missing HSTS header", description="d",
+        confidence=0.9, scanner_name="security_headers_scanner",
+    )
+    rep = DeepScanReport(findings=[dast_finding])
+
+    class FakeEvent:
+        def __init__(self, **kw):
+            self.__dict__.update({"progress": 0, "message": "", "data": None, **kw})
+
+    class FakeAgent:
+        async def scan(self, target_url, scan_mode):
+            yield FakeEvent(progress=40, message="Testing headers…")
+            yield FakeEvent(data={"report": rep.model_dump(mode="json")})
+
+    monkeypatch.setattr(mcp_server, "_maybe_llm_client", lambda: None)
+    monkeypatch.setattr(factory, "create_deep_security_scan_agent", lambda **kw: FakeAgent())
+    monkeypatch.setattr(factory, "create_repo_ingestion_service", lambda: None)
+
+    job = mcp_server._ScanJob(status="running", progress=0.0, message="")
+    await mcp_server._run_dast_job(job, "http://localhost:3000", "medium")
+    assert job.status == "done" and job.progress == 1.0
+    assert job.result["grade"]                    # a ScanResult
+    assert job.result["counts"]["medium"] == 1
+
+
+async def test_run_dast_job_error_path_sets_error(isolated_cache, monkeypatch):
+    from isitsecure.engine import factory
+
+    class BoomAgent:
+        async def scan(self, target_url, scan_mode):
+            raise RuntimeError("scan boom")
+            yield  # make it an async generator
+
+    monkeypatch.setattr(mcp_server, "_maybe_llm_client", lambda: None)
+    monkeypatch.setattr(factory, "create_deep_security_scan_agent", lambda **kw: BoomAgent())
+    monkeypatch.setattr(factory, "create_repo_ingestion_service", lambda: None)
+
+    job = mcp_server._ScanJob(status="running", progress=0.0, message="")
+    await mcp_server._run_dast_job(job, "http://x", "medium")
+    assert job.status == "error" and "boom" in job.error
+
+
+async def test_run_dast_job_no_report_sets_error(isolated_cache, monkeypatch):
+    from isitsecure.engine import factory
+
+    class NoReportAgent:
+        async def scan(self, target_url, scan_mode):
+            yield type("E", (), {"progress": 10, "message": "crawling", "data": None})()
+
+    monkeypatch.setattr(mcp_server, "_maybe_llm_client", lambda: None)
+    monkeypatch.setattr(factory, "create_deep_security_scan_agent", lambda **kw: NoReportAgent())
+    monkeypatch.setattr(factory, "create_repo_ingestion_service", lambda: None)
+
+    job = mcp_server._ScanJob(status="running", progress=0.0, message="")
+    await mcp_server._run_dast_job(job, "http://x", "medium")
+    assert job.status == "error" and "no report" in job.error.lower()
+
+
+async def test_scan_url_eviction_protects_running_jobs(isolated_cache, monkeypatch):
+    monkeypatch.setattr(mcp_server, "_JOBS_MAX", 2)
+    mcp_server._JOBS["olddone"] = mcp_server._ScanJob(status="done", progress=1.0, message="")
+    mcp_server._JOBS["oldrun"] = mcp_server._ScanJob(status="running", progress=0.5, message="")
+
+    async def fake_runner(job, url, min_severity):
+        job.status = "done"
+
+    monkeypatch.setattr(mcp_server, "_run_dast_job", fake_runner)
+    server = mcp_server.build_server()
+    _, handle = await server.call_tool("scan_url", {"url": "http://localhost:9000"})
+    # over cap → evict the oldest FINISHED job, keep the running one + the new one
+    assert "olddone" not in mcp_server._JOBS
+    assert "oldrun" in mcp_server._JOBS
+    assert handle["job_id"] in mcp_server._JOBS
+
+
+async def test_fix_on_dast_scan_id_errors_cleanly(isolated_cache):
+    # A DAST finding has no code_location and its scan has no repo_path.
+    dast = DeepFinding(
+        source=FindingSource.DAST_URL, category=FindingCategory.MISSING_HEADERS,
+        severity=SeverityLevel.MEDIUM, title="Missing HSTS", description="d",
+        confidence=0.9, scanner_name="security_headers_scanner",
+    )
+    sid = mcp_server._cache_report(DeepScanReport(findings=[dast]), repo_path=None)
+    server = mcp_server.build_server()
+    with pytest.raises(Exception) as exc:
+        await server.call_tool("fix", {"scan_id": sid, "finding_id": dast.id})
+    assert "source file" in str(exc.value).lower()   # graceful ToolError, not a crash
 
 
 def test_missing_mcp_dependency_gives_friendly_message(monkeypatch):
