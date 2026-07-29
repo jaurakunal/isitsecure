@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0](https://github.com/jaurakunal/isitsecure/compare/v0.8.0...v0.9.0) (2026-07-29)
+
+
+### Features
+
+* **sast:** deterministic Semgrep taint/injection floor for JS/TS ([#4](https://github.com/jaurakunal/isitsecure/issues/4)) ([#95](https://github.com/jaurakunal/isitsecure/issues/95)) ([ed239aa](https://github.com/jaurakunal/isitsecure/commit/ed239aa295fabd8f7a67635d5846f3cf262ab5e8))
+
+
+### Documentation
+
+* taint-analysis design ([#4](https://github.com/jaurakunal/isitsecure/issues/4)) — layered Semgrep + LLM injection detection ([e6cc3e7](https://github.com/jaurakunal/isitsecure/commit/e6cc3e789afa3ebc3913552966949bcfdc4dee34))
+
 ## [0.8.0](https://github.com/jaurakunal/isitsecure/compare/v0.7.0...v0.8.0) (2026-07-29)
 
 
