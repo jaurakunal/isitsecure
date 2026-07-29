@@ -80,6 +80,9 @@ _DAST_TIMEOUT_MAP: dict[str, float] = {
 
 _SAST_TIMEOUT_MAP: dict[str, float] = {
     "secret_scanner": ScannerTimeouts.GIT_SECRET_SCAN_SECONDS,
+    # Above the analyzer's internal 120s so its own timeout/kill fires first and
+    # the semgrep child is always reaped (never orphaned by an outer cancel).
+    "semgrep_taint": ScannerTimeouts.SEMGREP_TAINT_SECONDS,
 }
 
 

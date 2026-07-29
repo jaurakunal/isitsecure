@@ -17,7 +17,7 @@ Phase 5.5: Probe Analysis        ─── Cross-scanner pattern detection on HT
 Phase 5.6: OOB Collection        ─── Poll for blind vulnerability callbacks
 Phase 6:  Repo Ingestion         ─── Clone + index repository
 Phase 6.5: LSP Initialization    ─── Start TypeScript Language Server
-Phase 7:  SAST Scanners          ─── 17 scanners run in parallel
+Phase 7:  SAST Scanners          ─── 18 scanners run in parallel
 Phase 7.5: LSP Validation        ─── Trace auth flows, suppress false positives
 Phase 8:  LLM Code Review        ─── AI analyzes high-risk routes
 Phase 9:  Cross-Reference        ─── Match DAST findings to SAST findings
@@ -99,7 +99,7 @@ The repository is cloned (shallow, to temp dir) and indexed:
    - `GraphQLRouteMapper`: schema definitions → query/mutation types
 4. **File indexing** — reads all source files into memory (filtered by extension, size limit, skip `node_modules`)
 
-17 SAST scanners then run in parallel against the indexed codebase (plus the LLM-powered Semantic Rule Verifier when an API key is available).
+18 SAST scanners then run in parallel against the indexed codebase (plus the LLM-powered Semantic Rule Verifier when an API key is available). One of them, the **Semgrep Taint Analyzer** (`semgrep_taint`), is a deterministic source→sink injection floor for JS/TS that sits beneath the LLM code reviewer: it catches the mechanical SQLi/XSS/SSRF/path-traversal/command-injection cases reproducibly and for free, leaving the LLM to cover business logic and uncatalogued libraries. It is opt-in (`[taint]` extra) and no-ops if the `semgrep` binary is absent.
 
 ### Phase 7.5: LSP Validation
 
@@ -304,7 +304,7 @@ isitsecure/
 │   ├── cross_referencer.py     # DAST ↔ SAST finding matcher
 │   ├── scan_config.py          # User-configurable scan settings
 │   ├── scanners/               # 15 DAST scanners + special scanners
-│   ├── code_analysis/          # 17 SAST scanners + route mappers + LSP
+│   ├── code_analysis/          # 18 SAST scanners + route mappers + LSP + semgrep_rules/
 │   │   └── category_classifier.py  # Maps LLM-review findings to their FindingCategory
 │   ├── fixes/                  # AI fix gen: safety_net, verifier, plain_results, pr_flow
 │   ├── guided_dast/            # SAST → DAST test generation (6 strategies)
@@ -354,7 +354,7 @@ isitsecure/
               │               │                 │
               │               │         ┌───────▼──────────┐
               │               │         │  SAST Scanners   │
-              │               │         │  (17 parallel)   │
+              │               │         │  (18 parallel)   │
               │               │         └───────┬──────────┘
               │               │                 │
               └───────────────┼─────────────────┘

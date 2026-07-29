@@ -72,6 +72,7 @@ from isitsecure.engine.code_analysis.route_analyzer import (
 from isitsecure.engine.code_analysis.secret_scanner import (
     GitSecretScanner,
 )
+from isitsecure.engine.code_analysis.semgrep_analyzer import SemgrepAnalyzer
 from isitsecure.engine.cross_referencer import FindingCrossReferencer
 from isitsecure.engine.guided_dast.runner import SASTGuidedDASTRunner
 from isitsecure.engine.guided_dast.strategies.auth_bypass import (
@@ -290,6 +291,7 @@ def create_deep_security_scan_agent(
 
     sast_scanners = [
         GitSecretScanner(),
+        SemgrepAnalyzer(),  # deterministic taint/injection floor (#4)
         RouteAuthAnalyzer(),
         RLSPolicyAnalyzer(),
         MiddlewareAnalyzer(),

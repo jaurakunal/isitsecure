@@ -1,7 +1,10 @@
 # Taint Analysis for SAST (#4) — Design
 
-Status: **proposal**, backed by a run-on-`test-app` spike (results below). This
-doc is the contract we build to — argue it here before writing code.
+Status: **implemented** (Phase 2/3) — the `SemgrepAnalyzer` and the first JS/TS
+rule pack ship as of this change, backed by the run-on-`test-app` spike below.
+This doc records the design; see
+[docs/scanners/semgrep-taint.md](scanners/semgrep-taint.md) for the user-facing
+scanner reference.
 
 ## Problem
 
@@ -117,7 +120,7 @@ A new `SemgrepAnalyzer` behind the existing SAST scanner interface:
 1. On a code-only scan, detect the stack (already done) → select rule packs.
 2. Shell out to the bundled `semgrep` binary with those packs (`--json`), scoped
    to the cloned repo. No network (rules ship with us).
-3. Parse Semgrep's output → map each result to a `DeepFinding` (category from the
+3. Parse Semgrep's output → map each result to a `CodeFinding` (category from the
    rule, `code_location` from `path`/`start.line`, severity from the rule,
    `scanner_name = "semgrep_taint"`).
 4. Feed those findings into the same triage/dedup/plain-English pipeline as every
@@ -169,7 +172,7 @@ layer has a recall/FP scorecard of its own.
 ## Phasing
 
 1. **SAST injection benchmark fixtures** + a recall/FP harness (so we can measure).
-2. **`SemgrepAnalyzer`** (subprocess → parse → `DeepFinding`) with a first rule
+2. **`SemgrepAnalyzer`** (subprocess → parse → `CodeFinding`) with a first rule
    pack for the top stack (Next.js/Express + postgres/Prisma/Drizzle + DOM).
 3. **Benchmark**: prove it adds recall without FP vs. LLM-only. Discuss, then ship.
 4. **Broaden rule packs** (FastAPI/Flask/Django, more libraries) iteratively, each

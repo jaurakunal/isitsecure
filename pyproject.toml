@@ -52,9 +52,14 @@ llm = [
 mcp = [
     "mcp>=1.28.1,<2",
 ]
+# Deterministic taint/injection SAST via Semgrep (#4). Also available standalone
+# (`[taint]`); the analyzer no-ops gracefully when the semgrep binary is absent.
+taint = [
+    "semgrep>=1.100,<2",
+]
 # Everything
 all = [
-    "isitsecure[browser,oob,llm,mcp]",
+    "isitsecure[browser,oob,llm,mcp,taint]",
 ]
 # Development
 dev = [

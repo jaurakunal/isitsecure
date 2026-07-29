@@ -12,7 +12,7 @@ git clone https://github.com/jaurakunal/isitsecure.git
 cd isitsecure
 python3 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -e ".[all]"            # all scanners + browser + LLM extras
+pip install -e ".[all,dev]"        # all scanners + browser + LLM + semgrep taint + dev tools
 isitsecure setup                   # installs the Chromium browser for DAST
 ```
 
@@ -25,7 +25,11 @@ ruff check isitsecure  # lint
 
 Please make sure `pytest` and `ruff check` are green before opening a PR, and
 add tests for any behavior you change — the suite is the project's safety net.
-Some DAST/browser tests need the `[browser]` extra (Chromium) installed.
+Some DAST/browser tests need the `[browser]` extra (Chromium) installed. The
+Semgrep taint analyzer (`semgrep_taint`) needs the `[taint]` extra — included in
+`[all]` — for the `semgrep` binary; its unit tests mock the subprocess, so they
+pass without it, but you'll only see real taint findings end-to-end with it
+installed. The analyzer no-ops gracefully when the binary is absent.
 
 ## Adding a scanner
 
