@@ -128,9 +128,14 @@ A new `SemgrepAnalyzer` behind the existing SAST scanner interface:
 5. The LLM code reviewer still runs; dedup collapses overlaps (a finding both
    Semgrep and the LLM raise counts once).
 
-Packaging: bundle Semgrep as an **optional extra** (`isitsecure[taint]`, folded
-into `all`) and the rule packs under `isitsecure/engine/code_analysis/semgrep_rules/`.
-Degrade gracefully if the binary is missing (fall back to LLM-only, like today).
+Packaging: ship Semgrep as an **optional extra** (`isitsecure[taint]`) kept
+**separate from `all`** — semgrep's tightly-pinned dependency tree (rich/click/
+boltons/colorama) does not co-resolve with the `[all]` stack, so folding it in
+would break `pip install isitsecure[all]`. Since the analyzer only shells out to
+the `semgrep` **binary**, it's found via PATH or the venv, so an isolated install
+(`pipx install semgrep`, brew, or a separate venv) works just as well. The rule
+packs live under `isitsecure/engine/code_analysis/semgrep_rules/`. Degrade
+gracefully if the binary is missing (fall back to LLM-only, like today).
 
 ## Precision — the eternal SAST battle
 
