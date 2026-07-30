@@ -1,0 +1,119 @@
+# isitsecure taint/sink rules for Kotlin injection (#104).
+# Kotlin shares the JVM/Spring stack with Java, but the syntax differs enough
+# (params are `name: Type`, constructors have no `new`, functions use `fun`) that
+# Semgrep needs a separate `languages: [kotlin]` pack — a rule can only hold
+# patterns valid in every language it lists. Mirrors injection-java.yaml.
+rules:
+  # ---- SQL injection: dangerous query construction (pattern) ----
+  - id: isitsecure-kotlin-sqli
+    languages: [kotlin]
+    severity: ERROR
+    metadata: {category: injection_risk, isitsecure-severity: critical}
+    message: "Raw SQL built from string concatenation — SQL injection. Use a parameterized query."
+    patterns:
+      - pattern-either:
+          - pattern: $S.executeQuery("..." + ...)
+          - pattern: $S.executeUpdate("..." + ...)
+          - pattern: $C.prepareStatement("..." + ...)
+          - pattern: $E.createNativeQuery("..." + ...)
+          - pattern: $J.queryForList("..." + ...)
+          - pattern: $J.queryForObject("..." + ...)
+          - pattern: $J.queryForMap("..." + ...)
+
+  # ---- SQL injection: user input → query STRING (intra-file taint) ----
+  - id: isitsecure-kotlin-sqli-taint
+    mode: taint
+    languages: [kotlin]
+    severity: ERROR
+    metadata: {category: injection_risk, isitsecure-severity: critical}
+    message: "User input flows into a raw SQL query — SQL injection."
+    pattern-sources: &kotlin_sources
+      # Servlet request accessors (method-call sources — same as Java)
+      - pattern: $REQ.getParameter(...)
+      - pattern: $REQ.getParameterValues(...)
+      - pattern: $REQ.getHeader(...)
+      - pattern: $REQ.getQueryString()
+      # Spring controller params — Kotlin `fun name(@RequestParam p: Type)`. Match
+      # both block bodies (`{...}`) and single-expression bodies (`= ...`), which
+      # are idiomatic Kotlin and have no braces.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: "fun $M(..., @RequestParam $P: $T, ...) {...}"
+              - pattern-inside: "fun $M(..., @RequestParam $P: $T, ...) = ..."
+          - focus-metavariable: $P
+      - patterns:
+          - pattern-either:
+              - pattern-inside: "fun $M(..., @RequestParam(...) $P: $T, ...) {...}"
+              - pattern-inside: "fun $M(..., @RequestParam(...) $P: $T, ...) = ..."
+          - focus-metavariable: $P
+      - patterns:
+          - pattern-either:
+              - pattern-inside: "fun $M(..., @PathVariable $P: $T, ...) {...}"
+              - pattern-inside: "fun $M(..., @PathVariable $P: $T, ...) = ..."
+          - focus-metavariable: $P
+      - patterns:
+          - pattern-either:
+              - pattern-inside: "fun $M(..., @PathVariable(...) $P: $T, ...) {...}"
+              - pattern-inside: "fun $M(..., @PathVariable(...) $P: $T, ...) = ..."
+          - focus-metavariable: $P
+      - patterns:
+          - pattern-either:
+              - pattern-inside: "fun $M(..., @RequestHeader $P: $T, ...) {...}"
+              - pattern-inside: "fun $M(..., @RequestHeader $P: $T, ...) = ..."
+          - focus-metavariable: $P
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $S.executeQuery($Q)
+              - pattern: $S.executeUpdate($Q)
+              - pattern: $S.execute($Q)
+              - pattern: $C.prepareStatement($Q)
+              - pattern: $E.createNativeQuery($Q)
+              - pattern: $E.createQuery($Q)
+              - pattern: $J.queryForList($Q, ...)
+              - pattern: $J.queryForObject($Q, ...)
+              - pattern: $J.update($Q, ...)
+          - focus-metavariable: $Q
+
+  # ---- Command injection: user input → shell ----
+  - id: isitsecure-kotlin-command-injection
+    mode: taint
+    languages: [kotlin]
+    severity: ERROR
+    metadata: {category: injection_risk, isitsecure-severity: critical}
+    message: "User input flows into a shell command — command injection."
+    pattern-sources: *kotlin_sources
+    pattern-sinks:
+      - pattern: Runtime.getRuntime().exec(...)
+      - pattern: ProcessBuilder(...)   # Kotlin: no `new`
+
+  # ---- SSRF: user-controlled URL → outbound request ----
+  - id: isitsecure-kotlin-ssrf
+    mode: taint
+    languages: [kotlin]
+    severity: ERROR
+    metadata: {category: injection_risk, isitsecure-severity: high}
+    message: "User-controlled URL flows into an outbound request — SSRF."
+    pattern-sources: *kotlin_sources
+    pattern-sinks:
+      - pattern: URL(...)              # Kotlin: no `new`
+      - pattern: $R.getForObject(...)
+      - pattern: $R.getForEntity(...)
+      - pattern: $R.exchange(...)
+
+  # ---- Path traversal: request-derived path → file access ----
+  # Note: the bare no-`new` sinks (File/URL/ProcessBuilder) match on callee name,
+  # so a same-named domain type or factory fn receiving request input directly
+  # could false-positive. It's taint-gated (needs a source in the same function),
+  # which bounds the blast radius; revisit with import-scoping if seen in the wild.
+  - id: isitsecure-kotlin-path-traversal
+    mode: taint
+    languages: [kotlin]
+    severity: WARNING
+    metadata: {category: injection_risk, isitsecure-severity: high}
+    message: "File accessed with a request-derived path — path traversal."
+    pattern-sources: *kotlin_sources
+    pattern-sinks:
+      - pattern: File(...)             # Kotlin: no `new`
+      - pattern: FileInputStream(...)
+      - pattern: FileReader(...)

@@ -6,7 +6,7 @@
 
 Runs [Semgrep](https://semgrep.dev) with isitsecure's own taint/sink rule packs over your cloned repo and maps the results to findings. It is a **deterministic injection floor beneath the LLM code reviewer**: the same input always produces the same findings, instantly and at no token cost.
 
-Three rule packs ship today — **JavaScript/TypeScript** (`injection-js.yaml`, #4), **Python** (`injection-python.yaml`, #93), and **Java/Spring** (`injection-java.yaml`, #102). The analyzer **auto-selects the packs whose languages are present in the repo** (#94): a JS-only repo runs only the JS pack, a mixed repo the relevant ones. (Semgrep also scopes each rule to its declared language, so selection is about not loading irrelevant rules — faster, and ready for per-framework packs later.)
+Four rule packs ship today — **JavaScript/TypeScript** (`injection-js.yaml`, #4), **Python** (`injection-python.yaml`, #93), **Java/Spring** (`injection-java.yaml`, #102), and **Kotlin/Spring** (`injection-kotlin.yaml`, #104). Java and Kotlin share the JVM/Spring stack and the same rule shape, but Semgrep needs a separate pack per language (a rule can only hold patterns valid in every language it lists, and Kotlin's syntax differs — `name: Type` params, no `new`). The analyzer **auto-selects the packs whose languages are present in the repo** (#94): a JS-only repo runs only the JS pack, a mixed repo the relevant ones. (Semgrep also scopes each rule to its declared language, so selection is about not loading irrelevant rules — faster, and ready for per-framework packs later.)
 
 **JavaScript/TypeScript** — six classes:
 
@@ -25,7 +25,7 @@ Three rule packs ship today — **JavaScript/TypeScript** (`injection-js.yaml`, 
 4. **Path traversal** — request-derived path → `open(...)`.
 5. **SSTI** — request input → `render_template_string(...)`.
 
-**Java** (Spring MVC / servlet request sources: `@RequestParam`/`@PathVariable`/`@RequestHeader` params, `HttpServletRequest.getParameter`/`getHeader`) — four classes:
+**Java and Kotlin** (Spring MVC / servlet request sources: `@RequestParam`/`@PathVariable`/`@RequestHeader` params, `HttpServletRequest.getParameter`/`getHeader`) — four classes each (the Kotlin pack mirrors the Java pack with Kotlin-syntax sources and no-`new` constructor sinks):
 
 1. **SQL injection** — string-concatenated queries in JDBC `Statement.execute*`, JPA `EntityManager.createQuery`/`createNativeQuery`, Spring `JdbcTemplate.query*`/`update`, plus a taint rule focused on the query-string argument (bound parameters are safe).
 2. **Command injection** — request input → `Runtime.getRuntime().exec(...)` / `new ProcessBuilder(...)`.
@@ -48,14 +48,14 @@ It is **best-effort and self-contained**:
 
 - If the `semgrep` binary isn't installed, the analyzer **no-ops and returns nothing** — the LLM layer still runs, exactly as before.
 - A crash or timeout in Semgrep **never fails the scan**; it logs and returns no findings. The subprocess is always killed and reaped (never orphaned), even if the overall scan is cancelled.
-- It only runs when the repo contains JS/TS, Python, or Java files.
+- It only runs when the repo contains JS/TS, Python, Java, or Kotlin files.
 - No network: the rule packs ship with isitsecure; Semgrep runs with `--metrics off`.
 
 ## Why It Matters
 
 Before this analyzer, injection detection (SQLi/XSS/SSRF/path-traversal/command-injection) rested **entirely on the LLM**, which is non-deterministic (finding counts wobble run-to-run), costs tokens, and is slow. The Semgrep layer gives a reproducible, instant, free floor for the mechanical source→sink cases, while the LLM keeps covering business-logic flaws and the long tail of libraries without rules.
 
-See [docs/taint-analysis.md](../taint-analysis.md) for the full design rationale, the spike results, and the per-stack rule model. The layer has its own recall/FP scorecard — **37/37 recall, 0 false positives** on an independent JS/TS + Python + Java injection fixture — via `python benchmarks/run_benchmarks.py sast-injection` (see [benchmarks/RESULTS.md](../../benchmarks/RESULTS.md)).
+See [docs/taint-analysis.md](../taint-analysis.md) for the full design rationale, the spike results, and the per-stack rule model. The layer has its own recall/FP scorecard — **46/46 recall, 0 false positives** on an independent JS/TS + Python + Java + Kotlin injection fixture — via `python benchmarks/run_benchmarks.py sast-injection` (see [benchmarks/RESULTS.md](../../benchmarks/RESULTS.md)).
 
 ## What Vulnerable Code Looks Like
 
@@ -77,11 +77,11 @@ const rows = await sql`SELECT * FROM users WHERE id = ${id}`;
 ## Limitations
 
 - **Intra-file only.** OSS Semgrep taint tracks dataflow within a single file. A route that hands user input to a helper in another file which then reaches a sink (inter-procedural) is not tracked — that path falls back to the LLM reviewer. (Inter-file taint is Semgrep Pro territory.)
-- **JS/TS, Python, and Java today.** Other stacks (Go, Ruby, …) are future rule-pack work; those apps rely on the LLM layer meanwhile. Python and Java server-side XSS (template-autoescaping nuance) is not yet covered.
+- **JS/TS, Python, Java, and Kotlin today** — the languages isitsecure supports for the rest of the scan. Other stacks (Go, Ruby, …) are DAST-only (no SAST support), so no taint pack. Python/Java/Kotlin server-side XSS (template-autoescaping nuance) is not yet covered.
 - **Python taint sources are Flask/Django** (`request.*`); FastAPI endpoint parameters aren't yet tracked, so FastAPI command-injection/SSRF/path/SSTI fall to the LLM layer (string-built SQL is still caught on any stack).
-- **Java taint sources are Spring MVC / servlet** (`@RequestParam`/`@PathVariable`/`getParameter`); other Java web frameworks (JAX-RS, `@RequestBody` fields, etc.) fall to the LLM layer. String-concatenated SQL on the unambiguous DB verbs (`executeQuery`/`executeUpdate`/`prepareStatement`/`createNativeQuery`/`queryFor*`) is still caught source-free; the generic verbs (`execute`/`createQuery`/`update`) need a recognized Spring source to fire.
+- **Java/Kotlin taint sources are Spring MVC / servlet** (`@RequestParam`/`@PathVariable`/`getParameter`); other JVM web frameworks (JAX-RS, `@RequestBody` fields, etc.) fall to the LLM layer. String-concatenated SQL on the unambiguous DB verbs (`executeQuery`/`executeUpdate`/`prepareStatement`/`createNativeQuery`/`queryFor*`) is still caught source-free; the generic verbs (`execute`/`createQuery`/`update`) need a recognized Spring source to fire.
 - **Per-stack rules.** Sinks for libraries we haven't catalogued won't fire deterministically (again, the LLM backstops them).
 
 ## Configuration
 
-No configuration. The analyzer auto-runs on any code-only/full scan when the `semgrep` binary is available and the repo has files a rule pack covers (JS/TS, Python, or Java) — selecting the matching packs automatically. The rule packs live in `isitsecure/engine/code_analysis/semgrep_rules/`; register a new one in `_RULE_PACKS` in `semgrep_analyzer.py`.
+No configuration. The analyzer auto-runs on any code-only/full scan when the `semgrep` binary is available and the repo has files a rule pack covers (JS/TS, Python, Java, or Kotlin) — selecting the matching packs automatically. The rule packs live in `isitsecure/engine/code_analysis/semgrep_rules/`; register a new one in `_RULE_PACKS` in `semgrep_analyzer.py`.

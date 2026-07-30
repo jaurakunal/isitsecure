@@ -137,11 +137,16 @@ class TestPackSelection:
         packs = SemgrepAnalyzer()._select_packs(_disk_snapshot(tmp_path, ["src/App.java"]))
         assert [p.name for p in packs] == ["injection-java.yaml"]
 
+    def test_kotlin_only(self, tmp_path):
+        packs = SemgrepAnalyzer()._select_packs(_disk_snapshot(tmp_path, ["src/App.kt"]))
+        assert [p.name for p in packs] == ["injection-kotlin.yaml"]
+
     def test_mixed_repo_gets_all_present(self, tmp_path):
         packs = SemgrepAnalyzer()._select_packs(
-            _disk_snapshot(tmp_path, ["a.ts", "b.py", "C.java"]))
+            _disk_snapshot(tmp_path, ["a.ts", "b.py", "C.java", "D.kt"]))
         assert {p.name for p in packs} == {
-            "injection-js.yaml", "injection-python.yaml", "injection-java.yaml"}
+            "injection-js.yaml", "injection-python.yaml",
+            "injection-java.yaml", "injection-kotlin.yaml"}
 
     def test_unsupported_language_gets_nothing(self, tmp_path):
         packs = SemgrepAnalyzer()._select_packs(_disk_snapshot(tmp_path, ["main.go", "README.md"]))
