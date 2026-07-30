@@ -369,7 +369,7 @@ isitsecure is not a replacement for enterprise security platforms. It's designed
 
 | Need | Best specialized tool | How isitsecure compares |
 |---|---|---|
-| Deep SAST (30+ languages) | [Semgrep](https://semgrep.dev) | We embed Semgrep for deterministic JS/TS injection taint (opt-in `[taint]`) and add LLM review on top; Semgrep's own registry covers far more languages and rules |
+| Deep SAST (30+ languages) | [Semgrep](https://semgrep.dev) | We embed Semgrep for deterministic JS/TS and Python injection taint (opt-in `[taint]`) and add LLM review on top; Semgrep's own registry covers far more languages and rules |
 | DAST with advanced exploitation | [OWASP ZAP](https://zaproxy.org) / [Burp Suite](https://portswigger.net) | Our DAST is simpler — fewer payloads, no WAF evasion |
 | Secret scanning (800+ patterns) | [TruffleHog](https://github.com/trufflesecurity/trufflehog) / [Gitleaks](https://github.com/gitleaks/gitleaks) | Our git scanner covers common patterns, not exhaustive |
 | Container + IaC scanning | [Trivy](https://github.com/aquasecurity/trivy) / [Checkov](https://github.com/bridgecrewio/checkov) | Our IaC/Docker scanners are basic — use Trivy for depth |
