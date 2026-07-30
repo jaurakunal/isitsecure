@@ -1,0 +1,111 @@
+# isitsecure taint/sink rules for Java injection (#102).
+# Rules target FRAMEWORK/LIBRARY APIs (Spring MVC request params / servlet
+# request as sources; JDBC/JPA/JdbcTemplate, Runtime/ProcessBuilder, URL/
+# RestTemplate, File/FileInputStream as sinks) — they apply to any app on these
+# stacks, not to a specific app.
+rules:
+  # ---- SQL injection: dangerous query construction (pattern) ----
+  - id: isitsecure-java-sqli
+    languages: [java]
+    severity: ERROR
+    metadata: {category: injection_risk, isitsecure-severity: critical}
+    message: "Raw SQL built from string concatenation — SQL injection. Use a parameterized query."
+    # Only DB-specific verbs are matched without a source. Generic verbs
+    # (execute/createQuery/update — common on non-SQL objects like HTTP/audit/
+    # cache/search clients) are left to the source-gated taint rule below, so
+    # `audit.update("event=" + id)` isn't a false alarm.
+    patterns:
+      - pattern-either:
+          - pattern: $S.executeQuery("..." + ...)
+          - pattern: $S.executeUpdate("..." + ...)
+          - pattern: $C.prepareStatement("..." + ...)
+          - pattern: $E.createNativeQuery("..." + ...)
+          - pattern: $J.queryForList("..." + ...)
+          - pattern: $J.queryForObject("..." + ...)
+          - pattern: $J.queryForMap("..." + ...)
+
+  # ---- SQL injection: user input → query STRING (intra-file taint) ----
+  # Focuses on the query-string argument, so a bound parameter (a request value
+  # passed as the args, not concatenated into the SQL) is NOT flagged.
+  - id: isitsecure-java-sqli-taint
+    mode: taint
+    languages: [java]
+    severity: ERROR
+    metadata: {category: injection_risk, isitsecure-severity: critical}
+    message: "User input flows into a raw SQL query — SQL injection."
+    pattern-sources: &java_sources
+      # Servlet request accessors (method-call sources)
+      - pattern: $REQ.getParameter(...)
+      - pattern: $REQ.getParameterValues(...)
+      - pattern: $REQ.getHeader(...)
+      - pattern: $REQ.getQueryString()
+      # Spring controller params — the annotated method parameter is the source.
+      # Matching the method and focusing the param is the correct idiom; a bare
+      # `(@RequestParam String $X)` pattern spuriously taints everything.
+      - patterns:
+          - pattern-inside: "$R $M(..., @RequestParam $T $P, ...) {...}"
+          - focus-metavariable: $P
+      - patterns:
+          - pattern-inside: "$R $M(..., @RequestParam(...) $T $P, ...) {...}"
+          - focus-metavariable: $P
+      - patterns:
+          - pattern-inside: "$R $M(..., @PathVariable $T $P, ...) {...}"
+          - focus-metavariable: $P
+      - patterns:
+          - pattern-inside: "$R $M(..., @PathVariable(...) $T $P, ...) {...}"
+          - focus-metavariable: $P
+      - patterns:
+          - pattern-inside: "$R $M(..., @RequestHeader $T $P, ...) {...}"
+          - focus-metavariable: $P
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $S.executeQuery($Q)
+              - pattern: $S.executeUpdate($Q)
+              - pattern: $S.execute($Q)
+              - pattern: $C.prepareStatement($Q)
+              - pattern: $E.createNativeQuery($Q)
+              - pattern: $E.createQuery($Q)
+              - pattern: $J.queryForList($Q, ...)
+              - pattern: $J.queryForObject($Q, ...)
+              - pattern: $J.update($Q, ...)
+          - focus-metavariable: $Q
+
+  # ---- Command injection: user input → shell ----
+  - id: isitsecure-java-command-injection
+    mode: taint
+    languages: [java]
+    severity: ERROR
+    metadata: {category: injection_risk, isitsecure-severity: critical}
+    message: "User input flows into a shell command — command injection."
+    pattern-sources: *java_sources
+    pattern-sinks:
+      - pattern: Runtime.getRuntime().exec(...)
+      - pattern: new ProcessBuilder(...)
+
+  # ---- SSRF: user-controlled URL → outbound request ----
+  - id: isitsecure-java-ssrf
+    mode: taint
+    languages: [java]
+    severity: ERROR
+    metadata: {category: injection_risk, isitsecure-severity: high}
+    message: "User-controlled URL flows into an outbound request — SSRF."
+    pattern-sources: *java_sources
+    pattern-sinks:
+      - pattern: new URL(...)
+      - pattern: $R.getForObject(...)
+      - pattern: $R.getForEntity(...)
+      - pattern: $R.exchange(...)
+
+  # ---- Path traversal: request-derived path → file access ----
+  - id: isitsecure-java-path-traversal
+    mode: taint
+    languages: [java]
+    severity: WARNING
+    metadata: {category: injection_risk, isitsecure-severity: high}
+    message: "File accessed with a request-derived path — path traversal."
+    pattern-sources: *java_sources
+    pattern-sinks:
+      - pattern: new File(...)
+      - pattern: new FileInputStream(...)
+      - pattern: new FileReader(...)

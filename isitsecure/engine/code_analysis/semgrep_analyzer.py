@@ -53,6 +53,7 @@ _RULE_PACKS: tuple[_RulePack, ...] = (
     _RulePack("javascript/typescript", "injection-js.yaml",
               (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")),
     _RulePack("python", "injection-python.yaml", (".py",)),
+    _RulePack("java", "injection-java.yaml", (".java",)),
 )
 
 # Dirs semgrep ignores by default; skipping them bounds the language-detection

@@ -18,28 +18,31 @@ _Runs: 2026-07 · `--llm none` (pure DAST detection, no LLM) · Juice Shop pinne
 | `vampi-vulnerable` | url-only | **3/3** (SQLi, IDOR, headers) | — | 14–16 |
 | `vampi-secure` | url-only | — | **2** (IDOR) | 13–15 |
 | `nodegoat-auth` | authenticated | **2/3** (headers, XSS; injection missed) | unmeasured | 28 |
-| `sast-injection` | code-only | **27/27 (100%)** — taint, per-class, deterministic | **0** | 27 |
+| `sast-injection` | code-only | **37/37 (100%)** — taint, per-class, deterministic | **0** | 37 |
 
-### SAST injection (`sast-injection`, code-only, taint layer #4 + #93)
+### SAST injection (`sast-injection`, code-only, taint layer #4 + #93 + #102)
 
 The deterministic Semgrep taint layer scored on an independent injection fixture
-(not `test-app`, which the JS rules were tuned on) covering **JS/TS (#4)** and
-**Python (#93)**. Recall **27/27** with **0 false positives** across all classes,
-deterministic across runs:
+(not `test-app`, which the JS rules were tuned on) covering **JS/TS (#4)**,
+**Python (#93)**, and **Java/Spring (#102)**. Recall **37/37** with **0 false
+positives** across all classes, deterministic across runs:
 
-| Class | JS/TS | Python | Class | JS/TS | Python |
-|---|--:|--:|---|--:|--:|
-| sqli | 5/5 | 7/7 | path-traversal | 1/1 | 2/2 |
-| reflected-xss | 2/2 | — | command-injection | 1/1 | 3/3 |
-| dom-xss | 2/2 | — | ssti | — | 1/1 |
-| ssrf | 1/1 | 2/2 | | | |
+| Class | JS/TS | Python | Java | Class | JS/TS | Python | Java |
+|---|--:|--:|--:|---|--:|--:|--:|
+| sqli | 5/5 | 7/7 | 5/5 | path-traversal | 1/1 | 2/2 | 1/1 |
+| reflected-xss | 2/2 | — | — | command-injection | 1/1 | 3/3 | 2/2 |
+| dom-xss | 2/2 | — | — | ssti | — | 1/1 | — |
+| ssrf | 1/1 | 2/2 | 2/2 | | | | |
 
-The FP side is exercised by benign near-misses in both languages — parameterized
+The FP side is exercised by benign near-misses in each language — parameterized
 queries, constant-path writes, non-DB `.query()`, escaped output, fixed-URL
 fetch (JS); parameterized/bound queries (including request-derived values in the
 params tuple), a bare `text()` i18n alias, `subprocess` without `shell=True`,
-constant-path `open()`, fixed-URL requests (Python) — none flagged. Cross-checked
-against isitsecure's own 164 Python files (which contain real `subprocess`,
+constant-path `open()`, fixed-URL requests (Python); `PreparedStatement`/bound
+`JdbcTemplate` queries, constant SQL, constant-path `File` (Java) — none flagged.
+Cross-checked against the real, non-vulnerable **spring-petclinic** (30 Java
+files, 10 `@RequestParam`/`@PathVariable`, 8 query/File/exec call sites): **0 FP**;
+and isitsecure's own 164 Python files (which contain real `subprocess`,
 `requests`/`httpx`, and `open()` call sites): **0 false positives**. This is the
 baseline the taint layer and future rule packs must hold.
 
