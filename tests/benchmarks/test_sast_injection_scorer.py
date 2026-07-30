@@ -47,10 +47,11 @@ class TestGroundTruth:
         assert len(bugs) >= 25  # JS/TS + Python across 7 classes
         assert {b["class"] for b in bugs} == set(si.CLASSES)
 
-    def test_python_and_js_fixtures_both_present(self):
+    def test_all_language_fixtures_present(self):
         files = {b["file"] for b in si.expected_bugs()}
-        assert any(f.endswith(".py") for f in files)   # Python (#93)
-        assert any(f.endswith(".ts") for f in files)   # JS/TS (#4)
+        assert any(f.endswith(".ts") for f in files)     # JS/TS (#4)
+        assert any(f.endswith(".py") for f in files)     # Python (#93)
+        assert any(f.endswith(".java") for f in files)   # Java (#102)
 
     def test_marker_regex_accepts_both_comment_styles(self):
         assert si.EXPECT_RE.search("foo()  // EXPECT sqli").group(1) == "sqli"

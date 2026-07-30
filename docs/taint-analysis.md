@@ -166,7 +166,7 @@ Note: the original benchmark was DAST-oriented, so this work added a **SAST
 injection benchmark** — a fixture set with known source→sink bugs giving the taint
 layer its own recall/FP scorecard. **Delivered** (#92): `benchmarks/sast_injection.py`
 + `benchmarks/fixtures/sast-injection/`, run via `python benchmarks/run_benchmarks.py
-sast-injection`. Baseline **27/27 recall, 0 FP** across JS/TS + Python ([benchmarks/RESULTS.md](../benchmarks/RESULTS.md)).
+sast-injection`. Baseline **37/37 recall, 0 FP** across JS/TS, Python, and Java ([benchmarks/RESULTS.md](../benchmarks/RESULTS.md)).
 
 ## Risks & open questions
 
@@ -177,18 +177,19 @@ sast-injection`. Baseline **27/27 recall, 0 FP** across JS/TS + Python ([benchma
 - **Binary dependency** — bundling/pinning Semgrep; graceful fallback when absent.
 - **Semgrep licensing** — OSS engine + our own rules are fine; confirm no
   reliance on registry rules with restrictive terms (we ship our own packs).
-- **Language coverage** — JS/TS (#4) and Python/Flask/Django (#93) ship today;
-  other stacks (Go, Ruby, Java) are future packs.
+- **Language coverage** — JS/TS (#4), Python/Flask/Django (#93), and Java/Spring
+  (#102) ship today; other stacks (Go, Ruby, …) are future packs.
 
 ## Phasing
 
 1. ✅ **SAST injection benchmark fixtures** + a recall/FP harness (#92) — the
-   `sast-injection` target, baseline 27/27 recall / 0 FP (JS/TS + Python).
+   `sast-injection` target, baseline 37/37 recall / 0 FP (JS/TS, Python, Java).
 2. ✅ **`SemgrepAnalyzer`** (subprocess → parse → `CodeFinding`) with a first rule
    pack for the top stack (Next.js/Express + postgres/Prisma/Drizzle + DOM) — #4.
 3. ✅ **Benchmark**: proved it adds recall without FP vs. LLM-only. Shipped in #4.
 4. 🚧 **Broaden rule packs** iteratively, each gated by the benchmark — #93 adds
-   the **Python** pack (Flask/Django sources; DB-API/SQLAlchemy/Django ORM, os/
-   subprocess, requests/urllib, Jinja sinks; SQLi/cmdi/SSRF/path/SSTI). Further
-   stacks/libraries continue here.
+   the **Python** pack (Flask/Django; DB-API/SQLAlchemy/Django ORM, os/subprocess,
+   requests/urllib, Jinja; SQLi/cmdi/SSRF/path/SSTI); #102 adds the **Java/Spring**
+   pack (Spring MVC/servlet sources; JDBC/JPA/JdbcTemplate, Runtime/ProcessBuilder,
+   URL/RestTemplate, java.io.File; SQLi/cmdi/SSRF/path). Further stacks continue here.
 5. **Keep the LLM layer** as the long-tail + business-logic backstop throughout.

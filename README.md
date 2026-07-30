@@ -104,7 +104,7 @@ isitsecure setup
 | `pip install -e ".[browser]"` | Adds DAST / live-URL scanning (requires `isitsecure setup` to install Chromium) |
 | `pip install -e ".[llm]"` | Adds LLM code review, triage, and AI fixes (requires an API key) |
 | `pip install -e ".[all]"` | Everything except `[taint]` (see below) |
-| `pip install -e ".[taint]"` | Deterministic Semgrep taint/injection SAST for JS/TS and Python. **Install separately** — semgrep's pinned dependencies don't co-resolve with `[all]`. The analyzer only needs the `semgrep` binary on PATH, so `pipx install semgrep` (or brew) works too; it falls back to LLM-only if absent |
+| `pip install -e ".[taint]"` | Deterministic Semgrep taint/injection SAST for JS/TS, Python, and Java. **Install separately** — semgrep's pinned dependencies don't co-resolve with `[all]`. The analyzer only needs the `semgrep` binary on PATH, so `pipx install semgrep` (or brew) works too; it falls back to LLM-only if absent |
 
 URL/DAST scanning needs the `[browser]` extra — without it, `isitsecure scan <url>` exits with a message telling you to install it.
 
@@ -225,7 +225,7 @@ The scan narrates each phase and every scanner as it runs (with elapsed time), s
 
 | Scanner | What It Finds |
 |---|---|
-| Semgrep Taint Analyzer | Deterministic source→sink injection for JS/TS and Python — SQLi, XSS, SSRF, path traversal, command injection, SSTI (a reproducible floor beneath the LLM reviewer; needs the `[taint]` extra, no-ops without the `semgrep` binary) |
+| Semgrep Taint Analyzer | Deterministic source→sink injection for JS/TS, Python, and Java — SQLi, XSS, SSRF, path traversal, command injection, SSTI (a reproducible floor beneath the LLM reviewer; needs the `[taint]` extra, no-ops without the `semgrep` binary) |
 | Git Secret Scanner | API keys, tokens, and credentials in git history (not just HEAD) |
 | Route Auth Analyzer | Next.js/Express/Django/FastAPI/Spring routes missing authentication |
 | RLS Policy Analyzer | Supabase tables without Row Level Security enabled |
@@ -369,7 +369,7 @@ isitsecure is not a replacement for enterprise security platforms. It's designed
 
 | Need | Best specialized tool | How isitsecure compares |
 |---|---|---|
-| Deep SAST (30+ languages) | [Semgrep](https://semgrep.dev) | We embed Semgrep for deterministic JS/TS and Python injection taint (opt-in `[taint]`) and add LLM review on top; Semgrep's own registry covers far more languages and rules |
+| Deep SAST (30+ languages) | [Semgrep](https://semgrep.dev) | We embed Semgrep for deterministic JS/TS, Python, and Java injection taint (opt-in `[taint]`) and add LLM review on top; Semgrep's own registry covers far more languages and rules |
 | DAST with advanced exploitation | [OWASP ZAP](https://zaproxy.org) / [Burp Suite](https://portswigger.net) | Our DAST is simpler — fewer payloads, no WAF evasion |
 | Secret scanning (800+ patterns) | [TruffleHog](https://github.com/trufflesecurity/trufflehog) / [Gitleaks](https://github.com/gitleaks/gitleaks) | Our git scanner covers common patterns, not exhaustive |
 | Container + IaC scanning | [Trivy](https://github.com/aquasecurity/trivy) / [Checkov](https://github.com/bridgecrewio/checkov) | Our IaC/Docker scanners are basic — use Trivy for depth |
@@ -390,7 +390,7 @@ isitsecure works well alongside other tools. Run `isitsecure scan` for the combi
 
 ## What It Does NOT Cover
 
-- **Inter-procedural taint analysis** — The opt-in Semgrep taint layer (`[taint]`) does intra-file source→sink dataflow for JS/TS and Python injection; cross-function/cross-file tracking (Semgrep Pro territory) still falls back to LLM reasoning
+- **Inter-procedural taint analysis** — The opt-in Semgrep taint layer (`[taint]`) does intra-file source→sink dataflow for JS/TS, Python, and Java injection; cross-function/cross-file tracking (Semgrep Pro territory) still falls back to LLM reasoning
 - **WAF evasion** — DAST payloads don't include advanced bypass techniques
 - **Compliance mapping** — No OWASP Top 10, CWE, or PCI-DSS tagging (yet)
 - **Network-level scanning** — No port scanning, TLS analysis, or infrastructure enumeration
@@ -624,7 +624,7 @@ python benchmarks/run_benchmarks.py sast-injection  # taint recall/FP (code-only
 python benchmarks/run_benchmarks.py --all       # + NodeGoat + crAPI + Juice Shop (heavy)
 ```
 
-Most targets spin the app up in Docker, run a DAST scan, score against a known ground truth, and tear it down (require Docker). The `sast-injection` target is **code-only** (no Docker) — it scores the deterministic Semgrep taint layer on a JS/TS + Python injection fixture (**27/27 recall, 0 FP**) and needs the `semgrep` binary instead; it's included in the default run. Measured results are tracked in [benchmarks/RESULTS.md](benchmarks/RESULTS.md); see [benchmarks/README.md](benchmarks/README.md) for targets and how scoring works.
+Most targets spin the app up in Docker, run a DAST scan, score against a known ground truth, and tear it down (require Docker). The `sast-injection` target is **code-only** (no Docker) — it scores the deterministic Semgrep taint layer on a JS/TS + Python + Java injection fixture (**37/37 recall, 0 FP**) and needs the `semgrep` binary instead; it's included in the default run. Measured results are tracked in [benchmarks/RESULTS.md](benchmarks/RESULTS.md); see [benchmarks/README.md](benchmarks/README.md) for targets and how scoring works.
 
 ## Privacy
 
