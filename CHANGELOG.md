@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0](https://github.com/jaurakunal/isitsecure/compare/v0.9.0...v0.10.0) (2026-07-30)
+
+
+### Features
+
+* **sast:** auto-select taint rule packs by repo language ([#94](https://github.com/jaurakunal/isitsecure/issues/94)) ([#99](https://github.com/jaurakunal/isitsecure/issues/99)) ([fbc422f](https://github.com/jaurakunal/isitsecure/commit/fbc422fd08de776abbacc02ba917b7ff56d5370e))
+* **sast:** Python taint/injection rule pack for the Semgrep layer ([#93](https://github.com/jaurakunal/isitsecure/issues/93)) ([#97](https://github.com/jaurakunal/isitsecure/issues/97)) ([eba40a5](https://github.com/jaurakunal/isitsecure/commit/eba40a55b0d88035aa8a7c7b3853b26e07a299d7))
+
 ## [0.9.0](https://github.com/jaurakunal/isitsecure/compare/v0.8.0...v0.9.0) (2026-07-29)
 
 
