@@ -99,7 +99,7 @@ The repository is cloned (shallow, to temp dir) and indexed:
    - `GraphQLRouteMapper`: schema definitions → query/mutation types
 4. **File indexing** — reads all source files into memory (filtered by extension, size limit, skip `node_modules`)
 
-18 SAST scanners then run in parallel against the indexed codebase (plus the LLM-powered Semantic Rule Verifier when an API key is available). One of them, the **Semgrep Taint Analyzer** (`semgrep_taint`), is a deterministic source→sink injection floor for JS/TS, Python, and Java that sits beneath the LLM code reviewer: it catches the mechanical SQLi/XSS/SSRF/path-traversal/command-injection/SSTI cases reproducibly and for free, leaving the LLM to cover business logic and uncatalogued libraries. It is opt-in (`[taint]` extra) and no-ops if the `semgrep` binary is absent.
+18 SAST scanners then run in parallel against the indexed codebase (plus the LLM-powered Semantic Rule Verifier when an API key is available). One of them, the **Semgrep Taint Analyzer** (`semgrep_taint`), is a deterministic source→sink injection floor for JS/TS, Python, Java, and Kotlin that sits beneath the LLM code reviewer: it catches the mechanical SQLi/XSS/SSRF/path-traversal/command-injection/SSTI cases reproducibly and for free, leaving the LLM to cover business logic and uncatalogued libraries. It is opt-in (`[taint]` extra) and no-ops if the `semgrep` binary is absent.
 
 ### Phase 7.5: LSP Validation
 
