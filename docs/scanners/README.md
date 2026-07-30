@@ -38,7 +38,7 @@ These scanners require authentication or use specialized techniques.
 
 These scanners analyze your source code without running it.
 
-- [Semgrep Taint Analyzer](./semgrep-taint.md) — Deterministic source→sink injection for JS/TS (SQLi, XSS, SSRF, path traversal, command injection)
+- [Semgrep Taint Analyzer](./semgrep-taint.md) — Deterministic source→sink injection for JS/TS and Python (SQLi, XSS, SSRF, path traversal, command injection, SSTI)
 - [Git Secret Scanner](./git-secret-scanner.md) — Secrets in git history
 - [Route Auth Analyzer](./route-auth-analyzer.md) — Routes missing authentication
 - [RLS Policy Analyzer](./rls-policy-analyzer.md) — Missing Supabase Row Level Security

@@ -66,8 +66,8 @@ and (b) rules must match the framework's *actual* code shapes (destructured
 **Don't replace the LLM — put a deterministic floor beneath it.**
 
 - **Semgrep taint/sink rules** handle the *mechanical* source→sink injections
-  (SQLi/XSS/SSRF/path-traversal/command-injection) on the stacks we've
-  catalogued: deterministic, cheap, same every run.
+  (SQLi/XSS/SSRF/path-traversal/command-injection, plus SSTI on Python) on the
+  stacks we've catalogued: deterministic, cheap, same every run.
 - **The LLM code reviewer** keeps doing what only it can: business-logic flaws,
   the long tail of libraries we haven't written rules for, and nuanced cases.
 
