@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0](https://github.com/jaurakunal/isitsecure/compare/v0.10.0...v0.11.0) (2026-07-30)
+
+
+### Features
+
+* **sast:** Java/Spring taint/injection rule pack for the Semgrep layer ([#102](https://github.com/jaurakunal/isitsecure/issues/102)) ([#103](https://github.com/jaurakunal/isitsecure/issues/103)) ([085263c](https://github.com/jaurakunal/isitsecure/commit/085263c0255ebd22e4fb4b122630f7fd508c4a97))
+
+
+### Documentation
+
+* **taint:** fill remaining JS/TS-only gaps left by the Python pack ([#93](https://github.com/jaurakunal/isitsecure/issues/93)) ([#100](https://github.com/jaurakunal/isitsecure/issues/100)) ([06b845e](https://github.com/jaurakunal/isitsecure/commit/06b845eb1c5e2584818238d31d6ccedc73b29cac))
+
 ## [0.10.0](https://github.com/jaurakunal/isitsecure/compare/v0.9.0...v0.10.0) (2026-07-30)
 
 
