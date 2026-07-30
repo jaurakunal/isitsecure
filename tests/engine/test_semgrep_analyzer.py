@@ -67,16 +67,30 @@ class TestGracefulNoOp:
 
     @pytest.mark.asyncio
     async def test_no_supported_files_skips_run(self, monkeypatch):
-        """A repo with no JS/TS files never even invokes semgrep."""
+        """A repo with no rule-pack-covered files (no JS/TS/Python) skips semgrep."""
         monkeypatch.setattr(SemgrepAnalyzer, "_find_semgrep", staticmethod(lambda: "/bin/semgrep"))
 
         async def _boom(*a, **k):  # pragma: no cover - must not be called
-            raise AssertionError("_run_semgrep should not run without JS/TS files")
+            raise AssertionError("_run_semgrep should not run without supported files")
 
         monkeypatch.setattr(SemgrepAnalyzer, "_run_semgrep", _boom)
         analyzer = SemgrepAnalyzer()
-        findings = await analyzer.scan(_snapshot({"main.py": "", "README.md": ""}))
+        findings = await analyzer.scan(_snapshot({"main.go": "", "README.md": ""}))
         assert findings == []
+
+    @pytest.mark.asyncio
+    async def test_python_files_trigger_run(self, monkeypatch):
+        """A Python-only repo runs semgrep (the #93 Python rule pack)."""
+        monkeypatch.setattr(SemgrepAnalyzer, "_find_semgrep", staticmethod(lambda: "/bin/semgrep"))
+        ran = {}
+
+        async def _fake(self, semgrep, clone_path):
+            ran["called"] = True
+            return {"results": []}
+
+        monkeypatch.setattr(SemgrepAnalyzer, "_run_semgrep", _fake)
+        await SemgrepAnalyzer().scan(_snapshot({"app/views.py": ""}))
+        assert ran.get("called") is True
 
     @pytest.mark.asyncio
     async def test_semgrep_crash_returns_empty(self, monkeypatch):

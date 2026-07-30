@@ -8,6 +8,10 @@ name: "isitsecure CodeQL config"
 #              not runtime sanitization.
 #   test-app/  An INTENTIONALLY vulnerable sample app (old next/jsonwebtoken/etc.)
 #              used as input to exercise the scanner. It is supposed to be insecure.
+#   benchmarks/fixtures/
+#              INTENTIONALLY vulnerable SAST-injection fixtures (the taint
+#              benchmark's ground truth — planted SQLi/cmdi/SSRF/etc.). They are
+#              supposed to be insecure; flagging them is noise, not a finding.
 #   ui/        A Next.js STATIC EXPORT (`output: "export"`, images.unoptimized),
 #              served as plain files by the localhost-bound FastAPI launch server
 #              (`isitsecure launch` binds 127.0.0.1; CORS restricted to localhost).
@@ -25,4 +29,5 @@ name: "isitsecure CodeQL config"
 paths-ignore:
   - tests
   - test-app
+  - benchmarks/fixtures
   - ui

@@ -1,0 +1,110 @@
+# isitsecure taint/sink rules for Python injection (#93).
+# Rules target FRAMEWORK/LIBRARY APIs (Flask/Django request objects as sources;
+# DB-API/SQLAlchemy/Django ORM, os/subprocess, requests/urllib, Jinja as sinks) —
+# they apply to any app on these stacks, not to a specific app.
+rules:
+  # ---- SQL injection: dangerous query construction (pattern) ----
+  # Pattern-based (not taint) so parameterized queries — execute(sql, params) —
+  # are never flagged; only string-built queries match. `text(...)` is scoped to
+  # inside execute() so it can't false-positive on a bare `text()` (e.g. an i18n
+  # gettext alias).
+  - id: isitsecure-py-sqli
+    languages: [python]
+    severity: ERROR
+    metadata: {category: injection_risk, isitsecure-severity: critical}
+    message: "Raw SQL built from an f-string/%/concatenation — SQL injection. Use a parameterized query."
+    patterns:
+      - pattern-either:
+          - pattern: $X.execute(f"...{...}...")
+          - pattern: $X.execute("..." % ...)
+          - pattern: $X.execute("..." + ...)
+          - pattern: $X.execute("...".format(...))
+          - pattern: $X.executemany(f"...{...}...")
+          - pattern: $X.execute(text(f"...{...}..."))
+          - pattern: $M.objects.raw(f"...{...}...")
+          - pattern: $M.objects.raw("..." % ...)
+          - pattern: $M.objects.raw("..." + ...)
+
+  # ---- SQL injection: user input → query STRING (intra-file taint) ----
+  # Catches the assign-then-execute shape the inline pattern above misses. The
+  # sink focuses on the query-string argument, so a parameterized call —
+  # execute(sql, params) with taint in `params` — is NOT flagged.
+  - id: isitsecure-py-sqli-taint
+    mode: taint
+    languages: [python]
+    severity: ERROR
+    metadata: {category: injection_risk, isitsecure-severity: critical}
+    message: "User input flows into a raw SQL query — SQL injection."
+    pattern-sources: &py_sources
+      - pattern: request.args
+      - pattern: request.form
+      - pattern: request.values
+      - pattern: request.data
+      - pattern: request.json
+      - pattern: request.args.get(...)
+      - pattern: request.form.get(...)
+      - pattern: request.values.get(...)
+      - pattern: request.GET
+      - pattern: request.POST
+      - pattern: request.GET.get(...)
+      - pattern: request.POST.get(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $CUR.execute($Q, ...)
+              - pattern: $CUR.executemany($Q, ...)
+              - pattern: $M.objects.raw($Q, ...)
+          - focus-metavariable: $Q
+
+  # ---- Command injection: user input → shell (intra-file taint) ----
+  - id: isitsecure-py-command-injection
+    mode: taint
+    languages: [python]
+    severity: ERROR
+    metadata: {category: injection_risk, isitsecure-severity: critical}
+    message: "User input flows into a shell command — command injection."
+    pattern-sources: *py_sources
+    pattern-sinks:
+      - pattern: os.system(...)
+      - pattern: os.popen(...)
+      - pattern: subprocess.run(..., shell=True, ...)
+      - pattern: subprocess.call(..., shell=True, ...)
+      - pattern: subprocess.Popen(..., shell=True, ...)
+      - pattern: subprocess.check_output(..., shell=True, ...)
+
+  # ---- SSRF: user-controlled URL → outbound request ----
+  - id: isitsecure-py-ssrf
+    mode: taint
+    languages: [python]
+    severity: ERROR
+    metadata: {category: injection_risk, isitsecure-severity: high}
+    message: "User-controlled URL flows into an outbound request (requests/urllib) — SSRF."
+    pattern-sources: *py_sources
+    pattern-sinks:
+      - pattern: requests.get(...)
+      - pattern: requests.post(...)
+      - pattern: requests.request(...)
+      - pattern: httpx.get(...)
+      - pattern: urllib.request.urlopen(...)
+
+  # ---- Path traversal: request-derived path → file open ----
+  - id: isitsecure-py-path-traversal
+    mode: taint
+    languages: [python]
+    severity: WARNING
+    metadata: {category: injection_risk, isitsecure-severity: high}
+    message: "File opened with a request-derived path — path traversal."
+    pattern-sources: *py_sources
+    pattern-sinks:
+      - pattern: open(...)
+
+  # ---- SSTI: user input → server-side template render ----
+  - id: isitsecure-py-ssti
+    mode: taint
+    languages: [python]
+    severity: ERROR
+    metadata: {category: injection_risk, isitsecure-severity: critical}
+    message: "User input flows into a server-side template render — template injection (SSTI)."
+    pattern-sources: *py_sources
+    pattern-sinks:
+      - pattern: render_template_string(...)

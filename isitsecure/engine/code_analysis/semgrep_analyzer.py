@@ -30,7 +30,9 @@ from isitsecure.engine.enums import FindingCategory, SeverityLevel
 logger = logging.getLogger(__name__)
 
 _RULES_DIR = Path(__file__).parent / "semgrep_rules"
-_JS_TS_EXT = (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")
+# Extensions the shipped rule packs cover (JS/TS #4, Python #93). Semgrep applies
+# each rule only to its declared language, so running the whole rules dir is safe.
+_SUPPORTED_EXT = (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".py")
 _SCAN_TIMEOUT_S = 120.0
 
 _SEVERITY_MAP = {
@@ -83,8 +85,8 @@ class SemgrepAnalyzer:
         return shutil.which("semgrep")
 
     def _has_supported_files(self, repo: RepoSnapshot) -> bool:
-        """Only run when there are JS/TS files (the current rule packs' scope)."""
-        return any(p.endswith(_JS_TS_EXT) for p in repo.file_index)
+        """Only run when there are files a rule pack covers (JS/TS or Python)."""
+        return any(p.endswith(_SUPPORTED_EXT) for p in repo.file_index)
 
     async def _run_semgrep(self, semgrep: str, clone_path: str) -> dict | None:
         cmd = [

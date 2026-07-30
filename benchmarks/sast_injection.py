@@ -33,8 +33,9 @@ import tempfile
 from collections import defaultdict
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures" / "sast-injection"
-EXPECT_RE = re.compile(r"//\s*EXPECT\s+([a-z-]+)")
-CLASSES = ("sqli", "reflected-xss", "dom-xss", "ssrf", "path-traversal", "command-injection")
+EXPECT_RE = re.compile(r"(?://|#)\s*EXPECT\s+([a-z-]+)")  # // (JS/TS) or # (Python)
+CLASSES = ("sqli", "reflected-xss", "dom-xss", "ssrf", "path-traversal",
+           "command-injection", "ssti")
 
 # Injection finding → vuln class, inferred from the title (findings are all
 # category injection_risk). Cues are DISTINCTIVE phrases, not bare substrings, so
@@ -42,20 +43,28 @@ CLASSES = ("sqli", "reflected-xss", "dom-xss", "ssrf", "path-traversal", "comman
 _TITLE_CUES = [
     ("dom-xss", ("into the dom", "innerhtml", "document.write", "dom xss")),
     ("reflected-xss", ("reflected", "html response")),
+    ("ssti", ("template injection", "ssti", "server-side template")),
     ("ssrf", ("outbound request", "ssrf")),
-    ("path-traversal", ("filesystem write", "path traversal", "request-derived filename")),
+    ("path-traversal", ("filesystem write", "path traversal", "request-derived")),
     ("command-injection", ("shell command", "command injection")),
     ("sqli", ("sql",)),
 ]
 
 
 def expected_bugs() -> list[dict]:
-    """Parse ``// EXPECT <class>`` markers out of the vulnerable fixtures."""
+    """Parse trailing ``EXPECT <class>`` markers out of the vulnerable fixtures.
+
+    Only *trailing* markers (code, then a comment) count as ground truth. A marker
+    inside a standalone/descriptive comment line (one that starts with ``//`` or
+    ``#``) is ignored, so prose mentioning "EXPECT" can't inflate the count.
+    """
     bugs = []
     for f in sorted((FIXTURES / "vulnerable").rglob("*")):
         if not f.is_file():
             continue
         for i, line in enumerate(f.read_text().splitlines(), start=1):
+            if line.lstrip().startswith(("//", "#")):
+                continue  # descriptive comment line, not a code+marker line
             m = EXPECT_RE.search(line)
             if m:
                 bugs.append({"file": f.name, "line": i, "class": m.group(1)})

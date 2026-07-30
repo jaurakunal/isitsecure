@@ -20,6 +20,7 @@ _CLASS_TITLE = {
     "ssrf": "User-controlled URL flows into an outbound request",
     "path-traversal": "Filesystem write using a request-derived filename",
     "command-injection": "User input flows into a shell command",
+    "ssti": "User input flows into a server-side template render — template injection (SSTI)",
 }
 
 
@@ -43,8 +44,29 @@ def _findings_for(bugs: list[dict], *, correct_class: bool = True) -> list[dict]
 class TestGroundTruth:
     def test_fixtures_have_expected_markers(self):
         bugs = si.expected_bugs()
-        assert len(bugs) >= 12  # 6 classes represented
+        assert len(bugs) >= 25  # JS/TS + Python across 7 classes
         assert {b["class"] for b in bugs} == set(si.CLASSES)
+
+    def test_python_and_js_fixtures_both_present(self):
+        files = {b["file"] for b in si.expected_bugs()}
+        assert any(f.endswith(".py") for f in files)   # Python (#93)
+        assert any(f.endswith(".ts") for f in files)   # JS/TS (#4)
+
+    def test_marker_regex_accepts_both_comment_styles(self):
+        assert si.EXPECT_RE.search("foo()  // EXPECT sqli").group(1) == "sqli"
+        assert si.EXPECT_RE.search("foo()  # EXPECT ssti").group(1) == "ssti"
+
+    def test_descriptive_comment_lines_are_not_ground_truth(self, tmp_path, monkeypatch):
+        """A standalone comment mentioning EXPECT must not inflate the count."""
+        vuln = tmp_path / "vulnerable"
+        vuln.mkdir()
+        (vuln / "x.py").write_text(
+            "# this line says EXPECT sqli but is prose\n"
+            "cur.execute(bad)  # EXPECT sqli\n"
+        )
+        monkeypatch.setattr(si, "FIXTURES", tmp_path)
+        bugs = si.expected_bugs()
+        assert len(bugs) == 1 and bugs[0]["line"] == 2
 
 
 class TestScoring:
@@ -144,6 +166,8 @@ class TestHelpers:
         ("User-controlled URL flows into an outbound request", "ssrf"),
         ("Filesystem write using a request-derived filename", "path-traversal"),
         ("User input flows into a shell command", "command-injection"),
+        ("User input flows into a server-side template render (SSTI)", "ssti"),
+        ("File opened with a request-derived path — path traversal", "path-traversal"),
         ("something else entirely", "?"),
         # regression: bare "dom" substring must NOT swallow these
         ("User-controlled URL flows to an external domain (SSRF)", "ssrf"),

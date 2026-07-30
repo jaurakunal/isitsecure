@@ -163,7 +163,7 @@ Note: the original benchmark was DAST-oriented, so this work added a **SAST
 injection benchmark** — a fixture set with known source→sink bugs giving the taint
 layer its own recall/FP scorecard. **Delivered** (#92): `benchmarks/sast_injection.py`
 + `benchmarks/fixtures/sast-injection/`, run via `python benchmarks/run_benchmarks.py
-sast-injection`. Baseline **12/12 recall, 0 FP** ([benchmarks/RESULTS.md](../benchmarks/RESULTS.md)).
+sast-injection`. Baseline **27/27 recall, 0 FP** across JS/TS + Python ([benchmarks/RESULTS.md](../benchmarks/RESULTS.md)).
 
 ## Risks & open questions
 
@@ -174,15 +174,18 @@ sast-injection`. Baseline **12/12 recall, 0 FP** ([benchmarks/RESULTS.md](../ben
 - **Binary dependency** — bundling/pinning Semgrep; graceful fallback when absent.
 - **Semgrep licensing** — OSS engine + our own rules are fine; confirm no
   reliance on registry rules with restrictive terms (we ship our own packs).
-- **Language coverage** — start JS/TS (largest vibe-coder surface), then Python.
+- **Language coverage** — JS/TS (#4) and Python/Flask/Django (#93) ship today;
+  other stacks (Go, Ruby, Java) are future packs.
 
 ## Phasing
 
 1. ✅ **SAST injection benchmark fixtures** + a recall/FP harness (#92) — the
-   `sast-injection` target, baseline 12/12 recall / 0 FP.
+   `sast-injection` target, baseline 27/27 recall / 0 FP (JS/TS + Python).
 2. ✅ **`SemgrepAnalyzer`** (subprocess → parse → `CodeFinding`) with a first rule
    pack for the top stack (Next.js/Express + postgres/Prisma/Drizzle + DOM) — #4.
 3. ✅ **Benchmark**: proved it adds recall without FP vs. LLM-only. Shipped in #4.
-4. **Broaden rule packs** (FastAPI/Flask/Django, more libraries) iteratively, each
-   gated by the benchmark — tracked in #93.
+4. 🚧 **Broaden rule packs** iteratively, each gated by the benchmark — #93 adds
+   the **Python** pack (Flask/Django sources; DB-API/SQLAlchemy/Django ORM, os/
+   subprocess, requests/urllib, Jinja sinks; SQLi/cmdi/SSRF/path/SSTI). Further
+   stacks/libraries continue here.
 5. **Keep the LLM layer** as the long-tail + business-logic backstop throughout.
