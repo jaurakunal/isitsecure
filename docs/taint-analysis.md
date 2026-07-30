@@ -94,10 +94,13 @@ popular vibe-coder stacks:
 Written once, applied to every app on that stack. This is how Semgrep / CodeQL /
 Snyk all work — packs per ecosystem, never per app.
 
-**We already detect the stack.** The scan reports `framework: nextjs`,
-`backend: supabase`, etc., so we **auto-select the matching rule packs per scan**
-— no user config. Apps on an uncatalogued library fall through to the LLM
-backstop (the whole point of the layered design).
+**We auto-select the matching rule packs per scan** — no user config (#94). Today
+selection is by **language present** (a JS-only repo runs only the JS pack; a
+Python-only repo only the Python pack), via the `_RULE_PACKS` registry in
+`semgrep_analyzer.py`. When packs are split per **framework** (e.g. Next.js vs
+Express), the registry grows a `frameworks` field matched against the scan's
+already-detected `framework`/`backend`. Apps on an uncatalogued library fall
+through to the LLM backstop (the whole point of the layered design).
 
 ## Why Semgrep (vs. alternatives)
 
@@ -117,7 +120,7 @@ backstop (the whole point of the layered design).
 
 A new `SemgrepAnalyzer` behind the existing SAST scanner interface:
 
-1. On a code-only scan, detect the stack (already done) → select rule packs.
+1. On a code-only scan, select the rule packs matching the repo's languages (#94).
 2. Shell out to the bundled `semgrep` binary with those packs (`--json`), scoped
    to the cloned repo. No network (rules ship with us).
 3. Parse Semgrep's output → map each result to a `CodeFinding` (category from the

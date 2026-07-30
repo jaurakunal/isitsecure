@@ -19,8 +19,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import shutil
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 from isitsecure.engine.code_analysis.models import CodeFinding
@@ -30,10 +32,32 @@ from isitsecure.engine.enums import FindingCategory, SeverityLevel
 logger = logging.getLogger(__name__)
 
 _RULES_DIR = Path(__file__).parent / "semgrep_rules"
-# Extensions the shipped rule packs cover (JS/TS #4, Python #93). Semgrep applies
-# each rule only to its declared language, so running the whole rules dir is safe.
-_SUPPORTED_EXT = (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".py")
 _SCAN_TIMEOUT_S = 120.0
+
+
+@dataclass(frozen=True)
+class _RulePack:
+    """A shipped rule pack and the repo file extensions that activate it."""
+
+    name: str                    # for logging
+    filename: str                # under semgrep_rules/
+    extensions: tuple[str, ...]  # a repo file with one of these enables the pack
+
+
+# Registry of shipped packs. Selected per scan (#94) so a JS-only repo never loads
+# the Python rules and vice-versa — fewer rules parsed, no cross-stack surprises.
+# Today selection is by language (file extension); when packs are split per
+# framework (e.g. Next.js vs Express), add a `frameworks` field and match on
+# RepoSnapshot.framework here.
+_RULE_PACKS: tuple[_RulePack, ...] = (
+    _RulePack("javascript/typescript", "injection-js.yaml",
+              (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")),
+    _RulePack("python", "injection-python.yaml", (".py",)),
+)
+
+# Dirs semgrep ignores by default; skipping them bounds the language-detection
+# walk without ever under-selecting (semgrep wouldn't scan them either).
+_WALK_SKIP_DIRS = frozenset({"node_modules", ".git"})
 
 _SEVERITY_MAP = {
     "critical": SeverityLevel.CRITICAL,
@@ -62,10 +86,11 @@ class SemgrepAnalyzer:
         if not semgrep:
             logger.debug("semgrep not installed — skipping taint analysis (isitsecure[taint])")
             return []
-        if not self._has_supported_files(repo):
-            return []
+        packs = self._select_packs(repo)
+        if not packs:
+            return []  # no rule pack covers this repo's languages
 
-        raw = await self._run_semgrep(semgrep, repo.clone_path)
+        raw = await self._run_semgrep(semgrep, repo.clone_path, packs)
         if raw is None:
             return []
         return self._to_findings(raw, repo)
@@ -84,14 +109,57 @@ class SemgrepAnalyzer:
             return str(candidate)
         return shutil.which("semgrep")
 
-    def _has_supported_files(self, repo: RepoSnapshot) -> bool:
-        """Only run when there are files a rule pack covers (JS/TS or Python)."""
-        return any(p.endswith(_SUPPORTED_EXT) for p in repo.file_index)
+    def _select_packs(self, repo: RepoSnapshot) -> list[Path]:
+        """Pick the rule packs whose languages appear in the repo (#94).
 
-    async def _run_semgrep(self, semgrep: str, clone_path: str) -> dict | None:
-        cmd = [
-            semgrep, "scan",
-            "--config", str(self._rules_dir),
+        Language presence is read from the actual on-disk tree (what semgrep will
+        scan) — NOT the curated ``file_index``, which drops oversized files and
+        skip-dirs semgrep would still scan. Over-selecting a pack is harmless;
+        under-selecting would silently lose findings, so we err toward inclusion.
+        """
+        present = self._extensions_on_disk(repo.clone_path)
+        selected: list[Path] = []
+        for pack in _RULE_PACKS:
+            if not any(ext in present for ext in pack.extensions):
+                continue
+            path = self._rules_dir / pack.filename
+            if not path.is_file():
+                logger.warning("semgrep_taint: rule pack %s missing — skipping", pack.filename)
+                continue
+            selected.append(path)
+        if selected:
+            logger.debug("semgrep_taint: selected packs %s", [p.name for p in selected])
+        return selected
+
+    @staticmethod
+    def _extensions_on_disk(clone_path: str) -> set[str]:
+        """Extensions present under ``clone_path`` that any rule pack cares about.
+
+        Case-sensitive (mirrors semgrep, which skips e.g. ``.PY``). Walk stops
+        early once every wanted extension has been seen.
+        """
+        wanted = {ext for pack in _RULE_PACKS for ext in pack.extensions}
+        found: set[str] = set()
+        try:
+            for _root, dirs, files in os.walk(clone_path):
+                dirs[:] = [d for d in dirs if d not in _WALK_SKIP_DIRS]
+                for f in files:
+                    ext = os.path.splitext(f)[1]
+                    if ext in wanted:
+                        found.add(ext)
+                        if found >= wanted:
+                            return found
+        except OSError:  # unreadable tree — let semgrep decide, select nothing here
+            return found
+        return found
+
+    async def _run_semgrep(
+        self, semgrep: str, clone_path: str, packs: list[Path]
+    ) -> dict | None:
+        cmd = [semgrep, "scan"]
+        for pack in packs:
+            cmd += ["--config", str(pack)]
+        cmd += [
             "--json", "--quiet",
             "--metrics", "off",       # no telemetry
             "--disable-version-check",
@@ -171,7 +239,8 @@ class SemgrepAnalyzer:
 
     # Rule id → vuln class, so the sqli sink + sqli taint rules dedup together but
     # different classes on the same line don't. Substring match on our rule ids.
-    _RULE_CLASSES = ("sqli", "reflected-xss", "dom-xss", "ssrf", "path-traversal", "command")
+    _RULE_CLASSES = ("sqli", "reflected-xss", "dom-xss", "ssrf", "path-traversal",
+                     "command", "ssti")
 
     @classmethod
     def _rule_class(cls, check_id: str) -> str:
