@@ -6,7 +6,7 @@
 
 Runs [Semgrep](https://semgrep.dev) with isitsecure's own taint/sink rule packs over your cloned repo and maps the results to findings. It is a **deterministic injection floor beneath the LLM code reviewer**: the same input always produces the same findings, instantly and at no token cost.
 
-Two rule packs ship today — **JavaScript/TypeScript** (`semgrep_rules/injection-js.yaml`, #4) and **Python** (`semgrep_rules/injection-python.yaml`, #93). Semgrep applies each rule only to its declared language, so a repo of either (or both) is covered.
+Two rule packs ship today — **JavaScript/TypeScript** (`semgrep_rules/injection-js.yaml`, #4) and **Python** (`semgrep_rules/injection-python.yaml`, #93). The analyzer **auto-selects the packs whose languages are present in the repo** (#94): a JS-only repo runs only the JS pack, a Python-only repo only the Python pack, a mixed repo both. (Semgrep also scopes each rule to its declared language, so selection is about not loading irrelevant rules — faster, and ready for per-framework packs later.)
 
 **JavaScript/TypeScript** — six classes:
 
@@ -76,4 +76,4 @@ const rows = await sql`SELECT * FROM users WHERE id = ${id}`;
 
 ## Configuration
 
-No configuration. The analyzer auto-runs on any code-only/full scan when the `semgrep` binary is available and the repo has JS/TS files. The rule packs live in `isitsecure/engine/code_analysis/semgrep_rules/`.
+No configuration. The analyzer auto-runs on any code-only/full scan when the `semgrep` binary is available and the repo has files a rule pack covers (JS/TS or Python) — selecting the matching packs automatically. The rule packs live in `isitsecure/engine/code_analysis/semgrep_rules/`; register a new one in `_RULE_PACKS` in `semgrep_analyzer.py`.

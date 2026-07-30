@@ -6,12 +6,15 @@ are mocked so the suite is deterministic in CI (no `[taint]` extra required).
 """
 
 import json
+import pathlib
 
 import pytest
 
 from isitsecure.engine.code_analysis.protocols import RepoSnapshot
 from isitsecure.engine.code_analysis.semgrep_analyzer import SemgrepAnalyzer
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
+
+_PACKS = [pathlib.Path("injection-js.yaml")]  # dummy pack arg for _run_semgrep tests
 
 
 def _snapshot(files: dict[str, str], clone_path: str = "/repo") -> RepoSnapshot:
@@ -29,6 +32,16 @@ def _snapshot(files: dict[str, str], clone_path: str = "/repo") -> RepoSnapshot:
         total_files=len(files),
         total_size_bytes=0,
     )
+
+
+def _disk_snapshot(tmp_path, names: list[str]) -> RepoSnapshot:
+    """A snapshot whose clone_path is a real dir containing `names` on disk —
+    `_select_packs` walks the disk (not file_index), so pack tests need real files."""
+    for n in names:
+        p = tmp_path / n
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("x = 1\n")
+    return _snapshot({}, clone_path=str(tmp_path))
 
 
 def _result(
@@ -66,7 +79,7 @@ class TestGracefulNoOp:
         assert findings == []
 
     @pytest.mark.asyncio
-    async def test_no_supported_files_skips_run(self, monkeypatch):
+    async def test_no_supported_files_skips_run(self, monkeypatch, tmp_path):
         """A repo with no rule-pack-covered files (no JS/TS/Python) skips semgrep."""
         monkeypatch.setattr(SemgrepAnalyzer, "_find_semgrep", staticmethod(lambda: "/bin/semgrep"))
 
@@ -75,34 +88,86 @@ class TestGracefulNoOp:
 
         monkeypatch.setattr(SemgrepAnalyzer, "_run_semgrep", _boom)
         analyzer = SemgrepAnalyzer()
-        findings = await analyzer.scan(_snapshot({"main.go": "", "README.md": ""}))
+        findings = await analyzer.scan(_disk_snapshot(tmp_path, ["main.go", "README.md"]))
         assert findings == []
 
     @pytest.mark.asyncio
-    async def test_python_files_trigger_run(self, monkeypatch):
-        """A Python-only repo runs semgrep (the #93 Python rule pack)."""
+    async def test_python_files_trigger_run(self, monkeypatch, tmp_path):
+        """A Python-only repo runs semgrep with the #93 Python rule pack only."""
         monkeypatch.setattr(SemgrepAnalyzer, "_find_semgrep", staticmethod(lambda: "/bin/semgrep"))
         ran = {}
 
-        async def _fake(self, semgrep, clone_path):
-            ran["called"] = True
+        async def _fake(self, semgrep, clone_path, packs):
+            ran["packs"] = [p.name for p in packs]
             return {"results": []}
 
         monkeypatch.setattr(SemgrepAnalyzer, "_run_semgrep", _fake)
-        await SemgrepAnalyzer().scan(_snapshot({"app/views.py": ""}))
-        assert ran.get("called") is True
+        await SemgrepAnalyzer().scan(_disk_snapshot(tmp_path, ["app/views.py"]))
+        assert ran.get("packs") == ["injection-python.yaml"]  # not the JS pack
 
     @pytest.mark.asyncio
-    async def test_semgrep_crash_returns_empty(self, monkeypatch):
+    async def test_semgrep_crash_returns_empty(self, monkeypatch, tmp_path):
         """_run_semgrep returning None (crash/timeout) degrades to no findings."""
         monkeypatch.setattr(SemgrepAnalyzer, "_find_semgrep", staticmethod(lambda: "/bin/semgrep"))
 
-        async def _none(self, semgrep, clone_path):
+        async def _none(self, semgrep, clone_path, packs):
             return None
 
         monkeypatch.setattr(SemgrepAnalyzer, "_run_semgrep", _none)
-        findings = await SemgrepAnalyzer().scan(_snapshot({"src/x.ts": ""}))
+        findings = await SemgrepAnalyzer().scan(_disk_snapshot(tmp_path, ["src/x.ts"]))
         assert findings == []
+
+
+class TestPackSelection:
+    """#94 — only the packs whose languages appear in the repo are run.
+
+    Selection walks the on-disk tree (what semgrep scans), not the curated
+    file_index — so these use real files.
+    """
+
+    def test_js_only(self, tmp_path):
+        packs = SemgrepAnalyzer()._select_packs(_disk_snapshot(tmp_path, ["src/a.ts", "b.jsx"]))
+        assert [p.name for p in packs] == ["injection-js.yaml"]
+
+    def test_python_only(self, tmp_path):
+        packs = SemgrepAnalyzer()._select_packs(_disk_snapshot(tmp_path, ["app/x.py"]))
+        assert [p.name for p in packs] == ["injection-python.yaml"]
+
+    def test_mixed_repo_gets_both(self, tmp_path):
+        packs = SemgrepAnalyzer()._select_packs(_disk_snapshot(tmp_path, ["a.ts", "b.py"]))
+        assert {p.name for p in packs} == {"injection-js.yaml", "injection-python.yaml"}
+
+    def test_unsupported_language_gets_nothing(self, tmp_path):
+        packs = SemgrepAnalyzer()._select_packs(_disk_snapshot(tmp_path, ["main.go", "README.md"]))
+        assert packs == []
+
+    def test_selects_lang_in_dir_dropped_from_file_index(self, tmp_path):
+        """Regression guard: a .py only under a build/ dir (excluded from
+        file_index but still scanned by semgrep) must still select the Python
+        pack — selection reads the disk, not file_index."""
+        packs = SemgrepAnalyzer()._select_packs(
+            _disk_snapshot(tmp_path, ["a.ts", "build/generated.py"]))
+        assert {p.name for p in packs} == {"injection-js.yaml", "injection-python.yaml"}
+
+    def test_skips_node_modules(self, tmp_path):
+        """A language present only under node_modules is not selected (semgrep
+        skips node_modules too, so this can't lose a real finding)."""
+        packs = SemgrepAnalyzer()._select_packs(
+            _disk_snapshot(tmp_path, ["a.ts", "node_modules/pkg/x.py"]))
+        assert [p.name for p in packs] == ["injection-js.yaml"]
+
+    def test_cjs_is_selected(self, tmp_path):
+        """`.cjs` (a real JS extension semgrep scans) selects the JS pack."""
+        packs = SemgrepAnalyzer()._select_packs(_disk_snapshot(tmp_path, ["server.cjs"]))
+        assert [p.name for p in packs] == ["injection-js.yaml"]
+
+    def test_missing_pack_file_skipped(self, monkeypatch, tmp_path):
+        """A stale registry entry (file gone) is skipped, not fatal to the scan."""
+        import isitsecure.engine.code_analysis.semgrep_analyzer as mod
+        bogus = mod._RulePack("bogus", "does-not-exist.yaml", (".rb",))
+        monkeypatch.setattr(mod, "_RULE_PACKS", (*mod._RULE_PACKS, bogus))
+        packs = SemgrepAnalyzer()._select_packs(_disk_snapshot(tmp_path, ["a.ts", "x.rb"]))
+        assert [p.name for p in packs] == ["injection-js.yaml"]  # bogus dropped
 
 
 class TestFindSemgrep:
@@ -127,8 +192,12 @@ class TestFindSemgrep:
 class TestFindingMapping:
     async def _run(self, monkeypatch, results):
         monkeypatch.setattr(SemgrepAnalyzer, "_find_semgrep", staticmethod(lambda: "/bin/semgrep"))
+        # These test result→CodeFinding mapping, not selection — force a pack so
+        # scan() proceeds without touching the (fake) clone_path on disk.
+        monkeypatch.setattr(SemgrepAnalyzer, "_select_packs",
+                            lambda self, repo: [pathlib.Path("injection-js.yaml")])
 
-        async def _fake(self, semgrep, clone_path):
+        async def _fake(self, semgrep, clone_path, packs):
             return {"results": results}
 
         monkeypatch.setattr(SemgrepAnalyzer, "_run_semgrep", _fake)
@@ -211,6 +280,35 @@ class TestRunSemgrepBoundary:
     """Exercise _run_semgrep's parsing/timeout via a fake subprocess (no binary)."""
 
     @pytest.mark.asyncio
+    async def test_builds_one_config_arg_per_pack(self, monkeypatch):
+        """Each selected pack becomes its own --config <path> in the argv."""
+        captured = {}
+
+        class _Proc:
+            returncode = 0
+
+            async def communicate(self):
+                return b'{"results": []}', b""
+
+            def kill(self):  # pragma: no cover
+                pass
+
+        async def _fake_exec(*cmd, **k):
+            captured["cmd"] = cmd
+            return _Proc()
+
+        monkeypatch.setattr(
+            "isitsecure.engine.code_analysis.semgrep_analyzer.asyncio.create_subprocess_exec",
+            _fake_exec,
+        )
+        packs = [pathlib.Path("injection-js.yaml"), pathlib.Path("injection-python.yaml")]
+        await SemgrepAnalyzer()._run_semgrep("/bin/semgrep", "/repo", packs)
+        cmd = list(captured["cmd"])
+        assert cmd.count("--config") == 2
+        assert str(packs[0]) in cmd and str(packs[1]) in cmd
+        assert cmd[-1] == "/repo"
+
+    @pytest.mark.asyncio
     async def test_parses_stdout_json(self, monkeypatch):
         payload = json.dumps({"results": [_result()]}).encode()
 
@@ -230,7 +328,7 @@ class TestRunSemgrepBoundary:
             "isitsecure.engine.code_analysis.semgrep_analyzer.asyncio.create_subprocess_exec",
             _fake_exec,
         )
-        raw = await SemgrepAnalyzer()._run_semgrep("/bin/semgrep", "/repo")
+        raw = await SemgrepAnalyzer()._run_semgrep("/bin/semgrep", "/repo", _PACKS)
         assert raw is not None and len(raw["results"]) == 1
 
     @pytest.mark.asyncio
@@ -251,7 +349,7 @@ class TestRunSemgrepBoundary:
             "isitsecure.engine.code_analysis.semgrep_analyzer.asyncio.create_subprocess_exec",
             _fake_exec,
         )
-        assert await SemgrepAnalyzer()._run_semgrep("/bin/semgrep", "/repo") is None
+        assert await SemgrepAnalyzer()._run_semgrep("/bin/semgrep", "/repo", _PACKS) is None
 
     @pytest.mark.asyncio
     async def test_subprocess_exception_returns_none(self, monkeypatch):
@@ -262,7 +360,7 @@ class TestRunSemgrepBoundary:
             "isitsecure.engine.code_analysis.semgrep_analyzer.asyncio.create_subprocess_exec",
             _boom,
         )
-        assert await SemgrepAnalyzer()._run_semgrep("/bin/semgrep", "/repo") is None
+        assert await SemgrepAnalyzer()._run_semgrep("/bin/semgrep", "/repo", _PACKS) is None
 
     @pytest.mark.asyncio
     async def test_malformed_json_returns_none(self, monkeypatch):
@@ -279,7 +377,7 @@ class TestRunSemgrepBoundary:
             "isitsecure.engine.code_analysis.semgrep_analyzer.asyncio.create_subprocess_exec",
             lambda *a, **k: _fake_awaitable(_Proc()),
         )
-        assert await SemgrepAnalyzer()._run_semgrep("/bin/semgrep", "/repo") is None
+        assert await SemgrepAnalyzer()._run_semgrep("/bin/semgrep", "/repo", _PACKS) is None
 
     @pytest.mark.asyncio
     async def test_non_dict_json_returns_none(self, monkeypatch):
@@ -296,7 +394,7 @@ class TestRunSemgrepBoundary:
             "isitsecure.engine.code_analysis.semgrep_analyzer.asyncio.create_subprocess_exec",
             lambda *a, **k: _fake_awaitable(_Proc()),
         )
-        assert await SemgrepAnalyzer()._run_semgrep("/bin/semgrep", "/repo") is None
+        assert await SemgrepAnalyzer()._run_semgrep("/bin/semgrep", "/repo", _PACKS) is None
 
     @pytest.mark.asyncio
     async def test_timeout_kills_and_reaps_child(self, monkeypatch):
@@ -326,7 +424,7 @@ class TestRunSemgrepBoundary:
             "isitsecure.engine.code_analysis.semgrep_analyzer.asyncio.create_subprocess_exec",
             lambda *a, **k: _fake_awaitable(_Proc()),
         )
-        result = await SemgrepAnalyzer()._run_semgrep("/bin/semgrep", "/repo")
+        result = await SemgrepAnalyzer()._run_semgrep("/bin/semgrep", "/repo", _PACKS)
         assert result is None
         assert killed["kill"] and killed["wait"]  # no orphan, no zombie
 
@@ -355,7 +453,7 @@ class TestRunSemgrepBoundary:
             lambda *a, **k: _fake_awaitable(_Proc()),
         )
         with pytest.raises(_a.CancelledError):
-            await SemgrepAnalyzer()._run_semgrep("/bin/semgrep", "/repo")
+            await SemgrepAnalyzer()._run_semgrep("/bin/semgrep", "/repo", _PACKS)
         assert killed["kill"]  # child killed even on cancellation
 
 

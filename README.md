@@ -104,7 +104,7 @@ isitsecure setup
 | `pip install -e ".[browser]"` | Adds DAST / live-URL scanning (requires `isitsecure setup` to install Chromium) |
 | `pip install -e ".[llm]"` | Adds LLM code review, triage, and AI fixes (requires an API key) |
 | `pip install -e ".[all]"` | Everything except `[taint]` (see below) |
-| `pip install -e ".[taint]"` | Deterministic Semgrep taint/injection SAST for JS/TS. **Install separately** — semgrep's pinned dependencies don't co-resolve with `[all]`. The analyzer only needs the `semgrep` binary on PATH, so `pipx install semgrep` (or brew) works too; it falls back to LLM-only if absent |
+| `pip install -e ".[taint]"` | Deterministic Semgrep taint/injection SAST for JS/TS and Python. **Install separately** — semgrep's pinned dependencies don't co-resolve with `[all]`. The analyzer only needs the `semgrep` binary on PATH, so `pipx install semgrep` (or brew) works too; it falls back to LLM-only if absent |
 
 URL/DAST scanning needs the `[browser]` extra — without it, `isitsecure scan <url>` exits with a message telling you to install it.
 

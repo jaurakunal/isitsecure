@@ -41,7 +41,7 @@ params tuple), a bare `text()` i18n alias, `subprocess` without `shell=True`,
 constant-path `open()`, fixed-URL requests (Python) — none flagged. Cross-checked
 against isitsecure's own 164 Python files (which contain real `subprocess`,
 `requests`/`httpx`, and `open()` call sites): **0 false positives**. This is the
-baseline the taint layer and future rule packs (#94) must hold.
+baseline the taint layer and future rule packs must hold.
 
 > Juice Shop recall is scored **per challenge** — a finding must match the class
 > signature AND land on the right endpoint — over the 45 DAST-detectable
