@@ -628,3 +628,75 @@ class TestStoredXss:
         f = await self._run("text/html",
                             "<div>&lt;canary_xss_abc_comment&gt;</div>")
         assert f is None
+
+
+# ---------------------------------------------------------------------------
+# POST-body XSS: use the form's discovered fields, try form + JSON (#109)
+# ---------------------------------------------------------------------------
+
+
+def _echoing_client(reflect_field: str, *, only_content_type: str | None = None):
+    """A mock RateLimitedClient whose request() echoes back a field's canary
+    (unescaped) — optionally only for one content-type — so we can assert the
+    scanner canaried that field via that transport."""
+    calls: list[dict] = []
+
+    async def _request(method, url, **kwargs):
+        ctype = kwargs.get("headers", {}).get("Content-Type", "")
+        calls.append({"method": method, "ctype": ctype, "kwargs": kwargs})
+        body = kwargs.get("data")
+        if body is None:  # JSON attempt carries a serialized string in `content`
+            import json as _j
+            try:
+                body = _j.loads(kwargs.get("content") or "{}")
+            except Exception:
+                body = {}
+        reflected = body.get(reflect_field, "")
+        blocked = only_content_type is not None and only_content_type not in ctype
+        html = "" if blocked else f"<html><input value='{reflected}'></html>"
+        return _make_html_response(html)
+
+    client = MagicMock()
+    client.request = AsyncMock(side_effect=_request)
+    client._calls = calls
+    return client
+
+
+@pytest.mark.asyncio
+async def test_post_body_xss_uses_discovered_form_fields():
+    """A form's real field (firstName) — not in the generic list — is canaried."""
+    assert "firstname" not in [f.lower() for f in XSSConfig.POST_BODY_FIELD_NAMES]
+    ep = DiscoveredEndpoint(
+        url="https://example.com/profile", method=EndpointMethod.POST,
+        query_param_names=["firstName", "lastName"],
+    )
+    client = _echoing_client("firstName")
+    finding = await XSSScanner()._test_single_post_body(client, ep)
+    assert finding is not None
+    assert finding.severity == SeverityLevel.HIGH
+    assert "firstName" in (finding.description + finding.evidence)
+
+
+@pytest.mark.asyncio
+async def test_post_body_xss_falls_back_to_generic_when_no_fields():
+    """Endpoints with no captured fields still use the generic list."""
+    ep = DiscoveredEndpoint(url="https://example.com/api", method=EndpointMethod.POST)
+    client = _echoing_client("comment")  # 'comment' is in the generic list
+    finding = await XSSScanner()._test_single_post_body(client, ep)
+    assert finding is not None and "comment" in finding.description
+
+
+@pytest.mark.asyncio
+async def test_post_body_xss_tries_form_then_json():
+    """Form-urlencoded is tried first; JSON is tried when the form doesn't reflect."""
+    ep = DiscoveredEndpoint(
+        url="https://example.com/profile", method=EndpointMethod.POST,
+        query_param_names=["firstName"],
+    )
+    # Only the JSON transport reflects -> scanner must fall through to it.
+    client = _echoing_client("firstName", only_content_type="application/json")
+    finding = await XSSScanner()._test_single_post_body(client, ep)
+    assert finding is not None
+    ctypes = [c["ctype"] for c in client._calls]
+    assert any("x-www-form-urlencoded" in c for c in ctypes)  # form tried first
+    assert any("application/json" in c for c in ctypes)        # json tried too
