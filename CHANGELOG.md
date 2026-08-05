@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0](https://github.com/jaurakunal/isitsecure/compare/v0.12.0...v0.13.0) (2026-08-05)
+
+
+### Features
+
+* **dast:** POST-body XSS uses the form's real fields + form/JSON transports ([#109](https://github.com/jaurakunal/isitsecure/issues/109)) ([#110](https://github.com/jaurakunal/isitsecure/issues/110)) ([c2215a9](https://github.com/jaurakunal/isitsecure/commit/c2215a932e5762f97faf39ca3328113814c48baa))
+
 ## [0.12.0](https://github.com/jaurakunal/isitsecure/compare/v0.11.0...v0.12.0) (2026-07-30)
 
 
