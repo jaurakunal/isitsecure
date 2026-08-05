@@ -1231,6 +1231,8 @@ class XSSConfig:
 
     # POST body XSS testing
     MAX_POST_ENDPOINTS_TO_TEST = 15
+    MAX_POST_BODY_FIELDS = 25  # cap canaried fields per endpoint (bounds body size)
+    # Fallback field names when an endpoint carried no discovered form fields.
     POST_BODY_FIELD_NAMES = (
         "name", "comment", "description", "title",
         "message", "bio", "content", "text",

@@ -14,7 +14,7 @@ import json
 import logging
 import re
 import uuid
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 
 from isitsecure.engine.constants import DeepScanConfig, XSSConfig
 from isitsecure.engine.models import (
@@ -277,6 +277,39 @@ class XSSScanner:
 
         return findings
 
+    async def _post_body_variants(
+        self,
+        client: RateLimitedClient,
+        method: str,
+        url: str,
+        body_payload: dict[str, str],
+        canary_map: dict[str, str],
+    ) -> tuple[object | None, str, str]:
+        """POST the canary body as form-urlencoded, then JSON.
+
+        Real HTML forms are ``application/x-www-form-urlencoded``; APIs take JSON.
+        Returns the response that reflects a canary (or the last valid attempt),
+        the sent body string, and a content-type label for the finding.
+        """
+        json_body = json.dumps(body_payload)
+        attempts = [
+            ("form-urlencoded", urlencode(body_payload),
+             {"data": body_payload,
+              "headers": {"Content-Type": "application/x-www-form-urlencoded"}}),
+            ("JSON", json_body,
+             {"content": json_body, "headers": {"Content-Type": "application/json"}}),
+        ]
+        last: tuple[object | None, str, str] = (None, "", "")
+        for label, sent_body, kwargs in attempts:
+            try:
+                resp = await client.request(method, url, **kwargs)
+            except Exception:  # noqa: BLE001, S112 - try the next content-type
+                continue
+            last = (resp, sent_body, label)
+            if resp.status_code < 400 and any(c in resp.text for c in canary_map.values()):
+                return resp, sent_body, label
+        return last
+
     async def _test_single_post_body(
         self,
         client: RateLimitedClient,
@@ -289,10 +322,15 @@ class XSSScanner:
         """
         canary_id = uuid.uuid4().hex[:8]
 
-        # Build JSON body with a unique canary per field
+        # Canary the form's ACTUAL discovered fields (extracted from the crawled
+        # <form>'s <input name=...>), falling back to generic names only when the
+        # endpoint carried none. A fixed generic list misses app-specific fields
+        # like firstName/lastName, so real form-POST XSS goes undetected.
+        field_names = list(endpoint.query_param_names) or list(XSSConfig.POST_BODY_FIELD_NAMES)
+        field_names = field_names[: XSSConfig.MAX_POST_BODY_FIELDS]
         body_payload: dict[str, str] = {}
         field_canary_map: dict[str, str] = {}
-        for field_name in XSSConfig.POST_BODY_FIELD_NAMES:
+        for field_name in field_names:
             canary_value = f"<canary_xss_{canary_id}_{field_name}>"
             body_payload[field_name] = canary_value
             field_canary_map[field_name] = canary_value
@@ -300,14 +338,12 @@ class XSSScanner:
         http_method = endpoint.method.value
 
         try:
-            response = await client.request(
-                http_method,
-                endpoint.url,
-                content=json.dumps(body_payload),
-                headers={"Content-Type": "application/json"},
+            # Try form-urlencoded (most HTML forms) then JSON (APIs); use whichever
+            # reflects a canary so the finding reflects the real request.
+            response, sent_body, sent_desc = await self._post_body_variants(
+                client, http_method, endpoint.url, body_payload, field_canary_map,
             )
-
-            if response.status_code >= 400:
+            if response is None or response.status_code >= 400:
                 return None
 
             response_body = response.text
@@ -320,7 +356,7 @@ class XSSScanner:
                         method=http_method,
                         url=endpoint.url,
                         headers=dict(response.request.headers),
-                        body=json.dumps(body_payload),
+                        body=sent_body,
                         response_status=response.status_code,
                         response_headers=dict(response.headers),
                         response_body=response_body,
@@ -336,21 +372,21 @@ class XSSScanner:
                             url=endpoint.url, field=field_name
                         ),
                         technical_detail=(
-                            f"Sent {http_method} with JSON body containing "
+                            f"Sent {http_method} with {sent_desc} body containing "
                             f"canary in field '{field_name}'.\n"
                             f"Canary: {canary_value}\n"
                             f"Reflected unescaped in response body.\n"
                             f"Content-Type: {content_type}"
                         ),
                         evidence=(
-                            f"{http_method} {endpoint.url} with JSON body -> "
+                            f"{http_method} {endpoint.url} with {sent_desc} body -> "
                             f"canary in '{field_name}' reflected unescaped"
                         ),
                         confidence=XSSConfig.CONFIDENCE_POST_BODY_REFLECTED,
                         scanner_name=self.scanner_name,
                         endpoint_url=endpoint.url,
                         http_method=http_method,
-                        request_payload=json.dumps(body_payload),
+                        request_payload=sent_body,
                         response_preview=response_body[:300],
                         probe_captures=[capture],
                     )
@@ -372,19 +408,19 @@ class XSSScanner:
                             "Verify that encoding is applied in all contexts."
                         ),
                         technical_detail=(
-                            f"Sent {http_method} with JSON body containing "
+                            f"Sent {http_method} with {sent_desc} body containing "
                             f"canary in field '{field_name}'.\n"
                             f"Canary text reflected (HTML chars may be encoded)."
                         ),
                         evidence=(
-                            f"{http_method} {endpoint.url} with JSON body -> "
+                            f"{http_method} {endpoint.url} with {sent_desc} body -> "
                             f"canary in '{field_name}' partially reflected"
                         ),
                         confidence=XSSConfig.CONFIDENCE_REFLECTED_POSSIBLE,
                         scanner_name=self.scanner_name,
                         endpoint_url=endpoint.url,
                         http_method=http_method,
-                        request_payload=json.dumps(body_payload),
+                        request_payload=sent_body,
                     )
 
             # Stored XSS: the payload may reflect only when the resource is
