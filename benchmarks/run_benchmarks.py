@@ -100,6 +100,18 @@ HEADERS = dict(category="missing_headers")
 XSS = dict(scanners=("xss_scanner", "dom_xss_scanner"))
 INJECTION = dict(scanner="active_injection_scanner")
 
+# NodeGoat is unversioned upstream, so pin a commit for a reproducible benchmark
+# (like Juice Shop is pinned to v20.1.1). Shallow-fetch exactly this commit.
+NODEGOAT_COMMIT = "c5cb68a7084e4ae7dcc60e6a98768720a81841e8"
+_NODEGOAT_UP = ["bash", "-c",
+                "test -d benchmarks/_ext/NodeGoat || (mkdir -p benchmarks/_ext/NodeGoat && "
+                "cd benchmarks/_ext/NodeGoat && git init -q && "
+                "git remote add origin https://github.com/OWASP/NodeGoat && "
+                f"git fetch --depth 1 origin {NODEGOAT_COMMIT} && git checkout -q FETCH_HEAD); "
+                "cd benchmarks/_ext/NodeGoat && docker compose up -d"]
+_NODEGOAT_DOWN = ["bash", "-c",
+                  "cd benchmarks/_ext/NodeGoat 2>/dev/null && docker compose down -v || true"]
+
 
 TARGETS: list[Target] = [
     Target(
@@ -134,14 +146,10 @@ TARGETS: list[Target] = [
     #     contained via a shallow clone), so we track their real setup. ---
     Target(
         name="nodegoat",
-        up_cmd=["bash", "-c",
-                "test -d benchmarks/_ext/NodeGoat || git clone --depth 1 "
-                "https://github.com/OWASP/NodeGoat benchmarks/_ext/NodeGoat; "
-                "cd benchmarks/_ext/NodeGoat && docker compose up -d"],
+        up_cmd=_NODEGOAT_UP,
         url="http://localhost:4000",
         ready_url="http://localhost:4000/",
-        down_cmd=["bash", "-c",
-                  "cd benchmarks/_ext/NodeGoat 2>/dev/null && docker compose down -v || true"],
+        down_cmd=_NODEGOAT_DOWN,
         ready_timeout=300,
         expect=[
             Expectation("Missing security headers", **HEADERS),
@@ -152,14 +160,10 @@ TARGETS: list[Target] = [
     ),
     Target(
         name="nodegoat-auth",
-        up_cmd=["bash", "-c",
-                "test -d benchmarks/_ext/NodeGoat || git clone --depth 1 "
-                "https://github.com/OWASP/NodeGoat benchmarks/_ext/NodeGoat; "
-                "cd benchmarks/_ext/NodeGoat && docker compose up -d"],
+        up_cmd=_NODEGOAT_UP,
         url="http://localhost:4000",
         ready_url="http://localhost:4000/",
-        down_cmd=["bash", "-c",
-                  "cd benchmarks/_ext/NodeGoat 2>/dev/null && docker compose down -v || true"],
+        down_cmd=_NODEGOAT_DOWN,
         ready_timeout=300,
         scan_mode="authenticated",
         # Register a user so the browser-login crawl can authenticate.

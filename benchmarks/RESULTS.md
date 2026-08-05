@@ -17,7 +17,7 @@ _Runs: 2026-07 · `--llm none` (pure DAST detection, no LLM) · Juice Shop pinne
 | `juiceshop` | url-only | **20/45 (44%)** — per-challenge, deterministic | not yet measured | ~25 |
 | `vampi-vulnerable` | url-only | **3/3** (SQLi, IDOR, headers) | — | 14–16 |
 | `vampi-secure` | url-only | — | **2** (IDOR) | 13–15 |
-| `nodegoat-auth` | authenticated | **2/3** (headers, XSS; injection missed) | unmeasured | 28 |
+| `nodegoat-auth` | authenticated | **1/3** (headers only; XSS + injection missed) | unmeasured | 22 |
 | `sast-injection` | code-only | **46/46 (100%)** — taint, per-class, deterministic | **0** | 46 |
 
 ### SAST injection (`sast-injection`, code-only, taint layer #4 + #93 + #102 + #104)
@@ -120,9 +120,21 @@ authenticated run finds **2 write BOLA** (email/password) with 0 FP.
 Server-rendered Express/EJS app — no JS API bundle, no OpenAPI spec. url-only
 discovery originally found **nothing**; HTML form/link discovery + a form-scoped
 login detector (identity field `userName`) now let a credentialed crawl log in,
-walk ~32 pages, and discover **10 form endpoints**. Harness recall **2/3**:
-missing headers ✓, XSS ✓, injection ✗ — the injection miss on the server-rendered
-forms is a real, reportable gap.
+walk ~32 pages, and discover **10 form endpoints**. NodeGoat is now **pinned to
+commit `c5cb68a`** for reproducibility (it's unversioned upstream, unlike Juice
+Shop's `v20.1.1` tag).
+
+Harness recall **1/3**: missing headers ✓, XSS ✗, injection ✗ — **deterministic
+across 4 consecutive runs** (22 findings each), down from a previously recorded
+2/3. **Root cause (investigated):** NodeGoat's `POST /profile` reflected XSS
+(`firstName`/`lastName` echoed unescaped) is real and the form *is* discovered
+with its real field names — but the **POST-body XSS scanner tests a fixed generic
+field list** (`name`/`comment`/…) instead of the form's discovered fields, so its
+canary lands in fields the app ignores. The reflected-XSS phase only tries those
+fields as *GET* params, which a POST-only form doesn't read. Net: reflected XSS
+in HTML form POSTs with app-specific field names is systematically missed —
+tracked as a detection gap. Juice Shop is stable at 20/45, so the DAST core is
+fine; this is specific to form-POST XSS.
 
 ## How to read these numbers
 
