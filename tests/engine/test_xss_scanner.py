@@ -700,3 +700,64 @@ async def test_post_body_xss_tries_form_then_json():
     ctypes = [c["ctype"] for c in client._calls]
     assert any("x-www-form-urlencoded" in c for c in ctypes)  # form tried first
     assert any("application/json" in c for c in ctypes)        # json tried too
+
+
+@pytest.mark.asyncio
+async def test_post_body_xss_passes_auth_headers_to_client(monkeypatch):
+    """#111 — the scanner's _auth_headers (session cookie) reach its HTTP client."""
+    captured: dict = {}
+
+    class _FakeClient:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def request(self, *a, **k):
+            return _make_html_response("")  # no reflection; we only check the ctor
+
+    monkeypatch.setattr(
+        "isitsecure.engine.scanners.xss_scanner.RateLimitedClient", _FakeClient
+    )
+    scanner = XSSScanner()
+    scanner._auth_headers = {"Cookie": "connect.sid=abc"}
+    ep = DiscoveredEndpoint(
+        url="https://ex.com/profile", method=EndpointMethod.POST,
+        query_param_names=["firstName"],
+    )
+    await scanner._test_post_body_xss([ep])
+    assert captured.get("extra_headers") == {"Cookie": "connect.sid=abc"}
+
+
+@pytest.mark.asyncio
+async def test_post_body_xss_no_auth_headers_passes_none(monkeypatch):
+    """Unauthenticated (url-only) scans pass no extra headers."""
+    captured: dict = {}
+
+    class _FakeClient:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def request(self, *a, **k):
+            return _make_html_response("")
+
+    monkeypatch.setattr(
+        "isitsecure.engine.scanners.xss_scanner.RateLimitedClient", _FakeClient
+    )
+    scanner = XSSScanner()  # default _auth_headers = {}
+    ep = DiscoveredEndpoint(
+        url="https://ex.com/profile", method=EndpointMethod.POST,
+        query_param_names=["firstName"],
+    )
+    await scanner._test_post_body_xss([ep])
+    assert captured.get("extra_headers") is None

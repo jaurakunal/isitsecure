@@ -385,6 +385,15 @@ class DeepSecurityScanAgent:
                     if self._jwt_scanner:
                         self._jwt_scanner._auth_session = session_a
 
+                # Propagate the crawl's auth (bearer token AND/OR session cookie)
+                # to the HTTP DAST scanners so they probe protected endpoints
+                # authenticated — NOT gated on a bearer token, since cookie-session
+                # apps (traditional server-rendered web apps) have none. #111
+                if crawl_result.auth_headers:
+                    for dast_scanner in self._dast_scanners:
+                        if hasattr(dast_scanner, "_auth_headers"):
+                            dast_scanner._auth_headers = dict(crawl_result.auth_headers)
+
                 yield DeepScanEvent(
                     DeepScanPhase.AUTHENTICATING,
                     OrchestratorConfig.MSG_CRAWL_SUMMARY.format(

@@ -256,6 +256,21 @@ class AuthenticatedCrawler:
             if apikey:
                 headers[SharedPatterns.HEADER_APIKEY] = apikey
 
+        # Session cookies: many traditional / server-rendered apps authenticate
+        # with a session cookie, not a bearer token. Capture the browser's
+        # cookies so downstream HTTP DAST scanners can probe protected endpoints
+        # authenticated (the crawl runs in an authed browser, but the follow-up
+        # httpx probes don't inherit its context). #111
+        try:
+            cookies = await page.context.cookies()  # type: ignore[union-attr]
+            cookie_header = "; ".join(
+                f"{c['name']}={c['value']}" for c in cookies if c.get("name")
+            )
+            if cookie_header:
+                headers[SharedPatterns.HEADER_COOKIE] = cookie_header
+        except Exception as exc:  # noqa: BLE001 - cookies are best-effort
+            logger.debug("Cookie capture failed: %s", exc)
+
         return headers
 
     # ------------------------------------------------------------------
