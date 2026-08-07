@@ -13,6 +13,7 @@ class SharedPatterns:
     BEARER_PREFIX = "Bearer "
     HEADER_AUTHORIZATION = "Authorization"
     HEADER_APIKEY = "apikey"
+    HEADER_COOKIE = "Cookie"
     HEADER_CONTENT_TYPE = "Content-Type"
     CONTENT_TYPE_JSON = "application/json"
     HEADER_USER_AGENT = "User-Agent"

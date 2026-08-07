@@ -554,3 +554,34 @@ class TestExtractAuthHeaders:
 
         headers = await crawler._extract_auth_headers(mock_page)
         assert "Bearer storage-token" in headers.get("Authorization", "")
+
+
+class TestExtractAuthHeadersCookies:
+    """#111 — capture session cookies (not just bearer tokens) for HTTP scanners."""
+
+    @pytest.mark.asyncio
+    async def test_captures_session_cookies(self):
+        crawler = _make_crawler()
+        page = MagicMock()
+        page.context.cookies = AsyncMock(return_value=[
+            {"name": "connect.sid", "value": "s%3Aabc"},
+            {"name": "csrf", "value": "xyz"},
+        ])
+        with patch(
+            "isitsecure.engine.scanners.authenticated_crawler.BrowserLoginHelper.extract_token",
+            AsyncMock(return_value=None),
+        ):
+            headers = await crawler._extract_auth_headers(page)
+        assert headers.get("Cookie") == "connect.sid=s%3Aabc; csrf=xyz"
+
+    @pytest.mark.asyncio
+    async def test_no_cookies_no_header(self):
+        crawler = _make_crawler()
+        page = MagicMock()
+        page.context.cookies = AsyncMock(return_value=[])
+        with patch(
+            "isitsecure.engine.scanners.authenticated_crawler.BrowserLoginHelper.extract_token",
+            AsyncMock(return_value=None),
+        ):
+            headers = await crawler._extract_auth_headers(page)
+        assert "Cookie" not in headers

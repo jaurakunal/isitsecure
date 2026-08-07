@@ -41,6 +41,11 @@ class XSSScanner:
     bodies) and static DOM sink analysis.
     """
 
+    def __init__(self) -> None:
+        # Auth headers (bearer token and/or session Cookie) injected by the
+        # authenticated scan path so probes reach protected endpoints. #111
+        self._auth_headers: dict[str, str] = {}
+
     @property
     def scanner_name(self) -> str:
         """Unique name identifying this scanner."""
@@ -101,6 +106,7 @@ class XSSScanner:
             delay_seconds=XSSConfig.PROBE_DELAY,
             timeout_seconds=XSSConfig.HTTP_TIMEOUT_SECONDS,
             user_agent=DeepScanConfig.USER_AGENT,
+            extra_headers=self._auth_headers or None,
         ) as client:
             for tested, endpoint in enumerate(candidates):
                 if budget.expired():
@@ -269,6 +275,7 @@ class XSSScanner:
             delay_seconds=XSSConfig.PROBE_DELAY,
             timeout_seconds=XSSConfig.HTTP_TIMEOUT_SECONDS,
             user_agent=DeepScanConfig.USER_AGENT,
+            extra_headers=self._auth_headers or None,
         ) as client:
             for endpoint in rank(post_endpoints, PriorityDimension.XSS)[: XSSConfig.MAX_POST_ENDPOINTS_TO_TEST]:
                 finding = await self._test_single_post_body(client, endpoint)
