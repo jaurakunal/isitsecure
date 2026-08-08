@@ -40,11 +40,12 @@ from isitsecure.engine.shared.time_budget import TimeBudget
 from isitsecure.engine.shared.rate_limited_client import RateLimitedClient
 from isitsecure.engine.shared.url_utils import inject_query_param
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
+from isitsecure.engine.shared.auth_aware import AuthAwareScanner
 
 logger = logging.getLogger(__name__)
 
 
-class ActiveInjectionScanner:
+class ActiveInjectionScanner(AuthAwareScanner):
     """Active injection scanner implementing DASTScannerProtocol.
 
     Scans discovered endpoints for SQL injection, NoSQL injection,
@@ -96,6 +97,7 @@ class ActiveInjectionScanner:
             delay_seconds=InjectionConfig.PROBE_DELAY,
             timeout_seconds=InjectionConfig.HTTP_TIMEOUT_SECONDS,
             user_agent=DeepScanConfig.USER_AGENT,
+            extra_headers=self.auth_headers,
         ) as client:
             # Target-level probe: auth-bypass SQLi on conventional login paths.
             # A login POST is rarely recoverable from a minified SPA bundle, so

@@ -57,6 +57,8 @@ If credentials are provided:
 
 For frontend-less REST APIs, `RestLoginAuthProvider` (the `token` auth provider) skips the browser entirely: it POSTs credentials to a login endpoint (auto-discovered, or given via `--login-url`), extracts the bearer token from the JSON response (or via JWT regex), and builds an authenticated session directly.
 
+After the crawl, the orchestrator hands the captured auth (bearer token and/or session cookie) to every HTTP DAST scanner that exposes `_auth_headers` (the `AuthAwareScanner` mixin in `engine/shared/auth_aware.py`). Each such scanner passes those headers as `extra_headers` to its `RateLimitedClient`, so the standard probes — injection, CSRF, SSRF, CORS, headers, open-redirect, mass-assignment, file-upload, GraphQL, HTTP-probe, source-map — run behind the login wall against protected endpoints instead of being redirected to the login page.
+
 ### Phase 4–5: DAST Scanners
 
 15 standard scanners run in parallel with per-scanner timeouts:

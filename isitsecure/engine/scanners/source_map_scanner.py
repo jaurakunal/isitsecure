@@ -32,6 +32,7 @@ from isitsecure.engine.models import (
 from isitsecure.engine.shared.rate_limited_client import RateLimitedClient
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
 from isitsecure.engine.ingestion.snapshot import CodebaseSnapshot
+from isitsecure.engine.shared.auth_aware import AuthAwareScanner
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,7 @@ _SOURCE_MAP_MARKERS = ('"sources":', '"mappings":')
 _JS_SUFFIXES = (".js", ".mjs", ".cjs")
 
 
-class SourceMapScanner:
+class SourceMapScanner(AuthAwareScanner):
     """Detects exposed JavaScript source maps.
 
     SRP: This scanner is responsible ONLY for confirming reachable,
@@ -97,6 +98,7 @@ class SourceMapScanner:
             delay_seconds=_REQUEST_DELAY_SECONDS,
             timeout_seconds=_HTTP_TIMEOUT_SECONDS,
             user_agent=DeepScanConfig.USER_AGENT,
+            extra_headers=self.auth_headers,
         ) as client:
             for map_url in candidates:
                 if map_url in seen:

@@ -23,11 +23,12 @@ from isitsecure.engine.shared.probe_capture import build_probe_capture
 from isitsecure.engine.shared.rate_limited_client import RateLimitedClient
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
 from isitsecure.engine.ingestion.snapshot import CodebaseSnapshot
+from isitsecure.engine.shared.auth_aware import AuthAwareScanner
 
 logger = logging.getLogger(__name__)
 
 
-class CORSScanner:
+class CORSScanner(AuthAwareScanner):
     """CORS misconfiguration scanner implementing DASTScannerProtocol.
 
     Sends preflight-style requests with various Origin headers to detect
@@ -73,6 +74,7 @@ class CORSScanner:
             delay_seconds=CORSConfig.PROBE_DELAY,
             timeout_seconds=CORSConfig.HTTP_TIMEOUT_SECONDS,
             user_agent=DeepScanConfig.USER_AGENT,
+            extra_headers=self.auth_headers,
         ) as client:
             for ep in representative:
                 ep_findings = await self._test_endpoint(client, ep)

@@ -31,6 +31,7 @@ from isitsecure.engine.shared.rate_limited_client import (
 )
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
 from isitsecure.engine.ingestion.snapshot import CodebaseSnapshot
+from isitsecure.engine.shared.auth_aware import AuthAwareScanner
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +49,7 @@ class _HeaderCheckType(str, Enum):
     X_POWERED_BY_PRESENT = "x_powered_by_present"
 
 
-class SecurityHeadersScanner:
+class SecurityHeadersScanner(AuthAwareScanner):
     """Security headers scanner implementing DASTScannerProtocol.
 
     Detects missing or misconfigured HTTP security headers by making
@@ -191,6 +192,7 @@ class SecurityHeadersScanner:
             delay_seconds=self.REQUEST_DELAY_SECONDS,
             timeout_seconds=SecurityHeadersScannerConfig.HTTP_TIMEOUT_SECONDS,
             user_agent=DeepScanConfig.USER_AGENT,
+            extra_headers=self.auth_headers,
         ) as client:
             for url in urls:
                 url_findings = await self._check_single_endpoint(client, url)

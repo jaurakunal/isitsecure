@@ -20,11 +20,12 @@ from isitsecure.engine.shared.rate_limited_client import RateLimitedClient
 from isitsecure.engine.shared.url_utils import inject_query_param
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
 from isitsecure.engine.ingestion.snapshot import CodebaseSnapshot
+from isitsecure.engine.shared.auth_aware import AuthAwareScanner
 
 logger = logging.getLogger(__name__)
 
 
-class SSRFScanner:
+class SSRFScanner(AuthAwareScanner):
     """Tests for Server-Side Request Forgery vulnerabilities.
 
     Identifies endpoints with URL-accepting parameters and injects
@@ -70,6 +71,7 @@ class SSRFScanner:
             delay_seconds=SSRFConfig.PROBE_DELAY,
             timeout_seconds=SSRFConfig.HTTP_TIMEOUT_SECONDS,
             user_agent=DeepScanConfig.USER_AGENT,
+            extra_headers=self.auth_headers,
         ) as client:
             for endpoint, param_name in testable:
                 ep_findings = await self._test_endpoint_param(
