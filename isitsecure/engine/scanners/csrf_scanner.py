@@ -22,11 +22,12 @@ from isitsecure.engine.shared.endpoint_prioritizer import PriorityDimension, ran
 from isitsecure.engine.shared.rate_limited_client import RateLimitedClient
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
 from isitsecure.engine.ingestion.snapshot import CodebaseSnapshot
+from isitsecure.engine.shared.auth_aware import AuthAwareScanner
 
 logger = logging.getLogger(__name__)
 
 
-class CSRFScanner:
+class CSRFScanner(AuthAwareScanner):
     """CSRF scanner implementing DASTScannerProtocol.
 
     Detects missing Cross-Site Request Forgery protections on
@@ -103,6 +104,7 @@ class CSRFScanner:
             delay_seconds=self.REQUEST_DELAY_SECONDS,
             timeout_seconds=CSRFConfig.HTTP_TIMEOUT_SECONDS,
             user_agent=DeepScanConfig.USER_AGENT,
+            extra_headers=self.auth_headers,
         ) as client:
             for ep in rank(endpoints, PriorityDimension.CSRF)[: CSRFConfig.MAX_ENDPOINTS_TO_TEST]:
                 finding = await self._test_forged_origin(client, ep)

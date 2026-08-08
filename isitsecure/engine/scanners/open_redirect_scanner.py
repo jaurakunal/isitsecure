@@ -24,11 +24,12 @@ from isitsecure.engine.shared.rate_limited_client import RateLimitedClient
 from isitsecure.engine.shared.url_utils import inject_query_param
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
 from isitsecure.engine.ingestion.snapshot import CodebaseSnapshot
+from isitsecure.engine.shared.auth_aware import AuthAwareScanner
 
 logger = logging.getLogger(__name__)
 
 
-class OpenRedirectScanner:
+class OpenRedirectScanner(AuthAwareScanner):
     """Open Redirect scanner implementing DASTScannerProtocol.
 
     Identifies endpoints that accept redirect-like parameters or reside
@@ -76,6 +77,7 @@ class OpenRedirectScanner:
             delay_seconds=OpenRedirectConfig.PROBE_DELAY,
             timeout_seconds=OpenRedirectConfig.HTTP_TIMEOUT_SECONDS,
             user_agent=DeepScanConfig.USER_AGENT,
+            extra_headers=self.auth_headers,
             follow_redirects=False,
         ) as client:
             for endpoint, param_name in testable:

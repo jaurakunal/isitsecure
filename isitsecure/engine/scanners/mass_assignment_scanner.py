@@ -22,11 +22,12 @@ from isitsecure.engine.models import (
 from isitsecure.engine.shared.rate_limited_client import RateLimitedClient
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
 from isitsecure.engine.ingestion.snapshot import CodebaseSnapshot
+from isitsecure.engine.shared.auth_aware import AuthAwareScanner
 
 logger = logging.getLogger(__name__)
 
 
-class MassAssignmentScanner:
+class MassAssignmentScanner(AuthAwareScanner):
     """Tests API endpoints for mass assignment vulnerabilities.
 
     Finds POST/PUT/PATCH endpoints and sends requests with extra
@@ -75,6 +76,7 @@ class MassAssignmentScanner:
             delay_seconds=MassAssignmentConfig.PROBE_DELAY,
             timeout_seconds=MassAssignmentConfig.HTTP_TIMEOUT_SECONDS,
             user_agent=DeepScanConfig.USER_AGENT,
+            extra_headers=self.auth_headers,
         ) as client:
             for endpoint in state_changing_endpoints:
                 ep_findings = await self._test_endpoint(client, endpoint)

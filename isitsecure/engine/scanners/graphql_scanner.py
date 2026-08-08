@@ -20,11 +20,12 @@ from isitsecure.engine.models import (
 from isitsecure.engine.shared.rate_limited_client import RateLimitedClient
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
 from isitsecure.engine.ingestion.snapshot import CodebaseSnapshot
+from isitsecure.engine.shared.auth_aware import AuthAwareScanner
 
 logger = logging.getLogger(__name__)
 
 
-class GraphQLScanner:
+class GraphQLScanner(AuthAwareScanner):
     """Tests GraphQL endpoints for common vulnerabilities.
 
     Detects GraphQL endpoints from path indicators, then probes for
@@ -71,6 +72,7 @@ class GraphQLScanner:
             delay_seconds=GraphQLConfig.PROBE_DELAY,
             timeout_seconds=GraphQLConfig.HTTP_TIMEOUT_SECONDS,
             user_agent=DeepScanConfig.USER_AGENT,
+            extra_headers=self.auth_headers,
         ) as client:
             for endpoint in graphql_endpoints:
                 ep_findings = await self._test_endpoint(client, endpoint)

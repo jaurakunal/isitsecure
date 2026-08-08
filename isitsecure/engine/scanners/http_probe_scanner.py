@@ -31,11 +31,12 @@ from isitsecure.engine.shared.rate_limited_client import (
 from isitsecure.engine.shared.url_utils import inject_query_param
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
 from isitsecure.engine.ingestion.snapshot import CodebaseSnapshot
+from isitsecure.engine.shared.auth_aware import AuthAwareScanner
 
 logger = logging.getLogger(__name__)
 
 
-class HTTPProbeScanner:
+class HTTPProbeScanner(AuthAwareScanner):
     """Probes HTTP configuration for misconfigurations and info leaks.
 
     Implements DASTScannerProtocol.
@@ -74,6 +75,7 @@ class HTTPProbeScanner:
             delay_seconds=HTTPProbeConfig.PROBE_DELAY,
             timeout_seconds=DeepScanConfig.HTTP_TIMEOUT_SECONDS,
             user_agent=DeepScanConfig.USER_AGENT,
+            extra_headers=self.auth_headers,
         ) as client:
             emit("http-probe: method tampering (OPTIONS/TRACE)")
             findings.extend(

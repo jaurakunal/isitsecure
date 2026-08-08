@@ -22,6 +22,7 @@ from isitsecure.engine.models import (
     DiscoveredEndpoint,
     FindingSource,
 )
+from isitsecure.engine.shared.auth_aware import AuthAwareScanner
 from isitsecure.engine.shared.endpoint_prioritizer import PriorityDimension, rank
 from isitsecure.engine.shared.probe_capture import build_probe_capture
 from isitsecure.engine.shared.rate_limited_client import RateLimitedClient
@@ -34,17 +35,15 @@ from isitsecure.engine.ingestion.snapshot import CodebaseSnapshot
 logger = logging.getLogger(__name__)
 
 
-class XSSScanner:
+class XSSScanner(AuthAwareScanner):
     """Active XSS scanner implementing DASTScannerProtocol.
 
     Performs canary-based reflected XSS testing (GET query params and POST
     bodies) and static DOM sink analysis.
-    """
 
-    def __init__(self) -> None:
-        # Auth headers (bearer token and/or session Cookie) injected by the
-        # authenticated scan path so probes reach protected endpoints. #111
-        self._auth_headers: dict[str, str] = {}
+    Auth headers (bearer token and/or session Cookie) reach probes via the
+    ``AuthAwareScanner`` mixin's ``_auth_headers`` slot (#111, generalized #115).
+    """
 
     @property
     def scanner_name(self) -> str:
@@ -106,7 +105,7 @@ class XSSScanner:
             delay_seconds=XSSConfig.PROBE_DELAY,
             timeout_seconds=XSSConfig.HTTP_TIMEOUT_SECONDS,
             user_agent=DeepScanConfig.USER_AGENT,
-            extra_headers=self._auth_headers or None,
+            extra_headers=self.auth_headers,
         ) as client:
             for tested, endpoint in enumerate(candidates):
                 if budget.expired():
@@ -275,7 +274,7 @@ class XSSScanner:
             delay_seconds=XSSConfig.PROBE_DELAY,
             timeout_seconds=XSSConfig.HTTP_TIMEOUT_SECONDS,
             user_agent=DeepScanConfig.USER_AGENT,
-            extra_headers=self._auth_headers or None,
+            extra_headers=self.auth_headers,
         ) as client:
             for endpoint in rank(post_endpoints, PriorityDimension.XSS)[: XSSConfig.MAX_POST_ENDPOINTS_TO_TEST]:
                 finding = await self._test_single_post_body(client, endpoint)

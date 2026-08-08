@@ -157,7 +157,7 @@ Without an API key, you still get all rule-based scanners — **41 in the defaul
 |---|---|---|
 | `url-only` | DAST scanners against a live URL | Target URL |
 | `code-only` | SAST scanners against source code | GitHub repo URL |
-| `authenticated` | DAST with login credentials (IDOR, cross-user BOLA, RLS, privilege escalation) | URL + credentials (add a second account for cross-user tests) |
+| `authenticated` | DAST with login credentials (IDOR, cross-user BOLA, RLS, privilege escalation) — plus the standard HTTP DAST scanners (injection, CSRF, SSRF, headers, …) now probe behind the login wall against protected endpoints | URL + credentials (add a second account for cross-user tests) |
 | `full` | Everything: SAST + DAST + authenticated + LLM review + cross-referencing | URL + repo + credentials + API key |
 | `auto` (default) | Detects mode from what you provide | Whatever you give it |
 
