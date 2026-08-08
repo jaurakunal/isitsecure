@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0](https://github.com/jaurakunal/isitsecure/compare/v0.14.0...v0.15.0) (2026-08-08)
+
+
+### Features
+
+* **dast:** auth-aware mixin so quick-depth HTTP scanners probe authenticated ([#115](https://github.com/jaurakunal/isitsecure/issues/115)) ([#117](https://github.com/jaurakunal/isitsecure/issues/117)) ([d4a1ebf](https://github.com/jaurakunal/isitsecure/commit/d4a1ebf7f50704cf7fbc7bdd71724676a76cfe3c))
+
 ## [0.14.0](https://github.com/jaurakunal/isitsecure/compare/v0.13.0...v0.14.0) (2026-08-07)
 
 
