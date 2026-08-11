@@ -45,6 +45,14 @@ class AuthBypassScanner:
     lockout, default credentials, and auth header bypass.
 
     All tests are rate-limited and logged as authorized security scans.
+
+    Deliberately NOT ``AuthAwareScanner`` (#119): every phase depends on the
+    ABSENCE or MANIPULATION of auth — username enumeration, account lockout and
+    default-credential probes must be unauthenticated, and the auth-header-bypass
+    phase attacks protected endpoints by stripping/forging auth. Injecting the
+    real session would ride on all of them and make bypass attempts spuriously
+    "succeed" (false positives). The orchestrator's ``hasattr(_, "_auth_headers")``
+    guard skips this scanner precisely because it doesn't inherit the mixin.
     """
 
     HTTP_STATUS_OK_MIN = 200

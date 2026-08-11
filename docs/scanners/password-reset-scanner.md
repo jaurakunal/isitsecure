@@ -10,6 +10,8 @@ Tests password reset flows for three issues:
 2. **Rate limiting bypass** — sends 10+ rapid reset requests. No rate limit means an attacker can flood a user's inbox or brute-force tokens.
 3. **Token leakage in response** — checks if the reset token appears in the HTTP response body (it should only be sent via email).
 
+**Authenticated scans (#119):** on an authenticated deep scan the scanner carries the captured session, so a reset flow that sits behind the login wall (e.g. an in-app "change password") is reachable. The three tests only vary the request body/email, so the session applies uniformly without affecting their logic.
+
 ## Why It Matters
 
 Password reset is often the weakest link in authentication:

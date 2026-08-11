@@ -23,12 +23,13 @@ from isitsecure.engine.models import (
 )
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
 from isitsecure.engine.ingestion.snapshot import CodebaseSnapshot
+from isitsecure.engine.shared.auth_aware import AuthAwareScanner
 from isitsecure.engine.shared.progress import emit
 
 logger = logging.getLogger(__name__)
 
 
-class RateLimitScanner:
+class RateLimitScanner(AuthAwareScanner):
     """Detects missing rate limiting on critical endpoints.
 
     Tests login, signup, password reset, and auth endpoints by:
@@ -38,6 +39,12 @@ class RateLimitScanner:
 
     NOTE: Uses a raw httpx client (not RateLimitedClient) because we
     intentionally want to send rapid bursts to test rate limiting.
+
+    Auth-aware (#119): on an authenticated deep scan the orchestrator injects the
+    session so behind-login critical endpoints are reachable and the burst tests
+    measure the authenticated user's rate limit (the realistic attacker). The
+    per-IP-vs-per-user test is the one exception — it MUST vary the identity, so
+    it strips the injected session (see ``_identity_headers``).
     """
 
     HTTP_STATUS_TOO_MANY_REQUESTS = 429
@@ -76,7 +83,7 @@ class RateLimitScanner:
         async with httpx.AsyncClient(
             timeout=RateLimitConfig.HTTP_TIMEOUT_SECONDS,
             follow_redirects=True,
-            headers={"User-Agent": DeepScanConfig.USER_AGENT},
+            headers={"User-Agent": DeepScanConfig.USER_AGENT, **(self.auth_headers or {})},
         ) as client:
             for endpoint in critical_endpoints:
                 endpoint_findings = await self._test_endpoint_rate_limit(
@@ -269,6 +276,17 @@ class RateLimitScanner:
 
         return findings
 
+    def _identity_headers(self, auth_value: str) -> dict[str, str]:
+        """Headers for a single synthetic identity in the IP-vs-user test.
+
+        The per-IP-vs-per-user test relies on two DISTINCT identities. If the
+        scan injected a real session (#119), it would ride on every request and
+        collapse both identities into the same authenticated user, so we blank
+        every injected auth header for these requests and set only the test one.
+        """
+        return {**{name: "" for name in (self.auth_headers or {})},
+                "Authorization": auth_value}
+
     async def _test_ip_vs_user_rate_limit(
         self,
         client: httpx.AsyncClient,
@@ -290,7 +308,7 @@ class RateLimitScanner:
                 response = await client.request(
                     method=endpoint.method.value,
                     url=endpoint.url,
-                    headers={"Authorization": first_auth},
+                    headers=self._identity_headers(first_auth),
                 )
                 if response.status_code == self.HTTP_STATUS_TOO_MANY_REQUESTS:
                     hit_429 = True
@@ -311,7 +329,7 @@ class RateLimitScanner:
             response = await client.request(
                 method=endpoint.method.value,
                 url=endpoint.url,
-                headers={"Authorization": second_auth},
+                headers=self._identity_headers(second_auth),
             )
             if response.status_code == self.HTTP_STATUS_TOO_MANY_REQUESTS:
                 second_batch_blocked = True
