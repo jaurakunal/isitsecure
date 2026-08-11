@@ -15,9 +15,12 @@ from isitsecure.engine.scanners.endpoint_discovery import (
 )
 from isitsecure.engine.scanners.protocols import DASTScannerProtocol
 
-# DAST scanner counts. QUICK (default) runs the fast set; DEEP adds 4 slow /
-# aggressive scanners (XSS, rate-limit, auth-bypass, password-reset).
-EXPECTED_DAST_SCANNER_COUNT_QUICK = 15
+# DAST scanner counts. QUICK (default) runs the fast set — which now includes a
+# lightweight XSS pass (reflected + POST-body, no static DOM) so authenticated
+# reflected XSS is caught at quick depth (#118). DEEP adds 3 slow/aggressive
+# scanners (rate-limit, auth-bypass, password-reset) and upgrades XSS to the
+# full pass (adds the static DOM sink analysis).
+EXPECTED_DAST_SCANNER_COUNT_QUICK = 16
 EXPECTED_DAST_SCANNER_COUNT_DEEP = 19
 # Expected SAST scanner count based on factory.py sast_scanners list (without LLM)
 EXPECTED_SAST_SCANNER_COUNT = 18
@@ -58,10 +61,26 @@ class TestFactory:
         assert len(deep._dast_scanners) == EXPECTED_DAST_SCANNER_COUNT_DEEP
         deep_names = {s.scanner_name for s in deep._dast_scanners}
         quick_names = {s.scanner_name for s in quick._dast_scanners}
-        # XSS is deep-only; injection is present in both.
+        # The deep-only aggressive scanners are absent from the quick set.
+        for name in ("rate_limit_scanner", "auth_bypass_scanner", "password_reset_tester"):
+            assert name in deep_names
+            assert name not in quick_names
+        # XSS and injection now run at both depths (XSS at a lighter effort in
+        # quick — see test_quick_xss_is_non_deep); injection in both too.
         assert "xss_scanner" in deep_names
-        assert "xss_scanner" not in quick_names
+        assert "xss_scanner" in quick_names
         assert any("injection" in n for n in quick_names)
+
+    def test_quick_xss_is_non_deep(self):
+        """QUICK depth builds XSS with the lighter (non-deep) effort (#118)."""
+        from isitsecure.engine.enums import ScanDepth
+        from isitsecure.engine.scanners.xss_scanner import XSSScanner
+        quick = create_deep_security_scan_agent(depth=ScanDepth.QUICK)
+        deep = create_deep_security_scan_agent(depth=ScanDepth.DEEP)
+        q_xss = next(s for s in quick._dast_scanners if isinstance(s, XSSScanner))
+        d_xss = next(s for s in deep._dast_scanners if isinstance(s, XSSScanner))
+        assert q_xss._deep is False
+        assert d_xss._deep is True
 
     def test_quick_injection_has_time_based_disabled(self):
         """QUICK depth builds the injection scanner with time-based SQLi off."""

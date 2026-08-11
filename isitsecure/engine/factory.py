@@ -264,6 +264,9 @@ def create_deep_security_scan_agent(
     deep = depth == ScanDepth.DEEP
     dast_scanners = [
         ActiveInjectionScanner(time_based=deep),
+        # Reflected + POST-body XSS runs at both depths; quick uses a tighter
+        # budget and skips the static DOM pass (#118). Deep adds the DOM pass.
+        XSSScanner(deep=deep),
         CSRFScanner(),
         SessionScanner(),
         GraphQLScanner(),
@@ -283,7 +286,6 @@ def create_deep_security_scan_agent(
     # traffic, timing measurements, password-reset side effects).
     if deep:
         dast_scanners += [
-            XSSScanner(),
             RateLimitScanner(),
             AuthBypassScanner(),
             PasswordResetScanner(),

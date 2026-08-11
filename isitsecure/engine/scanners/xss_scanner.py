@@ -43,7 +43,24 @@ class XSSScanner(AuthAwareScanner):
 
     Auth headers (bearer token and/or session Cookie) reach probes via the
     ``AuthAwareScanner`` mixin's ``_auth_headers`` slot (#111, generalized #115).
+
+    ``deep`` (default ``True``) selects the effort level. At quick depth (#118)
+    the scanner runs only the network reflected + POST-body phases on a tighter
+    time budget and skips the static DOM sink pass, so it fits the quick-depth
+    DAST set while still catching server-reflected XSS on protected endpoints.
     """
+
+    def __init__(self, deep: bool = True) -> None:
+        self._deep = deep
+
+    @property
+    def _active_budget_seconds(self) -> float:
+        """Per-phase time budget: full at deep depth, tighter at quick (#118)."""
+        return (
+            ScannerTimeouts.XSS_ACTIVE_SECONDS
+            if self._deep
+            else ScannerTimeouts.XSS_QUICK_SECONDS
+        )
 
     @property
     def scanner_name(self) -> str:
@@ -79,8 +96,9 @@ class XSSScanner(AuthAwareScanner):
         post_findings = await self._test_post_body_xss(endpoints)
         findings.extend(post_findings)
 
-        # Phase 3: DOM-based XSS analysis on JS content
-        if snapshot:
+        # Phase 3: DOM-based XSS analysis on JS content (deep only — static sink
+        # heuristic; the semgrep taint layer already covers DOM-XSS at quick).
+        if self._deep and snapshot:
             dom_findings = self._test_dom_xss(snapshot)
             findings.extend(dom_findings)
 
@@ -97,7 +115,7 @@ class XSSScanner(AuthAwareScanner):
         """Test endpoints for reflected XSS via query parameters."""
         findings: list[DeepFinding] = []
         testable = self._get_testable_endpoints(endpoints)
-        budget = TimeBudget(ScannerTimeouts.XSS_ACTIVE_SECONDS)
+        budget = TimeBudget(self._active_budget_seconds)
         candidates = rank(testable, PriorityDimension.XSS)[: XSSConfig.MAX_ENDPOINTS_TO_TEST]
 
         async with RateLimitedClient(
@@ -269,6 +287,10 @@ class XSSScanner(AuthAwareScanner):
         if not post_endpoints:
             return findings
 
+        # Shares the depth-aware budget with the reflected phase so the quick
+        # pass bounds BOTH network phases, not just the reflected one (#118).
+        budget = TimeBudget(self._active_budget_seconds)
+        candidates = rank(post_endpoints, PriorityDimension.XSS)[: XSSConfig.MAX_POST_ENDPOINTS_TO_TEST]
         async with RateLimitedClient(
             max_concurrent=XSSConfig.MAX_CONCURRENT,
             delay_seconds=XSSConfig.PROBE_DELAY,
@@ -276,7 +298,13 @@ class XSSScanner(AuthAwareScanner):
             user_agent=DeepScanConfig.USER_AGENT,
             extra_headers=self.auth_headers,
         ) as client:
-            for endpoint in rank(post_endpoints, PriorityDimension.XSS)[: XSSConfig.MAX_POST_ENDPOINTS_TO_TEST]:
+            for tested, endpoint in enumerate(candidates):
+                if budget.expired():
+                    logger.info(
+                        "XSSScanner: POST-body budget reached, tested %d/%d endpoints",
+                        tested, len(candidates),
+                    )
+                    break
                 finding = await self._test_single_post_body(client, endpoint)
                 if finding:
                     findings.append(finding)

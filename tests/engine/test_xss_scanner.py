@@ -761,3 +761,111 @@ async def test_post_body_xss_no_auth_headers_passes_none(monkeypatch):
     )
     await scanner._test_post_body_xss([ep])
     assert captured.get("extra_headers") is None
+
+
+class TestDepthBehavior:
+    """Quick vs deep depth behavior (#118).
+
+    At quick depth XSSScanner runs only the network reflected + POST-body
+    phases on a tighter budget and skips the static DOM sink pass, so it can
+    join the quick-depth DAST set and catch server-reflected XSS on protected
+    endpoints without the deep-only cost.
+    """
+
+    def test_deep_default_uses_full_budget(self) -> None:
+        from isitsecure.engine.shared.scanner_runner import ScannerTimeouts
+
+        assert XSSScanner()._active_budget_seconds == ScannerTimeouts.XSS_ACTIVE_SECONDS
+        assert XSSScanner(deep=True)._active_budget_seconds == ScannerTimeouts.XSS_ACTIVE_SECONDS
+
+    def test_quick_uses_tighter_budget(self) -> None:
+        from isitsecure.engine.shared.scanner_runner import ScannerTimeouts
+
+        assert XSSScanner(deep=False)._active_budget_seconds == ScannerTimeouts.XSS_QUICK_SECONDS
+        assert ScannerTimeouts.XSS_QUICK_SECONDS < ScannerTimeouts.XSS_ACTIVE_SECONDS
+
+    @pytest.mark.asyncio
+    async def test_quick_skips_static_dom_pass(self) -> None:
+        """A quick scanner must NOT run the static DOM sink heuristic even when a
+        code snapshot is present."""
+        scanner = XSSScanner(deep=False)
+        snapshot = _make_snapshot(
+            js_content='document.getElementById("o").innerHTML = userInput;'
+        )
+        with patch.object(scanner, "_test_dom_xss") as dom:
+            await scanner.scan([], snapshot=snapshot)
+            dom.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_deep_runs_static_dom_pass(self) -> None:
+        """A deep scanner runs the static DOM sink heuristic when a snapshot is
+        present."""
+        scanner = XSSScanner(deep=True)
+        snapshot = _make_snapshot(
+            js_content='document.getElementById("o").innerHTML = userInput;'
+        )
+        with patch.object(scanner, "_test_dom_xss", return_value=[]) as dom:
+            await scanner.scan([], snapshot=snapshot)
+            dom.assert_called_once_with(snapshot)
+
+    @pytest.mark.asyncio
+    async def test_both_network_phases_use_the_depth_budget(self) -> None:
+        """Both the reflected AND POST-body phases must build their TimeBudget
+        from the depth-aware value, so a quick pass actually bounds both (#118)."""
+        from isitsecure.engine.shared.scanner_runner import ScannerTimeouts
+
+        ep = DiscoveredEndpoint(
+            url="https://ex.com/profile", method=EndpointMethod.POST,
+            query_param_names=["firstName"],
+        )
+        get_ep = _make_endpoint("https://ex.com/search?q=1")
+
+        for deep, expected in ((False, ScannerTimeouts.XSS_QUICK_SECONDS),
+                               (True, ScannerTimeouts.XSS_ACTIVE_SECONDS)):
+            seen: list[float] = []
+
+            def _spy(seconds: float, _seen=seen):
+                _seen.append(seconds)
+                b = MagicMock()
+                b.expired.return_value = False
+                return b
+
+            scanner = XSSScanner(deep=deep)
+            with patch("isitsecure.engine.scanners.xss_scanner.TimeBudget", _spy), \
+                 patch("isitsecure.engine.scanners.xss_scanner.RateLimitedClient") as rc:
+                rc.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
+                rc.return_value.__aexit__ = AsyncMock(return_value=False)
+                await scanner.scan([get_ep, ep], snapshot=None)
+
+            # Two budgets built (reflected + POST-body), both at the depth value.
+            assert seen == [expected, expected], f"deep={deep}: {seen}"
+
+
+class TestFactoryDepthWiring:
+    """XSSScanner is wired into both depth sets with the right effort (#118)."""
+
+    def test_quick_set_includes_xss_scanner_non_deep(self) -> None:
+        from isitsecure.engine.enums import ScanDepth
+        from isitsecure.engine.factory import create_deep_security_scan_agent
+
+        agent = create_deep_security_scan_agent(depth=ScanDepth.QUICK)
+        xss = [s for s in agent._dast_scanners if isinstance(s, XSSScanner)]
+        assert len(xss) == 1
+        assert xss[0]._deep is False
+
+    def test_deep_set_includes_xss_scanner_deep(self) -> None:
+        from isitsecure.engine.enums import ScanDepth
+        from isitsecure.engine.factory import create_deep_security_scan_agent
+
+        agent = create_deep_security_scan_agent(depth=ScanDepth.DEEP)
+        xss = [s for s in agent._dast_scanners if isinstance(s, XSSScanner)]
+        assert len(xss) == 1
+        assert xss[0]._deep is True
+
+    def test_default_depth_is_quick_non_deep(self) -> None:
+        from isitsecure.engine.factory import create_deep_security_scan_agent
+
+        agent = create_deep_security_scan_agent()
+        xss = [s for s in agent._dast_scanners if isinstance(s, XSSScanner)]
+        assert len(xss) == 1
+        assert xss[0]._deep is False
