@@ -11,7 +11,7 @@ Phase 1:  URL Ingestion          ─── Playwright captures HTML + JS bundles
 Phase 2:  Endpoint Discovery     ─── JS bundles + OpenAPI specs + HTML forms + active probing
 Phase 3:  Authenticated Crawl    ─── Browser login + BFS page discovery
 Phase 3.5: OOB Registration      ─── Setup blind SSRF/injection callbacks
-Phase 4:  DAST Scanners          ─── 15 scanners run in parallel
+Phase 4:  DAST Scanners          ─── 16 scanners run in parallel (quick; deep adds 3)
 Phase 5:  Authenticated DAST     ─── JWT, RLS, privilege escalation, cross-user IDOR
 Phase 5.5: Probe Analysis        ─── Cross-scanner pattern detection on HTTP pairs
 Phase 5.6: OOB Collection        ─── Poll for blind vulnerability callbacks
@@ -61,7 +61,8 @@ After the crawl, the orchestrator hands the captured auth (bearer token and/or s
 
 ### Phase 4–5: DAST Scanners
 
-15 standard scanners run in parallel with per-scanner timeouts:
+16 standard scanners run in parallel at quick depth (deep adds 3 aggressive
+ones — rate-limit, auth-bypass, password-reset), each with per-scanner timeouts:
 
 ```
 ┌──────────────────────────────────────────────────────┐
@@ -280,7 +281,7 @@ async def run_scanner_safe(scanner_name, scan_coro, timeout_seconds):
         return []
 ```
 
-A single scanner failure never kills the scan. Timeouts are per-scanner-type (XSS gets 600s, headers get 60s).
+A single scanner failure never kills the scan. Timeouts are per-scanner-type (XSS gets a 600s outer timeout, headers get 60s). XSS also self-limits with an internal time budget that is tighter at quick depth (120s) than deep (600s), since quick skips the static DOM pass (#118).
 
 ### Event-Driven Progress
 
@@ -305,7 +306,7 @@ isitsecure/
 │   ├── constants.py            # All configuration constants
 │   ├── cross_referencer.py     # DAST ↔ SAST finding matcher
 │   ├── scan_config.py          # User-configurable scan settings
-│   ├── scanners/               # 15 DAST scanners + special scanners
+│   ├── scanners/               # 16 DAST scanners (quick) + special scanners
 │   ├── code_analysis/          # 18 SAST scanners + route mappers + LSP + semgrep_rules/
 │   │   └── category_classifier.py  # Maps LLM-review findings to their FindingCategory
 │   ├── fixes/                  # AI fix gen: safety_net, verifier, plain_results, pr_flow
@@ -350,7 +351,7 @@ isitsecure/
               │                │                │
     ┌─────────▼────────┐ ┌────▼────────┐ ┌─────▼──────────┐
     │  DAST Scanners   │ │ Auth DAST   │ │ Repo Ingestion │
-    │  (15 parallel)   │ │ (JWT, IDOR  │ │ (git clone +   │
+    │  (16 parallel)   │ │ (JWT, IDOR  │ │ (git clone +   │
     │                  │ │  RLS, PrivE) │ │  index)        │
     └─────────┬────────┘ └────┬────────┘ └─────┬──────────┘
               │               │                 │

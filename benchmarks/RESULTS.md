@@ -17,7 +17,7 @@ _Runs: 2026-07 · `--llm none` (pure DAST detection, no LLM) · Juice Shop pinne
 | `juiceshop` | url-only | **20/45 (44%)** — per-challenge, deterministic | not yet measured | ~25 |
 | `vampi-vulnerable` | url-only | **3/3** (SQLi, IDOR, headers) | — | 14–16 |
 | `vampi-secure` | url-only | — | **2** (IDOR) | 13–15 |
-| `nodegoat-auth` | authenticated | **2/3** (headers + injection; XSS missed) | unmeasured | 16 |
+| `nodegoat-auth` | authenticated | **3/3** (headers + injection + XSS) | unmeasured | 19 |
 | `sast-injection` | code-only | **46/46 (100%)** — taint, per-class, deterministic | **0** | 46 |
 
 ### SAST injection (`sast-injection`, code-only, taint layer #4 + #93 + #102 + #104)
@@ -124,27 +124,28 @@ walk ~32 pages, and discover **10 form endpoints**. NodeGoat is now **pinned to
 commit `c5cb68a`** for reproducibility (it's unversioned upstream, unlike Juice
 Shop's `v20.1.1` tag).
 
-Harness recall **2/3**: missing headers ✓, injection ✓, XSS ✗ (16 findings),
-up from **1/3** after the authenticated-DAST fix (#111 → #114 + #115).
+Harness recall **3/3**: missing headers ✓, injection ✓, XSS ✓ (19 findings),
+climbing from **1/3** (auth mechanism, #111 → #114 + #115) to **2/3** to the
+full **3/3** once reflected XSS was wired into the quick-depth set (#118).
 
-**Injection — now caught.** NodeGoat is a cookie-session app (no bearer token),
-so before the fix the HTTP DAST scanners probed *unauthenticated* and every
-protected endpoint bounced them to the login page — nothing to attack. The
+**Injection — caught (#114 + #115).** NodeGoat is a cookie-session app (no bearer
+token), so before the fix the HTTP DAST scanners probed *unauthenticated* and
+every protected endpoint bounced them to the login page — nothing to attack. The
 authenticated crawl now captures the session cookie (#114) and the orchestrator
 propagates it to every HTTP DAST scanner via the `AuthAwareScanner` mixin (#115),
 so `ActiveInjectionScanner` probes the protected endpoints behind the login wall
 and the injection surfaces.
 
-**XSS — still missed, separate gap.** NodeGoat's `POST /profile` reflected XSS
+**XSS — caught (#118).** NodeGoat's `POST /profile` reflected XSS
 (`firstName`/`lastName` echoed unescaped) is real, the form is discovered with
-its real field names, and the POST-body XSS scanner now tests the discovered
-fields (#110) with the session cookie attached — so the reflected XSS *is*
-detectable in isolation. But the full `XSSScanner` only runs at `--depth deep`;
-at the depth this benchmark uses, the quick HTTP DAST set doesn't include it
-(`DomXssScanner` is DOM-only, `ActiveInjectionScanner` targets SQLi/command
-injection). Wiring `XSSScanner` (or reflected-XSS coverage) into the quick-depth
-set is a separate follow-up. Juice Shop is stable at 20/45, so the DAST core is
-fine; this is specific to reflected XSS at quick depth.
+its real field names, and the POST-body XSS scanner tests the discovered fields
+(#110) with the session cookie attached. The last gap was that the full
+`XSSScanner` only ran at `--depth deep`. #118 adds a **lightweight XSS pass to the
+quick-depth set** (reflected + POST-body network phases on a tighter 2-min budget;
+the static DOM sink analysis stays deep-only), so the authenticated reflected XSS
+is now caught at the benchmark's default depth. Juice Shop stays stable and
+vampi-secure gains no false positives (the quick XSS pass is canary-based:
+unescaped reflection of a unique probe, which a hardened app doesn't produce).
 
 ## How to read these numbers
 

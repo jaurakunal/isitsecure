@@ -37,7 +37,7 @@ Built for developers and **vibe coders** shipping web apps who need to know if t
 
 ## What It Does
 
-isitsecure runs **41 rule-based scanners by default** — up to **45 with `--depth deep`** — (plus optional AI code review) against your web app in a single command. It combines four approaches that commercial tools sell separately:
+isitsecure runs **42 rule-based scanners by default** — up to **45 with `--depth deep`** — (plus optional AI code review) against your web app in a single command. It combines four approaches that commercial tools sell separately:
 
 - **SAST (Static Analysis)** — scans your source code for vulnerabilities without running it
 - **DAST (Dynamic Analysis)** — tests your live app by sending real HTTP requests
@@ -147,7 +147,7 @@ isitsecure is free and open source. The only cost is LLM API tokens for the AI-p
 | **Code-only + LLM review** | Yes | ~$5–8 |
 | **Full scan** (SAST + DAST + LLM) | Yes | ~$10–15 |
 
-Without an API key, you still get all rule-based scanners — **41 in the default `quick` depth** (15 DAST + 8 special DAST + 18 SAST), or **45 with `--depth deep`** (which adds 4 slower/aggressive DAST scanners). The LLM adds business logic review, semantic rule verification, and intelligent triage — things no pattern matcher can do.
+Without an API key, you still get all rule-based scanners — **42 in the default `quick` depth** (16 DAST + 8 special DAST + 18 SAST), or **45 with `--depth deep`** (which adds 3 slower/aggressive DAST scanners). The LLM adds business logic review, semantic rule verification, and intelligent triage — things no pattern matcher can do.
 
 **Supported LLM providers:** Anthropic (Claude), Google (Gemini)
 
@@ -167,8 +167,8 @@ Orthogonal to mode, `--depth` trades speed for coverage:
 
 | Depth | What runs | When to use |
 |---|---|---|
-| `quick` (default) | Structural + config checks, error-based injection, and the snapshot-based scanners (headers, CORS, RLS, source-map, SRI, client-exposure, redirects…). Fast. | Everyday scans — a solid first pass in a fraction of the time. |
-| `deep` | Everything in `quick` **plus** the slow/aggressive probes: time-based (blind) SQL injection, active XSS, auth-bypass timing, rate-limit bursts, and password-reset flows. | When you want the full arsenal and can wait. |
+| `quick` (default) | Structural + config checks, error-based injection, a lightweight reflected + POST-body XSS pass, and the snapshot-based scanners (headers, CORS, RLS, source-map, SRI, client-exposure, redirects…). Fast. | Everyday scans — a solid first pass in a fraction of the time. |
+| `deep` | Everything in `quick` **plus** the slow/aggressive probes: time-based (blind) SQL injection, the full XSS pass (adds static DOM sink analysis), auth-bypass timing, rate-limit bursts, and password-reset flows. | When you want the full arsenal and can wait. |
 
 ```bash
 # Fast pass (default)
@@ -184,11 +184,11 @@ The scan narrates each phase and every scanner as it runs (with elapsed time), s
 
 ### DAST Scanners — Tests Your Live App
 
-**19 total** — 15 run in the default `quick` depth; the 4 marked **◆** (slower/aggressive probes) are added by `--depth deep`.
+**19 total** — 16 run in the default `quick` depth; the 3 marked **◆** (slower/aggressive probes) are added by `--depth deep`.
 
 | Scanner | What It Finds |
 |---|---|
-| XSS Scanner **◆** | Reflected, POST body, and DOM-based cross-site scripting |
+| XSS Scanner | Reflected, POST body, and DOM-based cross-site scripting (quick runs the reflected + POST-body network phases; `--depth deep` adds the static DOM sink pass) |
 | Active Injection Scanner | SQL injection (error + time-based, incl. SQLAlchemy/sqlite3/psycopg errors), command injection, NoSQL injection, XXE, SSTI — injects query, body, and path parameters |
 | CSRF Scanner | Cross-site request forgery on state-changing endpoints |
 | Rate Limit Scanner **◆** | Missing or bypassable rate limiting on auth endpoints |

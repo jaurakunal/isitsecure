@@ -16,6 +16,8 @@ Three detection modes:
 
 The scanner is **context-aware**: if the canary lands inside an HTML attribute vs. a script block vs. raw HTML, it adjusts the severity and reports the injection context.
 
+**Scan depth (#118):** at `quick` depth (the default) the scanner runs the two network phases — reflected and POST-body — on a tighter 2-minute budget, so server-reflected XSS on protected endpoints is caught even in a fast pass. The static **DOM XSS** sink analysis (mode 3) is heavier and runs only at `--depth deep`; the deterministic Semgrep taint layer already provides a DOM-XSS floor at quick depth.
+
 ## Why It Matters
 
 XSS allows attackers to execute JavaScript in your users' browsers. This means they can:
