@@ -26,16 +26,23 @@ from isitsecure.engine.models import (
 )
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
 from isitsecure.engine.ingestion.snapshot import CodebaseSnapshot
+from isitsecure.engine.shared.auth_aware import AuthAwareScanner
 from isitsecure.engine.shared.progress import emit
 
 logger = logging.getLogger(__name__)
 
 
-class PasswordResetScanner:
+class PasswordResetScanner(AuthAwareScanner):
     """Tests password reset flow for enumeration, rate limiting, and token leaks.
 
     Implements DASTScannerProtocol so it can be added to the main
     DAST scanner list and run automatically.
+
+    Auth-aware (#119): on an authenticated deep scan the orchestrator injects the
+    session (bearer and/or cookie) so reset endpoints that sit behind the login
+    wall (e.g. an in-app "change password") are reachable. Every request runs
+    through the one client below, so the session applies uniformly; the reset
+    tests themselves stay valid because they only vary the request body/email.
     """
 
     @property
@@ -67,7 +74,7 @@ class PasswordResetScanner:
         async with httpx.AsyncClient(
             timeout=PasswordResetConfig.HTTP_TIMEOUT_SECONDS,
             follow_redirects=True,
-            headers={"User-Agent": DeepScanConfig.USER_AGENT},
+            headers={"User-Agent": DeepScanConfig.USER_AGENT, **(self.auth_headers or {})},
         ) as client:
             for ep in reset_endpoints:
                 path = urlparse(ep.url).path

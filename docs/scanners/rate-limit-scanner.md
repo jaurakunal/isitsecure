@@ -12,6 +12,8 @@ Sends rapid bursts of requests to auth-sensitive endpoints (login, password rese
 
 If the endpoint accepts all requests without returning 429, it has no rate limiting.
 
+**Authenticated scans (#119):** on an authenticated deep scan the scanner carries the captured session so behind-login critical endpoints are reachable and the burst tests measure the authenticated user's rate limit. The per-IP-vs-per-user test is the one exception — it strips the session and uses two synthetic identities, since that test must vary who is making the request.
+
 ## Why It Matters
 
 Without rate limiting, attackers can:

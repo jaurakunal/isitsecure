@@ -16,6 +16,8 @@ Tests authentication mechanisms for five weaknesses:
 
 5. **Auth header bypass** — sends requests with no auth, empty Bearer token, and Basic auth tricks to check for bypass paths.
 
+**Runs unauthenticated by design (#119):** unlike the other DAST scanners, this one is deliberately not made "auth-aware" — every test above depends on the absence or manipulation of authentication. Injecting the crawl's live session would ride on every request and make bypass attempts spuriously succeed (false positives), so the orchestrator's session propagation intentionally skips this scanner.
+
 ## Why It Matters
 
 Authentication is the front door. If attackers can enumerate valid usernames, there's no lockout, and default credentials work:
