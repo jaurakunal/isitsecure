@@ -562,7 +562,7 @@ class ActiveInjectionScanner(AuthAwareScanner):
                 continue
 
             finding = self._check_nosql_response(
-                body, baseline_size, endpoint, param_name, qs_payload
+                body, baseline_size, endpoint, param_name, qs_payload, baseline_body
             )
             if finding:
                 return finding
@@ -584,7 +584,7 @@ class ActiveInjectionScanner(AuthAwareScanner):
                     continue
 
                 finding = self._check_nosql_response(
-                    body, baseline_size, endpoint, param_name, payload
+                    body, baseline_size, endpoint, param_name, payload, baseline_body
                 )
                 if finding:
                     return finding
@@ -598,6 +598,7 @@ class ActiveInjectionScanner(AuthAwareScanner):
         endpoint: DiscoveredEndpoint,
         param_name: str,
         payload: str,
+        baseline_body: str = "",
     ) -> DeepFinding | None:
         """Analyze a response for NoSQL injection indicators.
 
@@ -611,6 +612,7 @@ class ActiveInjectionScanner(AuthAwareScanner):
                 return self._build_nosql_finding(
                     endpoint, param_name, payload, body,
                     f"Matched NoSQL indicator: {match.group(0)}",
+                    baseline_body,
                 )
 
         # Check for response size inflation (data leak)
@@ -623,6 +625,7 @@ class ActiveInjectionScanner(AuthAwareScanner):
                 f"Response size inflated: baseline={baseline_size}, "
                 f"injected={len(body)} "
                 f"(ratio={len(body) / baseline_size:.1f}x)",
+                baseline_body,
             )
 
         return None
@@ -634,6 +637,7 @@ class ActiveInjectionScanner(AuthAwareScanner):
         payload: str,
         body: str,
         technical_detail: str,
+        baseline_body: str = "",
     ) -> DeepFinding:
         """Build a DeepFinding for a confirmed NoSQL injection."""
         return DeepFinding(
@@ -651,7 +655,10 @@ class ActiveInjectionScanner(AuthAwareScanner):
             endpoint_url=endpoint.url,
             http_method=endpoint.method.value,
             request_payload=f"{param_name}={payload}",
-            response_preview=body[:300],
+            response_preview=body[:InjectionConfig.NOSQL_EVIDENCE_CHARS],
+            baseline_response_preview=(
+                baseline_body[:InjectionConfig.NOSQL_EVIDENCE_CHARS] or None
+            ),
         )
 
     # ------------------------------------------------------------------

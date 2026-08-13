@@ -87,6 +87,7 @@ class DeepScanPhase(str, Enum):
     CROSS_REFERENCING = "cross_referencing"
     SAST_GUIDED_DAST = "sast_guided_dast"
     LLM_BUSINESS_LOGIC = "llm_business_logic"
+    INJECTION_ADJUDICATION = "injection_adjudication"
     TRIAGE = "triage"
     REPORT_GENERATION = "report_generation"
 

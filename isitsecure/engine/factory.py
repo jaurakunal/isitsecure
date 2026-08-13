@@ -243,12 +243,16 @@ def create_deep_security_scan_agent(
     # Conditional import — only needed if llm_client is provided
     llm_code_reviewer = None
     llm_triage = None
+    injection_adjudicator = None
     if llm_client:
         from isitsecure.engine.code_analysis.llm_code_reviewer import (
             LLMCodeReviewer,
         )
         from isitsecure.engine.code_analysis.semantic_rule_verifier import (
             SemanticRuleVerifier,
+        )
+        from isitsecure.engine.triage.injection_adjudicator import (
+            InjectionAdjudicator,
         )
         from isitsecure.engine.triage.llm_triage_service import (
             LLMTriageService,
@@ -257,6 +261,8 @@ def create_deep_security_scan_agent(
         llm_code_reviewer = LLMCodeReviewer(llm_client)
         # Triage uses the judgment model (faster/cheaper)
         llm_triage = LLMTriageService(_judgment_client)
+        # Injection false-positive adjudicator (judgment model, #5)
+        injection_adjudicator = InjectionAdjudicator(_judgment_client)
 
     # OCP: new scanners are added to these lists — no agent code changes needed.
     # QUICK depth (default) runs the fast, high-signal scanners and finishes in
@@ -355,6 +361,8 @@ def create_deep_security_scan_agent(
         lsp_client=lsp_client,
         # LLM triage (dedup, enrich, prioritize, owner summary)
         llm_triage=llm_triage,
+        # LLM injection false-positive adjudicator (#5)
+        injection_adjudicator=injection_adjudicator,
         # Judgment LLM (faster model for result analysis)
         judgment_llm_client=_judgment_client,
     )

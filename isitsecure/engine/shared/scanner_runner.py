@@ -21,6 +21,7 @@ class ScannerTimeouts:
     LLM_CODE_REVIEW_SECONDS = 900  # 15 min — reviews in parallel batches (includes import-graph files)
     LSP_VALIDATION_SECONDS = 120   # 2 min — LSP init + auth flow tracing
     TRIAGE_SECONDS = 900           # 15 min — batched LLM triage + themes + owner summary
+    INJECTION_ADJUDICATOR_SECONDS = 240  # 4 min — batched LLM genuine-vs-benign injection review (#5)
     XSS_ACTIVE_SECONDS = 600       # 10 min — 20 endpoints × 5 params × 3 probe stages (deep)
     XSS_QUICK_SECONDS = 120        # 2 min — reflected + POST-body only, no DOM pass (quick, #118)
     INJECTION_ACTIVE_SECONDS = 900  # 15 min — 30 endpoints × 5 params, time-based SQLi (3s sleeps)

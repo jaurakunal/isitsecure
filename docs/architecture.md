@@ -23,6 +23,7 @@ Phase 8:  LLM Code Review        ─── AI analyzes high-risk routes
 Phase 9:  Cross-Reference        ─── Match DAST findings to SAST findings
 Phase 9.1: SAST-Guided DAST     ─── Generate targeted tests from code findings
 Phase 9.2: LLM Business Logic    ─── AI plans business logic attacks
+Phase 9.4: Injection Adjudication ── AI drops heuristic injection false positives
 Phase 9.5: LLM Triage           ─── Deduplicate, enrich, prioritize, theme
 Phase 10: Report                 ─── Build DeepScanReport
 Phase 11: Fix Generation         ─── AI generates code patches (optional, --output fixes)
@@ -166,6 +167,18 @@ This is the core differentiator. Six strategies generate targeted DAST tests fro
 | **RLS Bypass** | Table missing RLS policy | Query Supabase REST API with anon key |
 
 Commercial tools call DAST↔SAST correlation "IAST" and sell it as post-hoc matching. isitsecure's approach is **generative** — code findings create new dynamic tests that wouldn't have been run otherwise.
+
+### Phase 9.4: Injection Adjudication
+
+The active DAST injection scanner uses heuristics — response-size deltas and error strings — to flag SQL/NoSQL/command/template/XXE injection. Those heuristics misfire on benign behaviour: a redirect that renders the single-page-app shell, pagination, timestamps, or dynamic content can inflate a response just as much as a real data leak (issue #5).
+
+The **injection adjudicator** (`engine/triage/injection_adjudicator.py`) runs before triage and hands the LLM, for each borderline DAST injection finding, the payload plus the **baseline (safe-value) response** and the **injected response**, asking whether the difference is genuinely caused by injection or is normal application behaviour. Findings judged benign are dropped. Design guarantees:
+
+- It only ever **removes** a candidate — never creates or mutates findings — and only DAST injection findings whose title is in the adjudicated set. The deterministic Semgrep taint (SAST) findings are never touched.
+- It **fails open** on any LLM or parse error (a failed/malformed response keeps every finding), and the prompt resolves genuine uncertainty to "genuine." It is a precision filter, not a hard guarantee: a confident-but-wrong `benign` verdict can still drop a true positive, so it trades a little recall for fewer false positives. The target's response bodies are fenced as untrusted data in the prompt so a hostile target cannot inject a "benign" verdict to suppress its own findings.
+- It is a **strict no-op without an LLM client**, so the deterministic `--llm none` scan (and the benchmark floor) is unaffected — the false positives it removes are a with-API-key precision improvement, not a change to the rule-based detection.
+
+To make this possible, the scanner attaches the baseline response body to size-oracle findings (`DeepFinding.baseline_response_preview`) so the model has both sides to compare.
 
 ### Phase 9.5: LLM Triage
 

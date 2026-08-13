@@ -147,7 +147,7 @@ isitsecure is free and open source. The only cost is LLM API tokens for the AI-p
 | **Code-only + LLM review** | Yes | ~$5–8 |
 | **Full scan** (SAST + DAST + LLM) | Yes | ~$10–15 |
 
-Without an API key, you still get all rule-based scanners — **42 in the default `quick` depth** (16 DAST + 8 special DAST + 18 SAST), or **45 with `--depth deep`** (which adds 3 slower/aggressive DAST scanners). The LLM adds business logic review, semantic rule verification, and intelligent triage — things no pattern matcher can do.
+Without an API key, you still get all rule-based scanners — **42 in the default `quick` depth** (16 DAST + 8 special DAST + 18 SAST), or **45 with `--depth deep`** (which adds 3 slower/aggressive DAST scanners). The LLM adds business logic review, semantic rule verification, injection false-positive adjudication (drops heuristic injection FPs by comparing the baseline vs. injected response), and intelligent triage — things no pattern matcher can do.
 
 **Supported LLM providers:** Anthropic (Claude), Google (Gemini)
 
