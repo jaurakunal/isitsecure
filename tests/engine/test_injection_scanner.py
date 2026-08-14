@@ -246,8 +246,29 @@ class TestErrorBasedSQLi:
         )
 
         assert finding is not None
-        # Should have called get only once since first payload triggers match
-        assert mock_client.get.call_count == 1
+        # Stops at the first matching payload (does not iterate the rest), then
+        # fetches one baseline for the adjudicator (#125): 1 payload + 1 baseline.
+        assert mock_client.get.call_count == 2
+        # The baseline response is captured for genuine-vs-FP adjudication.
+        assert finding.baseline_response_preview is not None
+
+    async def test_finding_built_when_baseline_probe_fails(self) -> None:
+        """Fail-safe (#125): if the baseline probe errors, the SQLi finding is
+        still emitted with baseline_response_preview=None (never lost)."""
+        endpoint = _make_endpoint(query_param_names=["id"])
+        error_resp = _make_response(text="You have an error in your SQL syntax")
+
+        mock_client = _make_mock_client()
+        # 1st get = payload probe (matches); 2nd get = baseline probe (raises →
+        # _probe swallows it and returns None).
+        mock_client.get.side_effect = [error_resp, httpx.RequestError("boom")]
+
+        finding = await self.scanner._test_error_based_sqli(
+            mock_client, endpoint, "id"
+        )
+
+        assert finding is not None
+        assert finding.baseline_response_preview is None
 
 
 class TestTimeBasedSQLi:

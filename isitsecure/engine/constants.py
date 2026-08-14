@@ -1447,8 +1447,13 @@ class InjectionConfig:
     # Minimum baseline response size to compare against
     NOSQL_MIN_BASELINE_SIZE = 20
     # Chars of the injected AND baseline responses stored on the finding, so the
-    # LLM injection adjudicator can compare the two response bodies (#5).
-    NOSQL_EVIDENCE_CHARS = 1500
+    # LLM injection adjudicator can compare the two response bodies (#5, #125).
+    INJECTION_EVIDENCE_CHARS = 1500
+
+    # Benign value used to fetch a baseline response for error-based SQLi, so the
+    # adjudicator can compare "injected produced a SQL error the baseline lacked"
+    # against "the baseline already contains this text" (a false positive). #125
+    SQLI_BASELINE_VALUE = "1"
 
     # --- Authentication-bypass (boolean) SQLi ---
     # Login POST endpoints are rarely recoverable from a minified SPA bundle, so
@@ -5713,7 +5718,7 @@ class InjectionAdjudicatorConfig:
     MAX_TOKENS = 1200
     BATCH_SIZE = 8               # findings per LLM call
     # Per response body included in the prompt. Matches the amount the scanner
-    # stores on the finding (InjectionConfig.NOSQL_EVIDENCE_CHARS).
+    # stores on the finding (InjectionConfig.INJECTION_EVIDENCE_CHARS).
     MAX_EVIDENCE_CHARS = 1500
 
     # Only these DAST injection titles are borderline enough to adjudicate. The

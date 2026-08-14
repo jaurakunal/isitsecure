@@ -367,6 +367,16 @@ class ActiveInjectionScanner(AuthAwareScanner):
                     elapsed_ms=response.elapsed.total_seconds() * 1000,
                     scanner_name=self.scanner_name,
                 )
+                # Fetch a baseline (benign value) so the adjudicator can tell a
+                # real error-based SQLi (error appears only under the payload)
+                # from a false positive (the error text is in the baseline too,
+                # or isn't really a SQL error). Lazy: only when a match fires. #125
+                baseline_body = ""
+                baseline_resp = await self._probe(
+                    client, endpoint, param_name, InjectionConfig.SQLI_BASELINE_VALUE
+                )
+                if baseline_resp is not None:
+                    baseline_body = baseline_resp.text
                 return DeepFinding(
                     source=FindingSource.DAST_URL,
                     category=FindingCategory.INJECTION_RISK,
@@ -382,7 +392,10 @@ class ActiveInjectionScanner(AuthAwareScanner):
                     endpoint_url=endpoint.url,
                     http_method=endpoint.method.value,
                     request_payload=f"{param_name}={payload}",
-                    response_preview=body[:300],
+                    response_preview=body[:InjectionConfig.INJECTION_EVIDENCE_CHARS],
+                    baseline_response_preview=(
+                        baseline_body[:InjectionConfig.INJECTION_EVIDENCE_CHARS] or None
+                    ),
                     probe_captures=[capture],
                 )
         return None
@@ -655,9 +668,9 @@ class ActiveInjectionScanner(AuthAwareScanner):
             endpoint_url=endpoint.url,
             http_method=endpoint.method.value,
             request_payload=f"{param_name}={payload}",
-            response_preview=body[:InjectionConfig.NOSQL_EVIDENCE_CHARS],
+            response_preview=body[:InjectionConfig.INJECTION_EVIDENCE_CHARS],
             baseline_response_preview=(
-                baseline_body[:InjectionConfig.NOSQL_EVIDENCE_CHARS] or None
+                baseline_body[:InjectionConfig.INJECTION_EVIDENCE_CHARS] or None
             ),
         )
 

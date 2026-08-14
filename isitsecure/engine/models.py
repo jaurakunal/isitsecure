@@ -177,9 +177,10 @@ class DeepFinding(BaseModel):
     http_method: str | None = None
     request_payload: str | None = None
     response_preview: str | None = None
-    # Baseline (safe-value) response, for differential findings (e.g. the NoSQL
-    # size oracle). Lets the LLM injection adjudicator compare baseline vs.
-    # injected instead of guessing from the injected response alone (#5).
+    # Baseline (safe-value) response, for differential findings (the NoSQL size
+    # oracle and error-based SQLi). Lets the LLM injection adjudicator compare
+    # baseline vs. injected instead of guessing from the injected response alone
+    # (#5, #125).
     baseline_response_preview: str | None = None
 
     # SAST-specific fields
