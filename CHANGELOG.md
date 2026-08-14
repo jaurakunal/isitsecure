@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.0](https://github.com/jaurakunal/isitsecure/compare/v0.17.0...v0.18.0) (2026-08-14)
+
+
+### Features
+
+* **triage:** LLM injection false-positive adjudicator ([#5](https://github.com/jaurakunal/isitsecure/issues/5)) ([#126](https://github.com/jaurakunal/isitsecure/issues/126)) ([0ea8a4e](https://github.com/jaurakunal/isitsecure/commit/0ea8a4e832b75843b0bee22fdab01adac659a44b))
+
 ## [0.17.0](https://github.com/jaurakunal/isitsecure/compare/v0.16.0...v0.17.0) (2026-08-11)
 
 
