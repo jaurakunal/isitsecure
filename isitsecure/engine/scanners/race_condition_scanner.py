@@ -128,7 +128,7 @@ class RaceConditionScanner:
                 category=FindingCategory.AUTH_WEAKNESS,
                 severity=SeverityLevel.HIGH,
                 title=RaceConditionConfig.TITLE_RACE_CONDITION.format(
-                    method=method, path=path, count=success_count,
+                    method=method, path=path,
                 ),
                 description=RaceConditionConfig.DESC_RACE_CONDITION.format(
                     total=RaceConditionConfig.CONCURRENT_REQUESTS,

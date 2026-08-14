@@ -317,6 +317,8 @@ isitsecure/
 │   ├── models.py               # DeepFinding, DeepScanReport, etc.
 │   ├── enums.py                # All enumerations
 │   ├── constants.py            # All configuration constants
+│   ├── identity.py             # Stable cross-scan finding fingerprint (#38 trust)
+│   ├── suppression.py          # .isitsecureignore parsing + filter (#51)
 │   ├── cross_referencer.py     # DAST ↔ SAST finding matcher
 │   ├── scan_config.py          # User-configurable scan settings
 │   ├── scanners/               # 16 DAST scanners (quick) + special scanners
