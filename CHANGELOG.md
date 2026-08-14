@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.1](https://github.com/jaurakunal/isitsecure/compare/v0.19.0...v0.19.1) (2026-08-14)
+
+
+### Bug Fixes
+
+* **dast:** stop matching bare ORM/driver names as SQL errors ([#125](https://github.com/jaurakunal/isitsecure/issues/125)) ([#130](https://github.com/jaurakunal/isitsecure/issues/130)) ([fd523d1](https://github.com/jaurakunal/isitsecure/commit/fd523d1519699d95c667a8b45c4cfad75ca25e5e))
+
 ## [0.19.0](https://github.com/jaurakunal/isitsecure/compare/v0.18.0...v0.19.0) (2026-08-14)
 
 
