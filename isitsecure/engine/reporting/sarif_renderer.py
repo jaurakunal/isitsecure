@@ -141,9 +141,10 @@ class SARIFRenderer:
         if locations:
             result["locations"] = locations
 
-        # Fingerprint for dedup across runs
+        # Stable fingerprint for dedup across runs (#38). Must NOT be finding.id
+        # (a per-scan random uuid) — that defeats cross-run dedup.
         result["fingerprints"] = {
-            "isitsecure/v1": finding.id,
+            "isitsecure/v1": finding.fingerprint,
         }
 
         # Properties

@@ -201,6 +201,10 @@ def scan(
     llm_provider: str = typer.Option("anthropic", "--llm", help="LLM provider: anthropic|google|none"),
     output: str = typer.Option("table", "--output", "-o", help="Output format: table|json|html|sarif|fixes"),
     output_file: Optional[str] = typer.Option(None, "--output-file", "-f", help="Write report to file"),
+    suppress: Optional[list[str]] = typer.Option(None, "--suppress", help="Fingerprint to add to .isitsecureignore (repeatable)"),
+    suppress_reason: str = typer.Option("", "--suppress-reason", help="Reason recorded next to --suppress entries"),
+    suppress_file: Optional[str] = typer.Option(None, "--suppress-file", help="Ignore file path (default ./.isitsecureignore)"),
+    show_suppressed: bool = typer.Option(False, "--show-suppressed", help="List suppressed findings instead of hiding them"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """Run a security scan against a web application."""
@@ -309,6 +313,54 @@ def scan(
         credentials_b=credentials_b,
         scan_mode=resolved_mode,
     ))
+
+    # --- Suppression (#51): drop findings the user has accepted as FPs -------
+    # Applied once here so every output format (table/json/html/sarif/fixes)
+    # sees the same filtered set. The .isitsecureignore file is the source of
+    # truth and is reviewable in code review.
+    from isitsecure.engine import suppression as _suppression
+    _ignore_path = Path(suppress_file) if suppress_file else _suppression.default_ignore_path()
+    if suppress:
+        newly = _suppression.add_suppressions(
+            _ignore_path, report.findings, suppress, suppress_reason
+        )
+        if newly:
+            err_console.print(
+                f"[green]Suppressed {len(newly)} finding(s)[/green] in "
+                f"[dim]{_ignore_path}[/dim]"
+            )
+        unmatched = set(suppress) - {f.fingerprint for f in report.findings}
+        if unmatched:
+            err_console.print(
+                f"[yellow]No finding in this scan matched: {', '.join(sorted(unmatched))}[/yellow]"
+            )
+    _suppressed_fps = _suppression.load_suppressed_fingerprints(_ignore_path)
+    _active, _hidden = _suppression.partition(report.findings, _suppressed_fps)
+    if show_suppressed:
+        report.findings = _hidden
+        if output not in ("json", "sarif"):
+            err_console.print(
+                f"[dim]Showing {len(_hidden)} suppressed finding(s) from {_ignore_path.name}[/dim]"
+            )
+    else:
+        report.findings = _active
+        # Keep the thematic grouping honest: drop suppressed findings from themes
+        # (they reference findings by id). The owner_summary is an LLM narrative
+        # generated pre-suppression and may still mention a suppressed finding.
+        _hidden_ids = {f.id for f in _hidden}
+        if _hidden_ids and report.themes:
+            _kept = []
+            for _th in report.themes:
+                _th.finding_ids = [i for i in _th.finding_ids if i not in _hidden_ids]
+                _th.finding_count = len(_th.finding_ids)
+                if _th.finding_ids:
+                    _kept.append(_th)
+            report.themes = _kept
+        if _hidden and output not in ("json", "sarif"):
+            err_console.print(
+                f"[dim]{len(_hidden)} finding(s) suppressed via {_ignore_path.name} "
+                f"(use --show-suppressed to view)[/dim]"
+            )
 
     # Output results
     if output == "json":
@@ -603,6 +655,9 @@ def _print_report_table(report) -> None:
                 detail = f"{detail}\n[dim]{term.upper()}: {definition}[/dim]"
                 seen_glossary.add(term)
                 break
+
+        # Stable fingerprint so the user can `--suppress` this finding (#38/#51).
+        detail = f"{detail}\n[dim]fp {finding.fingerprint}[/dim]"
 
         table.add_row(
             str(i),

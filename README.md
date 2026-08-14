@@ -26,7 +26,7 @@ Built for developers and **vibe coders** shipping web apps who need to know if t
 - [Install](#install) · [Quick Start](#quick-start) · [What It Costs](#what-it-costs)
 - [Scan Modes](#scan-modes) · [Scan Depth](#scan-depth)
 - [What It Scans](#what-it-scans) — [DAST](#dast-scanners--tests-your-live-app) · [Special DAST](#special-dast-scanners-8) · [SAST](#sast-scanners-18--analyzes-your-code) · [LLM](#llm-powered-analysis-requires-api-key) · [Cross-Referencing](#cross-referencing--guided-dast)
-- [Language Support](#language-support) · [Output Formats](#output-formats)
+- [Language Support](#language-support) · [Output Formats](#output-formats) · [Suppressing False Positives](#suppressing-false-positives)
 - [Auto-Fix](#auto-fix-one-command-to-fix-your-app) · [Security Badge](#security-badge)
 - [How We Compare](#how-we-compare) · [What It Does NOT Cover](#what-it-does-not-cover)
 - [Configuration](#configuration) — [API Keys](#api-keys) · [OOB Callbacks](#oob-callbacks-blind-vulnerability-detection) · [Authenticated Scanning](#authenticated-scanning)
@@ -287,6 +287,32 @@ isitsecure scan URL --output sarif   # SARIF 2.1.0 for GitHub Code Scanning
 isitsecure scan URL --output fixes   # AI-generated fix plan (Markdown with diffs)
 ```
 
+## Suppressing False Positives
+
+A finding you've reviewed and accepted (a false positive, or an accepted risk) shouldn't nag you on every scan. Each finding has a **stable fingerprint** — the same across runs, environments (localhost vs. prod), and code edits — shown under each row in the table output (`fp <hash>`) and in the JSON/SARIF output.
+
+Suppress one by adding its fingerprint to a repo-local **`.isitsecureignore`** file, which is committed and reviewable in pull requests:
+
+```bash
+# See the fingerprints (in table or JSON output)
+isitsecure scan https://your-app.com --output json | jq '.findings[] | {fingerprint, title, endpoint_url}'
+
+# Suppress a finding (appends to ./.isitsecureignore with context + reason)
+isitsecure scan https://your-app.com --suppress de0e57aeb5f61708 --suppress-reason "benign: /createdb re-populate, not injection"
+
+# Future scans hide it automatically; review what's hidden anytime:
+isitsecure scan https://your-app.com --show-suppressed
+```
+
+The `.isitsecureignore` file is plain text — one fingerprint per line, `#` comments for context — so suppressions live with your code and are reviewed like any other change. Delete a line to un-suppress.
+
+```
+# .isitsecureignore
+de0e57aeb5f61708   # [injection_risk] GET /createdb — SQL injection (benign: not injection)
+```
+
+Suppressed findings are dropped from the findings list, counts, and themes in every output format. (The AI *owner summary* narrative is written during the scan, so it may still mention a finding you suppressed afterward.)
+
 ## Auto-Fix: One Command to Fix Your App
 
 `fix` works two ways depending on what you point it at:
@@ -496,6 +522,10 @@ Options:
   --auth-password-b TEXT Second user's password (paired with --auth-email-b)
   --login-url TEXT       Explicit login endpoint (else auto-discovered)
   --github-token TEXT    GitHub token for cloning private repos
+  --suppress TEXT        Fingerprint to add to .isitsecureignore (repeatable)
+  --suppress-reason TEXT Reason recorded next to --suppress entries
+  --suppress-file TEXT   Ignore file path [default: ./.isitsecureignore]
+  --show-suppressed      List suppressed findings instead of hiding them
   -v, --verbose          Enable debug logging
 
 isitsecure fix [OPTIONS]

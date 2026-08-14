@@ -4,7 +4,7 @@ from enum import Enum
 from typing import Optional
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 from isitsecure.engine.enums import (
     EndpointCategory,
@@ -194,6 +194,14 @@ class DeepFinding(BaseModel):
 
     # Cross-reference
     related_finding_ids: list[str] = Field(default_factory=list)
+
+    @computed_field  # serialized so users can copy it into `.isitsecureignore`
+    @property
+    def fingerprint(self) -> str:
+        """Stable cross-scan identity (#38). Derived, never stored, so it can't
+        drift from the finding's content. See ``engine/identity.py``."""
+        from isitsecure.engine.identity import finding_fingerprint
+        return finding_fingerprint(self)
 
     def to_customer_dict(self) -> dict:
         """Serialize for customer-facing report (excludes fix_code)."""

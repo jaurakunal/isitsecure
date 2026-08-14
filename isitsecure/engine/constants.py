@@ -2214,7 +2214,10 @@ class RaceConditionConfig:
     CONFIDENCE_RACE = 0.80
 
     TITLE_RACE_CONDITION = (
-        "Race condition — {method} '{path}' succeeds {count} times concurrently"
+        # No {count} here — it varies run-to-run (timing), which would
+        # destabilise the finding fingerprint. The count lives in the
+        # description instead (#38).
+        "Race condition — {method} '{path}' succeeds concurrently"
     )
     DESC_RACE_CONDITION = (
         "Sending {total} concurrent {method} requests to '{path}' resulted in "

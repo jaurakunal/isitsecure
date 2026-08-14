@@ -392,6 +392,7 @@ def _trim_report(report, min_severity: str, scan_id: str) -> ScanResult:
         findings_out.append(
             {
                 "id": finding.id,
+                "fingerprint": finding.fingerprint,  # stable id for suppression (#38)
                 "severity": sev,
                 "category": finding.category.value,
                 "title": finding.title,
