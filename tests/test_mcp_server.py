@@ -103,9 +103,10 @@ def test_trim_report_shape_and_plain_english():
     # Each finding carries the trimmed + plain-English fields, no raw bloat.
     f = out["findings"][0]
     assert set(f) == {
-        "id", "severity", "category", "title", "file", "line",
+        "id", "fingerprint", "severity", "category", "title", "file", "line",
         "priority", "what_it_is", "attacker_could", "fix",
     }
+    assert len(f["fingerprint"]) == 16  # stable id for suppression (#38)
     assert f["severity"] == "critical"
     assert f["category"] == "injection_risk"
     assert f["file"] == "app/api/x.ts" and f["line"] == 10
