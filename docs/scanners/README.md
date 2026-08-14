@@ -57,4 +57,5 @@ These use AI for analysis that pattern matchers cannot perform.
 
 - [LLM Code Reviewer](./llm-code-reviewer.md) — Business logic vulnerability detection
 - [Semantic Rule Verifier](./semantic-rule-verifier.md) — Logical errors in security rules
+- [Injection Adjudicator](../architecture.md#phase-94-injection-adjudication) — Drops heuristic DAST injection false positives by comparing the baseline vs. injected response (no-op without an API key)
 - [AI Fix Generator](./fix-generator.md) — Generates code patches for findings

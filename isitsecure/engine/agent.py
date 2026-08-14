@@ -162,6 +162,8 @@ class DeepSecurityScanAgent:
         guided_dast_runner: SASTGuidedDASTRunner | None = None,
         # LLM triage (optional — enriches findings with priority/guidance)
         llm_triage=None,
+        # LLM injection false-positive adjudicator (optional — #5)
+        injection_adjudicator=None,
         # Judgment LLM client (optional — faster/cheaper for result analysis)
         judgment_llm_client=None,
     ) -> None:
@@ -198,6 +200,9 @@ class DeepSecurityScanAgent:
 
         # LLM triage (optional)
         self._llm_triage = llm_triage
+
+        # LLM injection false-positive adjudicator (optional — #5)
+        self._injection_adjudicator = injection_adjudicator
 
         # Judgment LLM (optional — for result analysis, falls back to primary)
         self._judgment_llm_client = judgment_llm_client
@@ -897,6 +902,36 @@ class DeepSecurityScanAgent:
                     DeepScanPhase.LLM_BUSINESS_LOGIC,
                     f"LLM Business Logic: {len(biz_findings)} confirmed vulnerabilities",
                 )
+
+        # ==============================================================
+        # Phase 9.4: LLM injection false-positive adjudication (#5)
+        # Runs BEFORE triage so dropped FPs never reach dedup/enrichment/counts.
+        # Strict no-op without an LLM client (the --llm-none benchmark floor).
+        # ==============================================================
+        if self._injection_adjudicator and all_findings:
+            from isitsecure.engine.constants import InjectionAdjudicatorConfig
+
+            yield DeepScanEvent(
+                DeepScanPhase.INJECTION_ADJUDICATION,
+                InjectionAdjudicatorConfig.PROGRESS_ADJUDICATE,
+            )
+            try:
+                before = len(all_findings)
+                all_findings = await asyncio.wait_for(
+                    self._injection_adjudicator.adjudicate(all_findings),
+                    timeout=ScannerTimeouts.INJECTION_ADJUDICATOR_SECONDS,
+                )
+                dropped = before - len(all_findings)
+                if dropped:
+                    scanners_run.append(InjectionAdjudicatorConfig.SCANNER_NAME)
+                    yield DeepScanEvent(
+                        DeepScanPhase.INJECTION_ADJUDICATION,
+                        f"Injection adjudicator: dropped {dropped} false positive(s)",
+                    )
+            except TimeoutError:
+                logger.warning("Injection adjudicator timed out; keeping all findings")
+            except Exception as exc:  # noqa: BLE001 — fail open, never lose findings
+                logger.warning("Injection adjudicator failed (keeping all): %s", exc)
 
         # ==============================================================
         # Phase 9.5: LLM Triage (deduplicate, enrich, prioritize)
