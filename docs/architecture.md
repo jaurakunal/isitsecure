@@ -319,6 +319,7 @@ isitsecure/
 │   ├── constants.py            # All configuration constants
 │   ├── identity.py             # Stable cross-scan finding fingerprint (#38 trust)
 │   ├── suppression.py          # .isitsecureignore parsing + filter (#51)
+│   ├── baseline.py             # Baseline accept/diff — show only new findings (#52)
 │   ├── cross_referencer.py     # DAST ↔ SAST finding matcher
 │   ├── scan_config.py          # User-configurable scan settings
 │   ├── scanners/               # 16 DAST scanners (quick) + special scanners
