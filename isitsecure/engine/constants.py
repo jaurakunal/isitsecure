@@ -1414,12 +1414,19 @@ class InjectionConfig:
         r"PDOException",
         r"PostgreSQL.*ERROR",
         r"MySQL.*Error",
-        # ORM / DB-driver error leaks (SQLAlchemy, sqlite3, psycopg, etc.)
+        # ORM / DB error *types* that indicate a broken query (a syntax error is
+        # raised as an OperationalError/ProgrammingError). These are
+        # injection-indicative — unlike an IntegrityError (a UNIQUE/constraint
+        # violation), which is normal app behaviour, NOT injection.
         r"OperationalError",
         r"ProgrammingError",
         r"unrecognized token",
-        r"sqlalchemy",
-        r"psycopg2",
+        # NOTE: bare library/driver names (e.g. "sqlalchemy", "psycopg2") were
+        # removed (#125). They matched on the LIBRARY, so a benign
+        # `sqlalchemy.exc.IntegrityError: UNIQUE constraint failed` (e.g. VAmPI's
+        # /createdb re-populate) was flagged as SQLi. Real SQLi still matches via
+        # the error-type + syntax signatures above (verified: VAmPI's real SQLi
+        # surfaces `OperationalError` + `unrecognized token`).
     )
 
     # NoSQL injection payloads (JSON body format)

@@ -170,6 +170,42 @@ class TestSQLErrorPatternDetection:
         result = self.scanner._response_has_sql_error(body)
         assert result is not None
 
+    # ------------------------------------------------------------------
+    # #125: bare ORM/driver names must NOT match benign errors, while real
+    # SQLi (which raises a query/syntax error) must still match. Bodies below
+    # are the actual VAmPI responses captured from the live app.
+    # ------------------------------------------------------------------
+
+    def test_real_sqlalchemy_sqli_still_detected(self) -> None:
+        """The genuine VAmPI SQLi (unrecognized-token syntax error) must match."""
+        body = (
+            'sqlalchemy.exc.OperationalError: (sqlite3.OperationalError) '
+            'unrecognized token: "\'x\'\'"\n'
+            "[SQL: SELECT * FROM users WHERE username = 'x'']"
+        )
+        assert self.scanner._response_has_sql_error(body) is not None
+
+    def test_benign_integrity_error_not_flagged(self) -> None:
+        """VAmPI's /createdb re-populate raises a benign UNIQUE-constraint
+        IntegrityError — it is NOT SQL injection and must not be flagged (#125)."""
+        body = (
+            'sqlalchemy.exc.IntegrityError: (sqlite3.IntegrityError) '
+            "UNIQUE constraint failed: books.book_title\n"
+            "[SQL: INSERT INTO books (book_title, secret) VALUES (?, ?)]"
+        )
+        assert self.scanner._response_has_sql_error(body) is None
+
+    def test_real_postgres_sqli_still_detected(self) -> None:
+        """A real psycopg2 SQLi surfaces a syntax error, still matched without
+        the bare `psycopg2` pattern (#125)."""
+        body = 'psycopg2.errors.SyntaxError: syntax error at or near "\'"'
+        assert self.scanner._response_has_sql_error(body) is not None
+
+    def test_benign_orm_data_error_not_flagged(self) -> None:
+        """A benign ORM error that isn't a query/syntax failure must not match."""
+        body = "sqlalchemy.exc.InvalidRequestError: This session is in 'committed' state"
+        assert self.scanner._response_has_sql_error(body) is None
+
 
 class TestErrorBasedSQLi:
     """Tests for error-based SQL injection detection."""
