@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.0](https://github.com/jaurakunal/isitsecure/compare/v0.18.0...v0.19.0) (2026-08-14)
+
+
+### Features
+
+* **dast:** give error-based SQLi findings a baseline for the adjudicator ([#125](https://github.com/jaurakunal/isitsecure/issues/125)) ([#128](https://github.com/jaurakunal/isitsecure/issues/128)) ([f408688](https://github.com/jaurakunal/isitsecure/commit/f4086886be1bba7c099d5015f1289b88631c408d))
+
+
+### Documentation
+
+* architecture Phase 9.4 + models field comment updated. ([f408688](https://github.com/jaurakunal/isitsecure/commit/f4086886be1bba7c099d5015f1289b88631c408d))
+
 ## [0.18.0](https://github.com/jaurakunal/isitsecure/compare/v0.17.0...v0.18.0) (2026-08-14)
 
 
