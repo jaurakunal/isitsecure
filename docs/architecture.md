@@ -178,7 +178,7 @@ The **injection adjudicator** (`engine/triage/injection_adjudicator.py`) runs be
 - It **fails open** on any LLM or parse error (a failed/malformed response keeps every finding), and the prompt resolves genuine uncertainty to "genuine." It is a precision filter, not a hard guarantee: a confident-but-wrong `benign` verdict can still drop a true positive, so it trades a little recall for fewer false positives. The target's response bodies are fenced as untrusted data in the prompt so a hostile target cannot inject a "benign" verdict to suppress its own findings.
 - It is a **strict no-op without an LLM client**, so the deterministic `--llm none` scan (and the benchmark floor) is unaffected — the false positives it removes are a with-API-key precision improvement, not a change to the rule-based detection.
 
-To make this possible, the scanner attaches the baseline response body to size-oracle findings (`DeepFinding.baseline_response_preview`) so the model has both sides to compare.
+To make this possible, the scanner attaches the baseline (safe-value) response body to the borderline findings — the NoSQL size-oracle findings and the error-based SQLi findings (`DeepFinding.baseline_response_preview`) — so the model has both sides to compare. For error-based SQLi this lets it separate a real injection (the SQL error appears only under the payload) from a false positive (the "error" text is already in the baseline, or isn't really a query error) — the flaky `vampi-secure` SQLi false positives (#125). As with the rest of this phase, that clean-up only happens when an API key is present; the `--llm none` scan still emits the raw finding.
 
 ### Phase 9.5: LLM Triage
 

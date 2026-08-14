@@ -79,6 +79,20 @@ class TestCandidateSelection:
         llm.generate_with_system.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_error_based_sqli_finding_is_adjudicated(self):
+        """SQLi error-based findings are candidates too (#125), so an FP where
+        the SQL error text is in the baseline can be dropped."""
+        fp = _dast_injection(
+            "sqli", title="SQL injection vulnerability (error-based)",
+            endpoint="http://app/items",
+            injected="...near syntax error...", baseline="...near syntax error...",
+        )
+        llm = _llm(returns=_verdicts(("sqli", "benign")))
+        out = await InjectionAdjudicator(llm).adjudicate([fp])
+        assert out == []
+        llm.generate_with_system.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_unlisted_injection_title_is_ignored(self):
         weird = _dast_injection("w1", title="LDAP injection vulnerability")
         llm = _llm(returns=_verdicts(("w1", "benign")))
