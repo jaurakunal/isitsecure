@@ -175,6 +175,108 @@ def _ensure_config_dir() -> Path:
     return CONFIG_DIR
 
 
+def _drop_findings_from_themes(report, hidden_ids: set) -> None:
+    """Remove hidden findings from the report's thematic grouping so suppressed
+    or baseline-known findings don't resurface there (#51/#52)."""
+    if not hidden_ids or not report.themes:
+        return
+    kept = []
+    for theme in report.themes:
+        theme.finding_ids = [i for i in theme.finding_ids if i not in hidden_ids]
+        theme.finding_count = len(theme.finding_ids)
+        if theme.finding_ids:
+            kept.append(theme)
+    report.themes = kept
+
+
+def _apply_trust_filters(
+    report, *, output: str, target_url, repo,
+    suppress, suppress_reason: str, suppress_file, show_suppressed: bool,
+    baseline: bool, baseline_accept: bool, baseline_file,
+) -> None:
+    """Apply suppression (#51) then baseline (#52) to ``report.findings`` in place.
+
+    Suppression runs first, so the baseline never records or diffs a suppressed
+    finding. Mutates ``report.findings`` (and themes) so every output format sees
+    the same filtered set; emits progress to stderr. Extracted from ``scan`` so
+    the composition can be unit-tested directly.
+    """
+    from isitsecure.engine import baseline as _baseline
+    from isitsecure.engine import suppression as _suppression
+
+    # --- Suppression -----------------------------------------------------
+    ignore_path = Path(suppress_file) if suppress_file else _suppression.default_ignore_path()
+    if suppress:
+        newly = _suppression.add_suppressions(
+            ignore_path, report.findings, suppress, suppress_reason
+        )
+        if newly:
+            err_console.print(
+                f"[green]Suppressed {len(newly)} finding(s)[/green] in [dim]{ignore_path}[/dim]"
+            )
+        unmatched = set(suppress) - {f.fingerprint for f in report.findings}
+        if unmatched:
+            err_console.print(
+                f"[yellow]No finding in this scan matched: {', '.join(sorted(unmatched))}[/yellow]"
+            )
+    active, hidden = _suppression.partition(
+        report.findings, _suppression.load_suppressed_fingerprints(ignore_path)
+    )
+    if show_suppressed:
+        report.findings = hidden
+        if output not in ("json", "sarif"):
+            err_console.print(
+                f"[dim]Showing {len(hidden)} suppressed finding(s) from {ignore_path.name}[/dim]"
+            )
+    else:
+        report.findings = active
+        _drop_findings_from_themes(report, {f.id for f in hidden})
+        if hidden and output not in ("json", "sarif"):
+            err_console.print(
+                f"[dim]{len(hidden)} finding(s) suppressed via {ignore_path.name} "
+                f"(use --show-suppressed to view)[/dim]"
+            )
+
+    # --- Baseline --------------------------------------------------------
+    if baseline_accept and show_suppressed:
+        err_console.print(
+            "[yellow]--baseline-accept is ignored with --show-suppressed "
+            "(refusing to baseline the suppressed set).[/yellow]"
+        )
+    if not (baseline or baseline_accept) or show_suppressed:
+        return
+    bl_path = Path(baseline_file) if baseline_file else _baseline.baseline_path(target_url, repo)
+    if baseline_accept:
+        n = _baseline.save_baseline(
+            bl_path, report.findings, target_url=target_url, repo_url=repo,
+            commit=report.repo_commit_hash,
+        )
+        err_console.print(
+            f"[green]Baseline accepted[/green] — {n} finding(s) recorded in [dim]{bl_path}[/dim]"
+        )
+    if not baseline:
+        return
+    known_baseline = _baseline.load_baseline(bl_path)
+    if known_baseline is None:  # missing OR corrupt — distinguish for an honest message
+        if bl_path.exists():
+            err_console.print(
+                f"[yellow]Baseline at {bl_path} is unreadable/corrupt — showing all findings.[/yellow]"
+            )
+        elif not baseline_accept:
+            err_console.print(
+                "[yellow]No baseline accepted yet for this project — showing all findings. "
+                "Run once with --baseline-accept first.[/yellow]"
+            )
+        return
+    new, known = _baseline.partition_new(report.findings, known_baseline)
+    report.findings = new
+    _drop_findings_from_themes(report, {f.id for f in known})
+    if known and output not in ("json", "sarif"):
+        err_console.print(
+            f"[dim]{len(known)} known finding(s) hidden by baseline; showing {len(new)} new.[/dim]"
+        )
+
+
 def _load_api_key(provider: str) -> str | None:
     """Load API key from env, .env file, or config (see isitsecure.config)."""
     return load_api_key(provider)
@@ -205,6 +307,9 @@ def scan(
     suppress_reason: str = typer.Option("", "--suppress-reason", help="Reason recorded next to --suppress entries"),
     suppress_file: Optional[str] = typer.Option(None, "--suppress-file", help="Ignore file path (default ./.isitsecureignore)"),
     show_suppressed: bool = typer.Option(False, "--show-suppressed", help="List suppressed findings instead of hiding them"),
+    baseline: bool = typer.Option(False, "--baseline", help="Show only findings new since the accepted baseline"),
+    baseline_accept: bool = typer.Option(False, "--baseline-accept", help="Record the current findings as the baseline"),
+    baseline_file: Optional[str] = typer.Option(None, "--baseline-file", help="Baseline path (default ~/.isitsecure/baselines/<project>.json)"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """Run a security scan against a web application."""
@@ -314,53 +419,14 @@ def scan(
         scan_mode=resolved_mode,
     ))
 
-    # --- Suppression (#51): drop findings the user has accepted as FPs -------
-    # Applied once here so every output format (table/json/html/sarif/fixes)
-    # sees the same filtered set. The .isitsecureignore file is the source of
-    # truth and is reviewable in code review.
-    from isitsecure.engine import suppression as _suppression
-    _ignore_path = Path(suppress_file) if suppress_file else _suppression.default_ignore_path()
-    if suppress:
-        newly = _suppression.add_suppressions(
-            _ignore_path, report.findings, suppress, suppress_reason
-        )
-        if newly:
-            err_console.print(
-                f"[green]Suppressed {len(newly)} finding(s)[/green] in "
-                f"[dim]{_ignore_path}[/dim]"
-            )
-        unmatched = set(suppress) - {f.fingerprint for f in report.findings}
-        if unmatched:
-            err_console.print(
-                f"[yellow]No finding in this scan matched: {', '.join(sorted(unmatched))}[/yellow]"
-            )
-    _suppressed_fps = _suppression.load_suppressed_fingerprints(_ignore_path)
-    _active, _hidden = _suppression.partition(report.findings, _suppressed_fps)
-    if show_suppressed:
-        report.findings = _hidden
-        if output not in ("json", "sarif"):
-            err_console.print(
-                f"[dim]Showing {len(_hidden)} suppressed finding(s) from {_ignore_path.name}[/dim]"
-            )
-    else:
-        report.findings = _active
-        # Keep the thematic grouping honest: drop suppressed findings from themes
-        # (they reference findings by id). The owner_summary is an LLM narrative
-        # generated pre-suppression and may still mention a suppressed finding.
-        _hidden_ids = {f.id for f in _hidden}
-        if _hidden_ids and report.themes:
-            _kept = []
-            for _th in report.themes:
-                _th.finding_ids = [i for i in _th.finding_ids if i not in _hidden_ids]
-                _th.finding_count = len(_th.finding_ids)
-                if _th.finding_ids:
-                    _kept.append(_th)
-            report.themes = _kept
-        if _hidden and output not in ("json", "sarif"):
-            err_console.print(
-                f"[dim]{len(_hidden)} finding(s) suppressed via {_ignore_path.name} "
-                f"(use --show-suppressed to view)[/dim]"
-            )
+    # Suppression (#51) + baseline (#52): filter the findings once, so every
+    # output format sees the same set. Extracted for direct testing.
+    _apply_trust_filters(
+        report, output=output, target_url=target_url, repo=repo,
+        suppress=suppress, suppress_reason=suppress_reason,
+        suppress_file=suppress_file, show_suppressed=show_suppressed,
+        baseline=baseline, baseline_accept=baseline_accept, baseline_file=baseline_file,
+    )
 
     # Output results
     if output == "json":

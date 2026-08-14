@@ -313,6 +313,28 @@ de0e57aeb5f61708   # [injection_risk] GET /createdb — SQL injection (benign: n
 
 Suppressed findings are dropped from the findings list, counts, and themes in every output format. (The AI *owner summary* narrative is written during the scan, so it may still mention a finding you suppressed afterward.)
 
+### Baseline mode — only show what's new
+
+For an app that already has a backlog of known findings, **baseline mode** lets you accept the current set once and then, on later scans, see only what's *new* — ideal for a CI gate that should fail on regressions but not on pre-existing debt.
+
+```bash
+# Accept the current findings as the baseline for this project (once)
+isitsecure scan https://your-app.com --baseline-accept
+
+# Later scans: show only findings new since the baseline
+isitsecure scan https://your-app.com --baseline
+```
+
+Baselines are keyed per project (repo or target URL) and stored under `~/.isitsecure/baselines/` — machine-local state, unlike the committed `.isitsecureignore`. Baseline and suppression compose: `--baseline` shows new, not-suppressed findings. Findings match by the same stable fingerprint, so a baseline survives host/port/query changes and code edits.
+
+**In CI:** the default `~/.isitsecure/` path is per-machine, so a fresh runner has no baseline and `--baseline` would show the whole backlog. Point `--baseline-file` at a path you commit to the repo (or cache between runs) so the gate compares against a shared, version-controlled baseline:
+
+```bash
+isitsecure scan "$URL" --baseline-file .isitsecure-baseline.json --baseline --output sarif
+# establish/refresh it deliberately (e.g. on main):
+isitsecure scan "$URL" --baseline-file .isitsecure-baseline.json --baseline-accept
+```
+
 ## Auto-Fix: One Command to Fix Your App
 
 `fix` works two ways depending on what you point it at:
@@ -526,6 +548,9 @@ Options:
   --suppress-reason TEXT Reason recorded next to --suppress entries
   --suppress-file TEXT   Ignore file path [default: ./.isitsecureignore]
   --show-suppressed      List suppressed findings instead of hiding them
+  --baseline             Show only findings new since the accepted baseline
+  --baseline-accept      Record the current findings as the baseline
+  --baseline-file TEXT   Baseline path [default: ~/.isitsecure/baselines/<project>.json]
   -v, --verbose          Enable debug logging
 
 isitsecure fix [OPTIONS]
