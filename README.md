@@ -335,6 +335,22 @@ isitsecure scan "$URL" --baseline-file .isitsecure-baseline.json --baseline --ou
 isitsecure scan "$URL" --baseline-file .isitsecure-baseline.json --baseline-accept
 ```
 
+### Re-verifying a fix — is it fixed now?
+
+After you fix something, `isitsecure verify` re-checks *specific* findings from a previous scan and tells you fixed vs. still-present — without re-scanning everything:
+
+```bash
+isitsecure scan https://your-app.com --output json -f before.json   # capture findings + fingerprints
+# ...apply your fix...
+isitsecure verify https://your-app.com --report before.json --fingerprint de0e57aeb5f61708
+```
+
+- **DAST** findings are re-probed against the target — the exact endpoint is re-run through the scanner that raised it. To avoid ever *falsely* claiming a fix, a `fixed`/`still-present` verdict is only given when a single-endpoint re-probe can faithfully reproduce the finding (endpoint-level checks like security headers / CORS / CSRF, and parameter-level injection where the tested parameter is recoverable). Findings that depend on crawl-derived state or multi-request flows (e.g. stored XSS) are reported `unverifiable` — re-verify those with a full scan.
+- **SAST** findings are re-checked against a local `--repo` via a code-only re-scan.
+- Omit `--fingerprint` to re-verify every finding in the report. Exit codes make it a CI gate: **`0`** all clear (everything fixed), **`1`** at least one finding still present, **`2`** inconclusive — something couldn't be verified (`unverifiable`/error) or a requested fingerprint wasn't in the report. LLM-review findings (which need a model to reproduce) are always `unverifiable`.
+
+(This is the per-finding CLI counterpart to the MCP `verify(scan_id)` tool, which instead re-scans everything and reports grade movement.)
+
 ## Auto-Fix: One Command to Fix Your App
 
 `fix` works two ways depending on what you point it at:
@@ -564,6 +580,12 @@ isitsecure fix [OPTIONS]
   --pr-strategy TEXT     Group PRs by: per-category|per-file|per-finding|single [default: per-category]
   --max-prs INT          Cap on PRs; excess low-severity categories batch into one [default: 8]
   -v, --verbose          Enable debug logging
+
+isitsecure verify [TARGET_URL] [OPTIONS]   # exit 0 all-fixed · 1 still-present · 2 inconclusive
+  --report TEXT          Previous scan JSON (from scan --output json) [required]
+  --fingerprint TEXT     Only verify these fingerprints (repeatable; default: all)
+  -r, --repo TEXT        Local repo path for re-checking SAST findings
+  -o, --output TEXT      Output format: table|json [default: table]
 
 isitsecure badge [OPTIONS]
   -r, --repo TEXT        Path to local repo to scan [required]

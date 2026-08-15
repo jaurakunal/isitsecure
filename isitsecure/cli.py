@@ -769,6 +769,100 @@ def _print_report_table(report) -> None:
 
 
 # ---------------------------------------------------------------------------
+# verify command (#53 — re-check specific findings: fixed or still present)
+# ---------------------------------------------------------------------------
+
+@app.command()
+def verify(
+    target_url: Optional[str] = typer.Argument(None, help="Target URL to re-probe DAST findings against"),
+    report: str = typer.Option(..., "--report", help="Previous scan JSON (from scan --output json)"),
+    fingerprint: Optional[list[str]] = typer.Option(None, "--fingerprint", help="Only verify these fingerprints (repeatable; default: all)"),
+    repo: Optional[str] = typer.Option(None, "--repo", "-r", help="Local repo path for re-checking SAST findings"),
+    output: str = typer.Option("table", "--output", "-o", help="Output format: table|json"),
+) -> None:
+    """Re-check whether findings from a previous scan are fixed now.
+
+    SAST findings are re-checked against a local --repo; DAST findings are
+    re-probed against the target URL. Exits non-zero if any finding is still
+    present (CI-friendly).
+    """
+    import asyncio as _asyncio
+
+    from isitsecure.engine.models import DeepFinding
+    from isitsecure.engine.reverify import VerifyStatus, reverify_findings
+
+    report_path = Path(report)
+    if not report_path.exists():
+        err_console.print(f"[red]Report not found: {report}[/red]")
+        raise typer.Exit(2)
+    try:
+        data = json.loads(report_path.read_text())
+    except (json.JSONDecodeError, OSError) as exc:
+        err_console.print(f"[red]Could not read report {report}: {exc}[/red]")
+        raise typer.Exit(2) from exc
+
+    findings = [DeepFinding.model_validate(d) for d in data.get("findings", [])]
+    unknown: set[str] = set()
+    if fingerprint:
+        wanted = set(fingerprint)
+        findings = [f for f in findings if f.fingerprint in wanted]
+        unknown = wanted - {f.fingerprint for f in findings}
+        if unknown:
+            err_console.print(
+                f"[yellow]Not in report: {', '.join(sorted(unknown))}[/yellow]"
+            )
+    if not findings:
+        # Nothing verified — an inconclusive gate must not read as "green".
+        err_console.print("[yellow]No matching findings to verify.[/yellow]")
+        raise typer.Exit(2 if unknown else 0)
+
+    verdicts = _asyncio.run(reverify_findings(findings, target_url=target_url, repo_path=repo))
+
+    still = [v for v in verdicts if v.status == VerifyStatus.STILL_PRESENT]
+    fixed = [v for v in verdicts if v.status == VerifyStatus.FIXED]
+    inconclusive = [v for v in verdicts
+                    if v.status in (VerifyStatus.UNVERIFIABLE, VerifyStatus.ERROR)]
+
+    if output == "json":
+        sys.stdout.write(json.dumps({
+            "verdicts": [
+                {"fingerprint": v.finding.fingerprint, "status": v.status.value,
+                 "title": v.finding.title, "detail": v.detail}
+                for v in verdicts
+            ],
+            "fixed": len(fixed), "still_present": len(still),
+        }, indent=2) + "\n")
+    else:
+        _status_style = {
+            VerifyStatus.FIXED: "[green]FIXED[/green]",
+            VerifyStatus.STILL_PRESENT: "[red]STILL PRESENT[/red]",
+            VerifyStatus.UNVERIFIABLE: "[dim]unverifiable[/dim]",
+            VerifyStatus.ERROR: "[yellow]error[/yellow]",
+        }
+        table = Table(title="Re-verification", show_lines=False)
+        table.add_column("Status", width=16)
+        table.add_column("Finding", width=52)
+        table.add_column("Fingerprint", style="dim", width=16)
+        for v in verdicts:
+            table.add_row(_status_style[v.status], v.finding.title[:52], v.finding.fingerprint)
+        console.print(table)
+        console.print(
+            f"\n[green]{len(fixed)} fixed[/green] · "
+            f"[red]{len(still)} still present[/red] · "
+            f"[dim]{len(inconclusive)} unverifiable/error[/dim]"
+        )
+
+    # Exit codes for CI: 1 = a regression is still present; 2 = inconclusive
+    # (something couldn't be verified, or a requested fingerprint wasn't found) —
+    # so a typo or a missing target never reads as a green gate; 0 = all fixed.
+    if still:
+        raise typer.Exit(1)
+    if inconclusive or unknown:
+        raise typer.Exit(2)
+    raise typer.Exit(0)
+
+
+# ---------------------------------------------------------------------------
 # launch command (web UI)
 # ---------------------------------------------------------------------------
 
