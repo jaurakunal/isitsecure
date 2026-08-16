@@ -533,6 +533,11 @@ def pentest(
         None, "--mutation-endpoint",
         help="Path glob that performs mutations (e.g. /graphql, *deleteUser*) — gated as "
              "destructive even over a benign verb (repeatable)."),
+    allow_cross_host_loot: bool = typer.Option(
+        False, "--allow-cross-host-loot",
+        help="Let a captured $LOOT value be replayed to a host other than where it was "
+             "captured (and replay unattributed loot). Off by default — a defense-in-depth "
+             "exfil floor the planner can never lift itself."),
     auth_provider: str = typer.Option("token", "--auth-provider",
         help="Auth provider for operator creds: token|browser|rest."),
     auth_email: str = typer.Option("", "--auth-email", help="Operator account email/username (user A)."),
@@ -596,6 +601,7 @@ def pentest(
         target_accounts=list(target_account or []), target_id_ranges=id_ranges,
         allow_destructive_any_account=allow_destructive_any_account,
         allow_research_egress=allow_research_egress,
+        allow_cross_host_loot=allow_cross_host_loot,
         mutation_endpoints=list(mutation_endpoint or []), max_steps=max_steps,
         auth_provider=auth_provider, auth_email=auth_email, auth_password=auth_password,
         access_token=access_token, login_url=login_url,
