@@ -525,6 +525,10 @@ def pentest(
     allow_destructive_any_account: bool = typer.Option(
         False, "--allow-destructive-any-account",
         help="Lift the designated-target restriction (all-synthetic environments only)."),
+    mutation_endpoint: Optional[list[str]] = typer.Option(
+        None, "--mutation-endpoint",
+        help="Path glob that performs mutations (e.g. /graphql, *deleteUser*) — gated as "
+             "destructive even over a benign verb (repeatable)."),
     confirm_objectives: bool = typer.Option(
         False, "--confirm-objectives", help="Confirm the objective(s) before attacking."),
     max_steps: int = typer.Option(40, "--max-steps", help="Maximum plan→act iterations."),
@@ -576,7 +580,8 @@ def pentest(
         target_url=target_url, authorized_host=i_am_authorized, objectives=objectives,
         scope_globs=list(scope or []), cost_cap=cost_cap, rps=rps,
         target_accounts=list(target_account or []), target_id_ranges=id_ranges,
-        allow_destructive_any_account=allow_destructive_any_account, max_steps=max_steps)
+        allow_destructive_any_account=allow_destructive_any_account,
+        mutation_endpoints=list(mutation_endpoint or []), max_steps=max_steps)
 
     err_console.print(Panel(f"Target: {target_url}  |  Cost cap: ${cost_cap:.0f}  |  LLM: {llm_provider}",
                             title="Autonomous Pentest", border_style="bright_red"))

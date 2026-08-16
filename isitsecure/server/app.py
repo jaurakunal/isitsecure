@@ -102,6 +102,7 @@ class PentestRequest(BaseModel):
     target_accounts: Optional[list[str]] = None
     target_id_ranges: Optional[list[tuple[int, int]]] = None
     allow_destructive_any_account: bool = False
+    mutation_endpoints: Optional[list[str]] = None
     max_steps: int = 40
     llm_provider: str = "anthropic"
     api_key: Optional[str] = None
@@ -242,6 +243,7 @@ async def _run_pentest_background(pentest_id: str, request: PentestRequest) -> N
             target_accounts=request.target_accounts or [],
             target_id_ranges=[tuple(r) for r in (request.target_id_ranges or [])],
             allow_destructive_any_account=request.allow_destructive_any_account,
+            mutation_endpoints=request.mutation_endpoints or [],
             max_steps=request.max_steps)
         db_path = Path(tempfile.gettempdir()) / "isitsecure-pentest" / f"{pentest_id}.sqlite"
         db_path.parent.mkdir(parents=True, exist_ok=True)
