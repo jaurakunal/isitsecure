@@ -529,6 +529,15 @@ def pentest(
         None, "--mutation-endpoint",
         help="Path glob that performs mutations (e.g. /graphql, *deleteUser*) — gated as "
              "destructive even over a benign verb (repeatable)."),
+    auth_provider: str = typer.Option("token", "--auth-provider",
+        help="Auth provider for operator creds: token|browser|rest."),
+    auth_email: str = typer.Option("", "--auth-email", help="Operator account email/username (user A)."),
+    auth_password: str = typer.Option("", "--auth-password", help="Operator account password (user A)."),
+    access_token: str = typer.Option("", "--access-token", help="Bearer token to start authenticated."),
+    login_url: str = typer.Option("", "--login-url", help="Explicit login endpoint."),
+    auth_email_b: str = typer.Option("", "--auth-email-b",
+        help="Second identity's email — enables cross-user IDOR/BOLA proofs."),
+    auth_password_b: str = typer.Option("", "--auth-password-b", help="Second identity's password."),
     confirm_objectives: bool = typer.Option(
         False, "--confirm-objectives", help="Confirm the objective(s) before attacking."),
     max_steps: int = typer.Option(40, "--max-steps", help="Maximum plan→act iterations."),
@@ -556,6 +565,7 @@ def pentest(
     from isitsecure.engine.pentest.engagement import (
         AttestationError,
         PentestConfig,
+        build_auth_resolver,
         parse_id_range,
         run_engagement,
     )
@@ -581,7 +591,10 @@ def pentest(
         scope_globs=list(scope or []), cost_cap=cost_cap, rps=rps,
         target_accounts=list(target_account or []), target_id_ranges=id_ranges,
         allow_destructive_any_account=allow_destructive_any_account,
-        mutation_endpoints=list(mutation_endpoint or []), max_steps=max_steps)
+        mutation_endpoints=list(mutation_endpoint or []), max_steps=max_steps,
+        auth_provider=auth_provider, auth_email=auth_email, auth_password=auth_password,
+        access_token=access_token, login_url=login_url,
+        auth_email_b=auth_email_b, auth_password_b=auth_password_b)
 
     err_console.print(Panel(f"Target: {target_url}  |  Cost cap: ${cost_cap:.0f}  |  LLM: {llm_provider}",
                             title="Autonomous Pentest", border_style="bright_red"))
@@ -590,7 +603,8 @@ def pentest(
     db_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         report, store = asyncio.run(run_engagement(
-            config, llm_client=llm_client, db_path=db_path, on_event=_narrate_pentest_event))
+            config, llm_client=llm_client, db_path=db_path, on_event=_narrate_pentest_event,
+            auth_resolver=build_auth_resolver()))
     except AttestationError as exc:
         err_console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from None

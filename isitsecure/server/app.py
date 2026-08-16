@@ -104,6 +104,13 @@ class PentestRequest(BaseModel):
     allow_destructive_any_account: bool = False
     mutation_endpoints: Optional[list[str]] = None
     max_steps: int = 40
+    auth_provider: str = "token"
+    auth_email: str = ""
+    auth_password: str = ""
+    access_token: str = ""
+    login_url: str = ""
+    auth_email_b: str = ""
+    auth_password_b: str = ""
     llm_provider: str = "anthropic"
     api_key: Optional[str] = None
 
@@ -220,7 +227,11 @@ async def _run_pentest_background(pentest_id: str, request: PentestRequest) -> N
     stashing the built kill-chain report on completion."""
     import tempfile
 
-    from isitsecure.engine.pentest.engagement import PentestConfig, run_engagement
+    from isitsecure.engine.pentest.engagement import (
+        PentestConfig,
+        build_auth_resolver,
+        run_engagement,
+    )
     from isitsecure.engine.pentest.report import build_report
 
     job = _pentests[pentest_id]
@@ -244,11 +255,16 @@ async def _run_pentest_background(pentest_id: str, request: PentestRequest) -> N
             target_id_ranges=[tuple(r) for r in (request.target_id_ranges or [])],
             allow_destructive_any_account=request.allow_destructive_any_account,
             mutation_endpoints=request.mutation_endpoints or [],
-            max_steps=request.max_steps)
+            max_steps=request.max_steps,
+            auth_provider=request.auth_provider, auth_email=request.auth_email,
+            auth_password=request.auth_password, access_token=request.access_token,
+            login_url=request.login_url, auth_email_b=request.auth_email_b,
+            auth_password_b=request.auth_password_b)
         db_path = Path(tempfile.gettempdir()) / "isitsecure-pentest" / f"{pentest_id}.sqlite"
         db_path.parent.mkdir(parents=True, exist_ok=True)
         report, store = await run_engagement(
-            config, llm_client=llm_client, db_path=db_path, on_event=on_event)
+            config, llm_client=llm_client, db_path=db_path, on_event=on_event,
+            auth_resolver=build_auth_resolver())
         try:
             job["report"] = build_report(report, store)
         finally:
