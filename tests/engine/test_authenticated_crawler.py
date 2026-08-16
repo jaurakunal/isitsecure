@@ -394,6 +394,38 @@ class TestCrawlWithMockPlaywright:
         assert token == "my-jwt-token"
 
 
+class TestFormInteractionSafeMode:
+    """safe_mode gates the blind, un-audited button-clicking (pentest crawl path)."""
+
+    @pytest.mark.asyncio
+    async def test_safe_mode_suppresses_blind_button_clicks(self):
+        # In safe_mode the method is a no-op: it never even inspects the DOM, so no
+        # button (icon-only / non-English / "Confirm") can trigger a real side effect.
+        crawler = _make_crawler(safe_mode=True)
+        mock_page = AsyncMock()
+        await crawler._interact_with_forms(mock_page)
+        mock_page.evaluate.assert_not_called()
+        mock_page.query_selector_all.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_default_mode_still_clicks_buttons(self):
+        # Default (scan) behavior is preserved byte-for-byte: buttons are discovered and
+        # clicked so form-triggered endpoints are still captured.
+        crawler = _make_crawler()   # safe_mode defaults to False
+        mock_page = AsyncMock()
+        mock_page.evaluate = AsyncMock(
+            return_value=[{"index": 0, "text": "Confirm", "tag": "BUTTON"}])
+        btn = AsyncMock()
+        mock_page.query_selector_all = AsyncMock(return_value=[btn])
+        with patch(
+            "isitsecure.engine.scanners.authenticated_crawler.asyncio.sleep",
+            new=AsyncMock(),
+        ):
+            await crawler._interact_with_forms(mock_page)
+        mock_page.evaluate.assert_called_once()
+        btn.click.assert_awaited_once()
+
+
 class TestCategorizeUrl:
     """Tests for _categorize_url using configurable rules."""
 

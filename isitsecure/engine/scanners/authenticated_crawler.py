@@ -67,12 +67,19 @@ class AuthenticatedCrawler:
         password: str,
         login_url: str | None = None,
         seed_routes: list[str] | None = None,
+        safe_mode: bool = False,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._email = email
         self._password = password
         self._login_url = login_url or f"{self._base_url}/login"
         self._seed_routes = seed_routes or []
+        # When True (the pentest crawl path), blind clicking of state-changing buttons is
+        # disabled: only clearly-destructive text is filtered by the default heuristic, so
+        # an icon-only / non-English / "Confirm" button still triggers an unaudited real
+        # side effect that never routes through the destructive-op floor. safe_mode skips
+        # button interaction entirely. Default False keeps scan behavior byte-identical.
+        self._safe_mode = safe_mode
 
         self._intercepted: list[InterceptedRequest] = []
         self._auth_headers: dict[str, str] = {}
@@ -467,7 +474,14 @@ class AuthenticatedCrawler:
         This catches endpoints that are only reachable by clicking buttons
         (e.g., "Create Deal", "Submit Review", "Update Profile").
         Network interception captures the resulting requests.
+
+        In ``safe_mode`` this is a no-op: blind-clicking arbitrary buttons causes real,
+        unaudited side effects that never pass through the destructive-op floor (the
+        text-only "delete/remove/logout" filter misses icon-only / non-English /
+        "Confirm" controls), so the pentest crawl path suppresses it entirely.
         """
+        if self._safe_mode:
+            return
         try:
             # Find clickable buttons (excluding navigation and external links)
             buttons = await page.evaluate(  # type: ignore[union-attr]
