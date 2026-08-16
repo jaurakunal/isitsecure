@@ -103,6 +103,7 @@ class PentestRequest(BaseModel):
     target_id_ranges: Optional[list[tuple[int, int]]] = None
     allow_destructive_any_account: bool = False
     mutation_endpoints: Optional[list[str]] = None
+    allow_research_egress: bool = False
     max_steps: int = 40
     auth_provider: str = "token"
     auth_email: str = ""
@@ -254,6 +255,7 @@ async def _run_pentest_background(pentest_id: str, request: PentestRequest) -> N
             target_accounts=request.target_accounts or [],
             target_id_ranges=[tuple(r) for r in (request.target_id_ranges or [])],
             allow_destructive_any_account=request.allow_destructive_any_account,
+            allow_research_egress=request.allow_research_egress,
             mutation_endpoints=request.mutation_endpoints or [],
             max_steps=request.max_steps,
             auth_provider=request.auth_provider, auth_email=request.auth_email,

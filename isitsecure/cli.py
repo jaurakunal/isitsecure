@@ -525,6 +525,10 @@ def pentest(
     allow_destructive_any_account: bool = typer.Option(
         False, "--allow-destructive-any-account",
         help="Lift the designated-target restriction (all-synthetic environments only)."),
+    allow_research_egress: bool = typer.Option(
+        False, "--allow-research-egress",
+        help="Let the author fetch external reference docs (GET-only, outside the sandbox, "
+             "SSRF/metadata-guarded, budgeted, logged). Off by default."),
     mutation_endpoint: Optional[list[str]] = typer.Option(
         None, "--mutation-endpoint",
         help="Path glob that performs mutations (e.g. /graphql, *deleteUser*) — gated as "
@@ -591,6 +595,7 @@ def pentest(
         scope_globs=list(scope or []), cost_cap=cost_cap, rps=rps,
         target_accounts=list(target_account or []), target_id_ranges=id_ranges,
         allow_destructive_any_account=allow_destructive_any_account,
+        allow_research_egress=allow_research_egress,
         mutation_endpoints=list(mutation_endpoint or []), max_steps=max_steps,
         auth_provider=auth_provider, auth_email=auth_email, auth_password=auth_password,
         access_token=access_token, login_url=login_url,
