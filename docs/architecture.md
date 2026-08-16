@@ -324,6 +324,10 @@ isitsecure/
 │   ├── cross_referencer.py     # DAST ↔ SAST finding matcher
 │   ├── scan_config.py          # User-configurable scan settings
 │   ├── scanners/               # 16 DAST scanners (quick) + special scanners
+│   ├── pentest/                # Autonomous pentest agent — LLM-planned ReAct loop that
+│   │                           #   PROVES vulns by exploiting them (see docs/pentest.md).
+│   │                           #   scope/store/events/cost/state/tools/sandbox/planner/
+│   │                           #   orchestrator/exploiters/report/engagement
 │   ├── code_analysis/          # 18 SAST scanners + route mappers + LSP + semgrep_rules/
 │   │   └── category_classifier.py  # Maps LLM-review findings to their FindingCategory
 │   ├── fixes/                  # AI fix gen: safety_net, verifier, plain_results, pr_flow
@@ -340,10 +344,10 @@ isitsecure/
 │   ├── protocol.py             # LLMClientProtocol (DIP)
 │   └── adapters.py             # Anthropic + Google implementations
 ├── server/                     # FastAPI server for web UI
-│   ├── app.py                  # API routes + SSE streaming
+│   ├── app.py                  # API routes + SSE streaming (scan + pentest engagements)
 │   └── static/                 # Pre-built Next.js UI (bundled)
 ├── mcp_server.py               # Local stdio MCP server (`scan` tool for AI coding tools)
-└── cli.py                      # Typer CLI (scan, fix, badge, launch, mcp, setup)
+└── cli.py                      # Typer CLI (scan, pentest, fix, badge, launch, mcp, setup)
 ```
 
 ## Data Flow

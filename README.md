@@ -23,7 +23,7 @@ Built for developers and **vibe coders** shipping web apps who need to know if t
 ## Contents
 
 - [Demo](#demo) · [What It Does](#what-it-does)
-- [Install](#install) · [Quick Start](#quick-start) · [What It Costs](#what-it-costs)
+- [Install](#install) · [Quick Start](#quick-start) · [Autonomous Pentest](#autonomous-pentest) · [What It Costs](#what-it-costs)
 - [Scan Modes](#scan-modes) · [Scan Depth](#scan-depth)
 - [What It Scans](#what-it-scans) — [DAST](#dast-scanners--tests-your-live-app) · [Special DAST](#special-dast-scanners-8) · [SAST](#sast-scanners-18--analyzes-your-code) · [LLM](#llm-powered-analysis-requires-api-key) · [Cross-Referencing](#cross-referencing--guided-dast)
 - [Language Support](#language-support) · [Output Formats](#output-formats) · [Suppressing False Positives](#suppressing-false-positives)
@@ -135,6 +135,39 @@ isitsecure scan --repo https://github.com/you/your-app --output sarif
 # Open the web UI (for non-CLI users)
 isitsecure launch
 ```
+
+## Autonomous Pentest
+
+Where `scan` **detects** vulnerabilities breadth-first, `isitsecure pentest` **proves**
+them: an LLM-planned agent pursues an objective, chains one access into the next, and
+demonstrates impact by exploiting it (extracting data, reading a cross-user object) —
+then hands you a **kill-chain report**.
+
+```bash
+# You must attest authorization; the run refuses to start otherwise.
+isitsecure pentest https://your-app.com --i-am-authorized your-app.com \
+  --objective "read another user's data"
+
+# Let the agent propose its own objectives from recon:
+isitsecure pentest https://your-app.com --i-am-authorized your-app.com
+
+# HTML kill-chain report, a request-per-second cap, and a $ ceiling:
+isitsecure pentest https://your-app.com --i-am-authorized your-app.com \
+  --rps 5 --cost-cap 50 -o html -f pentest.html
+```
+
+It runs with **full autonomy inside a non-negotiable safety floor**: a hard scope
+allowlist enforced at the one HTTP primitive, total logging of every request/action
+to a per-engagement SQLite audit trail, an anti-DoS/mass-destruction bound, and
+**destructive actions (write/delete/takeover) confined to designated targets** — an
+account the agent created itself, or one you explicitly mark fair-game
+(`--target-account`, `--target-id-range`, or `--allow-destructive-any-account` for
+all-synthetic environments). The planner requires an LLM (`--llm anthropic|google`);
+a `cost.spent` event fires every $5 so you can watch spend live. See
+[docs/pentest.md](docs/pentest.md) for the full design and safety model.
+
+> ⚠️ Only run `pentest` against systems you are authorized to test. It actively
+> exploits the target.
 
 ## What It Costs
 
@@ -568,6 +601,22 @@ Options:
   --baseline-accept      Record the current findings as the baseline
   --baseline-file TEXT   Baseline path [default: ~/.isitsecure/baselines/<project>.json]
   -v, --verbose          Enable debug logging
+
+isitsecure pentest TARGET_URL [OPTIONS]     # autonomous, objective-driven exploit agent
+  --i-am-authorized HOST            Required attestation naming the in-scope host
+  --objective TEXT                  What to attempt (repeatable); if omitted, agent proposes
+  --scope TEXT                      Allowed host/path globs (repeatable) [default: target host]
+  --cost-cap FLOAT                  $ ceiling as an end-state [default: 500]; $5 cadence events
+  --rps FLOAT                       Requests-per-second cap
+  --target-account TEXT             Account marked a designated destructive target (repeatable)
+  --target-id-range TEXT            Object-ID range 'lo-hi' fair-game for destructive proofs
+  --allow-destructive-any-account   Lift the designated-target restriction (synthetic envs only)
+  --confirm-objectives              Confirm objective(s) before attacking
+  --max-steps INT                   Maximum plan→act iterations [default: 40]
+  --llm TEXT                        Planner backend: anthropic|google [default: anthropic] (required)
+  -o, --output TEXT                 Report format: md|html|json [default: md]
+  -f, --output-file TEXT            Write report to file
+  -v, --verbose                     Enable debug logging
 
 isitsecure fix [OPTIONS]
   -r, --repo TEXT        Local repo path, OR a remote GitHub URL to open PRs against [required]

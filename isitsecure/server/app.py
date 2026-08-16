@@ -12,11 +12,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import secrets
 import uuid
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -26,6 +28,22 @@ from isitsecure import __version__
 from isitsecure.config import load_api_key
 
 logger = logging.getLogger(__name__)
+
+# The pentest endpoint launches a real, network-active attack using the server's
+# stored API key. CORS (loopback-only) stops a cross-origin page from *reading*
+# responses but not from *sending* a "simple" POST, so we additionally require a
+# secret token in a CUSTOM header: a custom header forces a CORS preflight (which the
+# loopback-only policy blocks for a real cross-origin attacker), and the secret value
+# backstops a malicious loopback-origin page or a non-browser local process. The token
+# comes from ISITSECURE_PENTEST_TOKEN (the CLI `launch` sets + prints it) or a random
+# per-process value logged at startup.
+PENTEST_TOKEN = os.environ.get("ISITSECURE_PENTEST_TOKEN") or secrets.token_urlsafe(24)
+
+
+def _require_pentest_token(token: Optional[str]) -> None:
+    if not secrets.compare_digest(token or "", PENTEST_TOKEN):
+        raise HTTPException(status_code=403,
+                            detail="missing or invalid X-Pentest-Token (printed at server startup)")
 
 app = FastAPI(
     title="isitsecure",
@@ -49,6 +67,8 @@ app.add_middleware(
 _scans: dict[str, dict] = {}
 # In-memory "fix all" job storage
 _fix_jobs: dict[str, dict] = {}
+# In-memory pentest engagement storage (the full trail also persists to SQLite)
+_pentests: dict[str, dict] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -70,6 +90,21 @@ class ScanRequest(BaseModel):
 
 class FindingStatusUpdate(BaseModel):
     status: str  # "verified" | "false_positive" | "pending"
+
+
+class PentestRequest(BaseModel):
+    target_url: str
+    i_am_authorized: str = ""
+    objectives: Optional[list[str]] = None
+    scope: Optional[list[str]] = None
+    cost_cap: float = 500.0
+    rps: float = 0.0
+    target_accounts: Optional[list[str]] = None
+    target_id_ranges: Optional[list[tuple[int, int]]] = None
+    allow_destructive_any_account: bool = False
+    max_steps: int = 40
+    llm_provider: str = "anthropic"
+    api_key: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -124,6 +159,102 @@ async def stream_scan(scan_id: str):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+def _sse_job_stream(jobs: dict[str, dict], job_id: str, terminal_frames, *, poll: float = 0.5):
+    """Shared SSE loop: replay any new events for ``job_id``, then, once the job is
+    terminal, emit its ``terminal_frames(job)`` and a ``done`` frame. ``jobs`` is the
+    in-memory registry (e.g. ``_pentests``); ``terminal_frames`` maps a finished job to
+    the trailing frames to send."""
+    async def event_generator():
+        last_idx = 0
+        while True:
+            job = jobs.get(job_id)
+            if not job:
+                break
+            events = job["events"]
+            while last_idx < len(events):
+                yield f"data: {json.dumps(events[last_idx])}\n\n"
+                last_idx += 1
+            if job["status"] in ("complete", "failed"):
+                for frame in terminal_frames(job):
+                    yield f"data: {json.dumps(frame)}\n\n"
+                yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                break
+            await asyncio.sleep(poll)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/pentest")
+async def start_pentest(request: PentestRequest,
+                        x_pentest_token: Optional[str] = Header(default=None)):
+    """Start an autonomous pentest engagement. Requires the X-Pentest-Token header
+    (printed at server startup). Returns pentest_id for SSE streaming."""
+    _require_pentest_token(x_pentest_token)
+    pentest_id = str(uuid.uuid4())[:8]
+    _pentests[pentest_id] = {"status": "pending", "report": None, "events": []}
+    asyncio.create_task(_run_pentest_background(pentest_id, request))
+    return {"pentest_id": pentest_id}
+
+
+@app.get("/api/pentest/{pentest_id}/stream")
+async def stream_pentest(pentest_id: str):
+    """SSE endpoint for real-time engagement events (the same feed the CLI narrates)."""
+    if pentest_id not in _pentests:
+        raise HTTPException(status_code=404, detail="Pentest not found")
+
+    def terminal_frames(job):
+        return [{"type": "report", "data": job["report"]}] if job["report"] else []
+
+    return _sse_job_stream(_pentests, pentest_id, terminal_frames)
+
+
+async def _run_pentest_background(pentest_id: str, request: PentestRequest) -> None:
+    """Run one engagement, appending each live event to the job for the SSE feed and
+    stashing the built kill-chain report on completion."""
+    import tempfile
+
+    from isitsecure.engine.pentest.engagement import PentestConfig, run_engagement
+    from isitsecure.engine.pentest.report import build_report
+
+    job = _pentests[pentest_id]
+    job["status"] = "running"
+
+    def on_event(event) -> None:
+        job["events"].append({"type": "event", "kind": event.kind.value,
+                              "message": event.message, "payload": event.payload})
+
+    try:
+        api_key = request.api_key or load_api_key(request.llm_provider)
+        if not api_key:
+            raise ValueError(f"no API key for '{request.llm_provider}'")
+        from isitsecure.llm.adapters import create_llm_client
+        llm_client = create_llm_client(request.llm_provider, api_key)
+        config = PentestConfig(
+            target_url=request.target_url, authorized_host=request.i_am_authorized,
+            objectives=request.objectives or [], scope_globs=request.scope or [],
+            cost_cap=request.cost_cap, rps=request.rps,
+            target_accounts=request.target_accounts or [],
+            target_id_ranges=[tuple(r) for r in (request.target_id_ranges or [])],
+            allow_destructive_any_account=request.allow_destructive_any_account,
+            max_steps=request.max_steps)
+        db_path = Path(tempfile.gettempdir()) / "isitsecure-pentest" / f"{pentest_id}.sqlite"
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        report, store = await run_engagement(
+            config, llm_client=llm_client, db_path=db_path, on_event=on_event)
+        try:
+            job["report"] = build_report(report, store)
+        finally:
+            store.close()
+        job["status"] = "complete"
+    except Exception as exc:  # noqa: BLE001 — any failure must mark the job failed, never wedge it "running"
+        job["status"] = "failed"
+        job["events"].append({"type": "error", "message": str(exc)})
 
 
 def _enrich_report(raw_report: dict) -> dict:

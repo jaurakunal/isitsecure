@@ -15,6 +15,7 @@ import logging
 import sys
 from pathlib import Path
 from typing import Optional
+from uuid import uuid4
 
 import typer
 from rich.console import Console
@@ -492,6 +493,126 @@ def scan(
         _print_report_table(report)
 
 
+def _narrate_pentest_event(event) -> None:
+    """Print one live engagement event to stderr (stdout stays clean for the report)."""
+    from isitsecure.engine.pentest.models import EventKind
+    style = {
+        EventKind.REFUSAL: "yellow",
+        EventKind.FINDING: "bold red",
+        EventKind.LOOT: "cyan",
+        EventKind.COST: "magenta",
+        EventKind.OBJECTIVE: "bold",
+        EventKind.ENGAGEMENT_FINISHED: "green",
+    }.get(event.kind, "dim")
+    err_console.print(f"[{style}]• {event.message}[/{style}]")
+
+
+@app.command()
+def pentest(
+    target_url: str = typer.Argument(..., help="Target URL to attack (must be in scope)"),
+    objective: Optional[list[str]] = typer.Option(
+        None, "--objective", help="What to attempt (repeatable). If omitted, the agent proposes one."),
+    scope: Optional[list[str]] = typer.Option(
+        None, "--scope", help="Allowed host/path globs (repeatable). Default: the target host."),
+    i_am_authorized: str = typer.Option(
+        "", "--i-am-authorized", help="Required attestation naming the in-scope host."),
+    cost_cap: float = typer.Option(500.0, "--cost-cap", help="$ ceiling as an end-state. $5 cadence events."),
+    rps: float = typer.Option(0.0, "--rps", help="Requests-per-second cap (0 = unpaced)."),
+    target_account: Optional[list[str]] = typer.Option(
+        None, "--target-account", help="Account marked a designated destructive target (repeatable)."),
+    target_id_range: Optional[list[str]] = typer.Option(
+        None, "--target-id-range", help="Object-ID range 'lo-hi' fair-game for destructive proofs (repeatable)."),
+    allow_destructive_any_account: bool = typer.Option(
+        False, "--allow-destructive-any-account",
+        help="Lift the designated-target restriction (all-synthetic environments only)."),
+    confirm_objectives: bool = typer.Option(
+        False, "--confirm-objectives", help="Confirm the objective(s) before attacking."),
+    max_steps: int = typer.Option(40, "--max-steps", help="Maximum plan→act iterations."),
+    llm_provider: str = typer.Option("anthropic", "--llm", help="Planner backend: anthropic|google."),
+    output: str = typer.Option("md", "--output", "-o", help="Report format: md|html|json."),
+    output_file: Optional[str] = typer.Option(None, "--output-file", "-f", help="Write report to file."),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Run an autonomous, objective-driven pentest that *proves* vulnerabilities by
+    exploiting them, within a hard authorized scope and a total-logging audit trail."""
+    logging.basicConfig(level=logging.DEBUG if verbose else logging.WARNING)
+
+    if llm_provider == "none":
+        err_console.print("[red]The pentest loop is LLM-planned; --llm none is not supported.[/red]")
+        raise typer.Exit(1)
+    api_key = _load_api_key(llm_provider)
+    if not api_key:
+        err_console.print(
+            f"[red]No API key for '{llm_provider}'.[/red] Run [dim]isitsecure setup[/dim] "
+            "or set the provider's API key env var.")
+        raise typer.Exit(1)
+    from isitsecure.llm.adapters import create_llm_client
+    llm_client = create_llm_client(llm_provider, api_key)
+
+    from isitsecure.engine.pentest.engagement import (
+        AttestationError,
+        PentestConfig,
+        parse_id_range,
+        run_engagement,
+    )
+    from isitsecure.engine.pentest.report import build_report, render
+
+    objectives = list(objective or [])
+    if confirm_objectives:
+        shown = "\n".join(f"  • {o}" for o in objectives) if objectives \
+            else "  • (the agent will propose objectives from recon)"
+        err_console.print(f"[bold]About to attack {target_url} with:[/bold]\n{shown}")
+        if not typer.confirm("Proceed?"):
+            err_console.print("[yellow]Aborted.[/yellow]")
+            raise typer.Exit(1)
+
+    try:
+        id_ranges = [parse_id_range(r) for r in (target_id_range or [])]
+    except ValueError:
+        err_console.print("[red]--target-id-range must look like 'lo-hi' (e.g. 1-100), lo <= hi.[/red]")
+        raise typer.Exit(1) from None
+
+    config = PentestConfig(
+        target_url=target_url, authorized_host=i_am_authorized, objectives=objectives,
+        scope_globs=list(scope or []), cost_cap=cost_cap, rps=rps,
+        target_accounts=list(target_account or []), target_id_ranges=id_ranges,
+        allow_destructive_any_account=allow_destructive_any_account, max_steps=max_steps)
+
+    err_console.print(Panel(f"Target: {target_url}  |  Cost cap: ${cost_cap:.0f}  |  LLM: {llm_provider}",
+                            title="Autonomous Pentest", border_style="bright_red"))
+
+    db_path = _ensure_config_dir() / "engagements" / f"{uuid4().hex}.sqlite"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        report, store = asyncio.run(run_engagement(
+            config, llm_client=llm_client, db_path=db_path, on_event=_narrate_pentest_event))
+    except AttestationError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from None
+
+    if output not in ("md", "html", "json"):
+        err_console.print(
+            f"[yellow]Unknown --output '{output}'; using 'md'. "
+            "Valid options: md, html, json.[/yellow]")
+        output = "md"
+    try:
+        data = build_report(report, store)
+        rendered = render(data, output)
+    finally:
+        store.close()
+
+    err_console.print(f"[dim]Full audit trail: {db_path}[/dim]")
+    if output == "html":
+        out_path = output_file or "isitsecure-pentest.html"
+        Path(out_path).write_text(rendered)
+        console.print(f"[green]Pentest report written to {out_path}[/green]")
+    elif output_file:
+        Path(output_file).write_text(rendered)
+        err_console.print(f"[green]Report written to {output_file}[/green]")
+    else:
+        sys.stdout.write(rendered + "\n")
+
+
 async def _generate_fixes(report, llm_client, repo_url: str | None) -> str:
     """Generate LLM-powered fixes for critical and high findings."""
     from isitsecure.engine.fixes.fix_generator import FixGenerator
@@ -872,6 +993,8 @@ def launch(
     host: str = typer.Option("127.0.0.1", "--host", help="Host to bind to"),
 ) -> None:
     """Launch the isitsecure web UI in your browser."""
+    import os
+    import secrets
     import webbrowser
 
     import uvicorn
@@ -880,9 +1003,15 @@ def launch(
     # here so they get it too (interactive, one-time, skippable).
     _lsp_offer()
 
+    # The pentest API launches real attacks with the stored key, so it requires a
+    # secret token in a custom header. Generate it here and hand it to the server via
+    # the env var so the printed token matches what the server enforces.
+    pentest_token = os.environ.setdefault("ISITSECURE_PENTEST_TOKEN", secrets.token_urlsafe(24))
+
     console.print(Panel(
         f"[bold]isitsecure v{__version__}[/bold]\n"
-        f"Starting web UI at http://{host}:{port}",
+        f"Starting web UI at http://{host}:{port}\n"
+        f"[dim]Pentest API token (X-Pentest-Token): {pentest_token}[/dim]",
         title="Web UI",
         border_style="bright_magenta",
     ))
