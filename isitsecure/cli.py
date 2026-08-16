@@ -618,6 +618,32 @@ def pentest(
         sys.stdout.write(rendered + "\n")
 
 
+@app.command(name="pentest-promotions")
+def pentest_promotions(
+    engagements_dir: Optional[str] = typer.Option(
+        None, "--engagements-dir", help="Directory of engagement .sqlite stores "
+        "[default: ~/.isitsecure/engagements]"),
+    min_occurrences: int = typer.Option(
+        2, "--min", help="Minimum recurrences to surface a candidate."),
+) -> None:
+    """Surface recurring LLM-authored (`author_exploit`) exploits across past engagements
+    that have earned a place in the curated exploiter library."""
+    from isitsecure.engine.pentest.promotion import find_promotions
+    directory = engagements_dir or str(_ensure_config_dir() / "engagements")
+    candidates = find_promotions(directory, min_occurrences=min_occurrences)
+    if not candidates:
+        console.print("[dim]No recurring custom exploits to promote yet.[/dim]")
+        return
+    table = Table(title="Promotion candidates — recurring custom exploits to curate")
+    table.add_column("Recurs", justify="right")
+    table.add_column("Signature")
+    table.add_column("Example goal")
+    for candidate in candidates:
+        table.add_row(str(candidate.occurrences), candidate.signature,
+                      candidate.goals[0] if candidate.goals else "")
+    console.print(table)
+
+
 async def _generate_fixes(report, llm_client, repo_url: str | None) -> str:
     """Generate LLM-powered fixes for critical and high findings."""
     from isitsecure.engine.fixes.fix_generator import FixGenerator
