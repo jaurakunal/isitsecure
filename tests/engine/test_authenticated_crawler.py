@@ -305,6 +305,23 @@ class TestSameOriginAndNormalize:
         crawler = _make_crawler()
         assert crawler._is_same_origin("https://app.example.com/bundle.js") is False
 
+    def test_same_origin_false_javascript_scheme_matching_netloc(self):
+        # netloc matches the base but the scheme is javascript: — must be rejected so a
+        # crafted form action can't smuggle a non-HTTP URL past the origin gate.
+        crawler = _make_crawler()
+        assert (
+            crawler._is_same_origin("javascript://app.example.com/alert(1)") is False
+        )
+
+    def test_same_origin_false_data_scheme(self):
+        crawler = _make_crawler()
+        assert crawler._is_same_origin("data://app.example.com/x") is False
+
+    def test_same_origin_true_http_scheme(self):
+        # A plain http:// URL on the same host is still a valid origin.
+        crawler = _make_crawler()
+        assert crawler._is_same_origin("http://app.example.com/dashboard") is True
+
     def test_normalize_strips_fragment(self):
         crawler = _make_crawler()
         assert crawler._normalize_url("https://app.example.com/page#section") == "https://app.example.com/page"
@@ -448,6 +465,31 @@ class TestFormInteractionSafeMode:
         assert crawler._html_endpoints == {}
 
     @pytest.mark.asyncio
+    async def test_safe_mode_rejects_javascript_scheme_form_action(self):
+        # A crafted action="javascript://<base-netloc>/..." matches netloc but is not an
+        # HTTP(S) origin — the scheme gate in _is_same_origin must keep it out of the store.
+        crawler = _make_crawler(safe_mode=True)
+        mock_page = AsyncMock()
+        mock_page.evaluate = AsyncMock(return_value=[
+            {"action": "javascript://app.example.com/steal", "method": "POST",
+             "fields": ["x"]},
+        ])
+        await crawler._interact_with_forms(mock_page, "https://app.example.com/profile")
+        assert crawler._html_endpoints == {}
+
+    @pytest.mark.asyncio
+    async def test_safe_mode_records_http_scheme_form_action(self):
+        # The counterpart: a same-host http(s) action IS recorded.
+        crawler = _make_crawler(safe_mode=True)
+        mock_page = AsyncMock()
+        mock_page.evaluate = AsyncMock(return_value=[
+            {"action": "http://app.example.com/api/x", "method": "POST",
+             "fields": ["x"]},
+        ])
+        await crawler._interact_with_forms(mock_page, "https://app.example.com/profile")
+        assert "POST:http://app.example.com/api/x" in crawler._html_endpoints
+
+    @pytest.mark.asyncio
     async def test_safe_mode_form_extraction_failure_is_swallowed(self):
         crawler = _make_crawler(safe_mode=True)
         mock_page = AsyncMock()
@@ -472,6 +514,80 @@ class TestFormInteractionSafeMode:
             await crawler._interact_with_forms(mock_page)
         mock_page.evaluate.assert_called_once()
         btn.click.assert_awaited_once()
+
+
+class TestSafeModeCrawlSurfacesFormTargets:
+    """End-to-end: a safe_mode <form> target must not just land in the internal
+    _html_endpoints dict — it must surface through _build_endpoints() into the
+    discovered_endpoints that crawl() RETURNS (what the pentest tool folds into
+    state.endpoints). This closes the gap the earlier tests left (they asserted only
+    the internal dict)."""
+
+    @staticmethod
+    def _mock_playwright(mock_page):
+        browser = AsyncMock()
+        context = AsyncMock()
+        browser.new_context = AsyncMock(return_value=context)
+        context.new_page = AsyncMock(return_value=mock_page)
+        pw = AsyncMock()
+        pw.chromium.launch = AsyncMock(return_value=browser)
+        cm = AsyncMock()
+        cm.__aenter__ = AsyncMock(return_value=pw)
+        cm.__aexit__ = AsyncMock(return_value=None)
+        return MagicMock(return_value=cm)
+
+    @pytest.mark.asyncio
+    async def test_form_target_surfaces_in_returned_endpoints(self):
+        crawler = _make_crawler(safe_mode=True)
+
+        mock_page = AsyncMock()
+        mock_page.url = "https://app.example.com/dashboard"
+        mock_page.on = MagicMock()  # handler registration is sync (not awaited)
+        mock_page.content = AsyncMock(return_value="")
+
+        async def evaluate(script, *args, **kwargs):
+            # The form-target extraction queries document.querySelectorAll('form');
+            # link discovery queries 'a[href]'. Only the form path yields a target.
+            if "'form'" in script:
+                return [
+                    {"action": "/api/x", "method": "POST", "fields": ["bio"]},
+                ]
+            return []
+
+        mock_page.evaluate = AsyncMock(side_effect=evaluate)
+
+        with (
+            patch(
+                "isitsecure.engine.scanners.authenticated_crawler.async_playwright",
+                self._mock_playwright(mock_page),
+            ),
+            patch.object(
+                AuthenticatedCrawler, "_login", new=AsyncMock(return_value=True)
+            ),
+            patch.object(
+                AuthenticatedCrawler,
+                "_extract_auth_headers",
+                new=AsyncMock(return_value={}),
+            ),
+            patch(
+                "isitsecure.engine.scanners.authenticated_crawler.asyncio.sleep",
+                new=AsyncMock(),
+            ),
+        ):
+            result = await crawler.crawl()
+
+        form_eps = [
+            ep for ep in result.discovered_endpoints
+            if ep.url == "https://app.example.com/api/x"
+        ]
+        assert form_eps, "safe_mode form target must surface in returned endpoints"
+        ep = form_eps[0]
+        assert ep.method.value == "POST"
+        assert (
+            ep.source_pattern
+            == AuthenticatedCrawlerConfig.SAFE_MODE_FORM_SOURCE_PATTERN
+        )
+        assert ep.query_param_names == ["bio"]
 
 
 class TestCategorizeUrl:

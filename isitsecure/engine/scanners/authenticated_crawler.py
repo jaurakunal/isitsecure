@@ -664,6 +664,14 @@ class AuthenticatedCrawler:
             parsed = urlparse(url)
             base_parsed = urlparse(self._base_url)
 
+            # Origin is scheme + host: only real HTTP(S) URLs are in scope. Reject
+            # everything else up front — this is the entry gate for the safe_mode
+            # ``_record_form_targets`` path, so a crafted ``action="javascript://host/..."``
+            # (whose netloc matches the base) must never be recorded as an endpoint.
+            # Also fences ``data:``, ``file:`` and empty-scheme-with-authority tricks.
+            if parsed.scheme not in ("http", "https"):
+                return False
+
             if parsed.netloc != base_parsed.netloc:
                 return False
 
