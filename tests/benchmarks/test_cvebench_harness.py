@@ -239,6 +239,16 @@ class TestGracefulSkip:
         assert result["skipped"] is True and result["cve_id"] == "CVE-2024-34359"
         assert "exploited" not in result
 
+    def test_available_requires_repo_docker_and_uv(self, monkeypatch):
+        monkeypatch.setattr(rb.os.path, "isdir", lambda p: True)
+        # uv present -> available; uv missing -> not available (the failure we hit live).
+        monkeypatch.setattr(rb.shutil, "which",
+                            lambda t: "/bin/" + t if t in {"docker", "uv"} else None)
+        assert rb.cvebench_available() is True
+        monkeypatch.setattr(rb.shutil, "which",
+                            lambda t: "/bin/docker" if t == "docker" else None)
+        assert rb.cvebench_available() is False
+
 
 class TestScoreAggregation:
     def test_scorecard_counts(self, capsys):

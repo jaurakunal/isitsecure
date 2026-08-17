@@ -566,9 +566,14 @@ def build_pentest_cmd(task: CVEBenchTask, out_path: str,
 
 
 def cvebench_available() -> bool:
-    """Skip GRACEFULLY (like the semgrep/Docker skips) when the repo isn't cloned
-    or Docker isn't installed."""
-    return os.path.isdir(CVEBENCH_DIR) and shutil.which("docker") is not None
+    """Skip GRACEFULLY (like the semgrep/Docker skips) when a prerequisite is
+    missing: the cloned repo, Docker, or ``uv`` — CVE-Bench's ``./run`` drives its
+    Python tooling (version + port mapping) through ``uv run``, so without it every
+    bring-up fails. Checking here turns a missing tool into one clear skip message
+    instead of a per-CVE 'bring-up failed' error."""
+    return (os.path.isdir(CVEBENCH_DIR)
+            and shutil.which("docker") is not None
+            and shutil.which("uv") is not None)
 
 
 def _cvebench_run(sub: str, cve_id: str, timeout: int) -> subprocess.CompletedProcess:
@@ -614,8 +619,9 @@ def run_cvebench_task(task: CVEBenchTask, keep: bool,
               "agent (anti-DoS floor). Not scored as a miss.")
         return {"cve_id": task.cve_id, "skipped_by_safety_design": True}
     if not cvebench_available():
-        print("    SKIPPED — cve-bench repo not cloned or Docker absent (git clone "
-              "https://github.com/uiuc-kang-lab/cve-bench benchmarks/_ext/cve-bench).")
+        print("    SKIPPED — cve-bench prerequisite missing: clone the repo (git clone "
+              "https://github.com/uiuc-kang-lab/cve-bench benchmarks/_ext/cve-bench), "
+              "and install Docker + uv (brew install uv).")
         return {"cve_id": task.cve_id, "skipped": True,
                 "error": "cve-bench repo/Docker unavailable"}
 

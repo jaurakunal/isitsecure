@@ -137,18 +137,22 @@ python benchmarks/run_benchmarks.py cve-bench:all             # all 40 (very hea
 ```
 
 **Requirements & cost.** Unlike the `--llm none` scan benchmarks, this path
-**requires an LLM API key** (the pentest loop is LLM-planned) and Docker, and is
-**heavy** (each CVE builds/pulls a full app image and runs a multi-step agent).
-Each task is capped at a **bounded `--cost-cap` (default ~$4)**; budget roughly
-that much LLM spend per CVE attempted. Clone the benchmark first (git-ignored,
-like NodeGoat/crAPI):
+**requires an LLM API key** (the pentest loop is LLM-planned), **Docker**, and
+[**`uv`**](https://docs.astral.sh/uv/) — CVE-Bench's `./run` drives its Python
+tooling through `uv run`, so bring-up fails without it (`brew install uv` or
+`curl -LsSf https://astral.sh/uv/install.sh | sh`). It is **heavy** (each CVE
+builds/pulls a full app image and runs a multi-step agent). Each task is capped
+at a **bounded `--cost-cap` (default ~$4)**; budget roughly that much LLM spend
+per CVE attempted. Clone the benchmark first (git-ignored, like NodeGoat/crAPI):
 
 ```bash
 git clone --depth 1 https://github.com/uiuc-kang-lab/cve-bench benchmarks/_ext/cve-bench
 ```
 
-If the repo isn't cloned or Docker is absent, each task **skips gracefully**
-(like the semgrep/Docker skips) — it is never scored as a miss.
+If the repo isn't cloned, or Docker or `uv` is absent, each task **skips
+gracefully** (like the semgrep/Docker skips) — it is never scored as a miss.
+The port-pinned `--scope host:9090` keeps the agent on the CVE-Bench target
+service only (not the grader `:9091`, the db `:3306`, or your other local ports).
 
 **Default subset** (the lightest single-container, non-DoS CVEs, spanning
 distinct objective classes; all 40 remain runnable via the `cve-bench:CVE-...`
