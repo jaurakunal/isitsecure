@@ -1,0 +1,68 @@
+name: CVE-Bench (pentest)
+
+# Runs the isitsecure PENTEST agent against CVE-Bench's real-world web CVEs on a
+# Linux runner — bash 5, GNU `timeout`, and native Docker, i.e. the environment
+# CVE-Bench's `./run` needs (it does NOT run on macOS: bash 3.2 lacks `${v,,}`
+# and there is no GNU `timeout`). Manual only — it needs an LLM API key, pulls
+# multi-GB application images, and spends real tokens (~$4/CVE cost cap).
+#
+# Prereq: add an `ANTHROPIC_API_KEY` repository secret (the pentest planner is
+# LLM-driven; unlike `scan`, this path cannot run with `--llm none`).
+
+on:
+  workflow_dispatch:
+    inputs:
+      selector:
+        description: "cve-bench (4-CVE default subset) | cve-bench:all | cve-bench:CVE-XXXX-YYYY"
+        default: "cve-bench"
+        required: true
+
+jobs:
+  cvebench:
+    # NOTE: hosted `ubuntu-latest` has ~14 GB free disk; the heavy ML CVE images
+    # (llama-cpp-python, lollms-webui) may exceed it even after the free-disk step
+    # below. For `cve-bench:all` or the ML CVEs, switch to a larger or self-hosted
+    # Linux runner: `runs-on: [self-hosted, linux]`.
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Reclaim disk for heavy images
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          sudo docker image prune -af || true
+          df -h /
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[all]"
+
+      - name: Install uv (CVE-Bench's ./run drives its tooling via `uv run`)
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Clone CVE-Bench
+        run: git clone --depth 1 https://github.com/uiuc-kang-lab/cve-bench benchmarks/_ext/cve-bench
+
+      - name: Run CVE-Bench pentest benchmark
+        env:
+          # load_api_key() reads this env var first (isitsecure/config.py).
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::error::ANTHROPIC_API_KEY secret is not set — the pentest planner needs it."
+            exit 1
+          fi
+          python benchmarks/run_benchmarks.py "${{ inputs.selector }}" | tee cvebench-scorecard.txt
+
+      - name: Upload scorecard
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cvebench-scorecard
+          path: cvebench-scorecard.txt

@@ -239,14 +239,23 @@ class TestGracefulSkip:
         assert result["skipped"] is True and result["cve_id"] == "CVE-2024-34359"
         assert "exploited" not in result
 
-    def test_available_requires_repo_docker_and_uv(self, monkeypatch):
+    def test_available_requires_repo_docker_uv_timeout_and_bash4(self, monkeypatch):
         monkeypatch.setattr(rb.os.path, "isdir", lambda p: True)
-        # uv present -> available; uv missing -> not available (the failure we hit live).
+        monkeypatch.setattr(rb, "_bash_major", lambda: 5)
+        present = {"docker", "uv", "timeout"}
+        monkeypatch.setattr(rb.shutil, "which",
+                            lambda t: "/bin/" + t if t in present else None)
+        assert rb.cvebench_available() is True
+        # Missing GNU timeout (the macOS gap) -> not available.
         monkeypatch.setattr(rb.shutil, "which",
                             lambda t: "/bin/" + t if t in {"docker", "uv"} else None)
-        assert rb.cvebench_available() is True
-        monkeypatch.setattr(rb.shutil, "which",
-                            lambda t: "/bin/docker" if t == "docker" else None)
+        assert rb.cvebench_available() is False
+
+    def test_available_false_on_old_bash(self, monkeypatch):
+        # macOS bash 3.2 can't run CVE-Bench's `${cve,,}` — skip cleanly.
+        monkeypatch.setattr(rb.os.path, "isdir", lambda p: True)
+        monkeypatch.setattr(rb.shutil, "which", lambda t: "/bin/" + t)
+        monkeypatch.setattr(rb, "_bash_major", lambda: 3)
         assert rb.cvebench_available() is False
 
 

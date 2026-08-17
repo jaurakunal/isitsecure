@@ -565,15 +565,30 @@ def build_pentest_cmd(task: CVEBenchTask, out_path: str,
     return cmd
 
 
+def _bash_major() -> int:
+    """Major version of the ``bash`` that would run CVE-Bench's ``./run`` (its
+    shebang is ``#!/usr/bin/env bash``). 0 if bash is absent/unparseable."""
+    try:
+        r = _run(["bash", "-c", "echo ${BASH_VERSINFO[0]}"], timeout=10)
+        return int((r.stdout or "").strip() or 0)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return 0
+
+
 def cvebench_available() -> bool:
-    """Skip GRACEFULLY (like the semgrep/Docker skips) when a prerequisite is
-    missing: the cloned repo, Docker, or ``uv`` — CVE-Bench's ``./run`` drives its
-    Python tooling (version + port mapping) through ``uv run``, so without it every
-    bring-up fails. Checking here turns a missing tool into one clear skip message
-    instead of a per-CVE 'bring-up failed' error."""
+    """Skip GRACEFULLY (like the semgrep/Docker skips) when the environment can't
+    run CVE-Bench. Its ``./run`` is Linux-targeted — it uses a bash-4 ``${cve,,}``
+    expansion and GNU ``timeout``, and drives its Python tooling through ``uv run``
+    — so it needs the cloned repo, Docker, ``uv``, GNU ``timeout``, and bash >= 4.
+    macOS ships bash 3.2 and no ``timeout``, so this returns False there: run it on
+    Linux (see the ``cve-bench`` CI workflow or the README Linux runbook). Gating
+    here turns an unsupported host into one clear skip message instead of a per-CVE
+    ``bad substitution`` / ``timeout: command not found`` bring-up error."""
     return (os.path.isdir(CVEBENCH_DIR)
             and shutil.which("docker") is not None
-            and shutil.which("uv") is not None)
+            and shutil.which("uv") is not None
+            and shutil.which("timeout") is not None
+            and _bash_major() >= 4)
 
 
 def _cvebench_run(sub: str, cve_id: str, timeout: int) -> subprocess.CompletedProcess:
@@ -619,9 +634,11 @@ def run_cvebench_task(task: CVEBenchTask, keep: bool,
               "agent (anti-DoS floor). Not scored as a miss.")
         return {"cve_id": task.cve_id, "skipped_by_safety_design": True}
     if not cvebench_available():
-        print("    SKIPPED — cve-bench prerequisite missing: clone the repo (git clone "
-              "https://github.com/uiuc-kang-lab/cve-bench benchmarks/_ext/cve-bench), "
-              "and install Docker + uv (brew install uv).")
+        print("    SKIPPED — CVE-Bench needs a Linux-like env (Docker, uv, GNU "
+              "timeout, bash>=4) and the cloned repo. macOS ships bash 3.2 / no "
+              "timeout — run on Linux via the `cve-bench` CI workflow or the README "
+              "Linux runbook. (git clone https://github.com/uiuc-kang-lab/cve-bench "
+              "benchmarks/_ext/cve-bench)")
         return {"cve_id": task.cve_id, "skipped": True,
                 "error": "cve-bench repo/Docker unavailable"}
 

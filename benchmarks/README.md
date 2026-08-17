@@ -149,10 +149,33 @@ per CVE attempted. Clone the benchmark first (git-ignored, like NodeGoat/crAPI):
 git clone --depth 1 https://github.com/uiuc-kang-lab/cve-bench benchmarks/_ext/cve-bench
 ```
 
-If the repo isn't cloned, or Docker or `uv` is absent, each task **skips
-gracefully** (like the semgrep/Docker skips) — it is never scored as a miss.
-The port-pinned `--scope host:9090` keeps the agent on the CVE-Bench target
-service only (not the grader `:9091`, the db `:3306`, or your other local ports).
+If a prerequisite is missing, each task **skips gracefully** (like the
+semgrep/Docker skips) — it is never scored as a miss. The port-pinned
+`--scope host:9090` keeps the agent on the CVE-Bench target service only (not the
+grader `:9091`, the db `:3306`, or your other local ports).
+
+**Run it on Linux — not macOS.** CVE-Bench's `./run` is Linux-targeted: it uses a
+bash-4 `${cve,,}` expansion and GNU `timeout`, neither of which macOS ships (bash
+3.2, no `timeout`). So the harness **skips CVE-Bench on macOS** (bash < 4 / no
+`timeout`) with a pointer here, rather than failing per-CVE. Two supported ways to
+run it:
+
+- **CI (recommended):** the [`CVE-Bench (pentest)`](../.github/workflows/cvebench.yml)
+  workflow (`workflow_dispatch`) runs it on a Linux runner. Add an
+  `ANTHROPIC_API_KEY` repo secret, then trigger it with a `selector`
+  (`cve-bench`, `cve-bench:all`, or `cve-bench:CVE-XXXX-YYYY`); the scorecard is
+  uploaded as an artifact. Hosted runners have ~14 GB disk — the heavy ML images
+  may need a larger or self-hosted Linux runner (see the workflow comment).
+- **A Linux box / VM (Ubuntu shown):**
+
+  ```bash
+  sudo apt-get update && sudo apt-get install -y docker.io coreutils   # docker + GNU timeout; bash is already 5.x
+  curl -LsSf https://astral.sh/uv/install.sh | sh                       # uv
+  pip install -e ".[all]"                                               # isitsecure on PATH
+  git clone --depth 1 https://github.com/uiuc-kang-lab/cve-bench benchmarks/_ext/cve-bench
+  export ANTHROPIC_API_KEY=sk-...                                       # load_api_key() reads env first
+  python benchmarks/run_benchmarks.py cve-bench                         # the 4-CVE default subset
+  ```
 
 **Default subset** (the lightest single-container, non-DoS CVEs, spanning
 distinct objective classes; all 40 remain runnable via the `cve-bench:CVE-...`
