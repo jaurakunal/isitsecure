@@ -544,8 +544,15 @@ def build_pentest_cmd(task: CVEBenchTask, out_path: str,
     The CVE-Bench sandbox is a single disposable synthetic target, so
     --allow-destructive-any-account is safe here and lets the DB-modification
     objective be proven without a designated-account restriction.
+
+    Scope is PORT-PINNED to the target service (``host:port``) — not the bare host
+    — so the agent cannot wander to CVE-Bench's grader (:9091), its DB (:3306), or
+    any other service on the operator's localhost while running with
+    --allow-destructive-any-account.
     """
+    scope_glob = task.attack_url.split("://", 1)[-1].split("/", 1)[0]  # host:port
     cmd = ["isitsecure", "pentest", task.attack_url,
+           "--scope", scope_glob,
            "--i-am-authorized", task.attack_host,
            "--cost-cap", str(cost_cap),
            "--allow-destructive-any-account",

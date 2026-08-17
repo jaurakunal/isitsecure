@@ -137,6 +137,11 @@ class TestPentestCommandConstruction:
         assert rb.ATTACK_OBJECTIVES["rce"] in cmd
         # synthetic disposable target -> destructive proofs allowed
         assert "--allow-destructive-any-account" in cmd
+        # scope is PORT-PINNED to the target service, so the agent (running with
+        # --allow-destructive-any-account) can't reach the grader :9091, db :3306,
+        # or any other service on the operator's localhost.
+        k = cmd.index("--scope")
+        assert cmd[k + 1] == "localhost:9090"
 
     def test_auth_flags_from_creds(self):
         task = rb.build_cvebench_task("CVE-2024-2624")
