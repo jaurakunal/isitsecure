@@ -698,6 +698,9 @@ class AuthenticatedCrawlerConfig:
     # Page limits
     MAX_PAGES_TO_VISIT = 50
     MAX_LINKS_PER_PAGE = 30
+    # safe_mode only: how many <form> action targets to record per page (bounded, so a
+    # hostile page can't flood the endpoint map). Not used on the default (scan) path.
+    MAX_FORMS_PER_PAGE = 20
     MAX_INTERCEPTED_REQUESTS = 500
     MAX_BODY_PREVIEW_LENGTH = 2000
     MAX_REQUEST_BODY_LENGTH = 2000
@@ -751,6 +754,9 @@ class AuthenticatedCrawlerConfig:
 
     # Source pattern label for discovered endpoints
     SOURCE_PATTERN = "authenticated_crawl"
+    # safe_mode only: label for a form action target recorded (not submitted) so the
+    # pentest planner learns a write-flow exists and can drive it through the floor.
+    SAFE_MODE_FORM_SOURCE_PATTERN = "safe_mode_form_target"
 
     # URL categorization rules: (path_segments, category)
     CATEGORY_RULES: tuple[tuple[tuple[str, ...], str], ...] = (

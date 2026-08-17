@@ -395,17 +395,65 @@ class TestCrawlWithMockPlaywright:
 
 
 class TestFormInteractionSafeMode:
-    """safe_mode gates the blind, un-audited button-clicking (pentest crawl path)."""
+    """safe_mode gates the blind, un-audited button-clicking (pentest crawl path) but
+    still surfaces each form's action target so the write-flow is not thrown away."""
 
     @pytest.mark.asyncio
     async def test_safe_mode_suppresses_blind_button_clicks(self):
-        # In safe_mode the method is a no-op: it never even inspects the DOM, so no
-        # button (icon-only / non-English / "Confirm") can trigger a real side effect.
+        # In safe_mode no button (icon-only / non-English / "Confirm") is ever clicked:
+        # the button-clicking path (query_selector_all + .click) is never reached.
         crawler = _make_crawler(safe_mode=True)
         mock_page = AsyncMock()
-        await crawler._interact_with_forms(mock_page)
-        mock_page.evaluate.assert_not_called()
+        mock_page.evaluate = AsyncMock(return_value=[])
+        await crawler._interact_with_forms(mock_page, "https://app.example.com/x")
         mock_page.query_selector_all.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_safe_mode_records_form_action_targets(self):
+        # gate-through, not blanket-suppress: the form's method + action URL + field names
+        # are recorded as a discovered endpoint so the planner can drive the write-flow
+        # through the floored http_request — without the crawler submitting anything.
+        crawler = _make_crawler(safe_mode=True)
+        mock_page = AsyncMock()
+        mock_page.evaluate = AsyncMock(return_value=[
+            {"action": "/profile/update", "method": "POST", "fields": ["bio", "name"]},
+        ])
+        await crawler._interact_with_forms(mock_page, "https://app.example.com/profile")
+        ep = crawler._html_endpoints["POST:https://app.example.com/profile/update"]
+        assert ep.method.value == "POST"
+        assert ep.query_param_names == ["bio", "name"]
+        assert ep.requires_auth is True
+        assert ep.source_pattern == AuthenticatedCrawlerConfig.SAFE_MODE_FORM_SOURCE_PATTERN
+        mock_page.query_selector_all.assert_not_called()   # nothing submitted
+
+    @pytest.mark.asyncio
+    async def test_safe_mode_empty_action_targets_current_page(self):
+        # A form with no action posts to the current page — recorded at page_url.
+        crawler = _make_crawler(safe_mode=True)
+        mock_page = AsyncMock()
+        mock_page.evaluate = AsyncMock(return_value=[
+            {"action": "", "method": "post", "fields": ["q"]},
+        ])
+        await crawler._interact_with_forms(mock_page, "https://app.example.com/search")
+        assert "POST:https://app.example.com/search" in crawler._html_endpoints
+
+    @pytest.mark.asyncio
+    async def test_safe_mode_skips_cross_origin_form_action(self):
+        crawler = _make_crawler(safe_mode=True)
+        mock_page = AsyncMock()
+        mock_page.evaluate = AsyncMock(return_value=[
+            {"action": "https://evil.example/steal", "method": "POST", "fields": ["x"]},
+        ])
+        await crawler._interact_with_forms(mock_page, "https://app.example.com/profile")
+        assert crawler._html_endpoints == {}
+
+    @pytest.mark.asyncio
+    async def test_safe_mode_form_extraction_failure_is_swallowed(self):
+        crawler = _make_crawler(safe_mode=True)
+        mock_page = AsyncMock()
+        mock_page.evaluate = AsyncMock(side_effect=RuntimeError("evaluate boom"))
+        await crawler._interact_with_forms(mock_page, "https://app.example.com/x")
+        assert crawler._html_endpoints == {}   # no crash, nothing recorded
 
     @pytest.mark.asyncio
     async def test_default_mode_still_clicks_buttons(self):

@@ -17,7 +17,7 @@ import json
 import logging
 import re
 from collections import deque
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 try:
     from playwright.async_api import async_playwright
@@ -373,7 +373,7 @@ class AuthenticatedCrawler:
 
                 await self._discover_links_from_page(page)
                 await self._extract_html_endpoints(page, normalized)
-                await self._interact_with_forms(page)
+                await self._interact_with_forms(page, normalized)
 
             except Exception as exc:
                 error_msg = AuthenticatedCrawlerConfig.ERROR_PAGE_TIMEOUT.format(
@@ -468,19 +468,26 @@ class AuthenticatedCrawler:
     # Form Interaction (discovers API calls triggered by form submissions)
     # ------------------------------------------------------------------
 
-    async def _interact_with_forms(self, page: object) -> None:
+    async def _interact_with_forms(self, page: object, page_url: str = "") -> None:
         """Find forms and buttons on the page, click/submit them to trigger API calls.
 
         This catches endpoints that are only reachable by clicking buttons
         (e.g., "Create Deal", "Submit Review", "Update Profile").
         Network interception captures the resulting requests.
 
-        In ``safe_mode`` this is a no-op: blind-clicking arbitrary buttons causes real,
-        unaudited side effects that never pass through the destructive-op floor (the
-        text-only "delete/remove/logout" filter misses icon-only / non-English /
-        "Confirm" controls), so the pentest crawl path suppresses it entirely.
+        In ``safe_mode`` (the pentest crawl path) blind-clicking is suppressed —
+        clicking arbitrary buttons causes real, unaudited side effects that never pass
+        through the destructive-op floor (the text-only "delete/remove/logout" filter
+        misses icon-only / non-English / "Confirm" controls). Instead of throwing the
+        write-flow away, ``safe_mode`` *records each form's action target* (method +
+        action URL + field names) as a discovered endpoint via
+        :meth:`_record_form_targets`, so the pentest planner learns the write-flow exists
+        and can drive it through the floored ``http_request`` — gate-through, not
+        blanket-suppress. Read-only: nothing is clicked or submitted. Default (scan)
+        behavior below is unchanged.
         """
         if self._safe_mode:
+            await self._record_form_targets(page, page_url)
             return
         try:
             # Find clickable buttons (excluding navigation and external links)
@@ -525,6 +532,58 @@ class AuthenticatedCrawler:
 
         except Exception as exc:
             logger.debug("Form interaction failed: %s", exc)
+
+    async def _record_form_targets(self, page: object, page_url: str) -> None:
+        """``safe_mode`` replacement for blind button-clicking: read (never submit) each
+        ``<form>``'s method + action + named fields from the live DOM and record it as a
+        :class:`DiscoveredEndpoint`, so the pentest planner learns the write-flow exists
+        and can drive it through the floored ``http_request`` instead of the crawler
+        making an unaudited state change. Purely read-only — no element is clicked or
+        submitted. Only ever called on the ``safe_mode`` path, so scan is unaffected.
+        """
+        try:
+            forms = await page.evaluate(  # type: ignore[union-attr]
+                """() => {
+                    const skip = ['submit', 'button', 'reset', 'image', 'hidden'];
+                    const forms = document.querySelectorAll('form');
+                    return Array.from(forms).slice(0, 20).map(f => ({
+                        action: f.getAttribute('action') || '',
+                        method: (f.getAttribute('method') || 'get').toUpperCase(),
+                        fields: Array.from(
+                            f.querySelectorAll('input[name], select[name], textarea[name]')
+                        )
+                            .filter(i => !skip.includes(
+                                (i.getAttribute('type') || '').toLowerCase()))
+                            .map(i => i.getAttribute('name'))
+                            .filter(n => n),
+                    }));
+                }"""
+            )
+        except Exception as exc:
+            logger.debug("safe_mode form-target extraction failed: %s", exc)
+            return
+
+        for form in (forms or [])[: AuthenticatedCrawlerConfig.MAX_FORMS_PER_PAGE]:
+            action = (form.get("action") or "").strip()
+            url = (urljoin(page_url, action) if action else page_url).split("#")[0]
+            if not url or not self._is_same_origin(url):
+                continue
+            method = self._parse_method(form.get("method") or "GET")
+            fields = list(dict.fromkeys(f for f in (form.get("fields") or []) if f))
+            key = f"{method.value}:{url}"
+            self._html_endpoints.setdefault(
+                key,
+                DiscoveredEndpoint(
+                    url=url,
+                    method=method,
+                    source_pattern=(
+                        AuthenticatedCrawlerConfig.SAFE_MODE_FORM_SOURCE_PATTERN
+                    ),
+                    query_param_names=fields,
+                    category=self._categorize_url(url),
+                    requires_auth=True,
+                ),
+            )
 
     # ------------------------------------------------------------------
     # WebSocket Capture
