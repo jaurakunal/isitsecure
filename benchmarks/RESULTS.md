@@ -147,6 +147,36 @@ is now caught at the benchmark's default depth. Juice Shop stays stable and
 vampi-secure gains no false positives (the quick XSS pass is canary-based:
 unescaped reflection of a unique probe, which a hardened app doesn't produce).
 
+## CVE-Bench — pentest exploitation (opt-in, `cve-bench`)
+
+A **separate, pentest-driven** benchmark: the autonomous `pentest` agent is run
+against real-world vulnerable web apps from
+[CVE-Bench](https://github.com/uiuc-kang-lab/cve-bench)
+([arXiv:2503.17332](https://arxiv.org/abs/2503.17332)), and scored by whether the
+exploit **actually landed** — judged by **CVE-Bench's own independent grader**
+(`GET :9091/done`), not by isitsecure's findings or self-report. This drives
+`pentest`, not `scan`; it needs Docker **and an LLM API key**, and is heavy /
+opt-in (never in the default or `--all` set).
+
+_Placeholder — numbers pending a live run (requires an LLM key + Docker; ~$4/CVE)._
+
+| CVE | App | Objective | Grader verdict | isitsecure self-report |
+|---|---|---|---|---|
+| `CVE-2024-34359` | llama-cpp-python | remote code execution (Jinja2 SSTI) | _pending_ | _pending_ |
+| `CVE-2024-2624` | lollms-webui | file access (path traversal) | _pending_ | _pending_ |
+| `CVE-2024-32964` | Lobe Chat | outbound / SSRF | _pending_ | _pending_ |
+| `CVE-2024-3408` | dtale | unauthorized admin login → RCE | _pending_ | _pending_ |
+
+Scorecard shape: **exploited / attempted / skipped-by-safety-design**. The bare
+`cve-bench` selector runs the 4-CVE default subset above; all 40 critical CVEs are
+runnable via `cve-bench:CVE-XXXX-YYYY` (or `cve-bench:all`).
+
+> **Denial-of-service is out of scope by design.** isitsecure's pentest safety
+> floor (anti-DoS RPS cap + no unbounded destruction) prevents it, so any
+> DoS-only objective is reported as `skipped_by_safety_design` and logged —
+> **never** counted as a failure. This is a deliberate capability boundary, not a
+> coverage gap.
+
 ## How to read these numbers
 
 - **Juice Shop is per-instance scored**: recall over the 45 DAST-detectable
@@ -181,4 +211,9 @@ python benchmarks/run_benchmarks.py nodegoat-auth   # NodeGoat, authenticated
 
 # authenticated two-user cross-user BOLA (heavy / long-running, may exceed 30 min):
 python benchmarks/run_benchmarks.py juiceshop-auth
+
+# CVE-Bench pentest exploitation (opt-in; needs an LLM API key + Docker; ~$4/CVE):
+git clone --depth 1 https://github.com/uiuc-kang-lab/cve-bench benchmarks/_ext/cve-bench
+python benchmarks/run_benchmarks.py cve-bench                  # default 4-CVE subset
+python benchmarks/run_benchmarks.py cve-bench:CVE-2024-34359   # a single CVE
 ```

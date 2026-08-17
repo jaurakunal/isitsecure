@@ -206,28 +206,30 @@ class TestRunBenchmarksWiring:
         self.rb = rb
 
     def test_default_runs_vampi_plus_sast(self):
-        docker, want_sast, unknown = self.rb.resolve_selection([], all_flag=False)
+        docker, want_sast, cvebench, unknown = self.rb.resolve_selection([], all_flag=False)
         assert want_sast is True
         assert set(docker) == {"vampi-vulnerable", "vampi-secure"}
-        assert unknown == []
+        assert cvebench == [] and unknown == []
 
     def test_sast_only(self):
-        docker, want_sast, unknown = self.rb.resolve_selection(["sast-injection"], all_flag=False)
-        assert docker == [] and want_sast is True and unknown == []
+        docker, want_sast, cvebench, unknown = self.rb.resolve_selection(
+            ["sast-injection"], all_flag=False)
+        assert docker == [] and want_sast is True and cvebench == [] and unknown == []
 
     def test_docker_target_only_skips_sast(self):
-        docker, want_sast, unknown = self.rb.resolve_selection(["juiceshop"], all_flag=False)
-        assert docker == ["juiceshop"] and want_sast is False
+        docker, want_sast, cvebench, unknown = self.rb.resolve_selection(
+            ["juiceshop"], all_flag=False)
+        assert docker == ["juiceshop"] and want_sast is False and cvebench == []
 
     def test_mixed_docker_and_sast(self):
-        docker, want_sast, unknown = self.rb.resolve_selection(
+        docker, want_sast, cvebench, unknown = self.rb.resolve_selection(
             ["juiceshop", "sast-injection"], all_flag=False)
         assert docker == ["juiceshop"] and want_sast is True
 
     def test_all_flag_includes_sast(self):
-        docker, want_sast, unknown = self.rb.resolve_selection([], all_flag=True)
+        docker, want_sast, cvebench, unknown = self.rb.resolve_selection([], all_flag=True)
         assert want_sast is True and len(docker) == len(self.rb.TARGETS)
 
     def test_unknown_target_reported(self):
-        docker, want_sast, unknown = self.rb.resolve_selection(["nope"], all_flag=False)
+        docker, want_sast, cvebench, unknown = self.rb.resolve_selection(["nope"], all_flag=False)
         assert unknown == ["nope"] and docker == []
