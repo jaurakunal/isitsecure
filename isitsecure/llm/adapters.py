@@ -12,6 +12,32 @@ from isitsecure.llm.protocol import LLMClientProtocol
 
 logger = logging.getLogger(__name__)
 
+
+def _first_text_block(response) -> str:
+    """Return the text of the first text block in an Anthropic response.
+
+    Robust against responses whose ``content`` is empty (e.g. a ``max_tokens``
+    truncation with no completed text block) or contains only non-text blocks
+    (thinking / tool_use). In those cases returns ``""`` instead of raising
+    ``IndexError`` — callers already treat an empty response as a graceful
+    failure. Emits a warning when the response was truncated or had no text so
+    the condition stays visible in logs.
+    """
+    content = getattr(response, "content", None) or []
+    for block in content:
+        if getattr(block, "type", None) == "text" or hasattr(block, "text"):
+            text = getattr(block, "text", None)
+            if isinstance(text, str):
+                return text
+    stop_reason = getattr(response, "stop_reason", None)
+    logger.warning(
+        "LLM response had no text block (stop_reason=%s, blocks=%d)",
+        stop_reason,
+        len(content),
+    )
+    return ""
+
+
 # Model roles:
 #   planning  — code analysis, attack planning, SAST review, fix generation (most capable)
 #   judgment  — triage, result judgment, enrichment (faster/cheaper)
@@ -103,7 +129,7 @@ class AnthropicAdapter:
             messages=[{"role": "user", "content": prompt}],
         )
         self._record_usage(response)
-        return response.content[0].text
+        return _first_text_block(response)
 
     async def generate_with_system(
         self,
@@ -118,7 +144,35 @@ class AnthropicAdapter:
             messages=[{"role": "user", "content": user_prompt}],
         )
         self._record_usage(response)
-        return response.content[0].text
+        return _first_text_block(response)
+
+
+def _response_text(response) -> str:
+    """Return the text of a Gemini response, or ``""`` if there is none.
+
+    ``GenerateContentResponse.text`` returns ``None`` when the response has no
+    candidates/parts (e.g. a safety block or ``MAX_TOKENS`` finish with no text),
+    and some SDK versions raise on ``.text`` for a blocked response. Either way
+    the ``-> str`` contract must hold, so coalesce to ``""`` and warn rather than
+    letting ``None`` (or an exception) propagate to callers.
+    """
+    try:
+        text = getattr(response, "text", None)
+    except Exception as exc:  # SDK raises on some blocked/empty responses
+        logger.warning("LLM response text access failed: %s", exc)
+        return ""
+    if isinstance(text, str) and text:
+        return text
+    finish_reason = None
+    candidates = getattr(response, "candidates", None) or []
+    if candidates:
+        finish_reason = getattr(candidates[0], "finish_reason", None)
+    logger.warning(
+        "LLM response had no text (finish_reason=%s, candidates=%d)",
+        finish_reason,
+        len(candidates),
+    )
+    return ""
 
 
 class GoogleAdapter:
@@ -176,7 +230,7 @@ class GoogleAdapter:
             ),
         )
         self._record_usage(response)
-        return response.text
+        return _response_text(response)
 
     async def generate_with_system(
         self,
@@ -195,4 +249,4 @@ class GoogleAdapter:
             ),
         )
         self._record_usage(response)
-        return response.text
+        return _response_text(response)
