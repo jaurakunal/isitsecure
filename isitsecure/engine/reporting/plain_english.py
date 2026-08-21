@@ -444,6 +444,23 @@ _CATEGORY_EXPLANATIONS: dict[str, PlainExplanation] = {
             "races (idempotency keys, atomic checks) before granting anything."
         ),
     ),
+    FindingCategory.XSS.value: PlainExplanation(
+        what_it_is=(
+            "Text a user or attacker supplies is shown back on a page without "
+            "being neutralised, so the browser runs it as code (a script) "
+            "instead of just displaying it."
+        ),
+        attacker_could=(
+            "Plant a script that runs in your users' browsers — stealing their "
+            "session and logging in as them, capturing what they type, or "
+            "quietly acting on their behalf."
+        ),
+        what_to_do=(
+            "Escape or encode all user-supplied content for the exact place it "
+            "is rendered (HTML, attribute, or JavaScript), and add a Content "
+            "Security Policy so injected scripts can't run."
+        ),
+    ),
 }
 
 
@@ -527,6 +544,9 @@ _CATEGORY_BUSINESS_IMPACT: dict[str, str] = {
     FindingCategory.BUSINESS_LOGIC.value:
         "Someone could pay less than they should, get paid features free, or "
         "drain credits — directly costing you money.",
+    FindingCategory.XSS.value:
+        "An attacker could run scripts in your users' browsers to hijack their "
+        "sessions and act as them.",
 }
 
 _GENERIC_BUSINESS_IMPACT = (
@@ -698,6 +718,17 @@ _CATEGORY_REMEDIATION: dict[str, str] = {
         "a transactional `SELECT ... FOR UPDATE` or conditional update) so they "
         "can't be replayed or raced. Confirm on the running app that a tampered "
         "price, a repeated request, and a concurrent redemption are all rejected."
+    ),
+    FindingCategory.XSS.value: (
+        "Contextually escape or encode every piece of user-controlled data for "
+        "the exact sink it is rendered into — HTML body, HTML attribute, "
+        "JavaScript, URL, or CSS — using your framework's auto-escaping rather "
+        "than building markup by hand, and never inject untrusted input into "
+        "`innerHTML`/`document.write`/`eval`. Add a strict Content-Security-Policy "
+        "(no `unsafe-inline`) as defence in depth, set the `HttpOnly` flag on "
+        "session cookies so a script can't read them, and sanitise any rich-text "
+        "HTML with a vetted allow-list sanitiser. Confirm on the running app that "
+        "a reflected/stored payload is rendered as inert text, not executed."
     ),
 }
 

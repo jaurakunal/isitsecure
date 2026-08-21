@@ -44,6 +44,7 @@ class FindingCategory(str, Enum):
     IDOR = "idor"
     PRIVILEGE_ESCALATION = "privilege_escalation"
     BUSINESS_LOGIC = "business_logic"
+    XSS = "xss"
 
 
 class AssetType(str, Enum):
