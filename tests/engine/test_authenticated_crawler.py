@@ -876,6 +876,8 @@ class _SignupMockPage:
         self.checked = set()
         self.navigations = []
         self.submitted = False
+        self.key_presses = []
+        self.keyboard = _MockKeyboard(self)
 
     def on(self, *args, **kwargs):          # interception registration is sync
         return None
@@ -1330,9 +1332,15 @@ class _MockKeyboard:
 
 
 class _PerceiveElement:
-    def __init__(self, page, key):
+    def __init__(self, page, key, *, opens=None, intercept=False):
         self.page = page
         self.key = key
+        # The overlay ``opens`` when THIS element is clicked (an inner trigger opens its base
+        # widget, so it may differ from the click-record ``key``).
+        self._opens = opens if opens is not None else key
+        # A pointer-intercepted element box: a plain (non-force) click raises, mirroring
+        # Playwright's "… subtree intercepts pointer events".
+        self._intercept = intercept
 
     async def fill(self, value):
         self.page.filled[self.key] = value
@@ -1344,12 +1352,19 @@ class _PerceiveElement:
         self.page.checked.discard(self.key)
         self.page.unchecked.add(self.key)
 
-    async def click(self):
+    async def is_visible(self):
+        return True
+
+    async def click(self, force=False):
+        if self._intercept and not force:
+            raise RuntimeError("element is not clickable: subtree intercepts pointer events")
         self.page.clicks.append(self.key)
+        if force:
+            self.page.force_clicks.append(self.key)
         # Clicking an overlay trigger "opens" it, exposing its options to a subsequent
         # read-overlay-options evaluate (models the lazy CDK/portal render).
-        if self.key in self.page._overlay_map:
-            self.page._open_options = list(self.page._overlay_map[self.key])
+        if self._opens in self.page._overlay_map:
+            self.page._open_options = list(self.page._overlay_map[self._opens])
 
 
 class _PerceiveMockPage:
@@ -1361,7 +1376,8 @@ class _PerceiveMockPage:
                  has_form=True, on_submit=None, page_text="", captcha=False,
                  perceive_error=False, screenshot_error=False, form_gone_after_submit=False,
                  custom_options=None, select_label_raises=False, overlay_map=None,
-                 choose_match=True, read_overlay_raises=False, missing_triggers=None):
+                 choose_match=True, read_overlay_raises=False, missing_triggers=None,
+                 widget_triggers=None, intercept_plain=None):
         self._fields = fields if fields is not None else []
         self._submit = submit
         self._screenshot = screenshot
@@ -1378,6 +1394,11 @@ class _PerceiveMockPage:
         self._choose_match = choose_match
         self._read_overlay_raises = read_overlay_raises
         self._missing_triggers = set(missing_triggers or ())
+        # Base locators whose inner ``.mat-mdc-select-trigger`` descendant exists (clicking it
+        # opens the base widget), and base locators whose element box is pointer-intercepted so
+        # a plain click raises (force-click still works).
+        self._widget_triggers = set(widget_triggers or ())
+        self._intercept_plain = set(intercept_plain or ())
         self._open_options = []
         self.url = "https://app.example.com/#/register"
         self.filled = {}
@@ -1388,6 +1409,7 @@ class _PerceiveMockPage:
         self.chosen = []
         self.state_sets = []
         self.key_presses = []
+        self.force_clicks = []
         self.navigations = []
         self.submitted = False
         self.submit_count = 0
@@ -1450,8 +1472,19 @@ class _PerceiveMockPage:
     async def query_selector(self, selector):
         if selector in self._missing_triggers:
             return None
+        # A compound inner-trigger selector "<locator> <trigger-sel>": present only when the
+        # base widget is configured to expose a real trigger; clicking it opens the base.
+        for trig in BrowserSignupConfig.OVERLAY_TRIGGER_SELECTORS:
+            suffix = f" {trig}"
+            if selector.endswith(suffix):
+                base = selector[: -len(suffix)]
+                if base in self._widget_triggers:
+                    return _PerceiveElement(self, base, opens=base)
+                return None
         if "perceive-idx" in selector:
-            return _PerceiveElement(self, selector)
+            return _PerceiveElement(
+                self, selector, intercept=selector in self._intercept_plain
+            )
         if self._submit and selector in BrowserSignupConfig.SUBMIT_BUTTON_SELECTORS:
             return _SubmitElement(self)
         if selector in self._custom_options:
@@ -2049,3 +2082,291 @@ class TestLLMSignupFlow:
         result = await crawler._run_signup(
             page, "a@x.com", "pw", "agent_1", _no_priv, None, None)
         assert result.success and result.signup_endpoint == "/api/Users"
+
+
+# ---------------------------------------------------------------------------
+# Real-SPA DOM-interaction robustness: interstitial-overlay dismissal + robust
+# custom-widget open (both live-proven on OWASP Juice Shop's register form)
+# ---------------------------------------------------------------------------
+
+
+class _DismissButton:
+    """A dismiss control returned by ``query_selector``: visibility + click behaviour."""
+
+    def __init__(self, page, selector, *, visible=True, raises=False):
+        self.page = page
+        self.selector = selector
+        self._visible = visible
+        self._raises = raises
+
+    async def is_visible(self):
+        return self._visible
+
+    async def click(self, force=False):
+        if self._raises:
+            raise RuntimeError("click intercepted")
+        self.page.dismiss_clicks.append(self.selector)
+
+
+class _DismissMockPage:
+    """A minimal page for ``_dismiss_overlays``: ``query_selector`` returns a configured
+    ``_DismissButton`` per selector; the keyboard records Escape presses. ``keyboard_raises``
+    models an environment where pressing Escape blows up (must be swallowed)."""
+
+    def __init__(self, *, present=None, keyboard_raises=False):
+        self._present = present or {}
+        self.dismiss_clicks = []
+        self.key_presses = []
+        self._keyboard_raises = keyboard_raises
+        self.keyboard = self._Keyboard(self)
+
+    class _Keyboard:
+        def __init__(self, page):
+            self.page = page
+
+        async def press(self, key):
+            if self.page._keyboard_raises:
+                raise RuntimeError("keyboard detached")
+            self.page.key_presses.append(key)
+
+    async def query_selector(self, selector):
+        return self._present.get(selector)
+
+
+class TestDismissOverlays:
+    """Fix 1: best-effort, bounded dismissal of interstitial overlays (cookie/welcome/modal)
+    that intercept ALL clicks on real SPAs — done before any form interaction."""
+
+    async def test_visible_dismiss_button_is_clicked_and_escape_pressed(self):
+        crawler = _make_crawler()
+        sel = BrowserSignupConfig.OVERLAY_DISMISS_SELECTORS[0]
+        page = _DismissMockPage(present={sel: None})  # start empty; add a real button below
+        page._present[sel] = _DismissButton(page, sel, visible=True)
+        await crawler._dismiss_overlays(page)
+        assert page.dismiss_clicks == [sel]
+        assert page.key_presses == ["Escape"]        # Escape always pressed once
+
+    async def test_invisible_dismiss_control_is_skipped(self):
+        crawler = _make_crawler()
+        sel = BrowserSignupConfig.OVERLAY_DISMISS_SELECTORS[0]
+        page = _DismissMockPage(present={sel: None})
+        page._present[sel] = _DismissButton(page, sel, visible=False)
+        await crawler._dismiss_overlays(page)
+        assert page.dismiss_clicks == []             # not visible → never clicked
+        assert page.key_presses == ["Escape"]
+
+    async def test_multiple_overlays_are_bounded(self):
+        crawler = _make_crawler()
+        # Present MORE visible dismiss controls than the cap; only the cap-many are clicked.
+        n = BrowserSignupConfig.MAX_OVERLAY_DISMISSALS + 2
+        selectors = BrowserSignupConfig.OVERLAY_DISMISS_SELECTORS[:n]
+        page = _DismissMockPage()
+        for sel in selectors:
+            page._present[sel] = _DismissButton(page, sel, visible=True)
+        await crawler._dismiss_overlays(page)
+        assert len(page.dismiss_clicks) == BrowserSignupConfig.MAX_OVERLAY_DISMISSALS
+        assert page.dismiss_clicks == list(
+            selectors[: BrowserSignupConfig.MAX_OVERLAY_DISMISSALS]
+        )
+
+    async def test_no_overlays_present_is_noop_but_still_escapes(self):
+        crawler = _make_crawler()
+        page = _DismissMockPage(present={})
+        await crawler._dismiss_overlays(page)
+        assert page.dismiss_clicks == []
+        assert page.key_presses == ["Escape"]
+
+    async def test_dismiss_click_that_raises_is_swallowed(self):
+        crawler = _make_crawler()
+        sel = BrowserSignupConfig.OVERLAY_DISMISS_SELECTORS[0]
+        page = _DismissMockPage()
+        page._present[sel] = _DismissButton(page, sel, visible=True, raises=True)
+        await crawler._dismiss_overlays(page)      # must not raise
+        assert page.dismiss_clicks == []
+        assert page.key_presses == ["Escape"]
+
+    async def test_escape_failure_is_swallowed(self):
+        crawler = _make_crawler()
+        page = _DismissMockPage(present={}, keyboard_raises=True)
+        await crawler._dismiss_overlays(page)      # must not raise
+        assert page.key_presses == []
+
+    async def test_dismiss_runs_before_perceive_in_signup_flow(self):
+        # Assert the overlay dismissal happens up front, before the form is perceived.
+        crawler = _make_crawler()
+
+        def on_submit(attempt):
+            crawler._intercepted.append(InterceptedRequest(
+                url="https://app.example.com/api/Users", method="POST",
+                response_status=201))
+        page = _PerceiveMockPage(fields=[
+            _pfield(_P0, tag="input", type="email", name="email", required=True),
+            _pfield(_P1, tag="input", type="password", name="password", required=True),
+        ], on_submit=on_submit)
+
+        order = []
+        orig_dismiss = crawler._dismiss_overlays
+        orig_perceive = crawler._perceive_form
+
+        async def spy_dismiss(p):
+            order.append("dismiss")
+            return await orig_dismiss(p)
+
+        async def spy_perceive(p):
+            order.append("perceive")
+            return await orig_perceive(p)
+
+        crawler._dismiss_overlays = spy_dismiss
+        crawler._perceive_form = spy_perceive
+
+        async def filler(perception, identity, goal):
+            return FormFillPlan(actions=[
+                FormFillAction(locator=_P0, action="type", value="a@x.com"),
+                FormFillAction(locator=_P1, action="type", value="pw")])
+
+        result = await crawler._run_signup(
+            page, "a@x.com", "pw", "agent_1", _synth, None, filler)
+        assert result.success
+        assert order[0] == "dismiss"
+        assert order.index("dismiss") < order.index("perceive")
+
+
+class TestOpenOverlayWidget:
+    """Fix 2: opening a custom overlay widget via its REAL trigger, with a force-click
+    fallback when the element box is pointer-intercepted by an overlapping label/overlay."""
+
+    async def test_prefers_real_inner_trigger(self):
+        # The widget exposes a .mat-mdc-select-trigger; clicking it opens the CDK overlay.
+        crawler = _make_crawler()
+        page = _PerceiveMockPage(widget_triggers={_P0}, overlay_map={_P0: ["Q1", "Q2"]})
+        opened = await crawler._open_overlay_widget(page, _P0)
+        assert opened is True
+        assert _P0 in page.clicks                    # the trigger click opened the base widget
+        assert page.force_clicks == []               # trigger worked → no force needed
+        assert page._open_options == ["Q1", "Q2"]
+
+    async def test_plain_intercepted_falls_back_to_force_click(self):
+        # No inner trigger; the element box is pointer-intercepted, so a plain click raises
+        # and the code retries with a force click, which opens the overlay.
+        crawler = _make_crawler()
+        page = _PerceiveMockPage(intercept_plain={_P0}, overlay_map={_P0: ["A"]})
+        opened = await crawler._open_overlay_widget(page, _P0)
+        assert opened is True
+        assert page.force_clicks == [_P0]            # opened via the force fallback
+        assert page._open_options == ["A"]
+
+    async def test_plain_click_opens_when_not_intercepted(self):
+        crawler = _make_crawler()
+        page = _PerceiveMockPage(overlay_map={_P0: ["A"]})
+        opened = await crawler._open_overlay_widget(page, _P0)
+        assert opened is True
+        assert page.clicks == [_P0] and page.force_clicks == []
+
+    async def test_widget_absent_returns_false(self):
+        crawler = _make_crawler()
+        page = _PerceiveMockPage(missing_triggers={_P0})
+        assert await crawler._open_overlay_widget(page, _P0) is False
+
+    async def test_query_selector_raising_returns_false(self):
+        crawler = _make_crawler()
+        page = _PerceiveMockPage()
+
+        async def boom(selector):
+            raise RuntimeError("query boom")
+
+        page.query_selector = boom
+        assert await crawler._open_overlay_widget(page, _P0) is False
+
+    async def test_force_click_also_failing_returns_false(self):
+        # Element box is intercepted AND force-click also raises → honest False (no open).
+        crawler = _make_crawler()
+        page = _PerceiveMockPage()
+
+        class _AlwaysRaises:
+            async def click(self, force=False):
+                raise RuntimeError("still intercepted" if not force else "force failed")
+
+        async def qs(selector):
+            # No inner trigger; the base element always raises on click.
+            for trig in BrowserSignupConfig.OVERLAY_TRIGGER_SELECTORS:
+                if selector.endswith(f" {trig}"):
+                    return None
+            return _AlwaysRaises()
+
+        page.query_selector = qs
+        assert await crawler._open_overlay_widget(page, _P0) is False
+
+    async def test_inner_trigger_click_raising_falls_through_to_force(self):
+        # The inner trigger exists but its click raises; the code falls through to the
+        # element box, whose plain click is intercepted, then force-opens.
+        crawler = _make_crawler()
+        page = _PerceiveMockPage(intercept_plain={_P0}, overlay_map={_P0: ["A"]})
+
+        base_qs = page.query_selector
+
+        async def qs(selector):
+            for trig in BrowserSignupConfig.OVERLAY_TRIGGER_SELECTORS:
+                if selector.endswith(f" {trig}"):
+                    class _RaisingTrigger:
+                        async def click(self, force=False):
+                            raise RuntimeError("trigger detached")
+                    return _RaisingTrigger()
+            return await base_qs(selector)
+
+        page.query_selector = qs
+        opened = await crawler._open_overlay_widget(page, _P0)
+        assert opened is True
+        assert page.force_clicks == [_P0]
+
+    async def test_enumerate_overlay_uses_robust_open_under_interception(self):
+        # _enumerate_overlay_options must open a pointer-intercepted mat-select via the force
+        # fallback and still read the lazily-rendered options.
+        crawler = _make_crawler()
+        page = _PerceiveMockPage(intercept_plain={_P2},
+                                 overlay_map={_P2: ["Q1", "Q2", "Q3"]})
+        opts = await crawler._enumerate_overlay_options(page, _P2)
+        assert opts == ["Q1", "Q2", "Q3"]
+        assert page.force_clicks == [_P2]            # opened via robust open, not a plain click
+        assert page.key_presses == ["Escape"]        # closed after read
+
+    async def test_select_option_uses_robust_open_under_interception(self):
+        # _select_option must open a pointer-intercepted custom dropdown via the real trigger,
+        # then click the chosen option.
+        crawler = _make_crawler()
+        option_selector = 'mat-option:has-text("First pet?")'
+        page = _PerceiveMockPage(widget_triggers={_P2}, overlay_map={_P2: ["First pet?"]},
+                                 custom_options={option_selector})
+        field = FormField(locator=_P2, tag="mat-select", name="securityQuestion",
+                          options=["First pet?"])
+        await crawler._select_option(page, _P2, "First pet?", field)
+        assert _P2 in page.clicks                    # opened via the real trigger
+        assert option_selector in page.clicks        # chosen option clicked
+
+    async def test_inner_trigger_query_raising_falls_through_to_plain_click(self):
+        # If querying the inner trigger itself raises, the widget still opens via a plain click.
+        crawler = _make_crawler()
+        page = _PerceiveMockPage(overlay_map={_P0: ["A"]})
+        base_qs = page.query_selector
+
+        async def qs(selector):
+            for trig in BrowserSignupConfig.OVERLAY_TRIGGER_SELECTORS:
+                if selector.endswith(f" {trig}"):
+                    raise RuntimeError("inner query boom")
+            return await base_qs(selector)
+
+        page.query_selector = qs
+        opened = await crawler._open_overlay_widget(page, _P0)
+        assert opened is True
+        assert page.clicks == [_P0] and page.force_clicks == []
+
+    async def test_enumerate_overlay_absent_widget_yields_empty(self):
+        crawler = _make_crawler()
+        page = _PerceiveMockPage(missing_triggers={_P0})
+        assert await crawler._enumerate_overlay_options(page, _P0) == []
+
+    async def test_select_option_absent_widget_is_noop(self):
+        crawler = _make_crawler()
+        page = _PerceiveMockPage(missing_triggers={_P0})
+        field = FormField(locator=_P0, tag="mat-select", name="q", options=["x"])
+        await crawler._select_option(page, _P0, "x", field)
+        assert page.clicks == []

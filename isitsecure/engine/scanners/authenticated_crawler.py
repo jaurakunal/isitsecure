@@ -581,6 +581,12 @@ class AuthenticatedCrawler:
             base.error = BrowserSignupConfig.ERROR_NO_REGISTER_PAGE
             return base
 
+        # Real SPAs interpose interstitial overlays (cookie banners, welcome/newsletter
+        # modals) on load whose surface intercepts EVERY click, so no form control can be
+        # interacted with until they are dismissed. A human dismisses the popup first; the
+        # agent must too. Best-effort and bounded — done once up front, before perceiving.
+        await self._dismiss_overlays(page)
+
         # Detect a real-world wall BEFORE filling/submitting — if walled we do not attempt
         # to defeat it and never submit the form.
         wall = await self._detect_signup_wall(page)
@@ -696,6 +702,85 @@ class AuthenticatedCrawler:
         except Exception:
             await asyncio.sleep(BrowserSignupConfig.POST_SUBMIT_SETTLE_MS / 1000)
 
+    async def _dismiss_overlays(self, page: object) -> None:
+        """Best-effort dismissal of interstitial overlays that block form interaction on real
+        SPAs — cookie-consent banners, welcome/onboarding modals, newsletter popups (Juice
+        Shop shows a welcome dialog + a cookie banner in a ``.cdk-overlay-container``). Their
+        surface INTERCEPTS every pointer event, so no form control can be clicked until they
+        are gone; a human dismisses the popup first, and so must the agent. Clicks any VISIBLE
+        match of the common dismiss controls (:data:`OVERLAY_DISMISS_SELECTORS`, in order),
+        BOUNDED by :data:`MAX_OVERLAY_DISMISSALS`, then presses Escape once. Fully best-effort:
+        a selector that is absent, not visible, or whose click raises is skipped, and the
+        method NEVER raises. Each dismissal is logged for the audit trail. Signup-path only —
+        scan never invokes it."""
+        dismissed = 0
+        for selector in BrowserSignupConfig.OVERLAY_DISMISS_SELECTORS:
+            if dismissed >= BrowserSignupConfig.MAX_OVERLAY_DISMISSALS:
+                break
+            try:
+                element = await page.query_selector(selector)  # type: ignore[union-attr]
+                if not element or not await element.is_visible():
+                    continue
+                await element.click()
+                dismissed += 1
+                logger.info("signup: dismissed interstitial overlay via %s", selector)
+            except Exception as exc:  # noqa: BLE001 — dismissal is best-effort, never fatal
+                logger.debug("signup: overlay dismiss via %s skipped: %s", selector, exc)
+        try:
+            await page.keyboard.press("Escape")  # type: ignore[union-attr]
+        except Exception as exc:  # noqa: BLE001 — Escape is best-effort
+            logger.debug("signup: overlay-dismiss Escape failed: %s", exc)
+
+    async def _open_overlay_widget(self, page: object, locator: str) -> bool:
+        """Robustly OPEN a custom overlay widget (mat-select / combobox / listbox /
+        react-select) so its lazily-rendered options appear, working around two real-SPA
+        obstacles proven live on Juice Shop: the element box being pointer-INTERCEPTED by an
+        overlapping Material ``<mat-label>`` ('… intercepts pointer events'), and a plain
+        element click not opening the panel. Tries, in order: (1) click the widget's REAL inner
+        trigger descendant (``.mat-mdc-select-trigger`` for a mat-select — the control the
+        framework actually listens on, which sits under the intercepting label); (2) a plain
+        click on the element box; (3) a FORCE click on the element box (``click(force=True)``),
+        which bypasses the interception check. Any step that raises falls through to the next.
+        Best-effort — returns True once a click lands, False if the widget can't be found or
+        opened (never raises)."""
+        try:
+            element = await page.query_selector(locator)  # type: ignore[union-attr]
+        except Exception as exc:
+            logger.debug("signup: overlay widget %s not found: %s", locator, exc)
+            return False
+        if not element:
+            return False
+        # (1) The widget's real inner trigger — under the overlapping label that intercepts a
+        # click at the element box.
+        for trigger_sel in BrowserSignupConfig.OVERLAY_TRIGGER_SELECTORS:
+            try:
+                inner = await page.query_selector(  # type: ignore[union-attr]
+                    f"{locator} {trigger_sel}"
+                )
+            except Exception:
+                inner = None
+            if inner:
+                try:
+                    await inner.click()
+                    return True
+                except Exception as exc:
+                    logger.debug(
+                        "signup: overlay inner-trigger click on %s failed: %s", locator, exc
+                    )
+        # (2) A plain click on the element box.
+        try:
+            await element.click()
+            return True
+        except Exception as exc:
+            logger.debug("signup: overlay element click on %s intercepted: %s", locator, exc)
+        # (3) A force click bypasses the pointer-interception (an overlapping label/overlay).
+        try:
+            await element.click(force=True)
+            return True
+        except Exception as exc:
+            logger.debug("signup: overlay force-click on %s failed: %s", locator, exc)
+        return False
+
     # ------------------------------------------------------------------
     # Form perception + plan execution (LLM form-comprehension path)
     # ------------------------------------------------------------------
@@ -762,17 +847,13 @@ class AuthenticatedCrawler:
 
     async def _enumerate_overlay_options(self, page: object, locator: str) -> list[str]:
         """OPEN an overlay dropdown to read the options it renders lazily, then CLOSE it —
-        READ-ONLY (it never selects an option and never submits). Clicks the widget's trigger,
-        waits for the overlay to render, reads the ``mat-option``/``[role=option]``/react-select
-        option nodes, and presses Escape to restore state. Fully best-effort and BOUNDED: a
-        widget that won't open (or an evaluate that fails) yields ``[]`` rather than raising."""
-        try:
-            trigger = await page.query_selector(locator)  # type: ignore[union-attr]
-            if not trigger:
-                return []
-            await trigger.click()
-        except Exception as exc:
-            logger.debug("signup: could not open dropdown %s to enumerate: %s", locator, exc)
+        READ-ONLY (it never selects an option and never submits). Opens the widget via its real
+        trigger (with a force-click fallback for a pointer-intercepted element box — see
+        :meth:`_open_overlay_widget`), waits for the overlay to render, reads the
+        ``mat-option``/``[role=option]``/react-select option nodes, and presses Escape to
+        restore state. Fully best-effort and BOUNDED: a widget that won't open (or an evaluate
+        that fails) yields ``[]`` rather than raising."""
+        if not await self._open_overlay_widget(page, locator):
             return []
         await self._settle(page)
         try:
@@ -1022,9 +1103,10 @@ class AuthenticatedCrawler:
     ) -> None:
         """Set a dropdown to ``value``. A native ``<select>`` (``field.tag == 'select'``) is
         driven with ``page.select_option`` (by visible label, then by value); a CUSTOM
-        dropdown (mat-select / role=listbox) is OPENED by clicking its trigger, then the
-        option whose visible text matches ``value`` is clicked. Best-effort — a failure is
-        logged, not raised."""
+        dropdown (mat-select / role=listbox) is OPENED via its real trigger (with a force-click
+        fallback for a pointer-intercepted element box — see :meth:`_open_overlay_widget`),
+        then the option whose visible text matches ``value`` is clicked. Best-effort — a
+        failure is logged, not raised."""
         if field is not None and (field.tag or "").lower() == "select":
             for kwargs in ({"label": value}, {"value": value}):
                 try:
@@ -1033,12 +1115,7 @@ class AuthenticatedCrawler:
                 except Exception as exc:
                     logger.debug("signup: native select_option %s failed: %s", kwargs, exc)
             return
-        try:
-            trigger = await page.query_selector(locator)  # type: ignore[union-attr]
-            if trigger:
-                await trigger.click()
-        except Exception as exc:
-            logger.debug("signup: could not open custom dropdown %s: %s", locator, exc)
+        if not await self._open_overlay_widget(page, locator):
             return
         await self._settle(page)
         await self._click_custom_option(page, value)

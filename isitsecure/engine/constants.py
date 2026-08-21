@@ -493,6 +493,43 @@ class BrowserSignupConfig:
         '[role="option"]:has-text("{text}")',
         'li[role="option"]:has-text("{text}")',
     )
+    # Real SPAs interpose interstitial overlays on load — cookie-consent banners, welcome
+    # modals, newsletter popups (Juice Shop shows a welcome dialog + a cookie banner in a
+    # ``.cdk-overlay-container``) — whose surface INTERCEPTS every pointer event, so no form
+    # control can be clicked until it is dismissed. ``_dismiss_overlays`` clicks any VISIBLE
+    # match of these common dismiss controls (in order), bounded by ``MAX_OVERLAY_DISMISSALS``,
+    # then presses Escape once. Best-effort and general (a human dismisses the popup first; the
+    # agent must too). Signup-path only — scan never runs this.
+    OVERLAY_DISMISS_SELECTORS = (
+        'button[aria-label*="close" i]',
+        'button[aria-label*="dismiss" i]',
+        'a[aria-label*="dismiss" i]',
+        'a[aria-label*="close" i]',
+        ".close-dialog",
+        ".cc-btn",
+        ".cc-dismiss",
+        'button:has-text("Dismiss")',
+        'button:has-text("Accept all")',
+        'button:has-text("Accept")',
+        'button:has-text("Got it")',
+        'button:has-text("I agree")',
+        'button:has-text("Me want it")',
+        'button:has-text("OK")',
+        'button:has-text("Close")',
+    )
+    # Upper bound on how many interstitial overlays ``_dismiss_overlays`` will dismiss in one
+    # pass — bounds the best-effort work so a hostile page full of dismiss-shaped controls
+    # can't make us click unboundedly.
+    MAX_OVERLAY_DISMISSALS = 5
+    # Descendant "real trigger" selectors tried (in order) to OPEN a custom overlay widget by
+    # clicking the control the framework actually listens on, rather than the element box —
+    # which an overlapping Material ``<mat-label>`` intercepts (Juice Shop's security-question
+    # ``mat-select``). Clicking ``.mat-mdc-select-trigger`` opens the CDK overlay; a force-click
+    # on the element box is the fallback. Empty match → fall through to the element itself.
+    OVERLAY_TRIGGER_SELECTORS = (
+        ".mat-mdc-select-trigger",
+        ".mat-select-trigger",
+    )
     # The goal handed to the LLM form-filler (engine-authored; rendered outside the fence).
     FORM_FILLER_GOAL = "register a new account so we can log in and reach the app"
     # Bounded adaptive retries: perceive → plan → execute → submit, re-perceiving on a still-
