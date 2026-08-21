@@ -111,6 +111,34 @@ class AuthenticatedCrawlResult(BaseModel):
     errors: list[str] = Field(default_factory=list)
 
 
+class BrowserSignupResult(BaseModel):
+    """Outcome of a browser-driven self-registration (``AuthenticatedCrawler.signup``).
+
+    The pentest ``provision_account`` browser fallback drives a real browser to read a
+    SPA's register form, submit it, and capture the real signup endpoint from the
+    resulting XHR. This is the structured result it reads back:
+
+    - ``success`` — the register form submitted and produced a 2xx signup API call.
+    - ``signup_endpoint`` — the path of the intercepted signup POST (e.g. ``/api/Users``),
+      the non-standard endpoint that path-probing could not find.
+    - ``email``/``password``/``username`` — the agent-owned credentials it registered with.
+    - ``status_code`` — the signup API call's status (``None`` when none was captured).
+    - ``error`` — why signup could not complete (no register page, no XHR, submit failed).
+    - ``blocked_reason`` — a real-world wall (CAPTCHA / email- / SMS-verification) that was
+      *detected and reported*, never defeated (the honest boundary). Mutually the reason
+      ``success`` is False without an ``error``.
+    """
+
+    success: bool = False
+    signup_endpoint: str = ""
+    email: str = ""
+    password: str = ""
+    username: str = ""
+    status_code: int | None = None
+    error: str = ""
+    blocked_reason: str = ""
+
+
 class CrossUserIDORResult(BaseModel):
     """Result of a cross-user IDOR test on a single resource."""
 

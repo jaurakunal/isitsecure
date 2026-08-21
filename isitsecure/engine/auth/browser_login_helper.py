@@ -102,13 +102,20 @@ class BrowserLoginHelper:
         return id_ok and pw_ok
 
     @staticmethod
-    async def click_submit(page: object) -> bool:
+    async def click_submit(
+        page: object,
+        selectors: tuple[str, ...] | None = None,
+    ) -> bool:
         """Try multiple selectors to find and click the submit button.
+
+        ``selectors`` defaults to the login submit set, so every existing caller
+        (login/crawl) is byte-identical. The browser-signup path passes the
+        register-form submit selectors instead, reusing this same click logic (DRY).
 
         Returns:
             True if a submit button was found and clicked, False otherwise.
         """
-        for selector in BrowserLoginConfig.SUBMIT_BUTTON_SELECTORS:
+        for selector in (selectors or BrowserLoginConfig.SUBMIT_BUTTON_SELECTORS):
             try:
                 element = await page.query_selector(selector)  # type: ignore[union-attr]
                 if element:

@@ -5,7 +5,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from isitsecure.engine.constants import AuthenticatedCrawlerConfig
+from isitsecure.engine.constants import (
+    AuthenticatedCrawlerConfig,
+    BrowserSignupConfig,
+)
 from isitsecure.engine.enums import EndpointCategory
 from isitsecure.engine.models import InterceptedRequest
 from isitsecure.engine.scanners.authenticated_crawler import (
@@ -812,3 +815,480 @@ class TestExtractAuthHeadersCookies:
         ):
             headers = await crawler._extract_auth_headers(page)
         assert "Cookie" not in headers
+
+
+# ---------------------------------------------------------------------------
+# Browser self-registration (signup) — pentest-only path; scan NEVER calls it
+# ---------------------------------------------------------------------------
+
+
+def _field(idx, name="", type="text", **kw):
+    """A field-metadata dict shaped like the signup field-enumerator returns."""
+    base = {"idx": idx, "name": name, "id": "", "type": type,
+            "placeholder": "", "aria": "", "label": "", "required": False}
+    base.update(kw)
+    return base
+
+
+class _MockInput:
+    def __init__(self, idx, page):
+        self.idx = idx
+        self.page = page
+
+    async def fill(self, value):
+        self.page.filled[self.idx] = value
+
+    async def check(self):
+        self.page.checked.add(self.idx)
+
+    async def click(self):
+        pass
+
+
+class _MockSubmit:
+    def __init__(self, page):
+        self.page = page
+
+    async def click(self):
+        self.page.submitted = True
+        if self.page.on_submit:
+            self.page.on_submit()
+
+
+class _SignupMockPage:
+    """A deterministic mock Playwright page for the signup flow: ``evaluate`` dispatches
+    on the marker comment in each JS snippet; ``query_selector`` returns fillable inputs
+    (by index) and a submit button; a submit click can fire a caller-supplied side effect
+    (modelling the signup XHR the interception captures)."""
+
+    def __init__(self, *, fields=None, has_form=True, captcha=False, page_text="",
+                 register_link="", submit_ok=True, on_submit=None, form_by_url=None):
+        self._fields = fields or []
+        self._has_form = has_form
+        self._captcha = captcha
+        self._page_text = page_text
+        self._register_link = register_link
+        self._submit_ok = submit_ok
+        self.on_submit = on_submit
+        self._form_by_url = form_by_url
+        self.url = "about:blank"
+        self.filled = {}
+        self.checked = set()
+        self.navigations = []
+        self.submitted = False
+
+    def on(self, *args, **kwargs):          # interception registration is sync
+        return None
+
+    async def goto(self, url, **kwargs):
+        self.navigations.append(url)
+        self.url = url
+
+    async def wait_for_load_state(self, *args, **kwargs):
+        return None
+
+    async def close(self):
+        return None
+
+    async def evaluate(self, script, *args):
+        if "find-register-link" in script:
+            return self._register_link
+        if "has-signup-form" in script:
+            if self._form_by_url is not None:
+                return self._form_by_url.get(self.url, False)
+            return self._has_form
+        if "enum-signup-fields" in script:
+            return self._fields
+        if "detect-captcha" in script:
+            return self._captcha
+        if "signup-page-text" in script:
+            return self._page_text
+        return None
+
+    async def query_selector(self, selector):
+        if "signup-idx" in selector:
+            return _MockInput(int(selector.split('"')[1]), self)
+        if selector in BrowserSignupConfig.SUBMIT_BUTTON_SELECTORS and self._submit_ok:
+            return _MockSubmit(self)
+        return None
+
+
+def _no_priv(name):
+    """A synthesize stand-in mirroring the API-path exclusion: refuse privilege fields."""
+    return None if name.lower() in ("isadmin", "role", "admin") else f"syn-{name}"
+
+
+class TestBrowserSignupRunFlow:
+    """The in-browser signup flow (_run_signup) with a mocked page — no real browser."""
+
+    def _happy_fields(self):
+        return [
+            _field(0, "email", "email", required=True),
+            _field(1, "password", "password", required=True),
+            _field(2, "passwordRepeat", "password", required=True),
+            _field(3, "username", "text", required=True),
+            _field(4, "isAdmin", "checkbox"),          # privilege → must never be filled
+        ]
+
+    def _page_that_captures(self, crawler, endpoint="/api/Users", status=201, **kw):
+        def on_submit():
+            crawler._intercepted.append(InterceptedRequest(
+                url=f"https://app.example.com{endpoint}", method="POST",
+                response_status=status))
+        return _SignupMockPage(on_submit=on_submit, **kw)
+
+    @pytest.mark.asyncio
+    async def test_happy_path_captures_endpoint_and_credentials(self):
+        crawler = _make_crawler()
+        page = self._page_that_captures(crawler, fields=self._happy_fields())
+        result = await crawler._run_signup(
+            page, "agent@x.com", "pw123", "agent_1", _no_priv,
+            register_url="https://app.example.com/register")
+        assert result.success is True
+        assert result.signup_endpoint == "/api/Users"
+        assert result.status_code == 201
+        assert result.email == "agent@x.com" and result.password == "pw123"  # noqa: S105
+        assert result.username == "agent_1"
+        # Field-fill: email, BOTH passwords, and username picked correctly.
+        assert page.filled[0] == "agent@x.com"
+        assert page.filled[1] == "pw123" and page.filled[2] == "pw123"
+        assert page.filled[3] == "agent_1"
+        # Privilege field is NEVER filled or checked.
+        assert 4 not in page.filled and 4 not in page.checked
+        assert page.submitted is True
+
+    @pytest.mark.asyncio
+    async def test_prefers_signup_shaped_post_over_arbitrary_last_call(self):
+        # Two POSTs captured: a non-signup tracking call fired LAST and the real signup
+        # call. The signup-shaped path (/api/Users) must be the one reported.
+        crawler = _make_crawler()
+
+        def on_submit():
+            crawler._intercepted.append(InterceptedRequest(
+                url="https://app.example.com/api/Users", method="POST",
+                response_status=201))
+            crawler._intercepted.append(InterceptedRequest(
+                url="https://app.example.com/api/track", method="POST",
+                response_status=200))
+
+        page = _SignupMockPage(fields=self._happy_fields(), on_submit=on_submit)
+        result = await crawler._run_signup(
+            page, "a@x.com", "pw", "u", _no_priv,
+            register_url="https://app.example.com/register")
+        assert result.success and result.signup_endpoint == "/api/Users"
+
+    @pytest.mark.asyncio
+    async def test_non_2xx_signup_call_is_not_success(self):
+        crawler = _make_crawler()
+        page = self._page_that_captures(
+            crawler, endpoint="/api/Users", status=500,
+            fields=self._happy_fields())
+        result = await crawler._run_signup(
+            page, "a@x.com", "pw", "u", _no_priv,
+            register_url="https://app.example.com/register")
+        assert result.success is False
+        assert result.signup_endpoint == "/api/Users" and result.status_code == 500
+        assert "returned 500" in result.error
+
+    @pytest.mark.asyncio
+    async def test_no_signup_xhr_captured_is_honest_failure(self):
+        crawler = _make_crawler()
+        page = _SignupMockPage(fields=self._happy_fields(), on_submit=None)
+        result = await crawler._run_signup(
+            page, "a@x.com", "pw", "u", _no_priv,
+            register_url="https://app.example.com/register")
+        assert result.success is False
+        assert result.error == BrowserSignupConfig.ERROR_NO_SIGNUP_XHR
+
+    @pytest.mark.asyncio
+    async def test_captcha_wall_is_reported_and_form_not_submitted(self):
+        crawler = _make_crawler()
+        page = _SignupMockPage(fields=self._happy_fields(), captcha=True)
+        result = await crawler._run_signup(
+            page, "a@x.com", "pw", "u", _no_priv,
+            register_url="https://app.example.com/register")
+        assert result.success is False
+        assert "CAPTCHA" in result.blocked_reason
+        assert page.submitted is False           # never attempts to defeat the wall
+        assert page.filled == {}                 # never even fills
+
+    @pytest.mark.asyncio
+    async def test_email_verification_wall_reported(self):
+        crawler = _make_crawler()
+        page = _SignupMockPage(fields=self._happy_fields(),
+                               page_text="Please verify your email to continue")
+        result = await crawler._run_signup(
+            page, "a@x.com", "pw", "u", _no_priv,
+            register_url="https://app.example.com/register")
+        assert result.blocked_reason == BrowserSignupConfig.BLOCKED_EMAIL_VERIFY
+        assert page.submitted is False
+
+    @pytest.mark.asyncio
+    async def test_sms_verification_wall_reported(self):
+        crawler = _make_crawler()
+        page = _SignupMockPage(fields=self._happy_fields(),
+                               page_text="Enter the verification code we sent by SMS")
+        result = await crawler._run_signup(
+            page, "a@x.com", "pw", "u", _no_priv,
+            register_url="https://app.example.com/register")
+        assert result.blocked_reason == BrowserSignupConfig.BLOCKED_SMS_VERIFY
+
+    @pytest.mark.asyncio
+    async def test_no_register_page_found_is_failure(self):
+        crawler = _make_crawler()
+        page = _SignupMockPage(register_link="", form_by_url={})
+        result = await crawler._run_signup(
+            page, "a@x.com", "pw", "u", _no_priv, register_url=None)
+        assert result.success is False
+        assert result.error == BrowserSignupConfig.ERROR_NO_REGISTER_PAGE
+
+    @pytest.mark.asyncio
+    async def test_missing_password_field_is_fields_not_found(self):
+        crawler = _make_crawler()
+        page = _SignupMockPage(fields=[_field(0, "email", "email")])
+        result = await crawler._run_signup(
+            page, "a@x.com", "pw", "u", _no_priv,
+            register_url="https://app.example.com/register")
+        assert result.success is False
+        assert result.error == BrowserSignupConfig.ERROR_FIELDS_NOT_FOUND
+
+    @pytest.mark.asyncio
+    async def test_submit_button_missing_is_submit_failed(self):
+        crawler = _make_crawler()
+        page = _SignupMockPage(
+            fields=[_field(0, "email", "email"), _field(1, "password", "password")],
+            submit_ok=False)
+        result = await crawler._run_signup(
+            page, "a@x.com", "pw", "u", _no_priv,
+            register_url="https://app.example.com/register")
+        assert result.success is False
+        assert result.error == BrowserSignupConfig.ERROR_SUBMIT_FAILED
+
+
+class TestBrowserSignupPageDiscovery:
+    """Finding the register page: link discovery, then common-route fallback."""
+
+    @pytest.mark.asyncio
+    async def test_follows_register_link(self):
+        crawler = _make_crawler()
+        page = _SignupMockPage(
+            register_link="/register",
+            form_by_url={"https://app.example.com/register": True})
+        assert await crawler._goto_register_page(page, None) is True
+        assert "https://app.example.com/register" in page.navigations
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_common_route(self):
+        crawler = _make_crawler()
+        page = _SignupMockPage(
+            register_link="",
+            form_by_url={"https://app.example.com/#/register": True})
+        assert await crawler._goto_register_page(page, None) is True
+        assert any("/#/register" in nav for nav in page.navigations)
+
+    @pytest.mark.asyncio
+    async def test_explicit_register_url_used_first(self):
+        crawler = _make_crawler()
+        page = _SignupMockPage(
+            form_by_url={"https://app.example.com/join": True})
+        assert await crawler._goto_register_page(
+            page, "https://app.example.com/join") is True
+        assert page.navigations[0] == "https://app.example.com/join"
+
+    @pytest.mark.asyncio
+    async def test_navigation_exception_is_swallowed(self):
+        crawler = _make_crawler()
+        page = _SignupMockPage(form_by_url={})
+
+        async def boom(url, **kwargs):
+            raise RuntimeError("nav failed")
+
+        page.goto = boom
+        assert await crawler._goto_register_page(page, None) is False
+
+
+class TestBrowserSignupFieldFilling:
+    """Field classification + the privilege exclusion, exercised directly."""
+
+    @pytest.mark.asyncio
+    async def test_consent_checkbox_is_checked(self):
+        crawler = _make_crawler()
+        page = _SignupMockPage(fields=[
+            _field(0, "email", "email"),
+            _field(1, "password", "password"),
+            _field(2, "acceptTerms", "checkbox"),
+        ])
+        def synth(name):
+            return True if "accept" in name.lower() else "x"
+
+        assert await crawler._fill_signup_form(page, "a@x", "pw", "u", synth) is True
+        assert 2 in page.checked
+
+    @pytest.mark.asyncio
+    async def test_other_text_field_synthesized(self):
+        crawler = _make_crawler()
+        page = _SignupMockPage(fields=[
+            _field(0, "email", "email"),
+            _field(1, "password", "password"),
+            _field(2, "firstName", "text"),
+        ])
+        assert await crawler._fill_signup_form(page, "a@x", "pw", "u", _no_priv) is True
+        assert page.filled[2] == "syn-firstName"
+
+    @pytest.mark.asyncio
+    async def test_privilege_field_is_never_filled(self):
+        crawler = _make_crawler()
+        page = _SignupMockPage(fields=[
+            _field(0, "email", "email"),
+            _field(1, "password", "password"),
+            _field(2, "isAdmin", "text"),          # privilege as a plain text input
+            _field(3, "role", "checkbox"),         # privilege as a checkbox
+        ])
+        assert await crawler._fill_signup_form(page, "a@x", "pw", "u", _no_priv) is True
+        assert 2 not in page.filled and 3 not in page.checked
+
+    @pytest.mark.asyncio
+    async def test_captcha_input_field_is_skipped(self):
+        crawler = _make_crawler()
+        page = _SignupMockPage(fields=[
+            _field(0, "email", "email"),
+            _field(1, "password", "password"),
+            _field(2, "g-recaptcha-response", "text"),
+        ])
+        assert await crawler._fill_signup_form(page, "a@x", "pw", "u", _no_priv) is True
+        assert 2 not in page.filled
+
+    @pytest.mark.asyncio
+    async def test_username_field_by_label(self):
+        crawler = _make_crawler()
+        page = _SignupMockPage(fields=[
+            _field(0, "", "email"),
+            _field(1, "", "password"),
+            _field(2, "", "text", label="Choose a username"),
+        ])
+        assert await crawler._fill_signup_form(page, "a@x", "pw", "handle9", _no_priv)
+        assert page.filled[2] == "handle9"
+
+    @pytest.mark.asyncio
+    async def test_field_enumeration_failure_is_false(self):
+        crawler = _make_crawler()
+        page = _SignupMockPage()
+
+        async def boom(script, *args):
+            raise RuntimeError("evaluate boom")
+
+        page.evaluate = boom
+        assert await crawler._fill_signup_form(page, "a@x", "pw", "u", _no_priv) is False
+
+
+class TestBrowserSignupWrapper:
+    """The public signup() wrapper: playwright lifecycle, unavailability, crashes."""
+
+    @staticmethod
+    def _mock_pw(page):
+        browser = AsyncMock()
+        context = AsyncMock()
+        browser.new_context = AsyncMock(return_value=context)
+        context.new_page = AsyncMock(return_value=page)
+        browser.close = AsyncMock()
+        pw = AsyncMock()
+        pw.chromium.launch = AsyncMock(return_value=browser)
+        cm = AsyncMock()
+        cm.__aenter__ = AsyncMock(return_value=pw)
+        cm.__aexit__ = AsyncMock(return_value=None)
+        return MagicMock(return_value=cm)
+
+    @pytest.mark.asyncio
+    async def test_signup_returns_unavailable_when_playwright_missing(self):
+        crawler = _make_crawler(email="agent@x.com", password="pw")  # noqa: S106
+        with patch(
+            "isitsecure.engine.scanners.authenticated_crawler.async_playwright", None,
+        ):
+            result = await crawler.signup(username="agent_1")
+        assert result.success is False
+        assert result.error == AuthenticatedCrawlerConfig.ERROR_PLAYWRIGHT_UNAVAILABLE
+        # email/password default to the crawler's constructor credentials.
+        assert result.email == "agent@x.com" and result.password == "pw"  # noqa: S105
+        assert result.username == "agent_1"
+
+    @pytest.mark.asyncio
+    async def test_signup_end_to_end_through_wrapper(self):
+        crawler = _make_crawler()
+
+        def on_submit():
+            crawler._intercepted.append(InterceptedRequest(
+                url="https://app.example.com/api/Users", method="POST",
+                response_status=201))
+
+        page = _SignupMockPage(fields=[
+            _field(0, "email", "email"),
+            _field(1, "password", "password"),
+            _field(2, "username", "text"),
+        ], on_submit=on_submit)
+        with patch(
+            "isitsecure.engine.scanners.authenticated_crawler.async_playwright",
+            self._mock_pw(page),
+        ):
+            result = await crawler.signup(
+                username="agent_1", email="a@x.com", password="pw",  # noqa: S106
+                register_url="https://app.example.com/register")
+        assert result.success is True and result.signup_endpoint == "/api/Users"
+
+    @pytest.mark.asyncio
+    async def test_signup_browser_crash_is_a_result_not_raise(self):
+        crawler = _make_crawler()
+        pw = AsyncMock()
+        pw.chromium.launch = AsyncMock(side_effect=RuntimeError("chromium boom"))
+        cm = AsyncMock()
+        cm.__aenter__ = AsyncMock(return_value=pw)
+        cm.__aexit__ = AsyncMock(return_value=None)
+        with patch(
+            "isitsecure.engine.scanners.authenticated_crawler.async_playwright",
+            MagicMock(return_value=cm),
+        ):
+            result = await crawler.signup(username="agent_1")
+        assert result.success is False and "chromium boom" in result.error
+
+
+class TestScanNeverCallsSignup:
+    """Scan-safety: the scan/crawl path must NEVER invoke the pentest-only signup()."""
+
+    @staticmethod
+    def _mock_playwright(mock_page):
+        browser = AsyncMock()
+        context = AsyncMock()
+        browser.new_context = AsyncMock(return_value=context)
+        context.new_page = AsyncMock(return_value=mock_page)
+        pw = AsyncMock()
+        pw.chromium.launch = AsyncMock(return_value=browser)
+        cm = AsyncMock()
+        cm.__aenter__ = AsyncMock(return_value=pw)
+        cm.__aexit__ = AsyncMock(return_value=None)
+        return MagicMock(return_value=cm)
+
+    @pytest.mark.asyncio
+    async def test_crawl_does_not_invoke_signup(self):
+        crawler = _make_crawler()
+        mock_page = AsyncMock()
+        mock_page.url = "https://app.example.com/dashboard"
+        mock_page.on = MagicMock()
+        mock_page.content = AsyncMock(return_value="")
+        mock_page.evaluate = AsyncMock(return_value=[])
+
+        signup_spy = AsyncMock()
+        with (
+            patch(
+                "isitsecure.engine.scanners.authenticated_crawler.async_playwright",
+                self._mock_playwright(mock_page),
+            ),
+            patch.object(AuthenticatedCrawler, "_login", new=AsyncMock(return_value=True)),
+            patch.object(AuthenticatedCrawler, "_extract_auth_headers",
+                         new=AsyncMock(return_value={})),
+            patch.object(AuthenticatedCrawler, "signup", new=signup_spy),
+            patch(
+                "isitsecure.engine.scanners.authenticated_crawler.asyncio.sleep",
+                new=AsyncMock(),
+            ),
+        ):
+            await crawler.crawl()
+        signup_spy.assert_not_called()

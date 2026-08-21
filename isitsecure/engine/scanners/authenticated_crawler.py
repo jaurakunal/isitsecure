@@ -17,6 +17,8 @@ import json
 import logging
 import re
 from collections import deque
+from collections.abc import Callable
+from typing import Any
 from urllib.parse import urljoin, urlparse
 
 try:
@@ -31,11 +33,13 @@ from isitsecure.engine.auth.browser_login_helper import (
 from isitsecure.engine.constants import (
     AuthenticatedCrawlerConfig,
     BrowserLoginConfig,
+    BrowserSignupConfig,
     SharedPatterns,
 )
 from isitsecure.engine.enums import EndpointCategory, EndpointMethod
 from isitsecure.engine.models import (
     AuthenticatedCrawlResult,
+    BrowserSignupResult,
     DiscoveredEndpoint,
     InterceptedRequest,
 )
@@ -48,6 +52,84 @@ from isitsecure.engine.shared.supabase_utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+# --- Browser-signup DOM helpers (JS run in the page; see AuthenticatedCrawler.signup) ---
+# Each carries a distinctive marker comment so tests can dispatch a mock ``page.evaluate``.
+
+# Return the href of the first anchor whose text/href looks like a "go to register" link.
+_FIND_REGISTER_LINK_JS = """
+(keywords) => { /* find-register-link */
+  const anchors = Array.from(document.querySelectorAll('a[href]'));
+  for (const a of anchors) {
+    const text = (a.textContent || '').toLowerCase();
+    const href = (a.getAttribute('href') || '').toLowerCase();
+    if (keywords.some((k) => text.includes(k) || href.includes(k))) {
+      return a.href || a.getAttribute('href') || '';
+    }
+  }
+  return '';
+}
+"""
+
+# True when the current page renders a registration form (a visible password input).
+_HAS_SIGNUP_FORM_JS = """
+() => { /* has-signup-form */
+  const vis = (el) => !!(el.offsetParent || el.getClientRects().length);
+  return !!Array.from(document.querySelectorAll('input[type="password"]')).find(vis);
+}
+"""
+
+# Enumerate the visible, fillable inputs/selects, stamping each with an index attribute
+# so the Python side can target it for filling, and returning its identifying metadata.
+_ENUM_SIGNUP_FIELDS_JS = """
+(attr) => { /* enum-signup-fields */
+  const skip = ["hidden", "file", "submit", "button", "reset", "image"];
+  const vis = (el) => !!(el.offsetParent || el.getClientRects().length);
+  const nodes = Array.from(document.querySelectorAll('input, select, textarea'));
+  const out = [];
+  let idx = 0;
+  for (const el of nodes) {
+    const type = (el.getAttribute('type') || el.tagName.toLowerCase()).toLowerCase();
+    if (skip.includes(type) || el.disabled || !vis(el)) continue;
+    let label = '';
+    if (el.id) {
+      const l = document.querySelector('label[for="' + el.id + '"]');
+      if (l) label = l.textContent || '';
+    }
+    if (!label && el.closest) {
+      const l = el.closest('label');
+      if (l) label = l.textContent || '';
+    }
+    el.setAttribute(attr, String(idx));
+    out.push({
+      idx: idx,
+      name: el.getAttribute('name') || '',
+      id: el.getAttribute('id') || '',
+      type: type,
+      placeholder: el.getAttribute('placeholder') || '',
+      aria: el.getAttribute('aria-label') || '',
+      label: (label || '').trim(),
+      required: el.hasAttribute('required'),
+    });
+    idx++;
+  }
+  return out;
+}
+"""
+
+# True when a CAPTCHA widget is present on the page (the form is walled).
+_DETECT_CAPTCHA_JS = """
+(selector) => { /* detect-captcha */
+  return !!document.querySelector(selector);
+}
+"""
+
+# The page's visible text (for detecting an email/SMS-verification wall).
+_SIGNUP_PAGE_TEXT_JS = """
+() => { /* signup-page-text */
+  return document.body ? (document.body.innerText || '') : '';
+}
+"""
 
 
 class AuthenticatedCrawler:
@@ -180,6 +262,338 @@ class AuthenticatedCrawler:
             len(result.owned_resource_ids),
             len(result.tables_discovered),
         )
+        return result
+
+    # ------------------------------------------------------------------
+    # Browser self-registration (pentest-only; scan NEVER calls this)
+    # ------------------------------------------------------------------
+
+    async def signup(
+        self,
+        *,
+        username: str,
+        email: str | None = None,
+        password: str | None = None,
+        synthesize: Callable[[str], Any] | None = None,
+        register_url: str | None = None,
+    ) -> BrowserSignupResult:
+        """Drive a REAL browser to self-register the AGENT'S OWN account, capturing the
+        real signup endpoint from the resulting XHR.
+
+        This is the "read the app, don't guess" fallback for a JavaScript SPA whose signup
+        endpoint is not discoverable by path-probing (e.g. Juice Shop's ``POST /api/Users``):
+        navigate to the register page, fill the form, submit, and read the intercepted API
+        call the submit fired — which both reveals the real endpoint AND creates the account.
+
+        It reuses the crawler's browser lifecycle and ``_setup_interception`` (so the signup
+        XHR is captured exactly as ``crawl`` captures API calls) and ``BrowserLoginHelper``
+        for form-filling/submission — a targeted, audited, single-form provisioning action,
+        NOT the blind clicking ``safe_mode`` suppresses. It NEVER fills privilege fields
+        (delegated to ``synthesize``, which the caller supplies as ``_synthesize_field`` —
+        the same exclusion the REST path uses) and NEVER submits anything but the register
+        form. A CAPTCHA / email- / SMS-verification wall is *detected and reported* via
+        ``blocked_reason`` — never defeated (the honest boundary).
+
+        ``email``/``password`` default to the crawler's constructor credentials.
+        ``synthesize(name) -> value`` returns a safe value for an unrecognized field, or
+        ``None`` to REFUSE it (privilege fields); it defaults to a benign string filler.
+        Scan builds the crawler and only ever calls :meth:`crawl` — this method is on a
+        separate path scan never invokes, so scan's behavior is byte-identical.
+        """
+        email = email or self._email
+        password = password or self._password
+        fill_value = synthesize or (lambda _name: "test")
+
+        if async_playwright is None:
+            logger.error(AuthenticatedCrawlerConfig.ERROR_PLAYWRIGHT_UNAVAILABLE)
+            return BrowserSignupResult(
+                success=False, email=email, password=password, username=username,
+                error=AuthenticatedCrawlerConfig.ERROR_PLAYWRIGHT_UNAVAILABLE,
+            )
+
+        try:
+            async with async_playwright() as pw:
+                browser = await pw.chromium.launch(headless=True)
+                try:
+                    context = await browser.new_context(
+                        viewport={"width": 1280, "height": 720},
+                    )
+                    page = await context.new_page()
+                    self._setup_interception(page)
+                    result = await self._run_signup(
+                        page, email, password, username, fill_value, register_url,
+                    )
+                    await page.close()
+                    await context.close()
+                finally:
+                    await browser.close()
+            return result
+        except Exception as exc:  # noqa: BLE001 — a browser failure is a result, not a crash
+            logger.error("Browser signup failed: %s", exc)
+            return BrowserSignupResult(
+                success=False, email=email, password=password, username=username,
+                error=str(exc),
+            )
+
+    async def _run_signup(
+        self,
+        page: object,
+        email: str,
+        password: str,
+        username: str,
+        fill_value: Callable[[str], Any],
+        register_url: str | None,
+    ) -> BrowserSignupResult:
+        """The in-browser signup flow (find → wall-check → fill → submit → capture)."""
+        base = BrowserSignupResult(
+            email=email, password=password, username=username,
+        )
+        if not await self._goto_register_page(page, register_url):
+            base.error = BrowserSignupConfig.ERROR_NO_REGISTER_PAGE
+            return base
+
+        # Detect a real-world wall BEFORE filling/submitting — if walled we do not attempt
+        # to defeat it and never submit the form.
+        wall = await self._detect_signup_wall(page)
+        if wall:
+            base.blocked_reason = wall
+            return base
+
+        if not await self._fill_signup_form(page, email, password, username, fill_value):
+            base.error = BrowserSignupConfig.ERROR_FIELDS_NOT_FOUND
+            return base
+
+        submitted = await BrowserLoginHelper.click_submit(
+            page, BrowserSignupConfig.SUBMIT_BUTTON_SELECTORS,
+        )
+        if not submitted:
+            base.error = BrowserSignupConfig.ERROR_SUBMIT_FAILED
+            return base
+
+        # Let the signup XHR fire and be captured by the interception handler.
+        try:
+            await page.wait_for_load_state(  # type: ignore[union-attr]
+                "networkidle",
+                timeout=BrowserLoginConfig.NETWORK_IDLE_TIMEOUT_MS,
+            )
+        except Exception:
+            await asyncio.sleep(BrowserSignupConfig.POST_SUBMIT_SETTLE_MS / 1000)
+
+        return self._signup_outcome_from_intercepted(email, password, username)
+
+    async def _goto_register_page(
+        self, page: object, register_url: str | None
+    ) -> bool:
+        """Navigate to the registration form: an explicit ``register_url`` hint, then a
+        register link on the app's landing page, then the common register routes. Returns
+        True once a page renders a registration form (a visible password input)."""
+        if register_url and await self._try_register_url(page, register_url):
+            return True
+
+        try:
+            await page.goto(  # type: ignore[union-attr]
+                self._base_url,
+                timeout=BrowserLoginConfig.NAVIGATION_TIMEOUT_MS,
+                wait_until="domcontentloaded",
+            )
+            await self._settle(page)
+        except Exception as exc:
+            logger.debug("signup: landing navigation failed: %s", exc)
+
+        href = await self._find_register_link(page)
+        if href and await self._try_register_url(page, urljoin(self._base_url, href)):
+            return True
+
+        for route in BrowserSignupConfig.REGISTER_ROUTES:
+            if await self._try_register_url(page, f"{self._base_url}{route}"):
+                return True
+        return False
+
+    async def _try_register_url(self, page: object, url: str) -> bool:
+        """Navigate to ``url`` and report whether it renders a registration form."""
+        try:
+            await page.goto(  # type: ignore[union-attr]
+                url,
+                timeout=BrowserLoginConfig.NAVIGATION_TIMEOUT_MS,
+                wait_until="domcontentloaded",
+            )
+            await self._settle(page)
+        except Exception as exc:
+            logger.debug("signup: navigation to %s failed: %s", url, exc)
+            return False
+        return await self._page_has_signup_form(page)
+
+    async def _settle(self, page: object) -> None:
+        """Best-effort wait for the network to go idle after a navigation."""
+        try:
+            await page.wait_for_load_state(  # type: ignore[union-attr]
+                "networkidle",
+                timeout=BrowserLoginConfig.NETWORK_IDLE_TIMEOUT_MS,
+            )
+        except Exception as exc:
+            logger.debug("signup: network-idle settle timed out: %s", exc)
+
+    async def _find_register_link(self, page: object) -> str:
+        """The href of a register/sign-up link on the current page, or ``""``."""
+        try:
+            href = await page.evaluate(  # type: ignore[union-attr]
+                _FIND_REGISTER_LINK_JS,
+                list(BrowserSignupConfig.REGISTER_LINK_KEYWORDS),
+            )
+        except Exception as exc:
+            logger.debug("signup: register-link discovery failed: %s", exc)
+            return ""
+        return href or ""
+
+    async def _page_has_signup_form(self, page: object) -> bool:
+        """True when the current page renders a registration form (a password input)."""
+        try:
+            return bool(await page.evaluate(_HAS_SIGNUP_FORM_JS))  # type: ignore[union-attr]
+        except Exception as exc:
+            logger.debug("signup: form detection failed: %s", exc)
+            return False
+
+    async def _detect_signup_wall(self, page: object) -> str | None:
+        """A real-world signup wall (CAPTCHA / email- / SMS-verification) present on the
+        page, or ``None``. Detected so it can be REPORTED, never defeated."""
+        try:
+            has_captcha = bool(await page.evaluate(  # type: ignore[union-attr]
+                _DETECT_CAPTCHA_JS, BrowserSignupConfig.CAPTCHA_SELECTOR,
+            ))
+        except Exception:
+            has_captcha = False
+        if has_captcha:
+            return BrowserSignupConfig.BLOCKED_CAPTCHA
+
+        try:
+            text = await page.evaluate(_SIGNUP_PAGE_TEXT_JS)  # type: ignore[union-attr]
+        except Exception:
+            text = ""
+        low = (text or "").lower()
+        if any(ind in low for ind in BrowserSignupConfig.EMAIL_VERIFY_INDICATORS):
+            return BrowserSignupConfig.BLOCKED_EMAIL_VERIFY
+        if any(ind in low for ind in BrowserSignupConfig.SMS_VERIFY_INDICATORS):
+            return BrowserSignupConfig.BLOCKED_SMS_VERIFY
+        return None
+
+    async def _fill_signup_form(
+        self,
+        page: object,
+        email: str,
+        password: str,
+        username: str,
+        fill_value: Callable[[str], Any],
+    ) -> bool:
+        """Enumerate the register form's fields and fill each by role: email → the agent
+        email; every password input → the password (so a password + confirm pair both get
+        the same value); a username field → the derived username; any other field → a value
+        from ``fill_value`` (which returns ``None`` for a privilege field, so it is SKIPPED
+        — never self-escalating). File/hidden/CAPTCHA inputs are skipped. Returns True when
+        a password and an identity (email or username) were filled — a real form."""
+        try:
+            fields = await page.evaluate(  # type: ignore[union-attr]
+                _ENUM_SIGNUP_FIELDS_JS, BrowserSignupConfig.SIGNUP_FIELD_ATTR,
+            )
+        except Exception as exc:
+            logger.debug("signup: field enumeration failed: %s", exc)
+            return False
+
+        filled_pw = filled_identity = False
+        for field in (fields or []):
+            ftype = str(field.get("type") or "").lower()
+            selector = (
+                f'[{BrowserSignupConfig.SIGNUP_FIELD_ATTR}="{field.get("idx")}"]'
+            )
+            if ftype == "password":
+                if await BrowserLoginHelper.fill_input(page, (selector,), password):
+                    filled_pw = True
+                continue
+            if self._is_captcha_field(field):
+                continue
+            if ftype == "email" or self._field_matches(
+                field, BrowserSignupConfig.EMAIL_FIELD_KEYWORDS
+            ):
+                if await BrowserLoginHelper.fill_input(page, (selector,), email):
+                    filled_identity = True
+                continue
+            if self._field_matches(field, BrowserSignupConfig.USERNAME_FIELD_KEYWORDS):
+                if await BrowserLoginHelper.fill_input(page, (selector,), username):
+                    filled_identity = True
+                continue
+            value = fill_value(self._field_key(field))
+            if value is None:                 # privilege/refused field — never filled
+                continue
+            if ftype == "checkbox":
+                await self._check_box(page, selector)
+                continue
+            await BrowserLoginHelper.fill_input(page, (selector,), str(value))
+
+        return filled_pw and filled_identity
+
+    @staticmethod
+    async def _check_box(page: object, selector: str) -> None:
+        """Tick a consent/agreement checkbox (a required ToS box) without failing hard."""
+        try:
+            element = await page.query_selector(selector)  # type: ignore[union-attr]
+            if element:
+                await element.check()
+        except Exception as exc:
+            logger.debug("signup: checkbox toggle failed: %s", exc)
+
+    @staticmethod
+    def _field_signals(field: dict) -> str:
+        """The field's identifying text (name/id/placeholder/aria/label), lowercased."""
+        return " ".join(
+            str(field.get(key) or "")
+            for key in ("name", "id", "placeholder", "aria", "label")
+        ).lower()
+
+    @classmethod
+    def _field_matches(cls, field: dict, keywords: tuple[str, ...]) -> bool:
+        signals = cls._field_signals(field)
+        return any(keyword in signals for keyword in keywords)
+
+    @classmethod
+    def _is_captcha_field(cls, field: dict) -> bool:
+        return "captcha" in cls._field_signals(field)
+
+    @staticmethod
+    def _field_key(field: dict) -> str:
+        """The most descriptive identifier for a field, for ``fill_value`` matching."""
+        for key in ("name", "id", "aria", "label", "placeholder"):
+            value = str(field.get(key) or "").strip()
+            if value:
+                return value
+        return ""
+
+    def _signup_outcome_from_intercepted(
+        self, email: str, password: str, username: str
+    ) -> BrowserSignupResult:
+        """Read the signup outcome from the intercepted XHRs: find the POST the submit
+        fired (preferring a signup-shaped path), report its endpoint + status, and count a
+        2xx as success. No captured POST → an honest failure (the form submitted but no API
+        call was seen — likely a non-JS or blocked form)."""
+        posts = [req for req in self._intercepted if req.method.upper() == "POST"]
+        if not posts:
+            return BrowserSignupResult(
+                success=False, email=email, password=password, username=username,
+                error=BrowserSignupConfig.ERROR_NO_SIGNUP_XHR,
+            )
+        signup_posts = [
+            req for req in posts
+            if any(ind in urlparse(req.url).path.lower()
+                   for ind in BrowserSignupConfig.SIGNUP_PATH_INDICATORS)
+        ]
+        chosen = (signup_posts or posts)[-1]
+        path = urlparse(chosen.url).path
+        status = chosen.response_status
+        success = 200 <= status < 300
+        result = BrowserSignupResult(
+            success=success, signup_endpoint=path, status_code=status,
+            email=email, password=password, username=username,
+        )
+        if not success:
+            result.error = f"signup endpoint {path} returned {status}"
         return result
 
     # ------------------------------------------------------------------

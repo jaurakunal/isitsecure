@@ -456,6 +456,89 @@ class BrowserLoginConfig:
     ERROR_NO_TOKEN_FOUND = "No auth token found after login"
 
 
+class BrowserSignupConfig:
+    """Constants for browser-driven self-registration — the pentest ``signup`` fallback.
+
+    Used ONLY by ``AuthenticatedCrawler.signup`` (the "read the app, don't guess" path):
+    find the register page, fill the form, detect real-world walls (CAPTCHA / email- /
+    SMS-verification), and identify the real signup endpoint from the intercepted XHR.
+    Scan never touches this path, so scan behavior is unaffected.
+    """
+
+    # DOM attribute the field-enumerator stamps on each fillable input so the Python side
+    # can target it by index for filling (mirrors the login helper's marker approach).
+    SIGNUP_FIELD_ATTR = "data-isitsecure-signup-idx"
+
+    # Common SPA/server register routes tried (in order) when no register link is found.
+    REGISTER_ROUTES = (
+        "/#/register", "/register", "/signup", "/#/signup",
+        "/sign-up", "/users/register", "/create-account",
+    )
+    # Substrings (lowercased) that mark a link/button as a "go to register" control.
+    REGISTER_LINK_KEYWORDS = (
+        "register", "sign up", "sign-up", "signup", "create account",
+        "create an account", "create-account",
+    )
+    # Register-form submit selectors — the register verbs added to the login submit set so
+    # ``BrowserLoginHelper.click_submit`` submits the registration form (not a login form).
+    SUBMIT_BUTTON_SELECTORS = (
+        'button[type="submit"]',
+        'input[type="submit"]',
+        'button:has-text("Register")',
+        'button:has-text("Sign up")',
+        'button:has-text("Sign Up")',
+        'button:has-text("Create account")',
+        'button:has-text("Create Account")',
+        'button:has-text("Get started")',
+    )
+    # Field-name/label/placeholder signals used to classify a form input.
+    EMAIL_FIELD_KEYWORDS = ("email", "e-mail")
+    USERNAME_FIELD_KEYWORDS = (
+        "username", "user name", "userid", "user id", "login", "handle", "nickname",
+    )
+    # A CSS selector matching common CAPTCHA widgets — presence means the form is walled.
+    CAPTCHA_SELECTOR = (
+        'iframe[src*="recaptcha"], iframe[src*="hcaptcha"], iframe[title*="captcha" i], '
+        '.g-recaptcha, .h-captcha, [data-sitekey], [class*="captcha" i], [id*="captcha" i], '
+        'input[name*="captcha" i]'
+    )
+    # Page-text markers (lowercased) that indicate a verification wall.
+    EMAIL_VERIFY_INDICATORS = (
+        "verify your email", "verification email", "confirm your email",
+        "check your inbox", "email verification", "verification link",
+        "we've sent you an email", "we have sent you an email", "confirm your account",
+    )
+    SMS_VERIFY_INDICATORS = (
+        "sms verification", "phone verification", "verify your phone",
+        "verification code", "one-time code", "one time code", "text message",
+    )
+    # Input types the signup form-filler never touches.
+    SKIP_INPUT_TYPES = ("hidden", "file", "submit", "button", "reset", "image")
+    # Bounded settle (ms) after submit so the signup XHR fires and is intercepted.
+    POST_SUBMIT_SETTLE_MS = 4000
+    # Path substrings that mark an intercepted POST as the signup endpoint (preferred over
+    # an arbitrary POST when picking which captured call revealed the signup).
+    SIGNUP_PATH_INDICATORS = ("register", "signup", "sign-up", "users", "account", "auth")
+
+    # Blocked reasons (returned to the operator — the wall is reported, never defeated).
+    BLOCKED_CAPTCHA = "CAPTCHA challenge on the registration form (not defeated by design)"
+    BLOCKED_EMAIL_VERIFY = (
+        "email-verification required to complete registration (not defeated by design)"
+    )
+    BLOCKED_SMS_VERIFY = (
+        "SMS/phone-verification required to complete registration (not defeated by design)"
+    )
+    # Result error strings.
+    ERROR_NO_REGISTER_PAGE = "could not locate a registration form/page"
+    ERROR_NO_SIGNUP_XHR = (
+        "registration form submitted but no signup API call was captured"
+    )
+    ERROR_SUBMIT_FAILED = "could not submit the registration form"
+    ERROR_FIELDS_NOT_FOUND = (
+        "could not locate email/password fields on the registration form"
+    )
+
+
 class BrowserAuthConfig:
     """Provider-specific constants for BrowserAuthProvider (standalone auth)."""
 
