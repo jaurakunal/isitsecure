@@ -148,6 +148,15 @@ class FormField(BaseModel):
     returns can drive each control deterministically. ``options`` enumerates the choices of a
     native ``<select>`` OR a custom dropdown (``mat-select`` / ``[role="combobox"]`` /
     ``[role="listbox"]``) so the LLM can pick one of the REAL options rather than guessing.
+
+    ``control_kind`` is the CANONICAL, framework-agnostic taxonomy the perception classifies
+    every control into — one of ``"text"`` (text/email/password/number/tel/url/search/
+    textarea), ``"single_select"``, ``"multi_select"``, ``"radio_group"``, ``"checkbox"``,
+    ``"toggle"``, or ``"other"``. Perception detects the kind across native HTML, Angular
+    Material, and React/ARIA variants; the executor has ONE driver per kind that handles the
+    per-framework mechanics, and the LLM plans at this semantic level (this is a single-choice
+    with these options → pick one). ``"other"`` (the default) means "unclassified — infer from
+    tag/type/action", preserving backward compatibility for callers that build a field by hand.
     """
 
     locator: str
@@ -161,6 +170,7 @@ class FormField(BaseModel):
     required: bool = False
     value: str = ""
     options: list[str] = Field(default_factory=list)
+    control_kind: str = "other"
 
 
 class FormPerception(BaseModel):
@@ -175,13 +185,26 @@ class FormPerception(BaseModel):
 
 
 class FormFillAction(BaseModel):
-    """One step of a fill plan: ``type`` text into an input, ``select`` a dropdown option
-    (``value`` is one of the perceived field's enumerated ``options``), or ``check`` a
-    checkbox. ``locator`` targets the control (a perceived field's stable selector)."""
+    """One step of a fill plan, driving one control of a canonical ``control_kind``:
+
+    - ``type`` text into a ``text`` control (``value``);
+    - ``select`` one option of a ``single_select`` (``value`` — one of the field's enumerated
+      ``options``);
+    - ``select_multi`` several options of a ``multi_select`` (``values`` — a subset of the
+      enumerated ``options``);
+    - ``choose`` one option of a ``radio_group`` (``value``);
+    - ``check`` / ``uncheck`` a ``checkbox`` (``value`` a boolean, or the verb itself);
+    - ``toggle`` a ``toggle`` on/off (``value`` a boolean).
+
+    Single-value actions use ``value``; ``select_multi`` uses ``values``. ``locator`` targets
+    the control (a perceived field's stable selector). The legacy verbs ``type``/``select``/
+    ``check`` remain valid so older plans keep working."""
 
     locator: str
-    action: str = "type"  # "type" | "select" | "check"
+    # "type" | "select" | "select_multi" | "choose" | "check" | "uncheck" | "toggle"
+    action: str = "type"
     value: str = ""
+    values: list[str] = Field(default_factory=list)
 
 
 class FormFillPlan(BaseModel):
