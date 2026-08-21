@@ -506,6 +506,14 @@ class TestAuthModels:
         assert creds.email is None
         assert creds.cookies is None
 
+    def test_auth_credentials_username_optional_defaults_none(self):
+        """The additive login-identifier field defaults to None (no behavior change for
+        any existing caller — scan/operator ``--auth-*`` never set it) and round-trips
+        when explicitly provided (pentest ``provision_account``)."""
+        assert AuthCredentials(provider=AuthProvider.TOKEN).username is None
+        creds = AuthCredentials(provider=AuthProvider.TOKEN, email="a@x", username="bob")
+        assert creds.username == "bob"
+
     def test_auth_session_defaults(self):
         """Should use default_factory for mutable fields."""
         session = AuthSession(

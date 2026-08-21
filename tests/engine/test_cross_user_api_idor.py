@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
+
+import httpx
 import pytest
 
-from isitsecure.engine.auth.protocols import AuthSession
+from isitsecure.engine.auth.protocols import AuthCredentials, AuthSession
 from isitsecure.engine.auth.rest_login_auth import RestLoginAuthProvider
 from isitsecure.engine.enums import (
     AuthProvider,
@@ -146,6 +149,58 @@ class TestRestLoginProvider:
 
     def test_jwt_subject_bad_token_none(self):
         assert RestLoginAuthProvider._jwt_subject("not-a-jwt") is None
+
+    @staticmethod
+    def _patch_httpx(monkeypatch, handler):
+        """Route ``RestLoginAuthProvider``'s internal ``httpx.AsyncClient`` through a
+        ``MockTransport`` running ``handler`` — no network, deterministic."""
+        real = httpx.AsyncClient
+
+        def factory(**kwargs):
+            kwargs.pop("transport", None)
+            return real(transport=httpx.MockTransport(handler), **kwargs)
+
+        monkeypatch.setattr(
+            "isitsecure.engine.auth.rest_login_auth.httpx.AsyncClient", factory)
+
+    async def test_username_none_only_ever_sends_the_email(self, monkeypatch):
+        # Regression guard for scan / operator ``--auth-*`` (username unset): the login only
+        # ever tries the EMAIL value as the identifier — byte-identical to the old behavior.
+        seen: list[dict] = []
+
+        def handler(request):
+            seen.append(json.loads(request.content))
+            return httpx.Response(400, json={"error": "no"})
+
+        self._patch_httpx(monkeypatch, handler)
+        creds = AuthCredentials(provider=AuthProvider.TOKEN, email="a@x", password="pw",  # noqa: S106
+                                login_url="http://api/login")
+        with pytest.raises(ValueError):
+            await RestLoginAuthProvider("http://api").authenticate(creds)
+        # Every attempt carried ONLY the email value under an identifier key — never a
+        # username value (there is none), so scan's request stream is unchanged.
+        assert seen and {p.get("email") or p.get("username") for p in seen} == {"a@x"}
+
+    async def test_username_is_tried_as_identifier_value(self, monkeypatch):
+        # VAmPI shape: the endpoint accepts only ``{"username": "<derived>", ...}`` — the
+        # email is rejected. With ``username`` set, the login additively tries it and wins.
+        seen: list[dict] = []
+
+        def handler(request):
+            body = json.loads(request.content)
+            seen.append(body)
+            if body.get("username") == "bob":
+                return httpx.Response(200, json={"auth_token": "eyJh.eyJz.sig"})
+            return httpx.Response(400, json={"error": "'username' is a required property"})
+
+        self._patch_httpx(monkeypatch, handler)
+        creds = AuthCredentials(provider=AuthProvider.TOKEN, email="a@x", username="bob",
+                                password="pw", login_url="http://api/login")  # noqa: S106
+        session = await RestLoginAuthProvider("http://api").authenticate(creds)
+        assert session.access_token == "eyJh.eyJz.sig"  # noqa: S105
+        assert {"username": "bob", "password": "pw"} in seen   # the derived username won
+        # the email was tried first (email-only payloads) and refused — mirrors VAmPI
+        assert any(p.get("email") == "a@x" for p in seen)
 
     def test_build_session_uses_jwt_sub(self):
         prov = RestLoginAuthProvider("http://api")

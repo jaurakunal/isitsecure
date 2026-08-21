@@ -13,6 +13,12 @@ class AuthCredentials(BaseModel):
 
     provider: AuthProvider
     email: str | None = None
+    # An explicit login identifier distinct from the email (e.g. a registered
+    # ``username``). Optional and default ``None`` — every existing caller (scan,
+    # operator ``--auth-*``) leaves it unset, so only the email is tried, unchanged.
+    # A REST login additionally tries this value as the identifier when it is set
+    # (pentest ``provision_account`` logging in as the identity it just registered).
+    username: str | None = None
     password: str | None = None
     access_token: str | None = None
     refresh_token: str | None = None

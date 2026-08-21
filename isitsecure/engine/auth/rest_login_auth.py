@@ -34,7 +34,20 @@ class RestLoginAuthProvider:
         return AuthProvider.TOKEN
 
     async def authenticate(self, credentials: AuthCredentials) -> AuthSession:
-        identifier = credentials.email or ""
+        # Identifier VALUES to try as the login identifier. The email is always
+        # tried first (unchanged behavior). When an explicit ``username`` is
+        # provided — pentest ``provision_account`` logging in as the identity it
+        # just registered — it is ALSO tried, because some APIs (VAmPI's
+        # ``/users/v1/login``) require the username, not the email, and the
+        # derived username is not the email. Purely additive: with ``username``
+        # unset (scan, operator ``--auth-*``) this list is exactly ``[email]`` and
+        # only the email is tried across ``IDENTIFIER_KEYS``, byte-identical to before.
+        identifiers: list[str] = []
+        for value in (credentials.email, credentials.username):
+            if value and value not in identifiers:
+                identifiers.append(value)
+        if not identifiers:
+            identifiers = [""]  # preserve prior behavior when no identifier is supplied
         if credentials.login_url:
             candidates = [credentials.login_url]
         else:
@@ -45,20 +58,21 @@ class RestLoginAuthProvider:
             timeout=RestLoginConfig.HTTP_TIMEOUT_SECONDS, follow_redirects=True,
         ) as client:
             for url in candidates:
-                for id_key in RestLoginConfig.IDENTIFIER_KEYS:
-                    payload = {id_key: identifier, "password": credentials.password}
-                    try:
-                        resp = await client.post(url, json=payload)
-                    except httpx.HTTPError as exc:
-                        last_error = str(exc)
-                        continue
-                    if resp.status_code >= 400:
-                        last_error = f"{url} -> HTTP {resp.status_code}"
-                        continue
-                    token = self._extract_token(resp)
-                    if token:
-                        return self._build_session(token, identifier)
-                    last_error = f"{url} -> no token in response"
+                for identifier in identifiers:
+                    for id_key in RestLoginConfig.IDENTIFIER_KEYS:
+                        payload = {id_key: identifier, "password": credentials.password}
+                        try:
+                            resp = await client.post(url, json=payload)
+                        except httpx.HTTPError as exc:
+                            last_error = str(exc)
+                            continue
+                        if resp.status_code >= 400:
+                            last_error = f"{url} -> HTTP {resp.status_code}"
+                            continue
+                        token = self._extract_token(resp)
+                        if token:
+                            return self._build_session(token, identifier)
+                        last_error = f"{url} -> no token in response"
 
         raise ValueError(RestLoginConfig.ERROR_LOGIN_FAILED.format(
             count=len(candidates), error=last_error))
