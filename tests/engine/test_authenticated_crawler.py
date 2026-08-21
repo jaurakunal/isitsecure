@@ -1312,12 +1312,21 @@ _P3 = '[data-isitsecure-perceive-idx="3"]'
 
 
 def _pfield(locator, **kw):
-    """A perceived-field dict shaped like the perception JS returns."""
+    """A perceived-field dict shaped like the perception JS returns (now incl. the canonical
+    ``control_kind`` and the lazy-overlay ``overlay`` flag)."""
     base = {"locator": locator, "tag": "input", "type": "text", "name": "", "id": "",
             "label": "", "placeholder": "", "aria": "", "required": False, "value": "",
-            "options": []}
+            "options": [], "control_kind": "other", "overlay": False}
     base.update(kw)
     return base
+
+
+class _MockKeyboard:
+    def __init__(self, page):
+        self.page = page
+
+    async def press(self, key):
+        self.page.key_presses.append(key)
 
 
 class _PerceiveElement:
@@ -1331,8 +1340,16 @@ class _PerceiveElement:
     async def check(self):
         self.page.checked.add(self.key)
 
+    async def uncheck(self):
+        self.page.checked.discard(self.key)
+        self.page.unchecked.add(self.key)
+
     async def click(self):
         self.page.clicks.append(self.key)
+        # Clicking an overlay trigger "opens" it, exposing its options to a subsequent
+        # read-overlay-options evaluate (models the lazy CDK/portal render).
+        if self.key in self.page._overlay_map:
+            self.page._open_options = list(self.page._overlay_map[self.key])
 
 
 class _PerceiveMockPage:
@@ -1343,7 +1360,8 @@ class _PerceiveMockPage:
     def __init__(self, *, fields=None, submit=True, screenshot=b"PNGBYTES",
                  has_form=True, on_submit=None, page_text="", captcha=False,
                  perceive_error=False, screenshot_error=False, form_gone_after_submit=False,
-                 custom_options=None, select_label_raises=False):
+                 custom_options=None, select_label_raises=False, overlay_map=None,
+                 choose_match=True, read_overlay_raises=False, missing_triggers=None):
         self._fields = fields if fields is not None else []
         self._submit = submit
         self._screenshot = screenshot
@@ -1356,15 +1374,25 @@ class _PerceiveMockPage:
         self._form_gone_after_submit = form_gone_after_submit
         self._custom_options = set(custom_options or ())
         self._select_label_raises = select_label_raises
+        self._overlay_map = overlay_map or {}
+        self._choose_match = choose_match
+        self._read_overlay_raises = read_overlay_raises
+        self._missing_triggers = set(missing_triggers or ())
+        self._open_options = []
         self.url = "https://app.example.com/#/register"
         self.filled = {}
         self.checked = set()
+        self.unchecked = set()
         self.clicks = []
         self.selected = []
+        self.chosen = []
+        self.state_sets = []
+        self.key_presses = []
         self.navigations = []
         self.submitted = False
         self.submit_count = 0
         self._has_form_calls = 0
+        self.keyboard = _MockKeyboard(self)
 
     def on(self, *a, **k):
         return None
@@ -1390,6 +1418,18 @@ class _PerceiveMockPage:
                 raise RuntimeError("perceive boom")
             return {"fields": self._fields, "submit":
                     '[data-isitsecure-perceive-submit="1"]' if self._submit else ""}
+        if "read-overlay-options" in script:
+            if self._read_overlay_raises:
+                raise RuntimeError("read overlay boom")
+            return list(self._open_options)
+        if "choose-option" in script:
+            cfg = args[0]
+            self.chosen.append((cfg["locator"], cfg["value"]))
+            return self._choose_match
+        if "set-control-state" in script:
+            cfg = args[0]
+            self.state_sets.append((cfg["locator"], cfg["checked"]))
+            return cfg["checked"]
         if "find-register-link" in script:
             return ""
         if "has-signup-form" in script:
@@ -1408,6 +1448,8 @@ class _PerceiveMockPage:
         self.selected.append((locator, kwargs))
 
     async def query_selector(self, selector):
+        if selector in self._missing_triggers:
+            return None
         if "perceive-idx" in selector:
             return _PerceiveElement(self, selector)
         if self._submit and selector in BrowserSignupConfig.SUBMIT_BUTTON_SELECTORS:
@@ -1481,6 +1523,101 @@ class TestPerceiveForm:
         page = _PerceiveMockPage(fields=[_pfield(_P0)], screenshot=b"")
         perception = await crawler._perceive_form(page)
         assert perception.screenshot_b64 == ""
+
+
+def _idx(i):
+    return f'[data-isitsecure-perceive-idx="{i}"]'
+
+
+class TestPerceiveTaxonomy:
+    """Perception carries the canonical ``control_kind`` for every kind and OPENS lazy overlay
+    dropdowns (mat-select / listbox) to enumerate options that render only once opened."""
+
+    async def test_classifies_every_kind_and_enumerates_overlays(self):
+        crawler = _make_crawler()
+        # The full mix the JS classifier produces (JS is mocked; the dicts carry control_kind).
+        fields = [
+            _pfield(_idx(0), tag="select", type="select", control_kind="single_select",
+                    options=["US", "CA"]),
+            _pfield(_idx(1), tag="select", type="select", control_kind="multi_select",
+                    options=["A", "B"]),                                   # <select multiple>
+            _pfield(_idx(2), tag="mat-select", type="mat-select",
+                    control_kind="single_select", overlay=True, options=[]),  # lazy overlay
+            _pfield(_idx(3), tag="input", type="radio", control_kind="radio_group",
+                    name="gender", options=["Male", "Female"]),           # native radio group
+            _pfield(_idx(4), tag="mat-radio-group", type="mat-radio-group",
+                    control_kind="radio_group", options=["Free", "Pro"]),
+            _pfield(_idx(5), tag="input", type="checkbox", control_kind="checkbox",
+                    name="terms"),                                        # native checkbox
+            _pfield(_idx(6), tag="mat-slide-toggle", type="mat-slide-toggle",
+                    control_kind="toggle", name="notify"),
+            _pfield(_idx(7), tag="div", type="div", control_kind="multi_select",
+                    overlay=True, options=[]),  # [role=listbox][aria-multiselectable]
+        ]
+        page = _PerceiveMockPage(
+            fields=fields, overlay_map={_idx(2): ["Q1", "Q2", "Q3"], _idx(7): ["X", "Y"]},
+        )
+        perception = await crawler._perceive_form(page)
+        kinds = {f.locator: f.control_kind for f in perception.fields}
+        assert kinds == {
+            _idx(0): "single_select", _idx(1): "multi_select", _idx(2): "single_select",
+            _idx(3): "radio_group", _idx(4): "radio_group", _idx(5): "checkbox",
+            _idx(6): "toggle", _idx(7): "multi_select",
+        }
+        opts = {f.locator: f.options for f in perception.fields}
+        assert opts[_idx(0)] == ["US", "CA"]              # native, inline
+        assert opts[_idx(3)] == ["Male", "Female"]        # radio group, inline
+        assert opts[_idx(2)] == ["Q1", "Q2", "Q3"]        # mat-select, via overlay OPEN
+        assert opts[_idx(7)] == ["X", "Y"]                # listbox, via overlay OPEN
+        assert page.clicks.count(_idx(2)) == 1 and page.clicks.count(_idx(7)) == 1
+        assert page.key_presses == ["Escape", "Escape"]   # each overlay closed after read
+
+    async def test_overlay_read_error_yields_empty_and_still_closes(self):
+        crawler = _make_crawler()
+        page = _PerceiveMockPage(
+            fields=[_pfield(_idx(0), tag="mat-select", type="mat-select",
+                            control_kind="single_select", overlay=True, options=[])],
+            overlay_map={_idx(0): ["x"]}, read_overlay_raises=True,
+        )
+        perception = await crawler._perceive_form(page)
+        assert perception.fields[0].options == []
+        assert page.key_presses == ["Escape"]
+
+    async def test_overlay_trigger_absent_yields_empty(self):
+        crawler = _make_crawler()
+        page = _PerceiveMockPage(
+            fields=[_pfield(_idx(0), tag="mat-select", type="mat-select",
+                            control_kind="single_select", overlay=True, options=[])],
+            missing_triggers={_idx(0)},
+        )
+        perception = await crawler._perceive_form(page)
+        assert perception.fields[0].options == []
+        assert page.clicks == [] and page.key_presses == []   # never opened
+
+    async def test_overlay_enumeration_is_bounded(self):
+        crawler = _make_crawler()
+        cap = BrowserSignupConfig.MAX_OVERLAY_ENUMERATIONS
+        n = cap + 2
+        fields = [_pfield(_idx(i), tag="mat-select", type="mat-select",
+                          control_kind="single_select", overlay=True, options=[])
+                  for i in range(n)]
+        page = _PerceiveMockPage(
+            fields=fields, overlay_map={_idx(i): ["opt"] for i in range(n)})
+        perception = await crawler._perceive_form(page)
+        enumerated = [f for f in perception.fields if f.options]
+        assert len(enumerated) == cap                     # bounded — the last 2 stay empty
+
+    async def test_inline_options_skip_overlay_open(self):
+        # An overlay-flagged field that already has inline options is NOT re-opened.
+        crawler = _make_crawler()
+        page = _PerceiveMockPage(
+            fields=[_pfield(_idx(0), tag="mat-select", type="mat-select",
+                            control_kind="single_select", overlay=True,
+                            options=["already", "here"])],
+            overlay_map={_idx(0): ["nope"]})
+        perception = await crawler._perceive_form(page)
+        assert perception.fields[0].options == ["already", "here"]
+        assert page.clicks == []
 
 
 def _synth(name):
@@ -1585,6 +1722,157 @@ class TestApplyFillPlan:
         assert page.selected == [(_P1, {"label": "opt-a"})]
 
 
+class TestApplyFillPlanTaxonomy:
+    """One driver per canonical kind, dispatched on the perceived field's ``control_kind``."""
+
+    async def test_multi_select_native_passes_whole_list(self):
+        crawler = _make_crawler()
+        page = _PerceiveMockPage()
+        perception = FormPerception(fields=[
+            FormField(locator=_P0, tag="select", name="tags",
+                      control_kind="multi_select", options=["A", "B", "C"])])
+        plan = FormFillPlan(actions=[
+            FormFillAction(locator=_P0, action="select_multi", values=["A", "C"])])
+        await crawler._apply_fill_plan(page, plan, perception, _synth)
+        assert page.selected == [(_P0, {"label": ["A", "C"]})]
+
+    async def test_multi_select_native_falls_back_to_value_kwarg(self):
+        crawler = _make_crawler()
+        page = _PerceiveMockPage(select_label_raises=True)
+        perception = FormPerception(fields=[
+            FormField(locator=_P0, tag="select", name="tags",
+                      control_kind="multi_select", options=["A"])])
+        plan = FormFillPlan(actions=[
+            FormFillAction(locator=_P0, action="select_multi", values=["A"])])
+        await crawler._apply_fill_plan(page, plan, perception, _synth)
+        assert page.selected == [(_P0, {"value": ["A"]})]
+
+    async def test_multi_select_overlay_opens_and_clicks_each(self):
+        crawler = _make_crawler()
+        sel_music = '[role="option"]:has-text("Music")'
+        sel_art = '[role="option"]:has-text("Art")'
+        page = _PerceiveMockPage(custom_options={sel_music, sel_art})
+        perception = FormPerception(fields=[
+            FormField(locator=_P0, tag="mat-select", name="interests",
+                      control_kind="multi_select", options=["Music", "Art", "Sports"])])
+        plan = FormFillPlan(actions=[
+            FormFillAction(locator=_P0, action="select_multi", values=["Music", "Art"])])
+        await crawler._apply_fill_plan(page, plan, perception, _synth)
+        assert _P0 in page.clicks                       # opened
+        assert sel_music in page.clicks and sel_art in page.clicks
+        assert page.key_presses == ["Escape"]           # closed after
+
+    async def test_multi_select_empty_values_is_noop(self):
+        crawler = _make_crawler()
+        page = _PerceiveMockPage()
+        perception = FormPerception(fields=[
+            FormField(locator=_P0, tag="select", control_kind="multi_select", options=["A"])])
+        plan = FormFillPlan(actions=[FormFillAction(locator=_P0, action="select_multi")])
+        await crawler._apply_fill_plan(page, plan, perception, _synth)
+        assert page.selected == []
+
+    async def test_radio_group_choose_clicks_matching_option(self):
+        crawler = _make_crawler()
+        page = _PerceiveMockPage()
+        perception = FormPerception(fields=[
+            FormField(locator=_P0, tag="mat-radio-group", name="plan",
+                      control_kind="radio_group", options=["Free", "Pro"])])
+        plan = FormFillPlan(actions=[
+            FormFillAction(locator=_P0, action="choose", value="Pro")])
+        await crawler._apply_fill_plan(page, plan, perception, _synth)
+        assert page.chosen == [(_P0, "Pro")]
+
+    async def test_checkbox_mat_uses_set_state(self):
+        crawler = _make_crawler()
+        page = _PerceiveMockPage()
+        perception = FormPerception(fields=[
+            FormField(locator=_P0, tag="mat-checkbox", name="terms",
+                      control_kind="checkbox")])
+        plan = FormFillPlan(actions=[
+            FormFillAction(locator=_P0, action="check", value="true")])
+        await crawler._apply_fill_plan(page, plan, perception, _synth)
+        assert page.state_sets == [(_P0, True)]
+
+    async def test_checkbox_native_uncheck(self):
+        crawler = _make_crawler()
+        page = _PerceiveMockPage()
+        perception = FormPerception(fields=[
+            FormField(locator=_P0, tag="input", type="checkbox", name="news",
+                      control_kind="checkbox")])
+        plan = FormFillPlan(actions=[
+            FormFillAction(locator=_P0, action="uncheck", value="false")])
+        await crawler._apply_fill_plan(page, plan, perception, _synth)
+        assert _P0 in page.unchecked and _P0 not in page.checked
+
+    async def test_toggle_off_via_set_state(self):
+        crawler = _make_crawler()
+        page = _PerceiveMockPage()
+        perception = FormPerception(fields=[
+            FormField(locator=_P0, tag="mat-slide-toggle", name="notify",
+                      control_kind="toggle")])
+        plan = FormFillPlan(actions=[
+            FormFillAction(locator=_P0, action="toggle", value="false")])
+        await crawler._apply_fill_plan(page, plan, perception, _synth)
+        assert page.state_sets == [(_P0, False)]
+
+    async def test_toggle_role_switch_on(self):
+        crawler = _make_crawler()
+        page = _PerceiveMockPage()
+        perception = FormPerception(fields=[
+            FormField(locator=_P0, tag="div", control_kind="toggle", name="darkmode")])
+        plan = FormFillPlan(actions=[
+            FormFillAction(locator=_P0, action="toggle", value="true")])
+        await crawler._apply_fill_plan(page, plan, perception, _synth)
+        assert page.state_sets == [(_P0, True)]
+
+    async def test_privilege_field_never_driven_across_kinds(self):
+        crawler = _make_crawler()
+        page = _PerceiveMockPage()
+        perception = FormPerception(fields=[
+            FormField(locator=_P0, tag="mat-select", name="role",
+                      control_kind="single_select", options=["user", "admin"]),
+            FormField(locator=_P1, tag="mat-slide-toggle", name="isAdmin",
+                      control_kind="toggle")])
+        plan = FormFillPlan(actions=[
+            FormFillAction(locator=_P0, action="select", value="admin"),   # role — refused
+            FormFillAction(locator=_P1, action="toggle", value="true")])   # isAdmin — refused
+        await crawler._apply_fill_plan(page, plan, perception, _synth)
+        assert page.clicks == [] and page.state_sets == []
+
+    async def test_unknown_kind_and_verb_fall_back_to_harmless_text_fill(self):
+        # An unclassified control ("other") with an unknown verb resolves, via tag/type/options
+        # inference, to a plain text fill — never an unexpected widget interaction.
+        crawler = _make_crawler()
+        page = _PerceiveMockPage()
+        perception = FormPerception(fields=[
+            FormField(locator=_P0, tag="div", control_kind="other")])
+        plan = FormFillPlan(actions=[
+            FormFillAction(locator=_P0, action="frobnicate", value="x")])
+        await crawler._apply_fill_plan(page, plan, perception, _synth)
+        assert page.filled == {_P0: "x"}                  # text fill, no widget driver
+        assert page.clicks == [] and page.state_sets == []
+
+    async def test_backfill_radio_and_toggle_and_multiselect(self):
+        crawler = _make_crawler()
+
+        def synth(name):
+            return {"plan": "Pro", "notify": "true", "tags": "A"}.get(name, f"syn-{name}")
+
+        page = _PerceiveMockPage()
+        perception = FormPerception(fields=[
+            FormField(locator=_P0, tag="mat-radio-group", name="plan",
+                      control_kind="radio_group", required=True, options=["Free", "Pro"]),
+            FormField(locator=_P1, tag="mat-slide-toggle", name="notify",
+                      control_kind="toggle", required=True),
+            FormField(locator=_P2, tag="mat-select", name="tags",
+                      control_kind="multi_select", required=True, options=["A", "B"]),
+        ])
+        await crawler._apply_fill_plan(page, FormFillPlan(), perception, synth)
+        assert page.chosen == [(_P0, "Pro")]              # radio_group backfilled
+        assert page.state_sets == [(_P1, True)]           # toggle backfilled on
+        assert _P2 in page.clicks                         # multi_select overlay opened
+
+
 class TestLLMSignupFlow:
     def _fields(self):
         return [
@@ -1626,6 +1914,47 @@ class TestLLMSignupFlow:
         assert record["identity"] == {"email": "a@x.com", "password": "pw",
                                       "username": "agent_1"}
         assert record["goal"] == BrowserSignupConfig.FORM_FILLER_GOAL
+
+    async def test_end_to_end_with_mat_select_overlay(self):
+        # Juice-Shop-shaped: a lazy mat-select whose options render only when opened. Perception
+        # opens it to enumerate the real options, the LLM picks one, the executor drives the
+        # dropdown, and the intercepted POST /api/Users -> 201 proves the account was created.
+        crawler = _make_crawler()
+
+        def on_submit(attempt):
+            crawler._intercepted.append(InterceptedRequest(
+                url="https://app.example.com/api/Users", method="POST", response_status=201))
+
+        fields = [
+            _pfield(_P0, tag="input", type="email", name="email",
+                    control_kind="text", required=True),
+            _pfield(_P1, tag="input", type="password", name="password",
+                    control_kind="text", required=True),
+            _pfield(_P2, tag="input", type="text", name="username",
+                    control_kind="text", required=True),
+            _pfield(_P3, tag="mat-select", type="mat-select", name="securityQuestion",
+                    control_kind="single_select", overlay=True, options=[], required=True),
+        ]
+        option_selector = 'mat-option:has-text("First pet?")'
+        page = _PerceiveMockPage(fields=fields, on_submit=on_submit,
+                                 overlay_map={_P3: ["Favorite color?", "First pet?"]},
+                                 custom_options={option_selector})
+        captured = {}
+
+        async def filler(perception, identity, goal):
+            q = next(f for f in perception.fields if f.locator == _P3)
+            captured["options"] = list(q.options)          # the LLM sees REAL options
+            return FormFillPlan(actions=[
+                FormFillAction(locator=_P0, action="type", value="a@x.com"),
+                FormFillAction(locator=_P1, action="type", value="pw"),
+                FormFillAction(locator=_P2, action="type", value="agent_1"),
+                FormFillAction(locator=_P3, action="select", value="First pet?"),
+            ])
+        result = await crawler._run_signup(
+            page, "a@x.com", "pw", "agent_1", _synth, None, filler)
+        assert result.success and result.signup_endpoint == "/api/Users"
+        assert captured["options"] == ["Favorite color?", "First pet?"]
+        assert option_selector in page.clicks              # the chosen option was clicked
 
     async def test_adaptive_retry_first_invalid_then_success(self):
         crawler = _make_crawler()

@@ -481,6 +481,11 @@ class BrowserSignupConfig:
     # Per-control cap on enumerated dropdown options fed to the LLM (bounds a hostile form's
     # option list). Enforced in the perception JS.
     MAX_PERCEIVE_OPTIONS = 60
+    # Upper bound on how many LAZY overlay dropdowns (mat-select / combobox / listbox /
+    # react-select) perception will OPEN to enumerate options in a single form pass — bounds
+    # the read-only open/close work so a hostile form full of overlay widgets can't make the
+    # perception step open unboundedly.
+    MAX_OVERLAY_ENUMERATIONS = 8
     # Playwright ``:has-text`` selector templates tried (in order) to click a CUSTOM dropdown
     # option (mat-select / role=listbox) whose visible text matches the LLM's chosen value.
     CUSTOM_OPTION_SELECTORS = (

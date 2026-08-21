@@ -139,12 +139,17 @@ _SIGNUP_PAGE_TEXT_JS = """
 }
 """
 
-# Rich PERCEPTION of the register form for the LLM form-comprehension path: for every
-# visible fillable control (native inputs/selects/textareas AND custom dropdowns —
-# mat-select / [role=combobox] / [role=listbox]) stamp a unique locator attribute and
-# return its identifying metadata; for a dropdown, enumerate the available option texts
-# (native <option>s, else the associated mat-option/[role=option] nodes). Also stamp and
-# return the submit control's locator. (See AuthenticatedCrawler._perceive_form.)
+# Rich PERCEPTION of the register form for the LLM form-comprehension path. For every visible
+# fillable control it CLASSIFIES the control into a CANONICAL, framework-agnostic ``control_kind``
+# (text / single_select / multi_select / radio_group / checkbox / toggle / other) detected across
+# native HTML, Angular Material (mat-select / mat-radio-group / mat-checkbox / mat-slide-toggle)
+# and React/ARIA ([role=combobox/listbox/radiogroup/checkbox/switch], react-select), stamps a
+# unique locator attribute, and returns its identifying metadata. Native radios sharing a ``name``
+# (and mat-radio-group / role=radiogroup) collapse to ONE radio_group field. For a choice control
+# it enumerates the option texts INLINE (native <option>s / radio labels); an overlay widget
+# (mat-select / combobox / listbox / react-select), whose options render lazily only when opened,
+# is flagged ``overlay:true`` so the Python side can open→read→close it. Also stamps and returns
+# the submit control's locator. (See AuthenticatedCrawler._perceive_form.)
 _PERCEIVE_FORM_JS = """
 (cfg) => { /* perceive-form */
   const fieldAttr = cfg.fieldAttr;
@@ -164,16 +169,42 @@ _PERCEIVE_FORM_JS = """
     }
     return (label || '').trim();
   };
-  const readOptions = (el, tag) => {
+  const cls = (el) => (el.getAttribute('class') || '').toLowerCase();
+  const isReactSelect = (el) => {
+    const c = cls(el);
+    return c.indexOf('select__control') !== -1 || c.indexOf('react-select') !== -1
+      || /select-\\w+__control/.test(c);
+  };
+  const multiSelectable = (el) =>
+    (el.getAttribute('aria-multiselectable') || '') === 'true' || el.hasAttribute('multiple')
+    || !!el.querySelector('[aria-multiselectable="true"], select[multiple]');
+  const classify = (el, tag, type, role) => {
+    if (tag === 'mat-slide-toggle' || role === 'switch') return {kind: 'toggle', overlay: false};
+    if (tag === 'mat-checkbox' || role === 'checkbox' || type === 'checkbox')
+      return {kind: 'checkbox', overlay: false};
+    if (tag === 'mat-radio-group' || role === 'radiogroup')
+      return {kind: 'radio_group', overlay: false};
+    if (tag === 'select')
+      return {kind: el.multiple ? 'multi_select' : 'single_select', overlay: false};
+    if (tag === 'mat-select')
+      return {kind: multiSelectable(el) ? 'multi_select' : 'single_select', overlay: true};
+    if (role === 'combobox') return {kind: 'single_select', overlay: true};
+    if (role === 'listbox')
+      return {kind: multiSelectable(el) ? 'multi_select' : 'single_select', overlay: true};
+    if (isReactSelect(el))
+      return {kind: multiSelectable(el) ? 'multi_select' : 'single_select', overlay: true};
+    const textish = ['text', 'email', 'password', 'number', 'tel', 'url', 'search'];
+    if (tag === 'textarea' || textish.indexOf(type) !== -1) return {kind: 'text', overlay: false};
+    return {kind: 'other', overlay: false};
+  };
+  const readInlineOptions = (el, tag, role) => {
     let nodes = [];
     if (tag === 'select') {
       nodes = Array.from(el.querySelectorAll('option'));
+    } else if (tag === 'mat-radio-group' || role === 'radiogroup') {
+      nodes = Array.from(el.querySelectorAll('mat-radio-button, [role="radio"]'));
     } else {
-      const owns = el.getAttribute('aria-owns') || el.getAttribute('aria-controls') || '';
-      let scope = null;
-      if (owns) scope = document.getElementById(owns.split(/\\s+/)[0]);
-      const root = scope || document;
-      nodes = Array.from(root.querySelectorAll('mat-option, [role="option"], option'));
+      nodes = Array.from(el.querySelectorAll('mat-option, [role="option"], option'));
     }
     const out = [];
     for (const n of nodes) {
@@ -183,33 +214,55 @@ _PERCEIVE_FORM_JS = """
     }
     return out;
   };
-  const selector = 'input, select, textarea, mat-select, [role="combobox"], [role="listbox"]';
+  const selector = ['input', 'select', 'textarea', 'mat-select', 'mat-radio-group',
+    'mat-checkbox', 'mat-slide-toggle', '[role="combobox"]', '[role="listbox"]',
+    '[role="radiogroup"]', '[role="checkbox"]', '[role="switch"]'].join(', ');
   const nodes = Array.from(document.querySelectorAll(selector));
   const out = [];
   let idx = 0;
+  const seenRadio = {};
+  const push = (el, kind, tag, type, options, overlay) => {
+    el.setAttribute(fieldAttr, String(idx));
+    out.push({
+      locator: '[' + fieldAttr + '="' + idx + '"]', control_kind: kind, tag: tag, type: type,
+      name: el.getAttribute('name') || '', id: el.getAttribute('id') || '', label: labelFor(el),
+      placeholder: el.getAttribute('placeholder') || '', aria: el.getAttribute('aria-label') || '',
+      required: el.hasAttribute('required') || (el.getAttribute('aria-required') || '') === 'true',
+      value: (el.value !== undefined && el.value !== null) ? String(el.value) : '',
+      options: options, overlay: overlay,
+    });
+    idx++;
+  };
   for (const el of nodes) {
     const tag = el.tagName.toLowerCase();
     const type = (el.getAttribute('type') || tag).toLowerCase();
-    if (skip.includes(type) || el.disabled || !vis(el)) continue;
     const role = (el.getAttribute('role') || '').toLowerCase();
-    const isDropdown = tag === 'select' || tag === 'mat-select'
-      || role === 'combobox' || role === 'listbox';
-    el.setAttribute(fieldAttr, String(idx));
-    out.push({
-      locator: '[' + fieldAttr + '="' + idx + '"]',
-      tag: tag,
-      type: type,
-      name: el.getAttribute('name') || '',
-      id: el.getAttribute('id') || '',
-      label: labelFor(el),
-      placeholder: el.getAttribute('placeholder') || '',
-      aria: el.getAttribute('aria-label') || '',
-      required: el.hasAttribute('required')
-        || (el.getAttribute('aria-required') || '') === 'true',
-      value: (el.value !== undefined && el.value !== null) ? String(el.value) : '',
-      options: isDropdown ? readOptions(el, tag) : [],
-    });
-    idx++;
+    if (skip.indexOf(type) !== -1 || el.disabled || !vis(el)) continue;
+    // A native radio inside a mat-radio-group / role=radiogroup is spoken for by that group.
+    if (type === 'radio' && el.closest('mat-radio-group, [role="radiogroup"]')) continue;
+    // Group native radios sharing a name into ONE radio_group field (options = the choices).
+    if (type === 'radio') {
+      const name = el.getAttribute('name') || '';
+      const key = 'r:' + (name || ('_' + idx));
+      if (seenRadio[key]) continue;
+      seenRadio[key] = true;
+      const scoped = name
+        ? Array.from(document.querySelectorAll('input[type="radio"][name="' + name + '"]'))
+        : [el];
+      const opts = [];
+      for (const r of scoped) {
+        const t = (labelFor(r) || r.value || '').trim();
+        if (t && opts.indexOf(t) === -1) opts.push(t);
+        if (opts.length >= maxOptions) break;
+      }
+      push(el, 'radio_group', tag, type, opts, false);
+      continue;
+    }
+    const info = classify(el, tag, type, role);
+    const isChoice = info.kind === 'single_select' || info.kind === 'multi_select'
+      || info.kind === 'radio_group';
+    push(el, info.kind, tag, type,
+      isChoice ? readInlineOptions(el, tag, role) : [], info.overlay);
   }
   let submit = '';
   let btn = document.querySelector('button[type="submit"], input[type="submit"]');
@@ -222,6 +275,79 @@ _PERCEIVE_FORM_JS = """
     submit = '[' + submitAttr + '="1"]';
   }
   return { fields: out, submit: submit };
+}
+"""
+
+# Read the option texts of a JUST-OPENED overlay dropdown (mat-select / combobox / listbox /
+# react-select) — its options render lazily in a CDK/portal overlay only while open. Called by
+# the Python side after it clicks the widget's trigger; READ-ONLY (never selects). (See
+# AuthenticatedCrawler._enumerate_overlay_options.)
+_READ_OVERLAY_OPTIONS_JS = """
+(cfg) => { /* read-overlay-options */
+  const maxOptions = cfg.maxOptions;
+  const nodes = Array.from(document.querySelectorAll(
+    'mat-option, [role="option"], .select__option, [class*="option"]'));
+  const out = [];
+  for (const n of nodes) {
+    const text = (n.textContent || '').trim();
+    if (text && out.indexOf(text) === -1) out.push(text);
+    if (out.length >= maxOptions) break;
+  }
+  return out;
+}
+"""
+
+# Choose ONE option of a radio_group by visible text (case-insensitive, trimmed, exact-then-
+# contains). Handles native ``input[type=radio]`` (grouped by ``name``), mat-radio-button, and
+# ``[role=radio]``. Clicks the matching control; returns whether one matched. (See
+# AuthenticatedCrawler._choose_option.)
+_CHOOSE_OPTION_JS = """
+(cfg) => { /* choose-option */
+  const want = (cfg.value || '').trim().toLowerCase();
+  const el = document.querySelector(cfg.locator);
+  if (!el) return false;
+  const type = (el.getAttribute('type') || '').toLowerCase();
+  let group;
+  if (type === 'radio') {
+    const name = el.getAttribute('name') || '';
+    group = name
+      ? Array.from(document.querySelectorAll('input[type="radio"][name="' + name + '"]'))
+      : [el];
+  } else {
+    group = Array.from(el.querySelectorAll('mat-radio-button, [role="radio"], input[type="radio"]'));
+  }
+  const textOf = (r) => {
+    let t = (r.textContent || '').trim();
+    if (!t && r.id) {
+      const l = document.querySelector('label[for="' + r.id + '"]');
+      if (l) t = (l.textContent || '').trim();
+    }
+    if (!t && r.closest) { const l = r.closest('label'); if (l) t = (l.textContent || '').trim(); }
+    return (t || r.value || '').trim().toLowerCase();
+  };
+  const click = (r) => { (r.matches('input') ? r : (r.querySelector('input') || r)).click(); return true; };
+  for (const r of group) { if (textOf(r) === want) return click(r); }
+  for (const r of group) { if (want && textOf(r).indexOf(want) !== -1) return click(r); }
+  return false;
+}
+"""
+
+# Set a checkbox/toggle to a desired boolean, handling native ``input``, mat-checkbox /
+# mat-slide-toggle, and ``[role=checkbox]``/``[role=switch]``. Reads the current state
+# (``.checked`` of the inner input, else ``aria-checked``) and clicks only if it differs. (See
+# AuthenticatedCrawler._set_checked, used for the mat/role variants.)
+_SET_STATE_JS = """
+(cfg) => { /* set-control-state */
+  const desired = !!cfg.checked;
+  const el = document.querySelector(cfg.locator);
+  if (!el) return false;
+  const inner = el.matches('input') ? el : el.querySelector('input');
+  const current = (inner && inner.checked !== undefined)
+    ? !!inner.checked : (el.getAttribute('aria-checked') || '') === 'true';
+  if (current !== desired) {
+    (el.matches('input') ? el : (el.querySelector('label, input, button') || el)).click();
+  }
+  return desired;
 }
 """
 
@@ -595,8 +721,12 @@ class AuthenticatedCrawler:
             logger.debug("signup: form perception failed: %s", exc)
             perceived = None
         perceived = perceived if isinstance(perceived, dict) else {}
-        fields = [
-            FormField(
+        fields: list[FormField] = []
+        enumerations = 0
+        for f in (perceived.get("fields") or []):
+            if not (isinstance(f, dict) and f.get("locator")):
+                continue
+            field = FormField(
                 locator=str(f.get("locator") or ""),
                 tag=str(f.get("tag") or ""),
                 type=str(f.get("type") or ""),
@@ -608,16 +738,61 @@ class AuthenticatedCrawler:
                 required=bool(f.get("required")),
                 value=str(f.get("value") or ""),
                 options=[str(o) for o in (f.get("options") or [])],
+                control_kind=str(f.get("control_kind") or "other"),
             )
-            for f in (perceived.get("fields") or [])
-            if isinstance(f, dict) and f.get("locator")
-        ]
+            # A lazy-rendered overlay dropdown (mat-select / combobox / listbox / react-select)
+            # exposes its options only once opened, so perception returned none. Enumerate them
+            # by OPENING the widget (read-only, never selecting), bounded by the per-form cap so
+            # a hostile form can't make us open unboundedly.
+            if (
+                not field.options
+                and field.control_kind in ("single_select", "multi_select")
+                and f.get("overlay")
+                and enumerations < BrowserSignupConfig.MAX_OVERLAY_ENUMERATIONS
+            ):
+                enumerations += 1
+                field.options = await self._enumerate_overlay_options(page, field.locator)
+            fields.append(field)
         return FormPerception(
             fields=fields,
             screenshot_b64=await self._capture_screenshot(page),
             page_url=page_url,
             submit_locator=str(perceived.get("submit") or ""),
         )
+
+    async def _enumerate_overlay_options(self, page: object, locator: str) -> list[str]:
+        """OPEN an overlay dropdown to read the options it renders lazily, then CLOSE it —
+        READ-ONLY (it never selects an option and never submits). Clicks the widget's trigger,
+        waits for the overlay to render, reads the ``mat-option``/``[role=option]``/react-select
+        option nodes, and presses Escape to restore state. Fully best-effort and BOUNDED: a
+        widget that won't open (or an evaluate that fails) yields ``[]`` rather than raising."""
+        try:
+            trigger = await page.query_selector(locator)  # type: ignore[union-attr]
+            if not trigger:
+                return []
+            await trigger.click()
+        except Exception as exc:
+            logger.debug("signup: could not open dropdown %s to enumerate: %s", locator, exc)
+            return []
+        await self._settle(page)
+        try:
+            opts = await page.evaluate(  # type: ignore[union-attr]
+                _READ_OVERLAY_OPTIONS_JS,
+                {"maxOptions": BrowserSignupConfig.MAX_PERCEIVE_OPTIONS},
+            )
+        except Exception as exc:
+            logger.debug("signup: overlay option read for %s failed: %s", locator, exc)
+            opts = []
+        await self._close_overlay(page)
+        return [str(o) for o in (opts or [])]
+
+    async def _close_overlay(self, page: object) -> None:
+        """Dismiss an opened overlay dropdown by pressing Escape (best-effort — restores the
+        page to its pre-enumeration state so the option-read never leaves a widget open)."""
+        try:
+            await page.keyboard.press("Escape")  # type: ignore[union-attr]
+        except Exception as exc:
+            logger.debug("signup: overlay close failed: %s", exc)
 
     async def _capture_screenshot(self, page: object) -> str:
         """A base64 PNG of the current page, bounded by ``SCREENSHOT_MAX_BYTES`` (an
@@ -632,6 +807,17 @@ class AuthenticatedCrawler:
             return ""
         return base64.b64encode(png).decode("ascii")
 
+    # Canonical control kinds the executor drives, and the fallback verb→kind map used when a
+    # field carries no ``control_kind`` (a hand-built field / a legacy plan) — this is what
+    # keeps the old ``type``/``select``/``check`` plans working.
+    _CONTROL_KINDS = frozenset(
+        {"text", "single_select", "multi_select", "radio_group", "checkbox", "toggle"}
+    )
+    _ACTION_KIND = {
+        "type": "text", "select": "single_select", "select_multi": "multi_select",
+        "choose": "radio_group", "check": "checkbox", "uncheck": "checkbox", "toggle": "toggle",
+    }
+
     async def _apply_fill_plan(
         self,
         page: object,
@@ -639,14 +825,16 @@ class AuthenticatedCrawler:
         perception: FormPerception,
         fill_value: Callable[[str], Any],
     ) -> None:
-        """EXECUTE a fill plan: for each action — ``type`` fills the input, ``select`` drives
-        a native ``<select>`` (via ``select_option``) or a custom dropdown (click-to-open then
-        click the option whose text matches), ``check`` ticks a checkbox. The privilege guard
-        is ENFORCED here independently of the planner's own strip: any action targeting a
-        field whose synthesized value is ``None`` (an authorization/privilege field) is
-        refused. Finally, any REQUIRED field the plan left untouched is back-filled via
-        ``fill_value`` (``_synthesize_field``) so a form needing a field the LLM omitted still
-        validates — never a privilege field (``fill_value`` returns ``None`` for those)."""
+        """EXECUTE a fill plan by DISPATCHING each action to the driver for the perceived
+        field's canonical ``control_kind`` (one driver per kind, each handling the native /
+        Angular Material / React-ARIA variant): text→fill, single_select→native ``select_option``
+        or overlay open-then-click, multi_select→native multi-``select_option`` or overlay
+        open-then-click-each, radio_group→click the matching radio, checkbox→set checked,
+        toggle→set on/off. The privilege guard is ENFORCED here independently of the planner's
+        strip: any action targeting a field whose synthesized value is ``None`` (an
+        authorization/privilege field) is refused. Finally, any REQUIRED field the plan left
+        untouched is back-filled via ``fill_value`` (``_synthesize_field``) so a form needing a
+        field the LLM omitted still validates — never a privilege field."""
         by_locator = {f.locator: f for f in perception.fields}
         targeted: set[str] = set()
         for action in plan.actions:
@@ -654,14 +842,145 @@ class AuthenticatedCrawler:
             if field is not None and fill_value(self._perceived_field_key(field)) is None:
                 continue  # privilege/authorization field — never filled (executor-enforced)
             targeted.add(action.locator)
-            act = (action.action or "").lower()
-            if act == "type":
-                await BrowserLoginHelper.fill_input(page, (action.locator,), str(action.value))
-            elif act == "select":
-                await self._select_option(page, action.locator, str(action.value), field)
-            elif act == "check":
-                await self._check_box(page, action.locator)
+            await self._drive_action(page, action, field)
         await self._backfill_required(page, perception, targeted, fill_value)
+
+    async def _drive_action(
+        self, page: object, action: Any, field: FormField | None
+    ) -> None:
+        """Route ONE fill action to the driver for its resolved ``control_kind``. An unknown/
+        ``other`` kind is a no-op (a hallucinated control can't drive an unexpected widget)."""
+        kind = self._effective_kind(field, action)
+        locator = action.locator
+        if kind == "text":
+            await BrowserLoginHelper.fill_input(page, (locator,), str(action.value))
+        elif kind == "single_select":
+            await self._select_option(page, locator, str(action.value), field)
+        elif kind == "multi_select":
+            await self._select_multi(page, locator, self._action_values(action), field)
+        elif kind == "radio_group":
+            await self._choose_option(page, locator, str(action.value))
+        elif kind in ("checkbox", "toggle"):
+            await self._set_checked(page, locator, self._desired_bool(action), field)
+
+    @classmethod
+    def _effective_kind(cls, field: FormField | None, action: Any) -> str:
+        """Resolve the control kind to drive: the perceived field's ``control_kind`` when it is
+        a known canonical kind, else inferred from the action verb (backward-compat for legacy
+        ``type``/``select``/``check`` plans), else from the field's tag/type."""
+        if field is not None:
+            kind = (field.control_kind or "").lower()
+            if kind in cls._CONTROL_KINDS:
+                return kind
+        act = (action.action or "").lower()
+        if act in cls._ACTION_KIND:
+            return cls._ACTION_KIND[act]
+        return cls._field_kind(field) if field is not None else "text"
+
+    @classmethod
+    def _field_kind(cls, field: FormField) -> str:
+        """The canonical kind of a perceived field from its ``control_kind`` (when known) else
+        inferred from tag/type/options — used for back-filling a field with no plan action."""
+        kind = (field.control_kind or "").lower()
+        if kind in cls._CONTROL_KINDS:
+            return kind
+        if (field.tag or "").lower() == "select":
+            return "single_select"
+        if (field.type or "").lower() == "checkbox":
+            return "checkbox"
+        if field.options:
+            return "single_select"
+        return "text"
+
+    @staticmethod
+    def _action_values(action: Any) -> list[str]:
+        """The list of chosen options for a multi-select action: the action's ``values`` if
+        present, else its single ``value`` wrapped (so a single-valued multi action still
+        works). Empty strings are dropped."""
+        vals = [str(v) for v in (getattr(action, "values", None) or []) if str(v)]
+        if not vals and action.value:
+            vals = [str(action.value)]
+        return vals
+
+    @staticmethod
+    def _desired_bool(action: Any) -> bool:
+        """The desired on/off state for a checkbox/toggle action: ``uncheck`` → off; an explicit
+        falsey ``value``/``values[0]`` (false/0/off/no/unchecked) → off; otherwise on (a
+        ``check``/``toggle`` with no explicit value means 'set it')."""
+        if (action.action or "").lower() == "uncheck":
+            return False
+        raw = action.value
+        if not raw and getattr(action, "values", None):
+            raw = action.values[0]
+        return str(raw or "").strip().lower() not in ("false", "0", "off", "no", "unchecked")
+
+    async def _select_multi(
+        self, page: object, locator: str, values: list[str], field: FormField | None
+    ) -> None:
+        """Drive a multi_select to ``values``. A native ``<select multiple>`` (``field.tag ==
+        'select'``) uses ``select_option`` with the whole list (by label, then by value); an
+        overlay multi-select (mat-select[multiple] / listbox / react-select) is OPENED once,
+        each matching option clicked, then closed. Best-effort — logged, never raised."""
+        if not values:
+            return
+        if field is not None and (field.tag or "").lower() == "select":
+            for kwargs in ({"label": values}, {"value": values}):
+                try:
+                    await page.select_option(locator, **kwargs)  # type: ignore[union-attr]
+                    return
+                except Exception as exc:
+                    logger.debug("signup: native multi select_option %s failed: %s", kwargs, exc)
+            return
+        try:
+            trigger = await page.query_selector(locator)  # type: ignore[union-attr]
+            if trigger:
+                await trigger.click()
+        except Exception as exc:
+            logger.debug("signup: could not open multi dropdown %s: %s", locator, exc)
+            return
+        await self._settle(page)
+        for value in values:
+            await self._click_custom_option(page, value)
+        await self._close_overlay(page)
+
+    async def _choose_option(self, page: object, locator: str, value: str) -> bool:
+        """Choose one option of a radio_group (native radios / mat-radio-button / [role=radio])
+        by matching visible text, via ``_CHOOSE_OPTION_JS``. Best-effort; returns whether an
+        option matched (never raises)."""
+        try:
+            matched = await page.evaluate(  # type: ignore[union-attr]
+                _CHOOSE_OPTION_JS, {"locator": locator, "value": value},
+            )
+        except Exception as exc:
+            logger.debug("signup: radio choose on %s failed: %s", locator, exc)
+            return False
+        return bool(matched)
+
+    async def _set_checked(
+        self, page: object, locator: str, desired: bool, field: FormField | None
+    ) -> None:
+        """Set a checkbox/toggle to ``desired``. A NATIVE ``input`` uses Playwright
+        ``check``/``uncheck`` (idempotent); a mat-checkbox / mat-slide-toggle / [role=checkbox] /
+        [role=switch] is driven by ``_SET_STATE_JS`` (read current state, click only if it
+        differs). Best-effort — logged, never raised."""
+        tag = (field.tag or "").lower() if field is not None else ""
+        if tag in ("", "input"):
+            try:
+                element = await page.query_selector(locator)  # type: ignore[union-attr]
+                if element:
+                    if desired:
+                        await element.check()
+                    else:
+                        await element.uncheck()
+            except Exception as exc:
+                logger.debug("signup: native checkbox set on %s failed: %s", locator, exc)
+            return
+        try:
+            await page.evaluate(  # type: ignore[union-attr]
+                _SET_STATE_JS, {"locator": locator, "checked": desired},
+            )
+        except Exception as exc:
+            logger.debug("signup: control-state set on %s failed: %s", locator, exc)
 
     async def _backfill_required(
         self,
@@ -671,9 +990,10 @@ class AuthenticatedCrawler:
         fill_value: Callable[[str], Any],
     ) -> None:
         """Fill any REQUIRED perceived field the plan did not target and that has no current
-        value, using ``fill_value``. Password fields are left to the LLM (a guessed password
-        would break a confirm-match); a privilege field (``fill_value`` → ``None``) is
-        skipped. This is the ``_synthesize_field`` safety net for a field the LLM omitted."""
+        value, using ``fill_value`` and the field's canonical kind. Password fields are left to
+        the LLM (a guessed password would break a confirm-match); a privilege field
+        (``fill_value`` → ``None``) is skipped. The ``_synthesize_field`` safety net for a field
+        the LLM omitted."""
         for field in perception.fields:
             if field.locator in targeted or not field.required or field.value:
                 continue
@@ -683,9 +1003,16 @@ class AuthenticatedCrawler:
             value = fill_value(self._perceived_field_key(field))
             if value is None:  # privilege/authorization field — never filled
                 continue
-            if ftype == "checkbox" or value is True:
-                await self._check_box(page, field.locator)
-            elif field.options:
+            kind = self._field_kind(field)
+            if kind == "checkbox" or value is True:
+                await self._set_checked(page, field.locator, True, field)
+            elif kind == "toggle":
+                await self._set_checked(page, field.locator, True, field)
+            elif kind == "radio_group":
+                await self._choose_option(page, field.locator, str(value))
+            elif kind == "multi_select":
+                await self._select_multi(page, field.locator, [str(value)], field)
+            elif kind == "single_select":
                 await self._select_option(page, field.locator, str(value), field)
             else:
                 await BrowserLoginHelper.fill_input(page, (field.locator,), str(value))
