@@ -13,6 +13,7 @@ intercepting every network request.  Discovers:
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import re
@@ -41,6 +42,9 @@ from isitsecure.engine.models import (
     AuthenticatedCrawlResult,
     BrowserSignupResult,
     DiscoveredEndpoint,
+    FormField,
+    FormFillPlan,
+    FormPerception,
     InterceptedRequest,
 )
 from isitsecure.engine.shared.html_endpoint_extractor import (
@@ -52,6 +56,10 @@ from isitsecure.engine.shared.supabase_utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Bounded adaptive retries for the LLM form-comprehension signup (perceive → plan → execute
+# → submit, re-perceiving on a still-invalid form). Module-level so tests can tighten it.
+_MAX_FORM_ATTEMPTS = BrowserSignupConfig.MAX_FORM_ATTEMPTS
 
 # --- Browser-signup DOM helpers (JS run in the page; see AuthenticatedCrawler.signup) ---
 # Each carries a distinctive marker comment so tests can dispatch a mock ``page.evaluate``.
@@ -128,6 +136,92 @@ _DETECT_CAPTCHA_JS = """
 _SIGNUP_PAGE_TEXT_JS = """
 () => { /* signup-page-text */
   return document.body ? (document.body.innerText || '') : '';
+}
+"""
+
+# Rich PERCEPTION of the register form for the LLM form-comprehension path: for every
+# visible fillable control (native inputs/selects/textareas AND custom dropdowns —
+# mat-select / [role=combobox] / [role=listbox]) stamp a unique locator attribute and
+# return its identifying metadata; for a dropdown, enumerate the available option texts
+# (native <option>s, else the associated mat-option/[role=option] nodes). Also stamp and
+# return the submit control's locator. (See AuthenticatedCrawler._perceive_form.)
+_PERCEIVE_FORM_JS = """
+(cfg) => { /* perceive-form */
+  const fieldAttr = cfg.fieldAttr;
+  const submitAttr = cfg.submitAttr;
+  const maxOptions = cfg.maxOptions;
+  const skip = ["hidden", "file", "submit", "button", "reset", "image"];
+  const vis = (el) => !!(el.offsetParent || el.getClientRects().length);
+  const labelFor = (el) => {
+    let label = '';
+    if (el.id) {
+      const l = document.querySelector('label[for="' + el.id + '"]');
+      if (l) label = l.textContent || '';
+    }
+    if (!label && el.closest) {
+      const l = el.closest('label');
+      if (l) label = l.textContent || '';
+    }
+    return (label || '').trim();
+  };
+  const readOptions = (el, tag) => {
+    let nodes = [];
+    if (tag === 'select') {
+      nodes = Array.from(el.querySelectorAll('option'));
+    } else {
+      const owns = el.getAttribute('aria-owns') || el.getAttribute('aria-controls') || '';
+      let scope = null;
+      if (owns) scope = document.getElementById(owns.split(/\\s+/)[0]);
+      const root = scope || document;
+      nodes = Array.from(root.querySelectorAll('mat-option, [role="option"], option'));
+    }
+    const out = [];
+    for (const n of nodes) {
+      const text = (n.textContent || n.value || '').trim();
+      if (text && out.indexOf(text) === -1) out.push(text);
+      if (out.length >= maxOptions) break;
+    }
+    return out;
+  };
+  const selector = 'input, select, textarea, mat-select, [role="combobox"], [role="listbox"]';
+  const nodes = Array.from(document.querySelectorAll(selector));
+  const out = [];
+  let idx = 0;
+  for (const el of nodes) {
+    const tag = el.tagName.toLowerCase();
+    const type = (el.getAttribute('type') || tag).toLowerCase();
+    if (skip.includes(type) || el.disabled || !vis(el)) continue;
+    const role = (el.getAttribute('role') || '').toLowerCase();
+    const isDropdown = tag === 'select' || tag === 'mat-select'
+      || role === 'combobox' || role === 'listbox';
+    el.setAttribute(fieldAttr, String(idx));
+    out.push({
+      locator: '[' + fieldAttr + '="' + idx + '"]',
+      tag: tag,
+      type: type,
+      name: el.getAttribute('name') || '',
+      id: el.getAttribute('id') || '',
+      label: labelFor(el),
+      placeholder: el.getAttribute('placeholder') || '',
+      aria: el.getAttribute('aria-label') || '',
+      required: el.hasAttribute('required')
+        || (el.getAttribute('aria-required') || '') === 'true',
+      value: (el.value !== undefined && el.value !== null) ? String(el.value) : '',
+      options: isDropdown ? readOptions(el, tag) : [],
+    });
+    idx++;
+  }
+  let submit = '';
+  let btn = document.querySelector('button[type="submit"], input[type="submit"]');
+  if (!btn) {
+    btn = Array.from(document.querySelectorAll('button')).find(
+      (b) => /register|sign ?up|create account|get started/i.test(b.textContent || ''));
+  }
+  if (btn) {
+    btn.setAttribute(submitAttr, '1');
+    submit = '[' + submitAttr + '="1"]';
+  }
+  return { fields: out, submit: submit };
 }
 """
 
@@ -276,22 +370,28 @@ class AuthenticatedCrawler:
         password: str | None = None,
         synthesize: Callable[[str], Any] | None = None,
         register_url: str | None = None,
+        form_filler: Callable[..., Any] | None = None,
     ) -> BrowserSignupResult:
         """Drive a REAL browser to self-register the AGENT'S OWN account, capturing the
         real signup endpoint from the resulting XHR.
 
-        This is the "read the app, don't guess" fallback for a JavaScript SPA whose signup
-        endpoint is not discoverable by path-probing (e.g. Juice Shop's ``POST /api/Users``):
-        navigate to the register page, fill the form, submit, and read the intercepted API
-        call the submit fired — which both reveals the real endpoint AND creates the account.
+        This is the "read and UNDERSTAND the app, don't guess" fallback for a JavaScript SPA
+        whose signup endpoint is not discoverable by path-probing (e.g. Juice Shop's
+        ``POST /api/Users``): navigate to the register page, PERCEIVE the form (rich DOM
+        extraction + a screenshot), let an LLM decide the fill (which value per field, WHICH
+        dropdown option), EXECUTE the plan, submit, and read the intercepted API call the
+        submit fired — which both reveals the real endpoint AND creates the account. On a
+        still-invalid form it re-perceives and re-plans, bounded, then gives up honestly.
 
-        It reuses the crawler's browser lifecycle and ``_setup_interception`` (so the signup
-        XHR is captured exactly as ``crawl`` captures API calls) and ``BrowserLoginHelper``
-        for form-filling/submission — a targeted, audited, single-form provisioning action,
-        NOT the blind clicking ``safe_mode`` suppresses. It NEVER fills privilege fields
-        (delegated to ``synthesize``, which the caller supplies as ``_synthesize_field`` —
-        the same exclusion the REST path uses) and NEVER submits anything but the register
-        form. A CAPTCHA / email- / SMS-verification wall is *detected and reported* via
+        When ``form_filler`` is None (tests / callers with no LLM), it falls back to the
+        legacy HEURISTIC fill (:meth:`_fill_signup_form`) so nothing regresses. Either way it
+        reuses the crawler's browser lifecycle and ``_setup_interception`` (so the signup XHR
+        is captured exactly as ``crawl`` captures API calls) and ``BrowserLoginHelper`` for
+        submission — a targeted, audited, single-form provisioning action, NOT the blind
+        clicking ``safe_mode`` suppresses. It NEVER fills privilege fields (the executor
+        strips any such plan action, and the heuristic path delegates to ``synthesize`` which
+        returns ``None`` for them) and NEVER submits anything but the register form. A
+        CAPTCHA / email- / SMS-verification wall is *detected and reported* via
         ``blocked_reason`` — never defeated (the honest boundary).
 
         ``email``/``password`` default to the crawler's constructor credentials.
@@ -322,6 +422,7 @@ class AuthenticatedCrawler:
                     self._setup_interception(page)
                     result = await self._run_signup(
                         page, email, password, username, fill_value, register_url,
+                        form_filler,
                     )
                     await page.close()
                     await context.close()
@@ -343,8 +444,10 @@ class AuthenticatedCrawler:
         username: str,
         fill_value: Callable[[str], Any],
         register_url: str | None,
+        form_filler: Callable[..., Any] | None = None,
     ) -> BrowserSignupResult:
-        """The in-browser signup flow (find → wall-check → fill → submit → capture)."""
+        """The in-browser signup flow: find → wall-check → (LLM-perceive+plan+execute+adapt,
+        or the heuristic fill) → submit → capture."""
         base = BrowserSignupResult(
             email=email, password=password, username=username,
         )
@@ -359,18 +462,106 @@ class AuthenticatedCrawler:
             base.blocked_reason = wall
             return base
 
-        if not await self._fill_signup_form(page, email, password, username, fill_value):
-            base.error = BrowserSignupConfig.ERROR_FIELDS_NOT_FOUND
-            return base
+        if form_filler is not None:
+            return await self._llm_signup(
+                page, email, password, username, fill_value, form_filler,
+            )
+        return await self._heuristic_signup(page, email, password, username, fill_value)
 
+    async def _heuristic_signup(
+        self,
+        page: object,
+        email: str,
+        password: str,
+        username: str,
+        fill_value: Callable[[str], Any],
+    ) -> BrowserSignupResult:
+        """The legacy hardcoded-heuristic fill (no LLM): classify each field by role, fill,
+        submit, capture. Kept so callers with no ``form_filler`` (tests / older code) still
+        provision — nothing regresses."""
+        if not await self._fill_signup_form(page, email, password, username, fill_value):
+            return BrowserSignupResult(
+                email=email, password=password, username=username,
+                error=BrowserSignupConfig.ERROR_FIELDS_NOT_FOUND,
+            )
+        return await self._submit_and_capture(page, email, password, username)
+
+    async def _llm_signup(
+        self,
+        page: object,
+        email: str,
+        password: str,
+        username: str,
+        fill_value: Callable[[str], Any],
+        form_filler: Callable[..., Any],
+    ) -> BrowserSignupResult:
+        """PERCEIVE → UNDERSTAND → EXECUTE → ADAPT. Perceive the form (DOM + screenshot),
+        ask the injected LLM form-filler for a plan (which value per field, WHICH dropdown
+        option), execute it, submit, and read the intercepted signup XHR. On a still-invalid
+        form (a disabled submit / a validation error keeping the register form on screen)
+        re-perceive and re-plan, bounded by ``_MAX_FORM_ATTEMPTS``, then give up honestly."""
+        identity = {"email": email, "password": password, "username": username}
+        goal = BrowserSignupConfig.FORM_FILLER_GOAL
+        last = BrowserSignupResult(
+            email=email, password=password, username=username,
+            error=BrowserSignupConfig.ERROR_FIELDS_NOT_FOUND,
+        )
+        for _attempt in range(_MAX_FORM_ATTEMPTS):
+            perception = await self._perceive_form(page)
+            if not perception.fields:
+                last = BrowserSignupResult(
+                    email=email, password=password, username=username,
+                    error=BrowserSignupConfig.ERROR_FIELDS_NOT_FOUND,
+                )
+                break
+            try:
+                plan = await form_filler(perception, identity, goal)
+            except Exception as exc:  # noqa: BLE001 — a filler failure is an empty plan, not a crash
+                logger.debug("signup: form_filler raised: %s", exc)
+                plan = FormFillPlan()
+            await self._apply_fill_plan(page, plan, perception, fill_value)
+
+            submitted = await BrowserLoginHelper.click_submit(
+                page, BrowserSignupConfig.SUBMIT_BUTTON_SELECTORS,
+            )
+            if not submitted:
+                # A disabled/absent submit means the form didn't validate — re-perceive
+                # (now showing the disabled/error state) and re-plan on the next attempt.
+                last = BrowserSignupResult(
+                    email=email, password=password, username=username,
+                    error=BrowserSignupConfig.ERROR_SUBMIT_FAILED,
+                )
+                await self._settle(page)
+                continue
+
+            await self._settle_after_submit(page)
+            outcome = self._signup_outcome_from_intercepted(email, password, username)
+            if outcome.success:
+                return outcome
+            last = outcome
+            # Only adapt while the register form is still on screen (still invalid). If it is
+            # gone, the submit navigated away and re-planning would fill nothing useful.
+            if not await self._page_has_signup_form(page):
+                break
+        return last
+
+    async def _submit_and_capture(
+        self, page: object, email: str, password: str, username: str
+    ) -> BrowserSignupResult:
+        """Submit the register form and read the outcome from the intercepted signup XHR."""
         submitted = await BrowserLoginHelper.click_submit(
             page, BrowserSignupConfig.SUBMIT_BUTTON_SELECTORS,
         )
         if not submitted:
-            base.error = BrowserSignupConfig.ERROR_SUBMIT_FAILED
-            return base
+            return BrowserSignupResult(
+                email=email, password=password, username=username,
+                error=BrowserSignupConfig.ERROR_SUBMIT_FAILED,
+            )
+        await self._settle_after_submit(page)
+        return self._signup_outcome_from_intercepted(email, password, username)
 
-        # Let the signup XHR fire and be captured by the interception handler.
+    async def _settle_after_submit(self, page: object) -> None:
+        """Let the signup XHR fire and be captured by the interception handler."""
         try:
             await page.wait_for_load_state(  # type: ignore[union-attr]
                 "networkidle",
@@ -379,7 +570,179 @@ class AuthenticatedCrawler:
         except Exception:
             await asyncio.sleep(BrowserSignupConfig.POST_SUBMIT_SETTLE_MS / 1000)
 
-        return self._signup_outcome_from_intercepted(email, password, username)
+    # ------------------------------------------------------------------
+    # Form perception + plan execution (LLM form-comprehension path)
+    # ------------------------------------------------------------------
+
+    async def _perceive_form(self, page: object) -> FormPerception:
+        """PERCEIVE the visible register form: via ``page.evaluate`` extract a structured
+        description of EVERY fillable control (a stable locator, tag/type, name/id, label,
+        placeholder, aria-label, required, current value, and — for a native ``<select>`` or
+        a custom dropdown — the enumerated option texts) and stamp the submit control's
+        locator; then capture a bounded screenshot. Fully defensive — a failing evaluate /
+        screenshot yields an empty perception rather than raising."""
+        page_url = getattr(page, "url", "") or ""
+        try:
+            perceived = await page.evaluate(  # type: ignore[union-attr]
+                _PERCEIVE_FORM_JS,
+                {
+                    "fieldAttr": BrowserSignupConfig.PERCEIVE_FIELD_ATTR,
+                    "submitAttr": BrowserSignupConfig.PERCEIVE_SUBMIT_ATTR,
+                    "maxOptions": BrowserSignupConfig.MAX_PERCEIVE_OPTIONS,
+                },
+            )
+        except Exception as exc:
+            logger.debug("signup: form perception failed: %s", exc)
+            perceived = None
+        perceived = perceived if isinstance(perceived, dict) else {}
+        fields = [
+            FormField(
+                locator=str(f.get("locator") or ""),
+                tag=str(f.get("tag") or ""),
+                type=str(f.get("type") or ""),
+                name=str(f.get("name") or ""),
+                id=str(f.get("id") or ""),
+                label=str(f.get("label") or ""),
+                placeholder=str(f.get("placeholder") or ""),
+                aria_label=str(f.get("aria") or ""),
+                required=bool(f.get("required")),
+                value=str(f.get("value") or ""),
+                options=[str(o) for o in (f.get("options") or [])],
+            )
+            for f in (perceived.get("fields") or [])
+            if isinstance(f, dict) and f.get("locator")
+        ]
+        return FormPerception(
+            fields=fields,
+            screenshot_b64=await self._capture_screenshot(page),
+            page_url=page_url,
+            submit_locator=str(perceived.get("submit") or ""),
+        )
+
+    async def _capture_screenshot(self, page: object) -> str:
+        """A base64 PNG of the current page, bounded by ``SCREENSHOT_MAX_BYTES`` (an
+        oversized or failing screenshot yields ``""`` — the structured fields still carry the
+        form; the screenshot is a supplement, never a hard dependency)."""
+        try:
+            png = await page.screenshot()  # type: ignore[union-attr]
+        except Exception as exc:
+            logger.debug("signup: screenshot failed: %s", exc)
+            return ""
+        if not png or len(png) > BrowserSignupConfig.SCREENSHOT_MAX_BYTES:
+            return ""
+        return base64.b64encode(png).decode("ascii")
+
+    async def _apply_fill_plan(
+        self,
+        page: object,
+        plan: FormFillPlan,
+        perception: FormPerception,
+        fill_value: Callable[[str], Any],
+    ) -> None:
+        """EXECUTE a fill plan: for each action — ``type`` fills the input, ``select`` drives
+        a native ``<select>`` (via ``select_option``) or a custom dropdown (click-to-open then
+        click the option whose text matches), ``check`` ticks a checkbox. The privilege guard
+        is ENFORCED here independently of the planner's own strip: any action targeting a
+        field whose synthesized value is ``None`` (an authorization/privilege field) is
+        refused. Finally, any REQUIRED field the plan left untouched is back-filled via
+        ``fill_value`` (``_synthesize_field``) so a form needing a field the LLM omitted still
+        validates — never a privilege field (``fill_value`` returns ``None`` for those)."""
+        by_locator = {f.locator: f for f in perception.fields}
+        targeted: set[str] = set()
+        for action in plan.actions:
+            field = by_locator.get(action.locator)
+            if field is not None and fill_value(self._perceived_field_key(field)) is None:
+                continue  # privilege/authorization field — never filled (executor-enforced)
+            targeted.add(action.locator)
+            act = (action.action or "").lower()
+            if act == "type":
+                await BrowserLoginHelper.fill_input(page, (action.locator,), str(action.value))
+            elif act == "select":
+                await self._select_option(page, action.locator, str(action.value), field)
+            elif act == "check":
+                await self._check_box(page, action.locator)
+        await self._backfill_required(page, perception, targeted, fill_value)
+
+    async def _backfill_required(
+        self,
+        page: object,
+        perception: FormPerception,
+        targeted: set[str],
+        fill_value: Callable[[str], Any],
+    ) -> None:
+        """Fill any REQUIRED perceived field the plan did not target and that has no current
+        value, using ``fill_value``. Password fields are left to the LLM (a guessed password
+        would break a confirm-match); a privilege field (``fill_value`` → ``None``) is
+        skipped. This is the ``_synthesize_field`` safety net for a field the LLM omitted."""
+        for field in perception.fields:
+            if field.locator in targeted or not field.required or field.value:
+                continue
+            ftype = (field.type or "").lower()
+            if ftype == "password":
+                continue
+            value = fill_value(self._perceived_field_key(field))
+            if value is None:  # privilege/authorization field — never filled
+                continue
+            if ftype == "checkbox" or value is True:
+                await self._check_box(page, field.locator)
+            elif field.options:
+                await self._select_option(page, field.locator, str(value), field)
+            else:
+                await BrowserLoginHelper.fill_input(page, (field.locator,), str(value))
+
+    async def _select_option(
+        self, page: object, locator: str, value: str, field: FormField | None
+    ) -> None:
+        """Set a dropdown to ``value``. A native ``<select>`` (``field.tag == 'select'``) is
+        driven with ``page.select_option`` (by visible label, then by value); a CUSTOM
+        dropdown (mat-select / role=listbox) is OPENED by clicking its trigger, then the
+        option whose visible text matches ``value`` is clicked. Best-effort — a failure is
+        logged, not raised."""
+        if field is not None and (field.tag or "").lower() == "select":
+            for kwargs in ({"label": value}, {"value": value}):
+                try:
+                    await page.select_option(locator, **kwargs)  # type: ignore[union-attr]
+                    return
+                except Exception as exc:
+                    logger.debug("signup: native select_option %s failed: %s", kwargs, exc)
+            return
+        try:
+            trigger = await page.query_selector(locator)  # type: ignore[union-attr]
+            if trigger:
+                await trigger.click()
+        except Exception as exc:
+            logger.debug("signup: could not open custom dropdown %s: %s", locator, exc)
+            return
+        await self._settle(page)
+        await self._click_custom_option(page, value)
+
+    async def _click_custom_option(self, page: object, value: str) -> bool:
+        """Click the custom-dropdown option whose visible text matches ``value``, trying the
+        configured ``:has-text`` selectors in order. Returns True once one is clicked."""
+        escaped = value.replace('"', '\\"')
+        for template in BrowserSignupConfig.CUSTOM_OPTION_SELECTORS:
+            selector = template.format(text=escaped)
+            try:
+                element = await page.query_selector(selector)  # type: ignore[union-attr]
+            except Exception as exc:
+                logger.debug("signup: option lookup %s failed: %s", selector, exc)
+                continue
+            if element:
+                try:
+                    await element.click()
+                    return True
+                except Exception as exc:
+                    logger.debug("signup: option click %s failed: %s", selector, exc)
+        return False
+
+    @staticmethod
+    def _perceived_field_key(field: FormField) -> str:
+        """The most descriptive identifier of a perceived field, for ``fill_value``/privilege
+        matching (mirrors the heuristic ``_field_key`` for the perceived-model shape)."""
+        for value in (field.name, field.id, field.aria_label, field.label, field.placeholder):
+            if value and value.strip():
+                return value.strip()
+        return ""
 
     async def _goto_register_page(
         self, page: object, register_url: str | None

@@ -469,6 +469,31 @@ class BrowserSignupConfig:
     # can target it by index for filling (mirrors the login helper's marker approach).
     SIGNUP_FIELD_ATTR = "data-isitsecure-signup-idx"
 
+    # --- LLM-driven form comprehension (perceive → understand → execute → adapt) ---
+    # DOM attributes the form-PERCEPTION pass stamps on each fillable control and on the
+    # submit button, so the LLM-returned plan can target them by a stable, unique locator.
+    PERCEIVE_FIELD_ATTR = "data-isitsecure-perceive-idx"
+    PERCEIVE_SUBMIT_ATTR = "data-isitsecure-perceive-submit"
+    # Upper bound on a captured screenshot (bytes) before base64 — a screenshot larger than
+    # this is dropped rather than bloating the LLM prompt (the structured fields still carry
+    # the form; the screenshot is a supplement).
+    SCREENSHOT_MAX_BYTES = 3 * 1024 * 1024
+    # Per-control cap on enumerated dropdown options fed to the LLM (bounds a hostile form's
+    # option list). Enforced in the perception JS.
+    MAX_PERCEIVE_OPTIONS = 60
+    # Playwright ``:has-text`` selector templates tried (in order) to click a CUSTOM dropdown
+    # option (mat-select / role=listbox) whose visible text matches the LLM's chosen value.
+    CUSTOM_OPTION_SELECTORS = (
+        'mat-option:has-text("{text}")',
+        '[role="option"]:has-text("{text}")',
+        'li[role="option"]:has-text("{text}")',
+    )
+    # The goal handed to the LLM form-filler (engine-authored; rendered outside the fence).
+    FORM_FILLER_GOAL = "register a new account so we can log in and reach the app"
+    # Bounded adaptive retries: perceive → plan → execute → submit, re-perceiving on a still-
+    # invalid form (a disabled submit / a visible validation error) before giving up honestly.
+    MAX_FORM_ATTEMPTS = 3
+
     # Common SPA/server register routes tried (in order) when no register link is found.
     REGISTER_ROUTES = (
         "/#/register", "/register", "/signup", "/#/signup",

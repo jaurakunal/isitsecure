@@ -1292,3 +1292,431 @@ class TestScanNeverCallsSignup:
         ):
             await crawler.crawl()
         signup_spy.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# LLM-driven form comprehension: perceive → understand → execute → adapt
+# ---------------------------------------------------------------------------
+
+from isitsecure.engine.models import (  # noqa: E402
+    FormField,
+    FormFillAction,
+    FormFillPlan,
+    FormPerception,
+)
+
+_P0 = '[data-isitsecure-perceive-idx="0"]'
+_P1 = '[data-isitsecure-perceive-idx="1"]'
+_P2 = '[data-isitsecure-perceive-idx="2"]'
+_P3 = '[data-isitsecure-perceive-idx="3"]'
+
+
+def _pfield(locator, **kw):
+    """A perceived-field dict shaped like the perception JS returns."""
+    base = {"locator": locator, "tag": "input", "type": "text", "name": "", "id": "",
+            "label": "", "placeholder": "", "aria": "", "required": False, "value": "",
+            "options": []}
+    base.update(kw)
+    return base
+
+
+class _PerceiveElement:
+    def __init__(self, page, key):
+        self.page = page
+        self.key = key
+
+    async def fill(self, value):
+        self.page.filled[self.key] = value
+
+    async def check(self):
+        self.page.checked.add(self.key)
+
+    async def click(self):
+        self.page.clicks.append(self.key)
+
+
+class _PerceiveMockPage:
+    """A mock Playwright page for the LLM signup path: ``evaluate`` dispatches on the JS
+    marker; ``screenshot`` returns bytes; ``query_selector``/``select_option`` drive the
+    executor. ``on_submit(attempt)`` models the signup XHR the interception would capture."""
+
+    def __init__(self, *, fields=None, submit=True, screenshot=b"PNGBYTES",
+                 has_form=True, on_submit=None, page_text="", captcha=False,
+                 perceive_error=False, screenshot_error=False, form_gone_after_submit=False,
+                 custom_options=None, select_label_raises=False):
+        self._fields = fields if fields is not None else []
+        self._submit = submit
+        self._screenshot = screenshot
+        self._has_form = has_form
+        self.on_submit = on_submit
+        self._page_text = page_text
+        self._captcha = captcha
+        self._perceive_error = perceive_error
+        self._screenshot_error = screenshot_error
+        self._form_gone_after_submit = form_gone_after_submit
+        self._custom_options = set(custom_options or ())
+        self._select_label_raises = select_label_raises
+        self.url = "https://app.example.com/#/register"
+        self.filled = {}
+        self.checked = set()
+        self.clicks = []
+        self.selected = []
+        self.navigations = []
+        self.submitted = False
+        self.submit_count = 0
+        self._has_form_calls = 0
+
+    def on(self, *a, **k):
+        return None
+
+    async def goto(self, url, **k):
+        self.navigations.append(url)
+        self.url = url
+
+    async def wait_for_load_state(self, *a, **k):
+        return None
+
+    async def close(self):
+        return None
+
+    async def screenshot(self, *a, **k):
+        if self._screenshot_error:
+            raise RuntimeError("screenshot boom")
+        return self._screenshot
+
+    async def evaluate(self, script, *args):
+        if "perceive-form" in script:
+            if self._perceive_error:
+                raise RuntimeError("perceive boom")
+            return {"fields": self._fields, "submit":
+                    '[data-isitsecure-perceive-submit="1"]' if self._submit else ""}
+        if "find-register-link" in script:
+            return ""
+        if "has-signup-form" in script:
+            if self.submitted and self._form_gone_after_submit:
+                return False
+            return self._has_form
+        if "detect-captcha" in script:
+            return self._captcha
+        if "signup-page-text" in script:
+            return self._page_text
+        return None
+
+    async def select_option(self, locator, **kwargs):
+        if "label" in kwargs and self._select_label_raises:
+            raise RuntimeError("no such label")
+        self.selected.append((locator, kwargs))
+
+    async def query_selector(self, selector):
+        if "perceive-idx" in selector:
+            return _PerceiveElement(self, selector)
+        if self._submit and selector in BrowserSignupConfig.SUBMIT_BUTTON_SELECTORS:
+            return _SubmitElement(self)
+        if selector in self._custom_options:
+            return _PerceiveElement(self, selector)
+        return None
+
+
+class _SubmitElement:
+    def __init__(self, page):
+        self.page = page
+
+    async def click(self):
+        self.page.submitted = True
+        self.page.submit_count += 1
+        if self.page.on_submit:
+            self.page.on_submit(self.page.submit_count)
+
+
+class TestPerceiveForm:
+    async def test_perceives_fields_options_screenshot_and_submit(self):
+        crawler = _make_crawler()
+        page = _PerceiveMockPage(fields=[
+            _pfield(_P0, tag="input", type="email", name="email", label="Email",
+                    required=True),
+            _pfield(_P1, tag="input", type="password", name="password", required=True),
+            _pfield(_P2, tag="mat-select", type="mat-select", name="securityQuestion",
+                    label="Security Question", required=True,
+                    options=["Favorite color?", "First pet?"]),
+        ])
+        perception = await crawler._perceive_form(page)
+        assert isinstance(perception, FormPerception)
+        assert [f.locator for f in perception.fields] == [_P0, _P1, _P2]
+        dropdown = perception.fields[2]
+        assert dropdown.tag == "mat-select"
+        assert dropdown.options == ["Favorite color?", "First pet?"]
+        assert perception.submit_locator == '[data-isitsecure-perceive-submit="1"]'
+        # screenshot is base64 of b"PNGBYTES"
+        import base64 as _b64
+        assert perception.screenshot_b64 == _b64.b64encode(b"PNGBYTES").decode()
+        assert perception.page_url == "https://app.example.com/#/register"
+
+    async def test_perceive_evaluate_error_is_empty(self):
+        crawler = _make_crawler()
+        page = _PerceiveMockPage(perceive_error=True)
+        perception = await crawler._perceive_form(page)
+        assert perception.fields == []
+
+    async def test_perceive_drops_field_without_locator(self):
+        crawler = _make_crawler()
+        page = _PerceiveMockPage(fields=[_pfield(""), _pfield(_P0, name="email")])
+        perception = await crawler._perceive_form(page)
+        assert [f.locator for f in perception.fields] == [_P0]
+
+    async def test_screenshot_failure_yields_empty_string(self):
+        crawler = _make_crawler()
+        page = _PerceiveMockPage(fields=[_pfield(_P0)], screenshot_error=True)
+        perception = await crawler._perceive_form(page)
+        assert perception.screenshot_b64 == ""
+
+    async def test_oversized_screenshot_dropped(self):
+        crawler = _make_crawler()
+        big = b"x" * (BrowserSignupConfig.SCREENSHOT_MAX_BYTES + 1)
+        page = _PerceiveMockPage(fields=[_pfield(_P0)], screenshot=big)
+        perception = await crawler._perceive_form(page)
+        assert perception.screenshot_b64 == ""
+
+    async def test_empty_screenshot_yields_empty_string(self):
+        crawler = _make_crawler()
+        page = _PerceiveMockPage(fields=[_pfield(_P0)], screenshot=b"")
+        perception = await crawler._perceive_form(page)
+        assert perception.screenshot_b64 == ""
+
+
+def _synth(name):
+    """A synthesize stand-in mirroring the API-path exclusion: refuse privilege fields."""
+    return None if name.lower() in ("isadmin", "role", "admin") else f"syn-{name}"
+
+
+class TestApplyFillPlan:
+    async def test_type_select_native_and_check_dispatch(self):
+        crawler = _make_crawler()
+        page = _PerceiveMockPage()
+        perception = FormPerception(fields=[
+            FormField(locator=_P0, tag="input", type="email", name="email"),
+            FormField(locator=_P1, tag="select", name="country",
+                      options=["US", "CA"]),
+            FormField(locator=_P2, tag="input", type="checkbox", name="terms"),
+        ])
+        plan = FormFillPlan(actions=[
+            FormFillAction(locator=_P0, action="type", value="a@x.com"),
+            FormFillAction(locator=_P1, action="select", value="US"),
+            FormFillAction(locator=_P2, action="check", value="true"),
+        ])
+        await crawler._apply_fill_plan(page, plan, perception, _synth)
+        assert page.filled[_P0] == "a@x.com"
+        assert page.selected == [(_P1, {"label": "US"})]
+        assert _P2 in page.checked
+
+    async def test_custom_dropdown_open_then_click_option(self):
+        crawler = _make_crawler()
+        option_selector = 'mat-option:has-text("Favorite color?")'
+        page = _PerceiveMockPage(custom_options={option_selector})
+        perception = FormPerception(fields=[
+            FormField(locator=_P0, tag="mat-select", name="securityQuestion",
+                      options=["Favorite color?"]),
+        ])
+        plan = FormFillPlan(actions=[
+            FormFillAction(locator=_P0, action="select", value="Favorite color?"),
+        ])
+        await crawler._apply_fill_plan(page, plan, perception, _synth)
+        # the trigger was clicked (opened) and the option element was clicked
+        assert _P0 in page.clicks
+        assert option_selector in page.clicks
+
+    async def test_native_select_label_falls_back_to_value(self):
+        crawler = _make_crawler()
+        page = _PerceiveMockPage(select_label_raises=True)
+        perception = FormPerception(fields=[
+            FormField(locator=_P0, tag="select", name="country", options=["US"]),
+        ])
+        plan = FormFillPlan(actions=[FormFillAction(locator=_P0, action="select", value="US")])
+        await crawler._apply_fill_plan(page, plan, perception, _synth)
+        assert page.selected == [(_P0, {"value": "US"})]
+
+    async def test_executor_strips_privilege_action(self):
+        crawler = _make_crawler()
+        page = _PerceiveMockPage()
+        perception = FormPerception(fields=[
+            FormField(locator=_P0, tag="input", type="email", name="email"),
+            FormField(locator=_P1, tag="input", type="checkbox", name="isAdmin"),
+        ])
+        plan = FormFillPlan(actions=[
+            FormFillAction(locator=_P0, action="type", value="a@x.com"),
+            FormFillAction(locator=_P1, action="check", value="true"),   # privilege — stripped
+        ])
+        await crawler._apply_fill_plan(page, plan, perception, _synth)
+        assert page.filled[_P0] == "a@x.com"
+        assert _P1 not in page.checked                       # never filled
+
+    async def test_backfills_required_field_the_plan_omitted(self):
+        crawler = _make_crawler()
+        page = _PerceiveMockPage()
+        perception = FormPerception(fields=[
+            FormField(locator=_P0, tag="input", type="email", name="email"),
+            FormField(locator=_P1, tag="input", type="text", name="phone", required=True),
+            FormField(locator=_P2, tag="input", type="password", name="password",
+                      required=True),                          # password: never backfilled
+            FormField(locator=_P3, tag="input", type="checkbox", name="isAdmin",
+                      required=True),                          # privilege: never backfilled
+        ])
+        plan = FormFillPlan(actions=[
+            FormFillAction(locator=_P0, action="type", value="a@x.com"),
+        ])
+        await crawler._apply_fill_plan(page, plan, perception, _synth)
+        assert page.filled[_P1] == "syn-phone"                # required + omitted → backfilled
+        assert _P2 not in page.filled                         # password left to the LLM
+        assert _P3 not in page.checked                        # privilege never set
+
+    async def test_backfill_checkbox_and_select(self):
+        crawler = _make_crawler()
+
+        def synth(name):
+            return True if name == "terms" else "opt-a"
+
+        page = _PerceiveMockPage()
+        perception = FormPerception(fields=[
+            FormField(locator=_P0, tag="input", type="checkbox", name="terms", required=True),
+            FormField(locator=_P1, tag="select", name="plan", required=True,
+                      options=["opt-a", "opt-b"]),
+        ])
+        await crawler._apply_fill_plan(page, FormFillPlan(), perception, synth)
+        assert _P0 in page.checked
+        assert page.selected == [(_P1, {"label": "opt-a"})]
+
+
+class TestLLMSignupFlow:
+    def _fields(self):
+        return [
+            _pfield(_P0, tag="input", type="email", name="email", required=True),
+            _pfield(_P1, tag="input", type="password", name="password", required=True),
+            _pfield(_P2, tag="input", type="text", name="username", required=True),
+        ]
+
+    def _plan(self):
+        return FormFillPlan(actions=[
+            FormFillAction(locator=_P0, action="type", value="a@x.com"),
+            FormFillAction(locator=_P1, action="type", value="pw"),
+            FormFillAction(locator=_P2, action="type", value="agent_1"),
+        ])
+
+    def _capturing_filler(self, plan):
+        record = {}
+
+        async def filler(perception, identity, goal):
+            record["perception"] = perception
+            record["identity"] = identity
+            record["goal"] = goal
+            return plan
+        return filler, record
+
+    async def test_end_to_end_success(self):
+        crawler = _make_crawler()
+
+        def on_submit(attempt):
+            crawler._intercepted.append(InterceptedRequest(
+                url="https://app.example.com/api/Users", method="POST",
+                response_status=201))
+        page = _PerceiveMockPage(fields=self._fields(), on_submit=on_submit)
+        filler, record = self._capturing_filler(self._plan())
+        result = await crawler._run_signup(
+            page, "a@x.com", "pw", "agent_1", _synth, None, filler)
+        assert result.success and result.signup_endpoint == "/api/Users"
+        assert page.filled[_P0] == "a@x.com" and page.filled[_P2] == "agent_1"
+        assert record["identity"] == {"email": "a@x.com", "password": "pw",
+                                      "username": "agent_1"}
+        assert record["goal"] == BrowserSignupConfig.FORM_FILLER_GOAL
+
+    async def test_adaptive_retry_first_invalid_then_success(self):
+        crawler = _make_crawler()
+
+        def on_submit(attempt):
+            if attempt >= 2:                                  # only the 2nd submit fires the XHR
+                crawler._intercepted.append(InterceptedRequest(
+                    url="https://app.example.com/api/Users", method="POST",
+                    response_status=201))
+        # form stays present after the first (failed) submit so the loop re-perceives
+        page = _PerceiveMockPage(fields=self._fields(), on_submit=on_submit)
+        filler, _ = self._capturing_filler(self._plan())
+        result = await crawler._run_signup(
+            page, "a@x.com", "pw", "agent_1", _synth, None, filler)
+        assert result.success and page.submit_count == 2
+
+    async def test_gives_up_when_form_gone_after_failed_submit(self):
+        crawler = _make_crawler()
+        page = _PerceiveMockPage(fields=self._fields(), on_submit=None,
+                                 form_gone_after_submit=True)
+        filler, _ = self._capturing_filler(self._plan())
+        result = await crawler._run_signup(
+            page, "a@x.com", "pw", "agent_1", _synth, None, filler)
+        assert not result.success and page.submit_count == 1   # no retry — form navigated away
+
+    async def test_no_fields_is_honest_failure(self):
+        crawler = _make_crawler()
+        page = _PerceiveMockPage(fields=[])
+        filler, _ = self._capturing_filler(self._plan())
+        result = await crawler._run_signup(
+            page, "a@x.com", "pw", "agent_1", _synth, None, filler)
+        assert not result.success
+        assert result.error == BrowserSignupConfig.ERROR_FIELDS_NOT_FOUND
+
+    async def test_submit_absent_retries_then_gives_up(self):
+        crawler = _make_crawler()
+        page = _PerceiveMockPage(fields=self._fields(), submit=False)
+        filler, _ = self._capturing_filler(self._plan())
+        result = await crawler._run_signup(
+            page, "a@x.com", "pw", "agent_1", _synth, None, filler)
+        assert not result.success
+        assert result.error == BrowserSignupConfig.ERROR_SUBMIT_FAILED
+        assert page.submit_count == 0
+
+    async def test_form_filler_exception_degrades_to_empty_plan(self):
+        crawler = _make_crawler()
+
+        def on_submit(attempt):
+            crawler._intercepted.append(InterceptedRequest(
+                url="https://app.example.com/api/Users", method="POST",
+                response_status=201))
+
+        async def boom(perception, identity, goal):
+            raise RuntimeError("filler boom")
+        page = _PerceiveMockPage(fields=self._fields(), on_submit=on_submit)
+        # An empty plan still backfills required fields and submits; the XHR is captured.
+        result = await crawler._run_signup(
+            page, "a@x.com", "pw", "agent_1", _synth, None, boom)
+        assert result.success
+
+    async def test_wall_is_reported_before_any_fill(self):
+        crawler = _make_crawler()
+        page = _PerceiveMockPage(fields=self._fields(), captcha=True)
+        filler, record = self._capturing_filler(self._plan())
+        result = await crawler._run_signup(
+            page, "a@x.com", "pw", "agent_1", _synth, None, filler)
+        assert result.blocked_reason == BrowserSignupConfig.BLOCKED_CAPTCHA
+        assert "perception" not in record                     # filler never called
+
+    async def test_no_register_page_fails(self):
+        crawler = _make_crawler()
+        page = _PerceiveMockPage(fields=self._fields(), has_form=False)
+        filler, _ = self._capturing_filler(self._plan())
+        # _goto_register_page probes routes; has_form=False everywhere -> no register page.
+        result = await crawler._run_signup(
+            page, "a@x.com", "pw", "agent_1", _synth, None, filler)
+        assert result.error == BrowserSignupConfig.ERROR_NO_REGISTER_PAGE
+
+    async def test_no_form_filler_uses_heuristic_fallback(self):
+        # form_filler=None -> the legacy heuristic fill still provisions (no regression).
+        crawler = _make_crawler()
+
+        def on_submit():                                       # _SignupMockPage calls it argless
+            crawler._intercepted.append(InterceptedRequest(
+                url="https://app.example.com/api/Users", method="POST",
+                response_status=201))
+        page = _SignupMockPage(fields=[
+            _field(0, "email", "email"),
+            _field(1, "password", "password"),
+            _field(2, "username", "text"),
+        ], on_submit=on_submit)
+        result = await crawler._run_signup(
+            page, "a@x.com", "pw", "agent_1", _no_priv, None, None)
+        assert result.success and result.signup_endpoint == "/api/Users"
