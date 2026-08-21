@@ -230,6 +230,56 @@ class CrossUserIDORResult(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0, default=0.0)
 
 
+class AppEntity(BaseModel):
+    """One data entity the target app exposes (e.g. ``User``, ``Product``) with its
+    inferred ID scheme and the endpoints that expose it.
+
+    Part of the :class:`AppModel` the LLM analyst builds from the GROUNDED knowledge
+    store. ``id_scheme`` is evidence-grounded — inferred from the observed id VALUES
+    (all-numeric-sequential → ``sequential_int``, UUIDs → ``uuid``), one of
+    ``sequential_int``/``uuid``/``slug``/``unknown``; a value outside that set is
+    normalised to ``unknown`` at parse time. ``endpoints`` are real captured
+    ``METHOD path_template`` refs, never guesses."""
+
+    name: str = ""
+    id_scheme: str = "unknown"  # sequential_int | uuid | slug | unknown
+    endpoints: list[str] = Field(default_factory=list)
+
+
+class StateChangingOp(BaseModel):
+    """A mutating operation the app exposes — the write surface worth attacking
+    (mass-assignment, broken-authz-on-write). ``path_template`` is a real captured
+    template (``POST /api/Users/{id}``), never a guess."""
+
+    method: str = ""
+    path_template: str = ""
+
+
+class AppModel(BaseModel):
+    """A structured, bounded model of the target app, produced by the LLM analyst
+    (``LLMPlanner.build_app_model``) from the GROUNDED knowledge store — the observed
+    endpoint inventory — so the planner reasons from an *understanding* of the app
+    (its entities, id scheme, tenancy/roles, and auth mechanism) instead of guessing
+    attacks opportunistically.
+
+    Every field is optional/defaulted so a THIN model — or the conservative empty model
+    a malformed LLM response parses to — is valid and never raises. Conservative and
+    evidence-grounded: ``id_scheme`` is inferred from observed id VALUES,
+    ``auth_mechanism`` from captured auth-header/token SHAPE (a ``_loot_structure``-style
+    descriptor, never a raw secret), and ``confidence`` (0–1) reflects how much the
+    observed surface actually supports the model."""
+
+    app_type: str = ""
+    entities: list[AppEntity] = Field(default_factory=list)
+    tenancy: str = "unknown"  # e.g. "multi-user, per-user objects" | "multi-tenant" | ...
+    roles: list[str] = Field(default_factory=list)
+    auth_mechanism: str = "unknown"  # e.g. "JWT (RS256) in Authorization header" | ...
+    state_changing_ops: list[StateChangingOp] = Field(default_factory=list)
+    interesting_params: list[str] = Field(default_factory=list)
+    notes: str = ""
+    confidence: float = 0.0
+
+
 class FindingSource(str, Enum):
     """Where the finding was discovered."""
 
