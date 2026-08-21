@@ -139,6 +139,58 @@ class BrowserSignupResult(BaseModel):
     blocked_reason: str = ""
 
 
+class FormField(BaseModel):
+    """One fillable control perceived on a register/signup form.
+
+    Captured by ``AuthenticatedCrawler._perceive_form`` for the LLM form-comprehension
+    path (the "read and understand the app, don't guess" signup). ``locator`` is a stable
+    CSS selector the executor can target (a stamped index attribute), so the plan the LLM
+    returns can drive each control deterministically. ``options`` enumerates the choices of a
+    native ``<select>`` OR a custom dropdown (``mat-select`` / ``[role="combobox"]`` /
+    ``[role="listbox"]``) so the LLM can pick one of the REAL options rather than guessing.
+    """
+
+    locator: str
+    tag: str = ""
+    type: str = ""
+    name: str = ""
+    id: str = ""
+    label: str = ""
+    placeholder: str = ""
+    aria_label: str = ""
+    required: bool = False
+    value: str = ""
+    options: list[str] = Field(default_factory=list)
+
+
+class FormPerception(BaseModel):
+    """A structured perception of a register/signup form: every fillable control (with its
+    dropdown options), a bounded screenshot (base64 PNG), the page URL, and the submit
+    control's locator. The input to the LLM form-comprehension step."""
+
+    fields: list[FormField] = Field(default_factory=list)
+    screenshot_b64: str = ""
+    page_url: str = ""
+    submit_locator: str = ""
+
+
+class FormFillAction(BaseModel):
+    """One step of a fill plan: ``type`` text into an input, ``select`` a dropdown option
+    (``value`` is one of the perceived field's enumerated ``options``), or ``check`` a
+    checkbox. ``locator`` targets the control (a perceived field's stable selector)."""
+
+    locator: str
+    action: str = "type"  # "type" | "select" | "check"
+    value: str = ""
+
+
+class FormFillPlan(BaseModel):
+    """The LLM's plan for filling a perceived form — an ordered list of fill actions.
+    Privilege/role actions are stripped before execution (never self-escalate)."""
+
+    actions: list[FormFillAction] = Field(default_factory=list)
+
+
 class CrossUserIDORResult(BaseModel):
     """Result of a cross-user IDOR test on a single resource."""
 
