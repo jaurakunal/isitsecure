@@ -331,6 +331,37 @@ class TestSameOriginAndNormalize:
         assert crawler._normalize_url("https://app.example.com/page?foo=1") == "https://app.example.com/page"
 
 
+class TestDeepCrawlBudgets:
+    """The pentest-only ``deep`` opt-in widens the page/network-idle budgets WITHOUT
+    touching the scan (default) path — which stays byte-identical."""
+
+    def test_scan_default_budgets_are_the_scan_constants(self):
+        # Scan builds the crawler with no ``deep`` kwarg (see engine/agent.py); the budgets
+        # it uses must equal the shared scan constants exactly — proof scan is unchanged.
+        crawler = _make_crawler()                       # no deep kwarg == the scan path
+        assert crawler._deep is False
+        assert crawler._max_pages == AuthenticatedCrawlerConfig.MAX_PAGES_TO_VISIT
+        assert (crawler._bfs_network_idle_timeout_ms
+                == AuthenticatedCrawlerConfig.BFS_NETWORK_IDLE_TIMEOUT_MS)
+
+    def test_explicit_deep_false_matches_scan_defaults(self):
+        crawler = _make_crawler(deep=False)
+        assert crawler._max_pages == AuthenticatedCrawlerConfig.MAX_PAGES_TO_VISIT
+        assert (crawler._bfs_network_idle_timeout_ms
+                == AuthenticatedCrawlerConfig.BFS_NETWORK_IDLE_TIMEOUT_MS)
+
+    def test_deep_widens_page_and_network_idle_budgets(self):
+        deep = _make_crawler(deep=True)
+        assert deep._deep is True
+        assert deep._max_pages == AuthenticatedCrawlerConfig.DEEP_MAX_PAGES_TO_VISIT
+        assert (deep._bfs_network_idle_timeout_ms
+                == AuthenticatedCrawlerConfig.DEEP_BFS_NETWORK_IDLE_TIMEOUT_MS)
+        # The deep budgets are strictly larger than the scan defaults (deeper, not equal).
+        assert deep._max_pages > AuthenticatedCrawlerConfig.MAX_PAGES_TO_VISIT
+        assert (deep._bfs_network_idle_timeout_ms
+                > AuthenticatedCrawlerConfig.BFS_NETWORK_IDLE_TIMEOUT_MS)
+
+
 class TestCrawlWithMockPlaywright:
     """Integration-style tests for the full crawl flow with mocked Playwright."""
 

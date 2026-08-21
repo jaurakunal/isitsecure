@@ -715,6 +715,12 @@ class AuthenticatedCrawlerConfig:
 
     # Page limits
     MAX_PAGES_TO_VISIT = 50
+    # Pentest-only DEEP crawl budget (opt-in via ``AuthenticatedCrawler(deep=True)``, which
+    # only the pentest ``crawl`` tool sets). A heavy SPA surfaces its live API across many
+    # more client-side views than the shallow default reaches, so the deep path visits more
+    # pages. NEVER used on the scan path (``deep`` defaults False), so scan's page budget is
+    # byte-identical.
+    DEEP_MAX_PAGES_TO_VISIT = 120
     MAX_LINKS_PER_PAGE = 30
     # safe_mode only: how many <form> action targets to record per page (bounded, so a
     # hostile page can't flood the endpoint map). Not used on the default (scan) path.
@@ -729,6 +735,11 @@ class AuthenticatedCrawlerConfig:
     NAVIGATION_TIMEOUT_MS = 20000
     PAGE_LOAD_WAIT_MS = 3000
     BFS_NETWORK_IDLE_TIMEOUT_MS = 8000
+    # Pentest-only DEEP per-page network-idle settle (opt-in via ``deep=True``). A longer
+    # wait lets more of a SPA's lazy XHR/fetch calls fire and be captured by the existing
+    # interception before the crawler moves on. NEVER used on the scan path, so scan's
+    # per-page wait is byte-identical.
+    DEEP_BFS_NETWORK_IDLE_TIMEOUT_MS = 15000
 
     # ID extraction
     UUID_PATTERN = SharedPatterns.UUID_PATTERN

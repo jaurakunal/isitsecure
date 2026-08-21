@@ -68,6 +68,7 @@ class AuthenticatedCrawler:
         login_url: str | None = None,
         seed_routes: list[str] | None = None,
         safe_mode: bool = False,
+        deep: bool = False,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._email = email
@@ -80,6 +81,23 @@ class AuthenticatedCrawler:
         # side effect that never routes through the destructive-op floor. safe_mode skips
         # button interaction entirely. Default False keeps scan behavior byte-identical.
         self._safe_mode = safe_mode
+        # DEEP is a pentest-only opt-in (the pentest ``crawl`` tool sets it alongside
+        # ``safe_mode``); scan builds the crawler WITHOUT it. It only widens two conservative,
+        # read-only knobs to surface more of a heavy SPA's live API — a higher page budget
+        # and a longer per-page network-idle settle (so more XHR/fetch is captured by the
+        # existing interception). It does NOT change what is clicked (still safe/no blind
+        # clicks), the origin bound, or the scheme guard. Because both knobs DEFAULT to the
+        # existing scan constants when ``deep`` is False, scan's page budget and waits are
+        # byte-identical.
+        self._deep = deep
+        self._max_pages = (
+            AuthenticatedCrawlerConfig.DEEP_MAX_PAGES_TO_VISIT if deep
+            else AuthenticatedCrawlerConfig.MAX_PAGES_TO_VISIT
+        )
+        self._bfs_network_idle_timeout_ms = (
+            AuthenticatedCrawlerConfig.DEEP_BFS_NETWORK_IDLE_TIMEOUT_MS if deep
+            else AuthenticatedCrawlerConfig.BFS_NETWORK_IDLE_TIMEOUT_MS
+        )
 
         self._intercepted: list[InterceptedRequest] = []
         self._auth_headers: dict[str, str] = {}
@@ -340,7 +358,7 @@ class AuthenticatedCrawler:
 
         while (
             self._link_queue
-            and visited_count < AuthenticatedCrawlerConfig.MAX_PAGES_TO_VISIT
+            and visited_count < self._max_pages
         ):
             url = self._link_queue.popleft()
             normalized = self._normalize_url(url)
@@ -361,7 +379,7 @@ class AuthenticatedCrawler:
                 try:
                     await page.wait_for_load_state(  # type: ignore[union-attr]
                         "networkidle",
-                        timeout=AuthenticatedCrawlerConfig.BFS_NETWORK_IDLE_TIMEOUT_MS,
+                        timeout=self._bfs_network_idle_timeout_ms,
                     )
                 except Exception:
                     await asyncio.sleep(
