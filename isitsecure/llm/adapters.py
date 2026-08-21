@@ -122,10 +122,11 @@ class AnthropicAdapter:
         max_tokens: int = 4096,
         temperature: float = 0.7,
     ) -> str:
+        # `temperature` is intentionally NOT forwarded — current models reject it
+        # ("temperature is deprecated for this model"); kept in the signature for API compat.
         response = await self._client.messages.create(
             model=self._model,
             max_tokens=max_tokens,
-            temperature=temperature,
             messages=[{"role": "user", "content": prompt}],
         )
         self._record_usage(response)
@@ -159,10 +160,12 @@ class AnthropicAdapter:
         the text block in a single user message. Reuses the same empty-content hardening
         (``_first_text_block``) and usage accounting as the text paths, so a truncated or
         blocked response degrades to ``""`` instead of raising."""
+        # NOTE: `temperature` is intentionally NOT sent — the current models reject it
+        # ("temperature is deprecated for this model"), exactly as generate_with_system omits
+        # it. The param stays in the signature for API compatibility but is not forwarded.
         response = await self._client.messages.create(
             model=self._model,
             max_tokens=max_tokens,
-            temperature=temperature,
             messages=[
                 {
                     "role": "user",

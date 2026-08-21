@@ -11,6 +11,7 @@ network — and assert graceful degradation (return ``""`` + warn) instead.
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 from isitsecure.llm.adapters import AnthropicAdapter, GoogleAdapter
@@ -206,3 +207,28 @@ async def test_google_generate_text_raises_returns_empty_string(caplog) -> None:
         result = await adapter.generate_with_system("sys", "user")
     assert result == ""
     assert any("text access failed" in r.message for r in caplog.records)
+
+
+class TestAnthropicOmitsTemperature:
+    """Regression: current models reject ``temperature`` ('deprecated for this model').
+    The adapter must NOT forward it — the mocked-SDK tests missed the real 400."""
+
+    @staticmethod
+    def _adapter_with_fake_client() -> tuple[Any, Any]:
+        client = MagicMock()
+        resp = MagicMock()
+        resp.content = [MagicMock(type="text", text="ok")]
+        client.messages.create = AsyncMock(return_value=resp)
+        adapter = AnthropicAdapter(api_key="k")  # noqa: S106
+        adapter._client = client
+        return adapter, client
+
+    async def test_generate_does_not_send_temperature(self):
+        adapter, client = self._adapter_with_fake_client()
+        await adapter.generate("hi")
+        assert "temperature" not in client.messages.create.call_args.kwargs
+
+    async def test_generate_with_image_does_not_send_temperature(self):
+        adapter, client = self._adapter_with_fake_client()
+        await adapter.generate_with_image("describe", "ZmFrZQ==")
+        assert "temperature" not in client.messages.create.call_args.kwargs
