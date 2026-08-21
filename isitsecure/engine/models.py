@@ -280,6 +280,42 @@ class AppModel(BaseModel):
     confidence: float = 0.0
 
 
+class HypothesisTarget(BaseModel):
+    """The REAL captured surface a :class:`Hypothesis` points at — a concrete endpoint from
+    the inventory (never a guess). ``method``/``path_template`` key an ``endpoint_inventory``
+    row (``GET`` + ``/api/Users/{id}``); ``param`` is a real observed param name on it (the
+    injectable/id param), or ``""`` when the attack targets the object id itself (IDOR)."""
+
+    method: str = ""
+    path_template: str = ""
+    param: str = ""
+
+
+class Hypothesis(BaseModel):
+    """A single, ranked, GROUNDED attack hypothesis the analyst proposes (M3) — the payoff of
+    the modeling layer. Each is derived from the :class:`AppModel` + the observed inventory and
+    names a REAL exploit tool with args grounded in the captured surface (real endpoint, real
+    param name, observed ids), so the planner tests it with concrete args instead of guessing.
+
+    ``vuln_class`` is one of a fixed vocabulary
+    (``IDOR``/``SQLI``/``AUTH_BYPASS``/``MASS_ASSIGNMENT``/``SSTI``/``SSRF``/``BROKEN_AUTHZ``/
+    ``OTHER``); a value outside it normalises to ``OTHER`` at parse time. ``exploit_tool`` is a
+    curated tool name validated against the tool registry, and ``exploit_args`` is rebuilt from
+    the store (``endpoint_params``/``observed_ids``) — NOT trusted from the model — so an
+    injected hypothesis can never drive a bad action. ``status`` tracks the test lifecycle
+    (``untested`` → ``testing`` → ``proven``/``disproven``/``couldnt_test``). Every field is
+    optional/defaulted, so a thin/malformed hypothesis is valid and never raises."""
+
+    vuln_class: str = "OTHER"
+    target: HypothesisTarget = Field(default_factory=HypothesisTarget)
+    rationale: str = ""
+    exploit_tool: str = ""
+    exploit_args: dict = Field(default_factory=dict)
+    expected_proof: str = ""
+    confidence: float = 0.0
+    status: str = "untested"  # untested | testing | proven | disproven | couldnt_test
+
+
 class FindingSource(str, Enum):
     """Where the finding was discovered."""
 
