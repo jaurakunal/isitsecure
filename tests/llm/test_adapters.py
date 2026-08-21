@@ -136,6 +136,62 @@ async def test_google_generate_none_text_returns_empty_string(caplog) -> None:
     assert any("no text" in r.message for r in caplog.records)
 
 
+# --- Anthropic: vision (generate_with_image) ---
+
+_PNG_B64 = "aVZCT1J3MEtHZ29BQUFBTg=="  # arbitrary base64 payload (not a real PNG)
+
+
+async def test_generate_with_image_sends_image_block_and_returns_text() -> None:
+    adapter = _make_anthropic_adapter(_anthropic_response([_text_block("a mat-select")]))
+    result = await adapter.generate_with_image("describe this form", _PNG_B64)
+    assert result == "a mat-select"
+    kwargs = adapter._client.messages.create.call_args.kwargs
+    content = kwargs["messages"][0]["content"]
+    image_blocks = [b for b in content if b.get("type") == "image"]
+    text_blocks = [b for b in content if b.get("type") == "text"]
+    assert len(image_blocks) == 1
+    assert image_blocks[0]["source"] == {
+        "type": "base64", "media_type": "image/png", "data": _PNG_B64,
+    }
+    assert text_blocks[0]["text"] == "describe this form"
+    # Usage is recorded exactly like the text paths.
+    assert adapter.token_usage["llm_calls"] == 1
+
+
+async def test_generate_with_image_empty_content_returns_empty_string(caplog) -> None:
+    adapter = _make_anthropic_adapter(_anthropic_response([]))
+    with caplog.at_level("WARNING"):
+        result = await adapter.generate_with_image("prompt", _PNG_B64)
+    assert result == ""  # not IndexError
+    assert any("no text block" in r.message for r in caplog.records)
+
+
+# --- Google: vision (generate_with_image) ---
+
+
+async def test_google_generate_with_image_sends_part_and_returns_text() -> None:
+    response = SimpleNamespace(text="gemini sees a form", candidates=[], usage_metadata=None)
+    adapter = _make_google_adapter(response)
+    result = await adapter.generate_with_image("describe this form", _PNG_B64)
+    assert result == "gemini sees a form"
+    kwargs = adapter._client.aio.models.generate_content.call_args.kwargs
+    contents = kwargs["contents"]
+    # A text prompt plus one inline image part.
+    assert isinstance(contents, list) and len(contents) == 2
+    assert contents[0] == "describe this form"
+    assert contents[1] is not None  # the inline image Part
+
+
+async def test_google_generate_with_image_empty_returns_empty_string(caplog) -> None:
+    response = SimpleNamespace(
+        text=None, candidates=[SimpleNamespace(finish_reason="SAFETY")], usage_metadata=None)
+    adapter = _make_google_adapter(response)
+    with caplog.at_level("WARNING"):
+        result = await adapter.generate_with_image("prompt", _PNG_B64)
+    assert result == ""
+    assert any("no text" in r.message for r in caplog.records)
+
+
 async def test_google_generate_text_raises_returns_empty_string(caplog) -> None:
     # Some SDK versions raise on .text for a blocked response.
     class _Raising:

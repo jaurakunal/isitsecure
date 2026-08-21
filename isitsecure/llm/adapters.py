@@ -146,6 +146,43 @@ class AnthropicAdapter:
         self._record_usage(response)
         return _first_text_block(response)
 
+    async def generate_with_image(
+        self,
+        prompt: str,
+        image_base64: str,
+        max_tokens: int = 4096,
+        temperature: float = 0.7,
+    ) -> str:
+        """Vision: send a base64 PNG plus a text prompt, return the text response.
+
+        The image is carried as an Anthropic ``image`` content block (base64 PNG) alongside
+        the text block in a single user message. Reuses the same empty-content hardening
+        (``_first_text_block``) and usage accounting as the text paths, so a truncated or
+        blocked response degrades to ``""`` instead of raising."""
+        response = await self._client.messages.create(
+            model=self._model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": image_base64,
+                            },
+                        },
+                        {"type": "text", "text": prompt},
+                    ],
+                }
+            ],
+        )
+        self._record_usage(response)
+        return _first_text_block(response)
+
 
 def _response_text(response) -> str:
     """Return the text of a Gemini response, or ``""`` if there is none.
@@ -246,6 +283,36 @@ class GoogleAdapter:
             config=types.GenerateContentConfig(
                 max_output_tokens=max_tokens,
                 system_instruction=system_prompt,
+            ),
+        )
+        self._record_usage(response)
+        return _response_text(response)
+
+    async def generate_with_image(
+        self,
+        prompt: str,
+        image_base64: str,
+        max_tokens: int = 4096,
+        temperature: float = 0.7,
+    ) -> str:
+        """Vision: send a base64 PNG as a Gemini inline image part plus a text prompt.
+
+        The image is decoded from base64 and passed as an inline ``Part`` (image/png)
+        alongside the text prompt. Reuses ``_response_text`` (empty/blocked → ``""``) and
+        ``_record_usage`` so behavior matches the text paths."""
+        import base64 as _base64
+
+        from google.genai import types
+
+        image_part = types.Part.from_bytes(
+            data=_base64.b64decode(image_base64), mime_type="image/png"
+        )
+        response = await self._client.aio.models.generate_content(
+            model=self._model,
+            contents=[prompt, image_part],
+            config=types.GenerateContentConfig(
+                max_output_tokens=max_tokens,
+                temperature=temperature,
             ),
         )
         self._record_usage(response)
