@@ -515,6 +515,24 @@ class RestLoginConfig:
         "/token",
         "/oauth/token",
     )
+    # Common self-registration (signup) endpoints to probe when the pentest
+    # ``provision_account`` tool is given no ``signup_url`` (or the supplied one fails).
+    # Mirrors ``LOGIN_PROBE_PATHS`` — the same REST shapes (``/users/v1/register`` is
+    # VAmPI's real path; ``/rest/user/register`` is a Juice-Shop-style path) — so the
+    # agent can self-register on a real API instead of guessing (VAmPI: a guessed
+    # ``/api/register`` 404s while ``/users/v1/register`` is the truth).
+    SIGNUP_PROBE_PATHS = (
+        "/register",
+        "/signup",
+        "/sign-up",
+        "/auth/register",
+        "/api/register",
+        "/api/signup",
+        "/api/auth/register",
+        "/users/register",
+        "/users/v1/register",
+        "/rest/user/register",
+    )
     # Payload keys to try for the identifier (APIs use email OR username).
     IDENTIFIER_KEYS = ("email", "username")
     # Response fields that commonly carry the token.
