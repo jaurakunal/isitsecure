@@ -871,6 +871,13 @@ class AuthenticatedCrawlerConfig:
     # pages. NEVER used on the scan path (``deep`` defaults False), so scan's page budget is
     # byte-identical.
     DEEP_MAX_PAGES_TO_VISIT = 120
+    # Contained-mode crawl budget (pentest ``crawl`` tool only, when running inside the
+    # §11 lockdown). A deep crawl of a large SPA that never goes network-idle would spend
+    # DEEP_MAX_PAGES_TO_VISIT × the full idle timeout — tens of minutes — under the 2g
+    # container bound. Contained runs cap the page budget hard; XHR/fetch is still captured
+    # continuously by interception, so a tighter budget maps the primary surface fast.
+    # NEVER used on the scan path.
+    CONTAINED_MAX_PAGES_TO_VISIT = 10
     MAX_LINKS_PER_PAGE = 30
     # safe_mode only: how many <form> action targets to record per page (bounded, so a
     # hostile page can't flood the endpoint map). Not used on the default (scan) path.
@@ -883,6 +890,21 @@ class AuthenticatedCrawlerConfig:
 
     # Timeouts
     NAVIGATION_TIMEOUT_MS = 20000
+    # Contained-mode per-page navigation timeout (pentest ``crawl`` tool only). Headless
+    # Chromium chokes on some heavy SPA views under the container bound; a short cap makes a
+    # pathological page fail fast instead of burning the full 20s. NEVER used on the scan path.
+    CONTAINED_NAVIGATION_TIMEOUT_MS = 8000
+    # Contained-mode OVERALL crawl deadline (pentest ``crawl`` tool only). A hard wall-clock
+    # backstop: headless Chromium can *crash a renderer* on a heavy SPA view, after which an
+    # untimed page op (e.g. page.evaluate) may hang indefinitely — no per-op timeout bounds
+    # that. When the deadline is hit the crawl stops and returns the endpoints captured so far
+    # (interception collects them continuously), so a bad SPA can never hang the engagement.
+    # NEVER used on the scan path.
+    CONTAINED_CRAWL_DEADLINE_SECONDS = 90.0
+    # Per-close (page/context/browser) teardown bound. A crashed renderer can hang close()
+    # itself; this caps each so cleanup can never block the crawl result. Used on all paths
+    # (a hung close is always a bug to bound), but only a crashed renderer ever triggers it.
+    CLOSE_TIMEOUT_SECONDS = 10.0
     PAGE_LOAD_WAIT_MS = 3000
     BFS_NETWORK_IDLE_TIMEOUT_MS = 8000
     # Pentest-only DEEP per-page network-idle settle (opt-in via ``deep=True``). A longer
@@ -890,6 +912,12 @@ class AuthenticatedCrawlerConfig:
     # interception before the crawler moves on. NEVER used on the scan path, so scan's
     # per-page wait is byte-identical.
     DEEP_BFS_NETWORK_IDLE_TIMEOUT_MS = 15000
+    # Contained-mode per-page network-idle settle (pentest ``crawl`` tool only, inside the
+    # lockdown). A live SPA with background polling/websockets rarely reaches network-idle,
+    # so every page waits the FULL timeout — the dominant cost of a contained crawl. A short
+    # cap slashes wall-clock with little loss (interception captures XHR continuously, not
+    # only at idle). NEVER used on the scan path.
+    CONTAINED_BFS_NETWORK_IDLE_TIMEOUT_MS = 3000
 
     # ID extraction
     UUID_PATTERN = SharedPatterns.UUID_PATTERN
@@ -948,6 +976,7 @@ class AuthenticatedCrawlerConfig:
 
     # Error messages
     ERROR_CRAWL_FAILED = "Authenticated crawl failed: {error}"
+    ERROR_CRAWL_DEADLINE = "crawl deadline reached; returning endpoints captured so far"
     ERROR_PAGE_TIMEOUT = "Page navigation timed out: {url}"
     ERROR_PLAYWRIGHT_UNAVAILABLE = "Playwright is not installed"
 

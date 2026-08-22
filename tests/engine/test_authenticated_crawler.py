@@ -1,5 +1,6 @@
 """Tests for the AuthenticatedCrawler."""
 
+import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -364,6 +365,27 @@ class TestDeepCrawlBudgets:
         assert (deep._bfs_network_idle_timeout_ms
                 > AuthenticatedCrawlerConfig.BFS_NETWORK_IDLE_TIMEOUT_MS)
 
+    def test_explicit_budget_overrides_win_even_over_deep(self):
+        # The contained crawl passes tight explicit budgets on TOP of deep=True: the
+        # overrides must win so a large SPA that never network-idles can't take tens of
+        # minutes under the 2g container bound.
+        crawler = _make_crawler(deep=True, max_pages=10,
+                                network_idle_timeout_ms=3000, navigation_timeout_ms=8000)
+        assert crawler._max_pages == 10
+        assert crawler._bfs_network_idle_timeout_ms == 3000
+        assert crawler._navigation_timeout_ms == 8000
+
+    def test_none_overrides_keep_the_derived_budget(self):
+        # None (what scan passes) must NOT override — the deep/non-deep derivation stands,
+        # so scan stays byte-identical.
+        crawler = _make_crawler(deep=False, max_pages=None,
+                                network_idle_timeout_ms=None, navigation_timeout_ms=None)
+        assert crawler._max_pages == AuthenticatedCrawlerConfig.MAX_PAGES_TO_VISIT
+        assert (crawler._bfs_network_idle_timeout_ms
+                == AuthenticatedCrawlerConfig.BFS_NETWORK_IDLE_TIMEOUT_MS)
+        assert (crawler._navigation_timeout_ms
+                == AuthenticatedCrawlerConfig.NAVIGATION_TIMEOUT_MS)
+
 
 class TestCrawlWithMockPlaywright:
     """Integration-style tests for the full crawl flow with mocked Playwright."""
@@ -699,6 +721,49 @@ class TestAnonymousCrawl:
             result = await crawler.crawl()
         login.assert_awaited()  # login attempted despite empty creds (scan-identical)
         assert any("login" in e.lower() for e in result.errors)
+
+
+class TestCrawlDeadline:
+    """The overall wall-clock deadline: a crawl whose BFS hangs (a crashed renderer can
+    hang an untimed page op forever) must still RETURN in bounded time with whatever the
+    interception captured — never hang the engagement."""
+
+    @staticmethod
+    def _mock_playwright(mock_page):
+        browser = AsyncMock()
+        context = AsyncMock()
+        browser.new_context = AsyncMock(return_value=context)
+        context.new_page = AsyncMock(return_value=mock_page)
+        pw = AsyncMock()
+        pw.chromium.launch = AsyncMock(return_value=browser)
+        cm = AsyncMock()
+        cm.__aenter__ = AsyncMock(return_value=pw)
+        cm.__aexit__ = AsyncMock(return_value=None)
+        return MagicMock(return_value=cm)
+
+    @pytest.mark.asyncio
+    async def test_hung_bfs_is_bounded_by_the_deadline_and_returns_partial(self):
+        crawler = _make_crawler(anonymous=True, max_crawl_seconds=0.05)
+
+        async def never_returns(*_a, **_k):
+            await asyncio.sleep(3600)  # simulate a crashed-renderer hang
+
+        mock_page = AsyncMock()
+        mock_page.url = "https://app.example.com/"
+        mock_page.on = MagicMock()
+        with (
+            patch(
+                "isitsecure.engine.scanners.authenticated_crawler.async_playwright",
+                self._mock_playwright(mock_page),
+            ),
+            patch.object(AuthenticatedCrawler, "_extract_auth_headers",
+                         new=AsyncMock(return_value={})),
+            patch.object(AuthenticatedCrawler, "_discover_links_from_page",
+                         new=AsyncMock()),
+            patch.object(AuthenticatedCrawler, "_bfs_crawl", new=never_returns),
+        ):
+            result = await crawler.crawl()  # must return, not hang
+        assert AuthenticatedCrawlerConfig.ERROR_CRAWL_DEADLINE in result.errors
 
 
 class TestCategorizeUrl:

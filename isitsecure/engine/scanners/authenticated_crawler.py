@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import logging
 import re
@@ -375,6 +376,10 @@ class AuthenticatedCrawler:
         safe_mode: bool = False,
         deep: bool = False,
         anonymous: bool = False,
+        max_pages: int | None = None,
+        network_idle_timeout_ms: int | None = None,
+        navigation_timeout_ms: int | None = None,
+        max_crawl_seconds: float | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._email = email
@@ -410,6 +415,25 @@ class AuthenticatedCrawler:
             AuthenticatedCrawlerConfig.DEEP_BFS_NETWORK_IDLE_TIMEOUT_MS if deep
             else AuthenticatedCrawlerConfig.BFS_NETWORK_IDLE_TIMEOUT_MS
         )
+        # Explicit budget overrides (the pentest crawl tool passes tight values inside the
+        # contained lockdown, where the deep budget would otherwise take tens of minutes on
+        # a large SPA that never network-idles). None = keep the deep/non-deep default, so
+        # scan — which passes neither — is byte-identical.
+        if max_pages is not None:
+            self._max_pages = max_pages
+        if network_idle_timeout_ms is not None:
+            self._bfs_network_idle_timeout_ms = network_idle_timeout_ms
+        # Per-page navigation timeout. Contained runs shorten it so a single pathological
+        # heavy page (headless Chromium chokes on some SPA views under the container bound)
+        # fails fast instead of burning the full default. None = the scan default.
+        self._navigation_timeout_ms = (
+            navigation_timeout_ms
+            if navigation_timeout_ms is not None
+            else AuthenticatedCrawlerConfig.NAVIGATION_TIMEOUT_MS
+        )
+        # Overall wall-clock crawl deadline (None = no deadline, the scan default). A hard
+        # backstop against a crashed-renderer hang that no per-op timeout can bound.
+        self._max_crawl_seconds = max_crawl_seconds
 
         self._intercepted: list[InterceptedRequest] = []
         self._auth_headers: dict[str, str] = {}
@@ -465,12 +489,35 @@ class AuthenticatedCrawler:
                     self._seed_link_queue()
                     await self._discover_links_from_page(page)
 
-                    pages_visited = await self._bfs_crawl(page, result)
+                    # Bound the BFS with an overall deadline (when set): a heavy SPA can
+                    # crash a renderer and hang an untimed page op indefinitely, which no
+                    # per-page timeout catches. On the deadline we stop and keep whatever the
+                    # interception already captured, so a bad SPA can't hang the engagement.
+                    pages_visited = 0
+                    try:
+                        if self._max_crawl_seconds is not None:
+                            pages_visited = await asyncio.wait_for(
+                                self._bfs_crawl(page, result), self._max_crawl_seconds)
+                        else:
+                            pages_visited = await self._bfs_crawl(page, result)
+                    except (asyncio.TimeoutError, TimeoutError):
+                        pages_visited = len(self._visited)
+                        result.errors.append(AuthenticatedCrawlerConfig.ERROR_CRAWL_DEADLINE)
+                        logger.warning(
+                            "crawl deadline (%.0fs) reached; returning partial results",
+                            self._max_crawl_seconds)
 
-                    await page.close()
-                    await context.close()
+                    # A crashed renderer can also HANG teardown (not just raise), and
+                    # contextlib.suppress bounds exceptions, not hangs — so every close is
+                    # wrapped in a short wait_for. Cleanup must never block the result.
+                    for closer in (page.close, context.close):
+                        with contextlib.suppress(Exception):
+                            await asyncio.wait_for(
+                                closer(), AuthenticatedCrawlerConfig.CLOSE_TIMEOUT_SECONDS)
                 finally:
-                    await browser.close()
+                    with contextlib.suppress(Exception):
+                        await asyncio.wait_for(
+                            browser.close(), AuthenticatedCrawlerConfig.CLOSE_TIMEOUT_SECONDS)
 
             result.pages_visited = pages_visited
             result.pages_discovered = sorted(self._visited)
@@ -1571,7 +1618,7 @@ class AuthenticatedCrawler:
             try:
                 await page.goto(  # type: ignore[union-attr]
                     normalized,
-                    timeout=AuthenticatedCrawlerConfig.NAVIGATION_TIMEOUT_MS,
+                    timeout=self._navigation_timeout_ms,
                     wait_until="domcontentloaded",
                 )
                 try:
