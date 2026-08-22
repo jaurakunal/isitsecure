@@ -154,6 +154,11 @@ isitsecure pentest https://your-app.com --i-am-authorized your-app.com
 # HTML kill-chain report, a request-per-second cap, and a $ ceiling:
 isitsecure pentest https://your-app.com --i-am-authorized your-app.com \
   --rps 5 --cost-cap 50 -o html -f pentest.html
+
+# Contain the WHOLE agent in a locked-down Docker container so your host
+# (home, ~/.aws, ~/.ssh, files) is unreachable. Build the image once, then:
+docker build -t isitsecure-pentest:latest .
+isitsecure pentest https://your-app.com --i-am-authorized your-app.com --contained
 ```
 
 It runs with **full autonomy inside a non-negotiable safety floor**: a hard scope
@@ -163,7 +168,11 @@ to a per-engagement SQLite audit trail, an anti-DoS/mass-destruction bound, and
 account the agent created itself, or one you explicitly mark fair-game
 (`--target-account`, `--target-id-range`, or `--allow-destructive-any-account` for
 all-synthetic environments). The planner requires an LLM (`--llm anthropic|google`);
-a `cost.spent` event fires every $5 so you can watch spend live. See
+a `cost.spent` event fires every $5 so you can watch spend live. `--contained` runs the
+whole engagement inside a read-only, non-root, caps-dropped Docker container with only a
+writable output dir mounted and the LLM key passed via env — so an agent that ingests
+attacker-controlled content still cannot reach your host FS or secrets (network egress is
+not yet locked down; see [docs/pentest.md](docs/pentest.md) "Contained mode"). See
 [docs/pentest.md](docs/pentest.md) for the full design and safety model.
 
 > ⚠️ Only run `pentest` against systems you are authorized to test. It actively

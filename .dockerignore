@@ -1,0 +1,36 @@
+# Keep the agent image slim and free of host secrets / scratch.
+.git
+.github
+.venv
+venv
+env
+__pycache__
+*.py[cod]
+*.egg-info
+dist
+build
+.eggs
+
+# Never bake operator secrets or local config into the image.
+.env
+.env.*
+*.sqlite
+.isitsecure
+
+# Tests, benchmarks, docs, tooling — not needed at runtime.
+tests
+benchmarks
+docs
+*.md
+!README.md
+.ruff_cache
+.pytest_cache
+.coverage
+htmlcov
+.mypy_cache
+
+# Editor / OS cruft
+.idea
+.vscode
+.DS_Store
+Thumbs.db

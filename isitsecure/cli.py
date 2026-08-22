@@ -553,6 +553,15 @@ def pentest(
     llm_provider: str = typer.Option("anthropic", "--llm", help="Planner backend: anthropic|google."),
     output: str = typer.Option("md", "--output", "-o", help="Report format: md|html|json."),
     output_file: Optional[str] = typer.Option(None, "--output-file", "-f", help="Write report to file."),
+    contained: bool = typer.Option(
+        False, "--contained",
+        help="Run the WHOLE engagement inside a locked-down Docker container so the "
+             "operator's host (home, ~/.aws, ~/.ssh, files) is unreachable. Read-only "
+             "rootfs, non-root, caps dropped, only the output dir mounted, API key via "
+             "env. Network egress is NOT yet restricted (see docs, slice 3.0b)."),
+    contained_image: str = typer.Option(
+        "isitsecure-pentest:latest", "--contained-image",
+        help="Docker image for --contained (build it from the repo Dockerfile)."),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """Run an autonomous, objective-driven pentest that *proves* vulnerabilities by
@@ -568,9 +577,14 @@ def pentest(
             f"[red]No API key for '{llm_provider}'.[/red] Run [dim]isitsecure setup[/dim] "
             "or set the provider's API key env var.")
         raise typer.Exit(1)
-    from isitsecure.llm.adapters import create_llm_client
-    llm_client = create_llm_client(llm_provider, api_key)
 
+    from isitsecure.engine.pentest.containment import (
+        DEFAULT_API_KEY_ENV,
+        ContainmentError,
+        contained_output_dir,
+        is_contained,
+        run_contained,
+    )
     from isitsecure.engine.pentest.engagement import (
         AttestationError,
         PentestConfig,
@@ -579,6 +593,18 @@ def pentest(
         run_engagement,
     )
     from isitsecure.engine.pentest.report import build_report, render
+
+    # `--contained` on the HOST re-executes the whole engagement inside a locked-down
+    # container (host-protection, slice 3.0a). Inside that container the sentinel is set,
+    # so the in-container invocation falls through to the normal in-process engagement —
+    # no recursion.
+    contained_mode = contained and not is_contained()
+
+    if output not in ("md", "html", "json"):
+        err_console.print(
+            f"[yellow]Unknown --output '{output}'; using 'md'. "
+            "Valid options: md, html, json.[/yellow]")
+        output = "md"
 
     objectives = list(objective or [])
     if confirm_objectives:
@@ -595,6 +621,40 @@ def pentest(
         err_console.print("[red]--target-id-range must look like 'lo-hi' (e.g. 1-100), lo <= hi.[/red]")
         raise typer.Exit(1) from None
 
+    err_console.print(Panel(
+        f"Target: {target_url}  |  Cost cap: ${cost_cap:.0f}  |  LLM: {llm_provider}"
+        + ("  |  [bold]CONTAINED[/bold]" if contained_mode else ""),
+        title="Autonomous Pentest", border_style="bright_red"))
+
+    if contained_mode:
+        passthrough = _pentest_passthrough_flags(
+            objective=objectives, scope=scope, i_am_authorized=i_am_authorized,
+            cost_cap=cost_cap, rps=rps, target_account=target_account,
+            target_id_range=target_id_range,
+            allow_destructive_any_account=allow_destructive_any_account,
+            allow_research_egress=allow_research_egress, mutation_endpoint=mutation_endpoint,
+            allow_cross_host_loot=allow_cross_host_loot, auth_provider=auth_provider,
+            auth_email=auth_email, auth_password=auth_password, access_token=access_token,
+            login_url=login_url, auth_email_b=auth_email_b, auth_password_b=auth_password_b,
+            max_steps=max_steps, llm_provider=llm_provider, output=output)
+        out_dir = _ensure_config_dir() / "engagements" / uuid4().hex
+        try:
+            result = run_contained(
+                image=contained_image, target_url=target_url, output_dir=out_dir,
+                passthrough_flags=passthrough, api_key_env=DEFAULT_API_KEY_ENV,
+                api_key_value=api_key, report_name=f"report.{output}")
+        except ContainmentError as exc:
+            err_console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1) from None
+        rendered = result.report_text or ""
+        err_console.print(
+            f"[dim]Contained engagement artifacts (host-mounted, sensitive): {out_dir}[/dim]")
+        _emit_pentest_report(rendered, output=output, output_file=output_file)
+        raise typer.Exit(result.returncode)
+
+    from isitsecure.llm.adapters import create_llm_client
+    llm_client = create_llm_client(llm_provider, api_key)
+
     config = PentestConfig(
         target_url=target_url, authorized_host=i_am_authorized, objectives=objectives,
         scope_globs=list(scope or []), cost_cap=cost_cap, rps=rps,
@@ -607,10 +667,11 @@ def pentest(
         access_token=access_token, login_url=login_url,
         auth_email_b=auth_email_b, auth_password_b=auth_password_b)
 
-    err_console.print(Panel(f"Target: {target_url}  |  Cost cap: ${cost_cap:.0f}  |  LLM: {llm_provider}",
-                            title="Autonomous Pentest", border_style="bright_red"))
-
-    db_path = _ensure_config_dir() / "engagements" / f"{uuid4().hex}.sqlite"
+    # Inside the container the only writable host-backed path is the mounted output dir,
+    # so the engagement DB (a sensitive artifact) lands there instead of ~/.isitsecure.
+    engagements_dir = (contained_output_dir() / "engagements") if is_contained() \
+        else (_ensure_config_dir() / "engagements")
+    db_path = engagements_dir / f"{uuid4().hex}.sqlite"
     db_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         report, store = asyncio.run(run_engagement(
@@ -620,11 +681,6 @@ def pentest(
         err_console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from None
 
-    if output not in ("md", "html", "json"):
-        err_console.print(
-            f"[yellow]Unknown --output '{output}'; using 'md'. "
-            "Valid options: md, html, json.[/yellow]")
-        output = "md"
     try:
         data = build_report(report, store)
         rendered = render(data, output)
@@ -632,6 +688,49 @@ def pentest(
         store.close()
 
     err_console.print(f"[dim]Full audit trail: {db_path}[/dim]")
+    _emit_pentest_report(rendered, output=output, output_file=output_file)
+
+
+def _pentest_passthrough_flags(
+    *, objective, scope, i_am_authorized, cost_cap, rps, target_account, target_id_range,
+    allow_destructive_any_account, allow_research_egress, mutation_endpoint,
+    allow_cross_host_loot, auth_provider, auth_email, auth_password, access_token,
+    login_url, auth_email_b, auth_password_b, max_steps, llm_provider, output,
+) -> list[str]:
+    """Reconstruct the pentest flags to forward into the in-container command. Excludes
+    host-only concerns (``--contained``/``--contained-image``, ``--output-file``, the
+    interactive ``--confirm-objectives``) and never the API key (that goes via env)."""
+    flags: list[str] = ["--llm", llm_provider, "-o", output,
+                        "--cost-cap", str(cost_cap), "--rps", str(rps),
+                        "--max-steps", str(max_steps), "--auth-provider", auth_provider]
+    if i_am_authorized:
+        flags += ["--i-am-authorized", i_am_authorized]
+    for value in (objective or []):
+        flags += ["--objective", value]
+    for value in (scope or []):
+        flags += ["--scope", value]
+    for value in (target_account or []):
+        flags += ["--target-account", value]
+    for value in (target_id_range or []):
+        flags += ["--target-id-range", value]
+    for value in (mutation_endpoint or []):
+        flags += ["--mutation-endpoint", value]
+    if allow_destructive_any_account:
+        flags.append("--allow-destructive-any-account")
+    if allow_research_egress:
+        flags.append("--allow-research-egress")
+    if allow_cross_host_loot:
+        flags.append("--allow-cross-host-loot")
+    for flag, value in (("--auth-email", auth_email), ("--auth-password", auth_password),
+                        ("--access-token", access_token), ("--login-url", login_url),
+                        ("--auth-email-b", auth_email_b), ("--auth-password-b", auth_password_b)):
+        if value:
+            flags += [flag, value]
+    return flags
+
+
+def _emit_pentest_report(rendered: str, *, output: str, output_file: str | None) -> None:
+    """Render the report to stdout / a file — shared by the host and contained paths."""
     if output == "html":
         out_path = output_file or "isitsecure-pentest.html"
         Path(out_path).write_text(rendered)
