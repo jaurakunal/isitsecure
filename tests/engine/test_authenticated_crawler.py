@@ -624,6 +624,83 @@ class TestSafeModeCrawlSurfacesFormTargets:
         assert ep.query_param_names == ["bio"]
 
 
+class TestAnonymousCrawl:
+    """The pentest-only ``anonymous`` flag: a credential-free recon crawl must NOT attempt
+    login (no navigation to the login page, no spurious 'login failed' error) yet still map
+    the app. Scan never sets the flag, so its login-on-empty-creds behavior is unchanged."""
+
+    @staticmethod
+    def _mock_playwright(mock_page):
+        browser = AsyncMock()
+        context = AsyncMock()
+        browser.new_context = AsyncMock(return_value=context)
+        context.new_page = AsyncMock(return_value=mock_page)
+        pw = AsyncMock()
+        pw.chromium.launch = AsyncMock(return_value=browser)
+        cm = AsyncMock()
+        cm.__aenter__ = AsyncMock(return_value=pw)
+        cm.__aexit__ = AsyncMock(return_value=None)
+        return MagicMock(return_value=cm)
+
+    @pytest.mark.asyncio
+    async def test_anonymous_crawl_skips_login_and_records_no_login_error(self):
+        crawler = _make_crawler(email="", password="", anonymous=True)
+        mock_page = AsyncMock()
+        mock_page.url = "https://app.example.com/"
+        mock_page.on = MagicMock()
+        mock_page.content = AsyncMock(return_value="")
+        mock_page.evaluate = AsyncMock(return_value=[])
+        login = AsyncMock(return_value=False)
+        with (
+            patch(
+                "isitsecure.engine.scanners.authenticated_crawler.async_playwright",
+                self._mock_playwright(mock_page),
+            ),
+            patch.object(AuthenticatedCrawler, "_login", login),
+            patch.object(
+                AuthenticatedCrawler, "_extract_auth_headers",
+                new=AsyncMock(return_value={}),
+            ),
+            patch(
+                "isitsecure.engine.scanners.authenticated_crawler.asyncio.sleep",
+                new=AsyncMock(),
+            ),
+        ):
+            result = await crawler.crawl()
+        login.assert_not_awaited()  # login was never attempted
+        assert not any("login" in e.lower() for e in result.errors)
+
+    @pytest.mark.asyncio
+    async def test_default_crawl_still_attempts_login(self):
+        # The non-anonymous path (scan and authenticated pentest crawl) must still call
+        # _login even with empty creds — this is the byte-identical scan behavior.
+        crawler = _make_crawler(email="", password="")  # anonymous defaults to False
+        mock_page = AsyncMock()
+        mock_page.url = "https://app.example.com/"
+        mock_page.on = MagicMock()
+        mock_page.content = AsyncMock(return_value="")
+        mock_page.evaluate = AsyncMock(return_value=[])
+        login = AsyncMock(return_value=False)
+        with (
+            patch(
+                "isitsecure.engine.scanners.authenticated_crawler.async_playwright",
+                self._mock_playwright(mock_page),
+            ),
+            patch.object(AuthenticatedCrawler, "_login", login),
+            patch.object(
+                AuthenticatedCrawler, "_extract_auth_headers",
+                new=AsyncMock(return_value={}),
+            ),
+            patch(
+                "isitsecure.engine.scanners.authenticated_crawler.asyncio.sleep",
+                new=AsyncMock(),
+            ),
+        ):
+            result = await crawler.crawl()
+        login.assert_awaited()  # login attempted despite empty creds (scan-identical)
+        assert any("login" in e.lower() for e in result.errors)
+
+
 class TestCategorizeUrl:
     """Tests for _categorize_url using configurable rules."""
 

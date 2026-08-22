@@ -47,6 +47,9 @@ from isitsecure.engine.models import (
     FormPerception,
     InterceptedRequest,
 )
+from isitsecure.engine.shared.browser_launch import (
+    contained_browser_launch_kwargs,
+)
 from isitsecure.engine.shared.html_endpoint_extractor import (
     extract_html_endpoints,
 )
@@ -371,10 +374,17 @@ class AuthenticatedCrawler:
         seed_routes: list[str] | None = None,
         safe_mode: bool = False,
         deep: bool = False,
+        anonymous: bool = False,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._email = email
         self._password = password
+        # ANONYMOUS is a pentest-only opt-in (the ``crawl`` tool sets it when the planner
+        # supplies no credentials) that skips the login step entirely for a clean, credential
+        # -free recon crawl of an SPA — the agent can map a heavy app's live API surface
+        # *before* it has an account. Scan never sets it (default False), so scan still
+        # attempts login even with empty creds — byte-identical behavior.
+        self._anonymous = anonymous
         self._login_url = login_url or f"{self._base_url}/login"
         self._seed_routes = seed_routes or []
         # When True (the pentest crawl path), blind clicking of state-changing buttons is
@@ -426,7 +436,8 @@ class AuthenticatedCrawler:
 
         try:
             async with async_playwright() as pw:
-                browser = await pw.chromium.launch(headless=True)
+                browser = await pw.chromium.launch(
+                    headless=True, **contained_browser_launch_kwargs())
                 try:
                     context = await browser.new_context(
                         viewport={"width": 1280, "height": 720},
@@ -435,13 +446,18 @@ class AuthenticatedCrawler:
                     self._setup_interception(page)
                     self._setup_websocket_capture(page)
 
-                    self._login_succeeded = await self._login(page)
-                    if not self._login_succeeded:
-                        result.errors.append(
-                            BrowserLoginConfig.ERROR_LOGIN_FAILED.format(
-                                error="Could not complete login flow"
+                    if self._anonymous:
+                        # Credential-free recon crawl: skip login entirely (no attempt,
+                        # no spurious "login failed" error) and browse anonymously.
+                        self._login_succeeded = False
+                    else:
+                        self._login_succeeded = await self._login(page)
+                        if not self._login_succeeded:
+                            result.errors.append(
+                                BrowserLoginConfig.ERROR_LOGIN_FAILED.format(
+                                    error="Could not complete login flow"
+                                )
                             )
-                        )
 
                     self._auth_headers = await self._extract_auth_headers(page)
                     result.auth_headers = self._auth_headers
@@ -539,7 +555,8 @@ class AuthenticatedCrawler:
 
         try:
             async with async_playwright() as pw:
-                browser = await pw.chromium.launch(headless=True)
+                browser = await pw.chromium.launch(
+                    headless=True, **contained_browser_launch_kwargs())
                 try:
                     context = await browser.new_context(
                         viewport={"width": 1280, "height": 720},
