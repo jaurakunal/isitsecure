@@ -558,7 +558,10 @@ def pentest(
         help="Run the WHOLE engagement inside a locked-down Docker container so the "
              "operator's host (home, ~/.aws, ~/.ssh, files) is unreachable. Read-only "
              "rootfs, non-root, caps dropped, only the output dir mounted, API key via "
-             "env. Network egress is NOT yet restricted (see docs, slice 3.0b)."),
+             "env. Egress is locked to a scope allowlist: the agent runs on a private "
+             "internal network with no direct internet; a proxy sidecar is its sole "
+             "egress and only the target + LLM (+ research, if enabled) are reachable "
+             "(CONNECT/host-level; see docs, slice 3.0b-1)."),
     contained_image: str = typer.Option(
         "isitsecure-pentest:latest", "--contained-image",
         help="Docker image for --contained (build it from the repo Dockerfile)."),
@@ -641,6 +644,7 @@ def pentest(
         try:
             result = run_contained(
                 image=contained_image, target_url=target_url, output_dir=out_dir,
+                scope_globs=list(scope or []), allow_research_egress=allow_research_egress,
                 passthrough_flags=passthrough, api_key_env=DEFAULT_API_KEY_ENV,
                 api_key_value=api_key, report_name=f"report.{output}")
         except ContainmentError as exc:
