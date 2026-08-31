@@ -61,3 +61,8 @@ isitsecure-report.html
 isitsecure-results.sarif
 isitsecure-fixes.md
 isitsecure-badge.svg
+
+# Live-target credentials and any target-specific specifics MUST stay out of
+# the public repo. The autonomous-pentest work (and its scratchpad) lives in the
+# private isitsecure-red-blue-team repo.
+scratchpad/
