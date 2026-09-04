@@ -219,6 +219,7 @@ class DeepSecurityScanAgent:
         credentials_a: AuthCredentials | None = None,
         credentials_b: AuthCredentials | None = None,
         scan_mode: ScanMode | None = None,
+        repo_branch: str | None = None,
     ) -> AsyncGenerator[DeepScanEvent, None]:
         """Run a full deep security scan.
 
@@ -227,6 +228,8 @@ class DeepSecurityScanAgent:
         - URL + credentials       -> AUTHENTICATED
         - URL only                -> URL_ONLY
         - Repo only               -> CODE_ONLY
+
+        ``repo_branch`` defaults to the repository's own default branch.
         """
         start_time = time.monotonic()
         # Install an ambient progress reporter so scanners can narrate their
@@ -245,6 +248,7 @@ class DeepSecurityScanAgent:
 
         all_findings: list[DeepFinding] = []
         scanners_run: list[str] = []
+        ingestion_errors: list[str] = []
 
         snapshot: CodebaseSnapshot | None = None
         repo_snapshot: RepoSnapshot | None = None
@@ -654,7 +658,44 @@ class DeepSecurityScanAgent:
                 OrchestratorConfig.MSG_CLONING_REPO.format(repo_url=repo_url),
                 OrchestratorConfig.PROGRESS_CODE_INGESTION,
             )
-            repo_snapshot = await self._ingest_repo(repo_url, github_token)
+            try:
+                repo_snapshot = await self._ingest_repo(
+                    repo_url, github_token, repo_branch
+                )
+            except Exception as e:
+                repo_snapshot = None
+                logger.error(
+                    OrchestratorConfig.ERROR_REPO_FAILED.format(error=e)
+                )
+                ingestion_errors.append(str(e))
+
+            if repo_snapshot is None:
+                if not ingestion_errors:
+                    # No exception, no snapshot: no ingestion service wired.
+                    ingestion_errors.append(
+                        "the repository could not be read"
+                    )
+                reason = ingestion_errors[-1]
+                # Code-only: the repo was the entire scan. Reporting "no
+                # findings" here would read as a clean bill of health for
+                # code we never opened (issue #147).
+                if mode is ScanMode.CODE_ONLY:
+                    yield DeepScanEvent(
+                        DeepScanPhase.COMPLETE,
+                        OrchestratorConfig.ERROR_REPO_FAILED.format(
+                            error=reason
+                        ),
+                        data={"error": True},
+                    )
+                    return
+                # Full scan: the live-site half is still real, so finish it —
+                # but the report has to say the code was never scanned.
+                yield DeepScanEvent(
+                    DeepScanPhase.CODE_INGESTION,
+                    OrchestratorConfig.ERROR_REPO_FAILED.format(error=reason),
+                    OrchestratorConfig.PROGRESS_CODE_INGESTION,
+                    data={"error": True},
+                )
 
         # ==============================================================
         # Phase 6.5: LSP Initialization (optional — graceful degradation)
@@ -1010,6 +1051,7 @@ class DeepSecurityScanAgent:
             idor_results=idor_results,
             scan_duration_seconds=round(duration, 2),
             scanners_run=scanners_run,
+            ingestion_errors=ingestion_errors,
             themes=themes,
             token_usage=self._collect_token_usage(),
         )
@@ -2232,17 +2274,23 @@ class DeepSecurityScanAgent:
             )
             return None
 
-    async def _ingest_repo(self, repo_url: str, github_token: str | None = None) -> RepoSnapshot | None:
-        """Ingest a repository using the repo ingestion service."""
+    async def _ingest_repo(
+        self,
+        repo_url: str,
+        github_token: str | None = None,
+        branch: str | None = None,
+    ) -> RepoSnapshot | None:
+        """Ingest a repository using the repo ingestion service.
+
+        Lets the ingestion service's failure propagate: the caller decides
+        whether it ends the scan or merely degrades it, and it needs the
+        reason to say which (issue #147).
+        """
         if not self._repo_ingestion:
             return None
-        try:
-            return await self._repo_ingestion.ingest(repo_url, github_token=github_token)
-        except Exception as e:
-            logger.error(
-                OrchestratorConfig.ERROR_REPO_FAILED.format(error=e),
-            )
-            return None
+        return await self._repo_ingestion.ingest(
+            repo_url, branch=branch, github_token=github_token
+        )
 
     def _build_category_summary(self, endpoints: list[DiscoveredEndpoint]) -> dict:
         """Build a summary of endpoint categories."""

@@ -75,11 +75,16 @@ class RepoIngestionService:
     async def ingest(
         self,
         repo_url: str,
-        branch: str = "main",
+        branch: str | None = None,
         github_token: str | None = None,
         full_history: bool = False,
     ) -> RepoSnapshot:
         """Clone a repo and return an indexed RepoSnapshot.
+
+        Args:
+            branch: Branch to scan.  ``None`` (the default) means the
+                remote's own default branch — assuming ``main`` made every
+                ``master``-default repository unscannable (issue #147).
 
         Steps:
             1. Create temp directory and git clone
@@ -98,6 +103,13 @@ class RepoIngestionService:
 
             # Capture the exact commit hash for the report
             commit_hash = await self._get_commit_hash(clone_dir)
+
+            # Report the branch we actually got, not the one we asked for:
+            # `branch=None` resolves to the remote's default, and a local
+            # directory is copied as-is regardless of what was requested.
+            resolved_branch = (
+                await self._get_branch_name(clone_dir) or branch or ""
+            )
 
             # Detect workspaces (monorepo support)
             workspaces = []
@@ -135,7 +147,7 @@ class RepoIngestionService:
 
             return RepoSnapshot(
                 repo_url=repo_url,
-                branch=branch,
+                branch=resolved_branch,
                 commit_hash=commit_hash,
                 clone_path=clone_dir,
                 framework=framework,
@@ -318,10 +330,13 @@ class RepoIngestionService:
     _SCP_LIKE = re.compile(r"^[\w.-]+@[\w.-]+:")   # git@host:path
 
     @classmethod
-    def _validate_remote(cls, url: str, branch: str) -> None:
+    def _validate_remote(cls, url: str, branch: str | None) -> None:
         """Reject repository URLs/branches that could inject git options or
         reach unsafe transports (ext::/fd:: run commands; file:// reads local)."""
-        for label, value in (("repository URL", url), ("branch", branch)):
+        checks = [("repository URL", url)]
+        if branch is not None:
+            checks.append(("branch", branch))
+        for label, value in checks:
             if value.startswith("-"):
                 raise RuntimeError(f"Refusing {label} that begins with '-'.")
         lowered = url.lower()
@@ -336,7 +351,7 @@ class RepoIngestionService:
     async def _clone_repo(
         self,
         repo_url: str,
-        branch: str,
+        branch: str | None,
         clone_path: str,
         github_token: str | None,
         full_history: bool,
@@ -374,8 +389,10 @@ class RepoIngestionService:
         cmd = ["git", "clone"]
         if not full_history:
             cmd.extend(["--depth", "1"])
+        if branch:
+            cmd.extend(["--branch", branch])
         # "--" ends option parsing so the URL/path can't be read as flags.
-        cmd.extend(["--branch", branch, "--", url, clone_path])
+        cmd.extend(["--", url, clone_path])
         # Restrict git to safe transports; never prompt for credentials.
         env = {
             **os.environ,
@@ -400,9 +417,15 @@ class RepoIngestionService:
                 if github_token:
                     error_msg = error_msg.replace(github_token, "***")
                 if "not found" in error_msg.lower():
+                    # Without an explicit branch we never asked git for one,
+                    # so this is the repository missing, not the branch.
                     raise RuntimeError(
                         RepoIngestionConfig.ERROR_BRANCH_NOT_FOUND.format(
                             branch=branch
+                        )
+                        if branch
+                        else RepoIngestionConfig.ERROR_REPO_NOT_FOUND.format(
+                            repo_url=repo_url
                         )
                     )
                 raise RuntimeError(
@@ -451,6 +474,30 @@ class RepoIngestionService:
             )
             if process.returncode == 0:
                 return stdout.decode().strip()
+        except Exception:
+            pass
+        return ""
+
+    @staticmethod
+    async def _get_branch_name(clone_path: str) -> str:
+        """Read the checked-out branch name from a cloned repo.
+
+        Returns ``""`` for a detached HEAD, a non-git directory, or any git
+        failure — callers fall back to whatever branch was requested.
+        """
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "git", "rev-parse", "--abbrev-ref", "HEAD",
+                cwd=clone_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(
+                process.communicate(), timeout=5
+            )
+            if process.returncode == 0:
+                name = stdout.decode().strip()
+                return "" if name == "HEAD" else name
         except Exception:
             pass
         return ""

@@ -546,7 +546,7 @@ Arguments:
 
 Options:
   -r, --repo TEXT        GitHub repo URL (SAST)
-  -b, --branch TEXT      Git branch [default: main]
+  -b, --branch TEXT      Git branch [default: the repo's own default branch]
   -m, --mode TEXT        Scan mode: auto|url-only|code-only|authenticated|full
   --depth TEXT           Scan depth: quick|deep [default: quick]
   --llm TEXT             LLM provider: anthropic|google|none [default: anthropic]
@@ -568,6 +568,9 @@ Options:
   --baseline-accept      Record the current findings as the baseline
   --baseline-file TEXT   Baseline path [default: ~/.isitsecure/baselines/<project>.json]
   -v, --verbose          Enable debug logging
+
+  # exit 1 if something you asked to scan couldn't be read (e.g. the repo
+  # failed to clone) — a report that never saw your code isn't a clean scan
 
 isitsecure fix [OPTIONS]
   -r, --repo TEXT        Local repo path, OR a remote GitHub URL to open PRs against [required]

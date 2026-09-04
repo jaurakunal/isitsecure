@@ -59,7 +59,7 @@ class ScanRequest(BaseModel):
     target_url: Optional[str] = None
     repo_url: Optional[str] = None
     github_token: Optional[str] = None
-    branch: str = "main"
+    branch: Optional[str] = None  # None = the repository's default branch
     scan_mode: Optional[str] = None
     auth_email: Optional[str] = None
     auth_password: Optional[str] = None
@@ -538,6 +538,7 @@ async def _run_scan_background(scan_id: str, request: ScanRequest) -> None:
             github_token=request.github_token,
             credentials_a=credentials_a,
             scan_mode=scan_mode,
+            repo_branch=request.branch,
         ):
             phase = getattr(event, "phase", "")
             message = getattr(event, "message", "")

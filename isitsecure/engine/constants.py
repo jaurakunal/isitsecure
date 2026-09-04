@@ -621,6 +621,12 @@ class RepoIngestionConfig:
     ERROR_CLONE_TIMEOUT = "Repository clone timed out after {timeout}s"
     ERROR_REPO_TOO_LARGE = "Repository exceeds maximum size of {max_size}MB"
     ERROR_BRANCH_NOT_FOUND = "Branch '{branch}' not found in repository"
+    # With no branch requested we clone the remote's default, so git's "not
+    # found" is about the repository itself — saying "branch 'main'" there
+    # sent people looking for the wrong problem (issue #147).
+    ERROR_REPO_NOT_FOUND = (
+        "Repository not found (or not accessible): {repo_url}"
+    )
 
 
 class FrameworkDetectorConfig:

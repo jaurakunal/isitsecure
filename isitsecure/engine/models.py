@@ -296,6 +296,11 @@ class DeepScanReport(BaseModel):
     scan_duration_seconds: float = 0.0
     scanners_run: list[str] = Field(default_factory=list)
 
+    # What we could not read. A repo that failed to clone used to produce a
+    # clean-looking report with zero findings, which reads as "you're fine"
+    # rather than "we never saw your code" (issue #147).
+    ingestion_errors: list[str] = Field(default_factory=list)
+
     # Thematic grouping of findings
     themes: list[SecurityTheme] = Field(default_factory=list)
 
