@@ -9,7 +9,11 @@ from __future__ import annotations
 
 import pytest
 
-from isitsecure import cli
+# Patch where a name is *used*, not where it is defined: `main` and
+# `setup_lsp` each bind their own reference to the environment helpers.
+from isitsecure.cli import app as cli_app
+from isitsecure.cli import main as cli
+from isitsecure.cli import setup_lsp
 
 
 # ---------------------------------------------------------------------------
@@ -187,7 +191,7 @@ def test_scan_with_no_target_shows_human_error(monkeypatch):
     monkeypatch.setattr(cli, "err_console", Console(file=buf, force_terminal=False))
 
     runner = CliRunner()
-    result = runner.invoke(cli.app, ["scan"])
+    result = runner.invoke(cli_app, ["scan"])
     assert result.exit_code == 1
     out = buf.getvalue()
     # Plain-language, not the old terse "provide a target URL, a --repo".
@@ -210,7 +214,8 @@ def _run_ensure_runtime(
     from isitsecure.engine.code_analysis.lsp import tsserver_locator
 
     monkeypatch.setattr(
-        cli, "_first_which", lambda bins: "found" if server_installed else None
+        setup_lsp, "_first_which",
+        lambda bins: "found" if server_installed else None,
     )
     monkeypatch.setattr(
         shutil, "which", lambda name: "/usr/bin/npm" if (npm and name == "npm") else None
@@ -234,9 +239,10 @@ def _run_ensure_runtime(
 
     printed: list[str] = []
     monkeypatch.setattr(
-        cli.console, "print", lambda *a, **k: printed.append(" ".join(str(x) for x in a))
+        setup_lsp.console, "print",
+        lambda *a, **k: printed.append(" ".join(str(x) for x in a)),
     )
-    cli._ensure_tsserver_runtime()
+    setup_lsp._ensure_tsserver_runtime()
     return "\n".join(printed), calls
 
 
@@ -325,7 +331,7 @@ def _run_scan_cli(monkeypatch, report, argv):
 
     monkeypatch.setattr(cli, "_run_scan", fake_run_scan)
 
-    result = CliRunner().invoke(cli.app, argv)
+    result = CliRunner().invoke(cli_app, argv)
     return result.exit_code, buf.getvalue()
 
 
