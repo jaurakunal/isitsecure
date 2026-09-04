@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.4](https://github.com/jaurakunal/isitsecure/compare/v0.22.3...v0.22.4) (2026-09-04)
+
+
+### Bug Fixes
+
+* **lsp:** read the whole header block, so pylsp works at all ([#154](https://github.com/jaurakunal/isitsecure/issues/154)) ([db11974](https://github.com/jaurakunal/isitsecure/commit/db119743e16c7e7bdfdf254318842676bba1e4d1))
+
 ## [0.22.3](https://github.com/jaurakunal/isitsecure/compare/v0.22.2...v0.22.3) (2026-09-04)
 
 
