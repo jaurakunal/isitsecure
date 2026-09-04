@@ -107,7 +107,11 @@ The repository is cloned (shallow, to temp dir) and indexed:
 
 ### Phase 7.5: LSP Validation
 
-If TypeScript and Node.js are available, the **TypeScript Language Server** is used to trace auth flows:
+If TypeScript and Node.js are available, the **TypeScript Language Server** is used to trace auth flows.
+
+The server carries no TypeScript of its own and resolves one from the workspace — but ingestion strips `node_modules`, so there is never one there. Phase 6.5 therefore locates a TypeScript 5.x `tsserver.js` (`lsp/tsserver_locator.py`: `$ISITSECURE_TSSERVER_PATH` → the scanned project → `~/.isitsecure/lsp` → the global npm root) and passes it as `tsserver.path` in the handshake. Without it the server refuses to start and this phase is skipped entirely.
+
+
 
 ```
 Route file: app/api/tasks/[id]/route.ts
@@ -274,6 +278,7 @@ The scanner works at any completeness level:
 | No LLM API key | Rule-based scanners only. No business logic review, no semantic verification, no triage enrichment |
 | No Playwright | URL ingestion falls back to httpx. No authenticated crawl, no DOM XSS |
 | No TypeScript/Node.js | LSP validation skipped. Auth flow tracing unavailable, more false positives |
+| No TypeScript 5.x runtime | Same — `typescript-language-server` won't start without a `tsserver.js`. `isitsecure setup --lsp` provisions one; see [lsp-setup.md](lsp-setup.md) |
 | No repo URL | SAST skipped entirely. DAST-only scan |
 | No target URL | SAST-only scan against code |
 | No credentials | Authenticated scanners skipped. No IDOR cross-user, no privilege escalation |

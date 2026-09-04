@@ -29,6 +29,11 @@ class NoOpLSPClient:
     def is_available(self) -> bool:
         return False
 
+    @property
+    def last_error(self) -> str | None:
+        # Nothing was ever attempted, so there is nothing to explain.
+        return None
+
     async def initialize(self, project_path: str) -> bool:
         return False
 

@@ -692,10 +692,17 @@ class DeepSecurityScanAgent:
                             )
                         )
                     else:
+                        # The client logs the server's own words; repeat the
+                        # cause here so one line explains the fallback (#145).
+                        reason = (
+                            self._lsp_client.last_error
+                            or "the language server did not initialize"
+                        )
                         logger.warning(
-                            "LSP initialization returned False — "
-                            "typescript-language-server may not be installed. "
-                            "Falling back to regex-only analysis."
+                            "LSP initialization failed (%s) — falling back to "
+                            "regex-only analysis. Run `isitsecure setup --lsp` "
+                            "to check the language-server setup.",
+                            reason,
                         )
                 except asyncio.TimeoutError:
                     logger.warning(

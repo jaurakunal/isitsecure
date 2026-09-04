@@ -731,6 +731,8 @@ isitsecure setup --check    # report what's installed (API key, DAST browser, LS
 
 `setup --lsp` installs what it can cleanly (Python via pip always; TypeScript via npm if Node is present; Java via Homebrew if available) and prints guidance for anything it can't. It's also offered as a step in the full `isitsecure setup`. This is optional — scans still work without it using regex-based detection. For manual setup and per-language detail, see [docs/lsp-setup.md](docs/lsp-setup.md).
 
+For TypeScript it also provisions a private TypeScript 5.x runtime under `~/.isitsecure/lsp` — `typescript-language-server` carries none of its own and won't start without one, and a scan runs against a copy of your project with `node_modules` stripped, so it can't borrow yours. Your global `typescript` is never installed or changed. To use a specific one instead, set `ISITSECURE_TSSERVER_PATH` to its `lib/tsserver.js`. `isitsecure setup --check` prints the runtime a scan will use.
+
 ## Contributing
 
 isitsecure is built on protocols and the strategy pattern. Adding a new scanner is straightforward:

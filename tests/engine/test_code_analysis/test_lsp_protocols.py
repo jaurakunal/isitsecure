@@ -1,14 +1,24 @@
-"""Tests for LSP protocol data models.
+"""Tests for LSP protocol data models and the client contract.
 
 Verifies default values, field assignment, and Pydantic behavior for
-``LSPLocation`` and ``AuthFlowResult``.
+``LSPLocation`` and ``AuthFlowResult``, plus the parts of
+``LSPClientProtocol`` every concrete client must honour.
 """
 
 from __future__ import annotations
 
+import pytest
+
+from isitsecure.engine.code_analysis.lsp.java_client import JavaLSPClient
+from isitsecure.engine.code_analysis.lsp.noop_client import NoOpLSPClient
 from isitsecure.engine.code_analysis.lsp.protocols import (
     AuthFlowResult,
+    LSPClientProtocol,
     LSPLocation,
+)
+from isitsecure.engine.code_analysis.lsp.python_client import PythonLSPClient
+from isitsecure.engine.code_analysis.lsp.tsserver_client import (
+    TypeScriptLSPClient,
 )
 
 
@@ -102,3 +112,29 @@ class TestAuthFlowResult:
         assert result.has_verified_auth is True
         assert result.trace_depth == 2
         assert result.has_ownership_check is True
+
+
+# ---------------------------------------------------------------------------
+# last_error — part of the client contract since #145
+# ---------------------------------------------------------------------------
+
+
+class TestLastErrorContract:
+    """Every client must be able to say why it isn't working.
+
+    Callers report the reason LSP is unavailable in the server's own words, so
+    a client that can't answer would send them back to guessing.
+    """
+
+    @pytest.mark.parametrize(
+        "client_factory",
+        [NoOpLSPClient, TypeScriptLSPClient, PythonLSPClient, JavaLSPClient],
+    )
+    def test_clients_expose_last_error(self, client_factory) -> None:
+        client = client_factory()
+        assert isinstance(client, LSPClientProtocol)
+        assert client.last_error is None
+
+    def test_noop_client_never_reports_an_error(self) -> None:
+        # It never attempts anything, so it has nothing to explain.
+        assert NoOpLSPClient().last_error is None

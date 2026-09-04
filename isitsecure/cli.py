@@ -1422,7 +1422,11 @@ _LSP_SPECS = [
         "bins": ("typescript-language-server",),
         "runtime": ("node",),
         "needs": "npm",
-        "cmd": ["npm", "install", "-g", "typescript-language-server", "typescript"],
+        # No `typescript` here on purpose: `typescript@latest` is now 7.x (the
+        # Go rewrite), which ships no lib/tsserver.js and can't drive the
+        # language server. `_ensure_tsserver_runtime` provisions a private 5.x
+        # runtime instead of touching the user's global install (issue #145).
+        "cmd": ["npm", "install", "-g", "typescript-language-server"],
         "hint": {
             "macos": "install Node.js (`brew install node`), then re-run `isitsecure setup --lsp`",
             "windows": "install Node.js (`winget install OpenJS.NodeJS` or nodejs.org), then re-run `isitsecure setup --lsp`",
@@ -1578,6 +1582,21 @@ def _preflight_checks(
                 "flag more false alarms.[/dim]\n"
                 "    [bold]Fix:[/bold] isitsecure setup --lsp"
             )
+        elif shutil.which("typescript-language-server"):
+            # The server being installed isn't enough: it needs a TypeScript
+            # 5.x runtime to start at all, and scans never provide one from
+            # the scanned tree itself (issue #145).
+            from isitsecure.engine.code_analysis.lsp.tsserver_locator import (
+                find_tsserver_js,
+            )
+            if not find_tsserver_js():
+                warnings.append(
+                    "The TypeScript language server has no TypeScript runtime "
+                    "to run, so it can't start.\n"
+                    "    [dim]→ Auth-flow tracing is skipped; code scanning "
+                    "falls back to regex-only analysis.[/dim]\n"
+                    "    [bold]Fix:[/bold] isitsecure setup --lsp"
+                )
 
     # (c) LLM API key — only if the user asked for an LLM provider.
     if llm_provider != "none" and not has_api_key:
@@ -1624,6 +1643,19 @@ def _print_status_report() -> None:
                           f"[dim]{', '.join(missing_rt)}[/dim] not on PATH to run it")
         else:
             console.print(f"  [yellow]•[/yellow] {spec['lang']}: [dim]not installed[/dim]")
+
+    if _first_which(("typescript-language-server",)):
+        from isitsecure.engine.code_analysis.lsp.tsserver_locator import (
+            find_tsserver_js,
+        )
+        tsserver = find_tsserver_js()
+        if tsserver:
+            console.print("  [green]✓[/green] TypeScript runtime (tsserver.js): "
+                          f"[dim]{tsserver}[/dim]")
+        else:
+            console.print("  [yellow]•[/yellow] TypeScript runtime (tsserver.js): "
+                          "[dim]missing — the TS language server can't start; "
+                          "run `isitsecure setup --lsp`[/dim]")
     console.print("\n[dim]Install missing language servers with:[/dim] isitsecure setup --lsp")
 
 
@@ -1661,6 +1693,66 @@ def _setup_lsps() -> None:
         missing_rt = [r for r in spec["runtime"] if not shutil.which(r)]
         if missing_rt:
             console.print(f"      [dim](also needs {', '.join(missing_rt)} on PATH to run)[/dim]")
+
+    _ensure_tsserver_runtime()
+
+
+def _ensure_tsserver_runtime() -> None:
+    """Make sure the TypeScript language server has a TypeScript to run.
+
+    typescript-language-server ships no TypeScript of its own and resolves it
+    from the workspace — but scans run against an ingested copy with no
+    ``node_modules``, so there is never one to find and the server refuses to
+    start. We install a private TypeScript 5.x under ``~/.isitsecure/lsp`` and
+    pass it as ``tsserver.path``; 5.x specifically, because ``typescript@latest``
+    is now the Go rewrite with no ``lib/tsserver.js`` (issue #145).
+    """
+    import shutil
+    import subprocess
+
+    from isitsecure.engine.code_analysis.lsp.tsserver_locator import (
+        PROVISIONED_ROOT,
+        TYPESCRIPT_PACKAGE_SPEC,
+        find_tsserver_js,
+    )
+
+    if not _first_which(("typescript-language-server",)):
+        return  # nothing to feed — the server itself isn't installed
+
+    found = find_tsserver_js()
+    if found:
+        console.print(f"  [green]✓[/green] TypeScript runtime: [dim]{found}[/dim]")
+        return
+
+    if not shutil.which("npm"):
+        console.print("  [yellow]![/yellow] TypeScript runtime: [dim]npm not on PATH — "
+                      f"install {TYPESCRIPT_PACKAGE_SPEC} and set "
+                      "ISITSECURE_TSSERVER_PATH to its lib/tsserver.js[/dim]")
+        return
+
+    console.print(f"  [cyan]→[/cyan] TypeScript runtime: installing {TYPESCRIPT_PACKAGE_SPEC}…")
+    try:
+        PROVISIONED_ROOT.mkdir(parents=True, exist_ok=True)
+        res = subprocess.run(
+            _resolve_install_cmd([
+                "npm", "install", "--prefix", str(PROVISIONED_ROOT),
+                TYPESCRIPT_PACKAGE_SPEC, "--no-audit", "--no-fund",
+            ]),
+            capture_output=True, text=True, timeout=600,
+        )
+    except Exception as exc:
+        console.print(f"  [red]✗[/red] TypeScript runtime: {exc}")
+        return
+
+    found = find_tsserver_js()
+    if res.returncode == 0 and found:
+        console.print("  [green]✓[/green] TypeScript runtime: installed "
+                      f"[dim]({found})[/dim]")
+    else:
+        tail = (res.stderr or res.stdout or "install did not complete").strip().splitlines()
+        console.print("  [yellow]![/yellow] TypeScript runtime: "
+                      f"{(tail[-1] if tail else '')[:120]}")
+        console.print("      [dim]Auth-flow tracing will fall back to regex-only analysis.[/dim]")
 
 
 def _lsp_offer() -> None:

@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from isitsecure.engine.code_analysis.lsp.protocols import LSPLocation
+from isitsecure.engine.code_analysis.lsp.rpc_errors import format_rpc_error
 from isitsecure.engine.constants import LSPConfig
 
 logger = logging.getLogger(__name__)
@@ -43,14 +44,25 @@ class BaseLSPClient:
         self._project_path: str = ""
         self._lock = asyncio.Lock()
         self._opened_files: set[str] = set()
+        self._last_error: str | None = None
 
     @property
     def is_available(self) -> bool:
         return self._initialized and self._process is not None
 
+    @property
+    def last_error(self) -> str | None:
+        """The most recent server-reported failure, for diagnostics.
+
+        A language server explains its own refusals better than we can guess
+        at them, so callers surface this rather than speculating (issue #145).
+        """
+        return self._last_error
+
     async def initialize(self, project_path: str) -> bool:
         """Spawn LSP server and initialize the session."""
         self._project_path = project_path
+        self._last_error = None
 
         try:
             self._pre_initialize(project_path)
@@ -98,6 +110,10 @@ class BaseLSPClient:
             )
 
             if result is None:
+                logger.warning(
+                    "LSP initialize failed: %s",
+                    self._last_error or "no response from the server",
+                )
                 await self.shutdown()
                 return False
 
@@ -242,10 +258,16 @@ class BaseLSPClient:
                 body = await self._process.stdout.readexactly(content_length)
                 data = json.loads(body.decode())
                 req_id = data.get("id")
+                rpc_error = format_rpc_error(data)
+                if rpc_error:
+                    # Keep the server's own explanation — dropping it is what
+                    # made #145 look like a missing install.
+                    self._last_error = rpc_error
+                    logger.debug("LSP request returned an error: %s", rpc_error)
                 if req_id is not None and req_id in self._pending:
                     future = self._pending[req_id]
                     if not future.done():
-                        future.set_result(data.get("result") if "error" not in data else None)
+                        future.set_result(None if rpc_error else data.get("result"))
         except (asyncio.CancelledError, asyncio.IncompleteReadError):
             pass
         except Exception as e:

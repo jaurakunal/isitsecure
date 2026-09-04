@@ -26,6 +26,10 @@ from typing import Any
 from isitsecure.engine.code_analysis.lsp.protocols import (
     LSPLocation,
 )
+from isitsecure.engine.code_analysis.lsp.rpc_errors import format_rpc_error
+from isitsecure.engine.code_analysis.lsp.tsserver_locator import (
+    find_tsserver_js,
+)
 from isitsecure.engine.constants import LSPConfig
 
 logger = logging.getLogger(__name__)
@@ -48,6 +52,9 @@ class TypeScriptLSPClient:
         self._temp_tsconfig: Path | None = None
         self._lock = asyncio.Lock()
         self._opened_files: set[str] = set()  # instance variable, not class
+        self._last_error: str | None = None
+        self._pending_methods: dict[int, str] = {}
+        self._tsserver_js: Path | None = None
 
     # ------------------------------------------------------------------
     # Static availability check (called by factory)
@@ -66,9 +73,20 @@ class TypeScriptLSPClient:
     def is_available(self) -> bool:
         return self._initialized and self._process is not None
 
+    @property
+    def last_error(self) -> str | None:
+        """The most recent server-reported failure, for diagnostics.
+
+        The server explains its own refusals far better than we can guess at
+        them, so callers surface this instead of speculating (issue #145).
+        """
+        return self._last_error
+
     async def initialize(self, project_path: str) -> bool:
         """Spawn tsserver and initialize the LSP session."""
         self._project_path = project_path
+        self._last_error = None
+        self._tsserver_js = None
 
         if not self.is_node_available():
             logger.info(LSPConfig.MSG_UNAVAILABLE)
@@ -118,37 +136,12 @@ class TypeScriptLSPClient:
             # Send LSP initialize request
             result = await self._send_request(
                 "initialize",
-                {
-                    "processId": None,
-                    "rootUri": f"file://{project_path}",
-                    "rootPath": project_path,
-                    "capabilities": {
-                        "textDocument": {
-                            "definition": {"dynamicRegistration": False},
-                            "references": {"dynamicRegistration": False},
-                            "hover": {"dynamicRegistration": False},
-                        }
-                    },
-                },
+                self._initialize_params(project_path),
                 timeout=LSPConfig.INIT_TIMEOUT_SECONDS,
             )
 
             if result is None:
-                # Try to get stderr for diagnostics
-                stderr_out = ""
-                if self._process and self._process.stderr:
-                    try:
-                        stderr_data = await asyncio.wait_for(
-                            self._process.stderr.read(2000), timeout=1
-                        )
-                        stderr_out = stderr_data.decode(errors="replace")
-                    except (asyncio.TimeoutError, Exception):
-                        pass
-                logger.warning(
-                    "LSP initialize returned None. "
-                    "Stderr: %s",
-                    stderr_out[:300] if stderr_out else "(empty)",
-                )
+                await self._report_initialize_failure()
                 await self.shutdown()
                 return False
 
@@ -164,6 +157,69 @@ class TypeScriptLSPClient:
             )
             await self.shutdown()
             return False
+
+    def _initialize_params(self, project_path: str) -> dict[str, Any]:
+        """Build the ``initialize`` params, including ``tsserver.path``.
+
+        typescript-language-server resolves TypeScript from the workspace and
+        refuses to start when it can't find one.  Scans always run against a
+        freshly-ingested copy with no ``node_modules``, so we hand it an
+        explicit ``tsserver.path`` — the server's own supported escape hatch
+        (issue #145).
+        """
+        params: dict[str, Any] = {
+            "processId": None,
+            "rootUri": f"file://{project_path}",
+            "rootPath": project_path,
+            "capabilities": {
+                "textDocument": {
+                    "definition": {"dynamicRegistration": False},
+                    "references": {"dynamicRegistration": False},
+                    "hover": {"dynamicRegistration": False},
+                }
+            },
+        }
+
+        self._tsserver_js = find_tsserver_js(project_path)
+        if self._tsserver_js:
+            logger.info("Using TypeScript runtime: %s", self._tsserver_js)
+            params["initializationOptions"] = {
+                "tsserver": {"path": str(self._tsserver_js)}
+            }
+        else:
+            # Not fatal on its own — the workspace may still resolve one. If
+            # it doesn't, the failure report below names this as the cause.
+            logger.debug(LSPConfig.MSG_NO_TYPESCRIPT_RUNTIME)
+        return params
+
+    async def _report_initialize_failure(self) -> None:
+        """Log why initialization failed, using the server's own words."""
+        if self._last_error:
+            logger.warning(
+                "LSP initialize failed: %s%s",
+                self._last_error,
+                (
+                    ""
+                    if self._tsserver_js
+                    else f" — {LSPConfig.MSG_NO_TYPESCRIPT_RUNTIME}"
+                ),
+            )
+            return
+
+        stderr_out = ""
+        if self._process and self._process.stderr:
+            try:
+                stderr_data = await asyncio.wait_for(
+                    self._process.stderr.read(2000), timeout=1
+                )
+                stderr_out = stderr_data.decode(errors="replace")
+            except Exception:
+                pass
+        logger.warning(
+            "LSP initialize got no response (timed out or the server died). "
+            "Stderr: %s",
+            stderr_out[:300] if stderr_out else "(empty)",
+        )
 
     async def get_definition(
         self, file_path: str, line: int, character: int
@@ -284,6 +340,7 @@ class TypeScriptLSPClient:
             if not future.done():
                 future.cancel()
         self._pending.clear()
+        self._pending_methods.clear()
 
     # ------------------------------------------------------------------
     # JSON-RPC communication
@@ -313,6 +370,7 @@ class TypeScriptLSPClient:
 
         future: asyncio.Future[Any] = asyncio.get_event_loop().create_future()
         self._pending[req_id] = future
+        self._pending_methods[req_id] = method
 
         try:
             self._write_message(message)
@@ -329,6 +387,7 @@ class TypeScriptLSPClient:
             return None
         finally:
             self._pending.pop(req_id, None)
+            self._pending_methods.pop(req_id, None)
 
     async def _send_notification(
         self, method: str, params: Any
@@ -384,13 +443,22 @@ class TypeScriptLSPClient:
 
                 # Dispatch response to pending future
                 req_id = data.get("id")
+                rpc_error = format_rpc_error(data)
+                if rpc_error:
+                    # Keep the server's own explanation — collapsing it to
+                    # None is what made #145 invisible.
+                    self._last_error = rpc_error
+                    logger.debug(
+                        "LSP %s returned an error: %s",
+                        self._pending_methods.get(req_id, "request"),
+                        rpc_error,
+                    )
                 if req_id is not None and req_id in self._pending:
                     future = self._pending[req_id]
                     if not future.done():
-                        if "error" in data:
-                            future.set_result(None)
-                        else:
-                            future.set_result(data.get("result"))
+                        future.set_result(
+                            None if rpc_error else data.get("result")
+                        )
 
         except (asyncio.CancelledError, asyncio.IncompleteReadError):
             pass
