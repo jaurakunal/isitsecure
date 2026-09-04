@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.3](https://github.com/jaurakunal/isitsecure/compare/v0.22.2...v0.22.3) (2026-09-04)
+
+
+### Code Refactoring
+
+* **cli:** split cli.py into a package by concern ([#152](https://github.com/jaurakunal/isitsecure/issues/152)) ([87b12bc](https://github.com/jaurakunal/isitsecure/commit/87b12bc1480f13e1dd12be12909516d936f549f1))
+
 ## [0.22.2](https://github.com/jaurakunal/isitsecure/compare/v0.22.1...v0.22.2) (2026-09-04)
 
 
