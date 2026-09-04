@@ -280,6 +280,7 @@ The scanner works at any completeness level:
 | No TypeScript/Node.js | LSP validation skipped. Auth flow tracing unavailable, more false positives |
 | No TypeScript 5.x runtime | Same — `typescript-language-server` won't start without a `tsserver.js`. `isitsecure setup --lsp` provisions one; see [lsp-setup.md](lsp-setup.md) |
 | No repo URL | SAST skipped entirely. DAST-only scan |
+| Repo fails to clone | Code-only: the scan stops and exits 1 (no report). Full: DAST findings are kept, the reason is recorded in `ingestion_errors`, and the CLI exits 1 — a zero-finding report must never read as "your code is fine" |
 | No target URL | SAST-only scan against code |
 | No credentials | Authenticated scanners skipped. No IDOR cross-user, no privilege escalation |
 

@@ -295,3 +295,82 @@ def test_missing_npm_gives_guidance_instead_of_installing(monkeypatch, tmp_path)
     out, calls = _run_ensure_runtime(monkeypatch, tmp_path, runtime=None, npm=False)
     assert calls == []
     assert "ISITSECURE_TSSERVER_PATH" in out
+
+
+# ---------------------------------------------------------------------------
+# #147 — a scan that couldn't read the code must not exit clean
+# ---------------------------------------------------------------------------
+
+def _run_scan_cli(monkeypatch, report, argv):
+    """Invoke `scan` with the engine stubbed out; return (exit_code, stderr)."""
+    import io
+
+    from rich.console import Console
+    from typer.testing import CliRunner
+
+    monkeypatch.setattr(cli, "_print_welcome", lambda: None)
+    monkeypatch.setattr(cli, "_preflight_checks", lambda *a, **k: None)
+    buf = io.StringIO()
+    monkeypatch.setattr(cli, "err_console", Console(file=buf, force_terminal=False))
+    monkeypatch.setattr(cli, "console", Console(file=buf, force_terminal=False))
+
+    import isitsecure.engine.factory as factory
+    monkeypatch.setattr(factory, "create_repo_ingestion_service", lambda *a, **k: None)
+    monkeypatch.setattr(
+        factory, "create_deep_security_scan_agent", lambda *a, **k: object()
+    )
+
+    async def fake_run_scan(agent, **kwargs):
+        return report
+
+    monkeypatch.setattr(cli, "_run_scan", fake_run_scan)
+
+    result = CliRunner().invoke(cli.app, argv)
+    return result.exit_code, buf.getvalue()
+
+
+def _empty_report(**kwargs):
+    from isitsecure.engine.models import DeepScanReport
+    return DeepScanReport(scan_mode="full", **kwargs)
+
+
+def test_scan_exits_nonzero_when_the_repo_could_not_be_read(monkeypatch, tmp_path):
+    # A partial scan that reports zero code findings reads as "your code is
+    # fine" in CI. It has to say the code was never scanned, and exit non-zero.
+    report = _empty_report(
+        ingestion_errors=["Repository not found (or not accessible): git@x/y"],
+    )
+    code, out = _run_scan_cli(
+        monkeypatch, report,
+        ["scan", "https://example.com", "--repo", "git@x/y", "--llm", "none",
+         "--output", "json", "--output-file", str(tmp_path / "r.json")],
+    )
+    assert code == 1
+    assert "Repository not found" in out
+    assert "not scanned" in out
+
+
+def test_failed_ingestion_is_recorded_in_the_report_itself(monkeypatch, tmp_path):
+    """Not just on the terminal — a saved report has to carry the caveat."""
+    import json
+
+    out_file = tmp_path / "r.json"
+    _run_scan_cli(
+        monkeypatch,
+        _empty_report(ingestion_errors=["Repository not found"]),
+        ["scan", "https://example.com", "--repo", "git@x/y", "--llm", "none",
+         "--output", "json", "--output-file", str(out_file)],
+    )
+    assert json.loads(out_file.read_text())["ingestion_errors"] == [
+        "Repository not found"
+    ]
+
+
+def test_scan_exits_clean_when_nothing_failed(monkeypatch, tmp_path):
+    code, out = _run_scan_cli(
+        monkeypatch, _empty_report(),
+        ["scan", "https://example.com", "--llm", "none",
+         "--output", "json", "--output-file", str(tmp_path / "r.json")],
+    )
+    assert code == 0
+    assert "not scanned" not in out

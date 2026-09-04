@@ -290,7 +290,9 @@ def _load_api_key(provider: str) -> str | None:
 def scan(
     target_url: Optional[str] = typer.Argument(None, help="URL to scan (DAST)"),
     repo: Optional[str] = typer.Option(None, "--repo", "-r", help="GitHub repo URL (SAST)"),
-    branch: str = typer.Option("main", "--branch", "-b", help="Git branch"),
+    branch: Optional[str] = typer.Option(
+        None, "--branch", "-b",
+        help="Git branch to scan (default: the repository's own default branch)"),
     github_token: Optional[str] = typer.Option(None, "--github-token", envvar="GITHUB_TOKEN"),
     mode: str = typer.Option("auto", "--mode", "-m", help="Scan mode: auto|url-only|code-only|authenticated|full"),
     depth: str = typer.Option("quick", "--depth", help="Scan depth: quick (fast, default) | deep (adds time-based SQLi, active XSS, and other slow/aggressive probes)"),
@@ -417,6 +419,7 @@ def scan(
         credentials_a=credentials_a,
         credentials_b=credentials_b,
         scan_mode=resolved_mode,
+        repo_branch=branch,
     ))
 
     # Suppression (#51) + baseline (#52): filter the findings once, so every
@@ -490,6 +493,18 @@ def scan(
             "[dim]Valid options for --output are: table, json, html, sarif, fixes.[/dim]"
         )
         _print_report_table(report)
+
+    # Something we were asked to scan couldn't be read. The findings above are
+    # real but partial, so don't let a green exit code say otherwise (#147).
+    if report.ingestion_errors:
+        err_console.print()
+        for problem in report.ingestion_errors:
+            err_console.print(f"  [red]•[/red] {problem}")
+        err_console.print(
+            "[yellow]Your code was not scanned — the results above cover only "
+            "the live site.[/yellow]"
+        )
+        raise typer.Exit(1)
 
 
 async def _generate_fixes(report, llm_client, repo_url: str | None) -> str:
@@ -567,6 +582,7 @@ async def _run_scan(agent, **kwargs):
     import time
 
     report = None
+    failure: str | None = None
     t0 = time.monotonic()
     last_phase = None
     err_console.print()
@@ -584,6 +600,11 @@ async def _run_scan(agent, **kwargs):
             from isitsecure.engine.models import DeepScanReport
             report = DeepScanReport.model_validate(data["report"])
             continue
+
+        # Keep the reason a phase gave up, so a scan that ends without a
+        # report can explain itself instead of shrugging (#147).
+        if data.get("error") and message:
+            failure = message
 
         status = data.get("status")
         if status == "start":
@@ -610,9 +631,14 @@ async def _run_scan(agent, **kwargs):
             err_console.print(f"{stamp}      [dim]· {message}[/dim]")
 
     if report is None:
+        if failure:
+            err_console.print(f"\n[red]{failure}[/red]")
+        else:
+            err_console.print(
+                "[red]The scan finished but didn't produce any results — something "
+                "went wrong along the way.[/red]"
+            )
         err_console.print(
-            "[red]The scan finished but didn't produce any results — something went "
-            "wrong along the way.[/red]\n"
             "[dim]Try re-running with -v (verbose) to see what happened, or check "
             "that your website address / code path is correct.[/dim]"
         )

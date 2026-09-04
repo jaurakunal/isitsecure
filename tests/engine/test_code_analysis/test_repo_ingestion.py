@@ -173,3 +173,141 @@ class TestRepoIngestionService:
         """Should return empty list when no .env files exist."""
         result = self.service._find_env_files(str(tmp_path))
         assert result == []
+
+
+# ---------------------------------------------------------------------------
+# #147 — branch selection
+# ---------------------------------------------------------------------------
+
+
+class _FakeProcess:
+    """Stand-in for the git subprocess, with a scripted result."""
+
+    def __init__(self, returncode: int = 0, stderr: bytes = b"") -> None:
+        self.returncode = returncode
+        self._stderr = stderr
+
+    async def communicate(self):
+        return b"", self._stderr
+
+
+class TestBranchSelection:
+    """The branch a scan reads must be the one the caller asked for — and,
+    when they asked for nothing, the repository's own default rather than an
+    assumed ``main`` (issue #147)."""
+
+    def setup_method(self) -> None:
+        self.service = RepoIngestionService(
+            framework_detector=FrameworkDetector(), route_mappers=[],
+        )
+
+    async def _clone_argv(self, monkeypatch, branch, returncode=0, stderr=b""):
+        """Run _clone_repo against a stubbed git and return its argv."""
+        captured: list[str] = []
+
+        async def fake_exec(*cmd, **_kwargs):
+            captured.extend(cmd)
+            return _FakeProcess(returncode, stderr)
+
+        monkeypatch.setattr(
+            "isitsecure.engine.code_analysis.repo_ingestion."
+            "asyncio.create_subprocess_exec",
+            fake_exec,
+        )
+        await self.service._clone_repo(
+            "https://github.com/org/repo", branch, "/tmp/clone", None, False
+        )
+        return captured
+
+    @pytest.mark.asyncio
+    async def test_no_branch_lets_git_pick_the_default(self, monkeypatch) -> None:
+        """Without --branch, git clones the remote's own default branch."""
+        argv = await self._clone_argv(monkeypatch, None)
+        assert "--branch" not in argv
+        assert "main" not in argv
+
+    @pytest.mark.asyncio
+    async def test_explicit_branch_is_passed_to_git(self, monkeypatch) -> None:
+        argv = await self._clone_argv(monkeypatch, "master")
+        assert argv[argv.index("--branch") + 1] == "master"
+
+    @pytest.mark.asyncio
+    async def test_url_still_terminated_by_double_dash(self, monkeypatch) -> None:
+        """The arg-injection guard survives the branch becoming optional."""
+        argv = await self._clone_argv(monkeypatch, None)
+        assert argv[argv.index("--") + 1] == "https://github.com/org/repo"
+
+    @pytest.mark.asyncio
+    async def test_missing_branch_is_reported_as_a_branch_problem(
+        self, monkeypatch
+    ) -> None:
+        with pytest.raises(RuntimeError, match="Branch 'nope' not found"):
+            await self._clone_argv(
+                monkeypatch, "nope", returncode=1, stderr=b"remote branch not found",
+            )
+
+    @pytest.mark.asyncio
+    async def test_missing_repo_is_not_blamed_on_a_branch(
+        self, monkeypatch
+    ) -> None:
+        """We asked git for no branch, so 'not found' is about the repo —
+        blaming a branch nobody requested is what sent people astray."""
+        with pytest.raises(RuntimeError) as exc:
+            await self._clone_argv(
+                monkeypatch, None, returncode=1, stderr=b"repository not found",
+            )
+        assert "Branch" not in str(exc.value)
+        assert "https://github.com/org/repo" in str(exc.value)
+
+    @pytest.mark.asyncio
+    async def test_snapshot_records_the_branch_actually_checked_out(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """`branch=None` must not leave the snapshot claiming 'main'."""
+        (tmp_path / "package.json").write_text("{}")
+        monkeypatch.setattr(
+            RepoIngestionService, "_get_branch_name",
+            AsyncMock(return_value="develop"),
+        )
+        with patch.object(self.service, "_clone_repo", new_callable=AsyncMock):
+            with patch(
+                "isitsecure.engine.code_analysis.repo_ingestion.tempfile"
+            ) as mock_tmp:
+                mock_tmp.mkdtemp.return_value = str(tmp_path)
+                snapshot = await self.service.ingest(
+                    repo_url="https://github.com/org/repo",
+                )
+        assert snapshot.branch == "develop"
+
+    @pytest.mark.asyncio
+    async def test_requested_branch_is_the_fallback_when_git_cannot_answer(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        (tmp_path / "package.json").write_text("{}")
+        monkeypatch.setattr(
+            RepoIngestionService, "_get_branch_name", AsyncMock(return_value=""),
+        )
+        with patch.object(self.service, "_clone_repo", new_callable=AsyncMock):
+            with patch(
+                "isitsecure.engine.code_analysis.repo_ingestion.tempfile"
+            ) as mock_tmp:
+                mock_tmp.mkdtemp.return_value = str(tmp_path)
+                snapshot = await self.service.ingest(
+                    repo_url="https://github.com/org/repo", branch="release",
+                )
+        assert snapshot.branch == "release"
+
+    def test_validate_remote_still_rejects_option_like_branches(self) -> None:
+        with pytest.raises(RuntimeError, match="branch"):
+            RepoIngestionService._validate_remote(
+                "https://github.com/org/repo", "--upload-pack=evil",
+            )
+
+    def test_validate_remote_accepts_no_branch(self) -> None:
+        RepoIngestionService._validate_remote(
+            "https://github.com/org/repo", None,
+        )  # must not raise
+
+    def test_validate_remote_still_rejects_unsafe_transports(self) -> None:
+        with pytest.raises(RuntimeError):
+            RepoIngestionService._validate_remote("ext::sh -c evil", None)

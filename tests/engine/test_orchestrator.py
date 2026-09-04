@@ -578,3 +578,105 @@ class TestSeverityOrder:
     def test_boosted_info_info(self) -> None:
         result = _SeverityOrder.boosted(SeverityLevel.INFO, SeverityLevel.INFO)
         assert result == SeverityLevel.LOW
+
+
+# ===========================================================================
+# #147 — a repo we couldn't read must not read as a clean scan
+# ===========================================================================
+
+class TestRepoIngestionFailures:
+    """A failed clone used to log an error and return a zero-finding report,
+    which in CI is indistinguishable from "your code is fine"."""
+
+    @pytest.mark.asyncio
+    async def test_branch_is_passed_to_the_ingestion_service(self) -> None:
+        repo_ingestion = AsyncMock()
+        repo_ingestion.ingest.return_value = MagicMock(
+            branch="release", commit_hash="abc123",
+        )
+        agent = _make_mock_agent(repo_ingestion_service=repo_ingestion)
+
+        await _collect_events(agent.scan(
+            repo_url="https://github.com/org/repo",
+            scan_mode=ScanMode.CODE_ONLY,
+            repo_branch="release",
+        ))
+
+        assert repo_ingestion.ingest.await_args.kwargs["branch"] == "release"
+
+    @pytest.mark.asyncio
+    async def test_no_branch_requested_stays_none(self) -> None:
+        """None must reach the service so it can use the remote's default —
+        substituting 'main' here is the bug."""
+        repo_ingestion = AsyncMock()
+        repo_ingestion.ingest.return_value = MagicMock(
+            branch="master", commit_hash="abc123",
+        )
+        agent = _make_mock_agent(repo_ingestion_service=repo_ingestion)
+
+        await _collect_events(agent.scan(
+            repo_url="https://github.com/org/repo", scan_mode=ScanMode.CODE_ONLY,
+        ))
+
+        assert repo_ingestion.ingest.await_args.kwargs["branch"] is None
+
+    @pytest.mark.asyncio
+    async def test_code_only_failure_ends_the_scan_with_an_error(self) -> None:
+        repo_ingestion = AsyncMock()
+        repo_ingestion.ingest.side_effect = RuntimeError(
+            "Branch 'nope' not found in repository"
+        )
+        agent = _make_mock_agent(repo_ingestion_service=repo_ingestion)
+
+        events = await _collect_events(agent.scan(
+            repo_url="https://github.com/org/repo", scan_mode=ScanMode.CODE_ONLY,
+        ))
+
+        final = events[-1]
+        assert final.phase == DeepScanPhase.COMPLETE
+        assert final.data.get("error") is True
+        # No report at all — better than a clean-looking empty one.
+        assert "report" not in final.data
+        assert "nope" in final.message
+
+    @pytest.mark.asyncio
+    async def test_full_scan_keeps_dast_findings_but_records_the_failure(
+        self,
+    ) -> None:
+        """The live-site half is still real, so don't throw it away — but the
+        report has to admit the code was never scanned."""
+        repo_ingestion = AsyncMock()
+        repo_ingestion.ingest.side_effect = RuntimeError("Repository not found")
+
+        xss = AsyncMock()
+        xss.scanner_name = "xss"
+        xss.scan.return_value = [_make_dast_finding()]
+
+        agent = _make_mock_agent(
+            endpoints=[DiscoveredEndpoint(url="https://example.com/api/users")],
+            dast_scanners=[xss],
+            repo_ingestion_service=repo_ingestion,
+        )
+        events = await _collect_events(agent.scan(
+            target_url="https://example.com",
+            repo_url="https://github.com/org/repo",
+            scan_mode=ScanMode.FULL,
+        ))
+
+        report = events[-1].data["report"]
+        assert report["ingestion_errors"] == ["Repository not found"]
+        assert len(report["findings"]) == 1  # the DAST half survived
+
+    @pytest.mark.asyncio
+    async def test_successful_scan_records_no_ingestion_errors(self) -> None:
+        repo_ingestion = AsyncMock()
+        repo_ingestion.ingest.return_value = MagicMock(
+            branch="main", commit_hash="abc123",
+        )
+        agent = _make_mock_agent(repo_ingestion_service=repo_ingestion)
+
+        events = await _collect_events(agent.scan(
+            repo_url="https://github.com/org/repo", scan_mode=ScanMode.CODE_ONLY,
+        ))
+
+        assert events[-1].data["report"]["ingestion_errors"] == []
