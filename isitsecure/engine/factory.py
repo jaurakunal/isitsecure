@@ -369,62 +369,20 @@ def create_deep_security_scan_agent(
 
 
 def _create_lsp_client():
-    """Create an LSP client with auto-detection.
+    """Create the LSP client used for code analysis.
 
-    Tries language servers in order:
-    1. TypeScript (typescript-language-server) — for JS/TS projects
-    2. Python (pylsp / pyright) — for Python projects
-    3. Java (jdtls) — for Java/Kotlin projects
-    4. NoOpLSPClient — graceful fallback
-
-    The agent will initialize the first available client at scan time
-    based on the detected framework.
+    The concrete server is *not* chosen here. This runs while the agent is
+    being built, before anything has been ingested, so the only thing it could
+    go on is what happens to be installed on the machine — which is how a
+    Python project ended up handed the TypeScript server while a working
+    pyright sat idle. ``LanguageRoutingLSPClient`` defers the choice to
+    ``initialize()``, once the project exists and its language can be read
+    off it.
 
     SRP: LSP client selection is isolated from agent creation.
     """
-    import shutil
-
-    from isitsecure.engine.code_analysis.lsp.noop_client import (
-        NoOpLSPClient,
-    )
-    from isitsecure.engine.code_analysis.lsp.tsserver_client import (
-        TypeScriptLSPClient,
-    )
-    from isitsecure.engine.code_analysis.lsp.python_client import (
-        PythonLSPClient,
-    )
-    from isitsecure.engine.code_analysis.lsp.java_client import (
-        JavaLSPClient,
+    from isitsecure.engine.code_analysis.lsp.language_router import (
+        LanguageRoutingLSPClient,
     )
 
-    # Try TypeScript LSP first (most common for target audience)
-    if TypeScriptLSPClient.is_node_available():
-        has_ts_ls = shutil.which("typescript-language-server") is not None
-        has_npx = shutil.which("npx") is not None
-
-        if has_ts_ls or has_npx:
-            logger.info(
-                "LSP ENABLED: TypeScript Language Server "
-                "(typescript-language-server=%s, npx=%s)",
-                "yes" if has_ts_ls else "no",
-                "yes" if has_npx else "no",
-            )
-            return TypeScriptLSPClient()
-
-    # Try Python LSP
-    if PythonLSPClient.is_server_available():
-        logger.info("LSP ENABLED: Python Language Server (pylsp/pyright)")
-        return PythonLSPClient()
-
-    # Try Java LSP
-    if JavaLSPClient.is_runtime_available() and JavaLSPClient.is_server_available():
-        logger.info("LSP ENABLED: Java Language Server (jdtls)")
-        return JavaLSPClient()
-
-    logger.warning(
-        "LSP DISABLED: No language server found. "
-        "Install one of: npm install -g typescript-language-server, "
-        "pip install python-lsp-server, or install jdtls. "
-        "Scan will use regex-only analysis (higher false positive rate)."
-    )
-    return NoOpLSPClient()
+    return LanguageRoutingLSPClient()

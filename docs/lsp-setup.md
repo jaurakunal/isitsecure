@@ -28,7 +28,7 @@ Route file: app/api/tasks/[id]/route.ts
 | **Python** | pylsp or pyright | `pip install python-lsp-server` or `pip install pyright` | Traces Depends(), decorators |
 | **Java/Kotlin** | jdtls | See [jdtls install guide](https://github.com/eclipse-jdtls/eclipse.jdt.ls#installation) | Traces @PreAuthorize, SecurityConfig |
 
-isitsecure auto-detects which LSP servers are installed and uses the first available one. If none are installed, regex-based auth detection is used (still effective, slightly higher false positive rate).
+isitsecure picks the server that matches the language your project is written in, and uses regex-based auth detection when there isn't one (still effective, slightly higher false positive rate).
 
 ## TypeScript LSP Setup
 
@@ -108,20 +108,20 @@ isitsecure setup --check
 typescript-language-server --version
 ```
 
-### How isitsecure Detects LSP
+### When the TypeScript server is considered usable
 
-When a scan starts, isitsecure automatically checks:
+For a project detected as TypeScript (see [How the Server Is Chosen](#how-the-server-is-chosen)),
+isitsecure checks that:
 
-1. Is Node.js available? (`node --version`)
-2. Is `typescript-language-server` installed globally? (`which typescript-language-server`)
-3. Is `npx` available as a fallback? (`which npx`)
+1. Node.js is available (`node --version`)
+2. `typescript-language-server` is on PATH, or `npx` is available as a fallback
+3. A TypeScript 5.x runtime can be found (see above)
 
-If all checks fail, you'll see:
+If any of those is missing you'll see the reason and the fix:
 
 ```
-LSP DISABLED: Node.js not found on this system.
-Install Node.js to enable TypeScript flow analysis.
-Scan will use regex-only analysis (higher false positive rate).
+No typescript language server installed — auth-flow tracing is skipped for
+this scan. Install one with `isitsecure setup --lsp`.
 ```
 
 The scan still works — you just get regex-based auth detection instead of LSP-based tracing.
@@ -163,11 +163,18 @@ LSP adds ~2-5 seconds to the scan for initialization and ~0.5s per route traced.
 
 ### Troubleshooting
 
-**"LSP DISABLED: Node.js found but typescript-language-server is not installed"**
+**"No &lt;language&gt; language server installed"**
+
+Your project was detected as that language, but its server isn't installed.
+Install it:
 
 ```bash
 isitsecure setup --lsp
 ```
+
+isitsecure deliberately won't substitute a server for a different language —
+one that can't read your code would report no findings, which is worse than
+saying it didn't look.
 
 **"LSP initialize failed: … Could not find a valid TypeScript installation"**
 
@@ -302,16 +309,33 @@ public SecurityFilterChain filterChain(HttpSecurity http) {
 - **Java 17+** — required for jdtls
 - **Maven or Gradle** — jdtls needs a build tool to resolve dependencies
 
-## How Auto-Detection Works
+## How the Server Is Chosen
 
-isitsecure tries LSP servers in this order:
+The choice is made **per scan, from your code** — not from what happens to be
+installed. Once your project has been ingested, isitsecure counts its source
+files and picks the server for whichever language most of it is written in:
 
-1. **TypeScript** — if `typescript-language-server` or `npx` is available
-   (it also needs a TypeScript 5.x runtime to start — see above)
-2. **Python** — if `pylsp` or `pyright-langserver` is available
-3. **Java** — if `java` runtime + `jdtls` is available
-4. **NoOp** — fallback, regex-only analysis
+| Language | Counted extensions | Server |
+|---|---|---|
+| TypeScript / JavaScript | `.ts` `.tsx` `.js` `.jsx` `.mjs` `.cjs` | typescript-language-server |
+| Python | `.py` `.pyi` | pylsp or pyright-langserver |
+| Java / Kotlin | `.java` `.kt` `.kts` | jdtls |
 
-The first available server is used. If your project is Python but you have TypeScript LSP installed, the TS LSP will be initialized — but it won't find any routes and auth flow tracing will be skipped. The regex-based Python auth detection still works regardless of which LSP is active.
+Vendored and generated directories (`node_modules`, `.venv`, `dist`, `target`,
+and hidden directories) don't count toward the total, so a Python service with
+a bundled JavaScript dependency is still scanned as Python. If two languages
+tie, the order in the table wins, so repeated scans of the same repo always
+choose the same server.
 
-To force a specific LSP, install only the server for your language.
+**If the matching server isn't installed, no server is used** — isitsecure says
+which one it wanted and falls back to regex-only auth detection. It will not
+start a server for a different language: one that doesn't understand your code
+finds nothing, which reads as "no problems here" rather than "not checked".
+
+```
+No python language server installed — auth-flow tracing is skipped for this
+scan. Install one with `isitsecure setup --lsp`.
+```
+
+To see what a scan chose, run with `-v` and look for `Project language:` and
+`LSP: using ...`.

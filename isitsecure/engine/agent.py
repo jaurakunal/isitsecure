@@ -707,10 +707,14 @@ class DeepSecurityScanAgent:
             and self._lsp_client
             and mode in (ScanMode.CODE_ONLY, ScanMode.FULL)
         ):
+            from isitsecure.engine.code_analysis.lsp.noop_client import (
+                NoOpLSPClient,
+            )
             from isitsecure.engine.constants import LSPConfig
 
-            if not self._lsp_client.is_available and not hasattr(self._lsp_client, '_process'):
-                # NoOpLSPClient — LSP was disabled at factory level
+            if isinstance(self._lsp_client, NoOpLSPClient):
+                # LSP was disabled when the agent was built. Ask the client
+                # what it is, rather than sniffing for a private attribute.
                 logger.info(LSPConfig.MSG_UNAVAILABLE)
             else:
                 yield DeepScanEvent(
