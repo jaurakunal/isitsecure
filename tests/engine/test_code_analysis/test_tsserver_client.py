@@ -424,3 +424,59 @@ class TestErrorReporting:
 
         assert "something else went wrong" in caplog.text
         assert "setup --lsp" not in caplog.text
+
+
+# ------------------------------------------------------------------
+# TestReaderFailure — a dead reader must say so, fast
+# ------------------------------------------------------------------
+
+
+class _BrokenStdout:
+    """A stream whose body never matches its declared Content-Length."""
+
+    def __init__(self) -> None:
+        self._buffer = b"Content-Length: 500\r\n\r\n{truncated"
+
+    async def readline(self) -> bytes:
+        index = self._buffer.find(b"\r\n")
+        if index == -1:
+            chunk, self._buffer = self._buffer, b""
+            return chunk
+        line, self._buffer = self._buffer[: index + 2], self._buffer[index + 2:]
+        return line
+
+    async def readexactly(self, count: int) -> bytes:
+        if count > len(self._buffer):
+            raise asyncio.IncompleteReadError(self._buffer, count)
+        chunk, self._buffer = self._buffer[:count], self._buffer[count:]
+        return chunk
+
+
+class TestReaderFailure:
+    """A reader that dies used to leave every request to time out and then
+    report "no response from the server" — pointing at the wrong problem."""
+
+    @pytest.mark.asyncio
+    async def test_reader_crash_is_recorded_and_releases_waiters(self) -> None:
+        client = TypeScriptLSPClient()
+        client._process = _FakeProcess([])  # type: ignore[assignment]
+        client._process.stdout = _BrokenStdout()  # type: ignore[assignment]
+        waiting: asyncio.Future = asyncio.get_running_loop().create_future()
+        client._pending[1] = waiting
+
+        await client._read_responses()
+
+        assert client.last_error is not None
+        assert "reader stopped" in client.last_error
+        # The waiter is resolved rather than left to burn its full timeout.
+        assert waiting.done() and waiting.result() is None
+
+    @pytest.mark.asyncio
+    async def test_clean_eof_is_not_reported_as_a_failure(self) -> None:
+        """A server exiting normally at shutdown is not a reader crash."""
+        client = TypeScriptLSPClient()
+        client._process = _FakeProcess([])  # type: ignore[assignment]
+
+        await client._read_responses()
+
+        assert client.last_error is None

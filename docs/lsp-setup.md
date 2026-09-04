@@ -193,6 +193,16 @@ The project may have a very large `node_modules` or complex tsconfig. Try:
 cd your-project && npm install
 ```
 
+**"LSP reader stopped: ..."**
+
+The language server sent something the client could not read, so the session is
+dead and the scan falls back to regex analysis. The text after the colon is the
+parse failure itself — include it if you file an issue, since it identifies the
+server and the message that broke.
+
+This is reported immediately rather than after the initialization timeout, so a
+scan that prints this has not silently waited 30 seconds first.
+
 **"LSP trace returned no results for route X"**
 
 The route may use a pattern the tracer doesn't recognize yet. The scan falls back to regex analysis for that route. File an issue with the route code and we'll add support.
