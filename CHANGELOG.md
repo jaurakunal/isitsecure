@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.23.1](https://github.com/jaurakunal/isitsecure/compare/v0.23.0...v0.23.1) (2026-09-04)
+
+
+### Tests
+
+* **cli:** cover the report renderers ([#159](https://github.com/jaurakunal/isitsecure/issues/159)) ([3709263](https://github.com/jaurakunal/isitsecure/commit/3709263eae429e4fc9f10c73144adfbd0c0bd8c8))
+
 ## [0.23.0](https://github.com/jaurakunal/isitsecure/compare/v0.22.4...v0.23.0) (2026-09-04)
 
 
