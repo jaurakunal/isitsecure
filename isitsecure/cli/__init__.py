@@ -23,8 +23,29 @@ them is what registers their commands on ``app``, and their order is the order
 from __future__ import annotations
 
 from isitsecure.cli import main as _main_module  # noqa: F401  (registers commands)
+from isitsecure.cli import fix_cmd as _fix_module  # noqa: F401  (registers `fix`)
 from isitsecure.cli import setup_lsp as _setup_lsp_module  # noqa: F401  (registers `setup`)
 from isitsecure.cli._app import app
 from isitsecure.cli._io import console, err_console
+
+# `--help` lists commands in registration order, which is import order — so
+# moving a command to another module used to silently reorder the help output.
+# State the order instead of inheriting it.
+_COMMAND_ORDER = (
+    "scan", "verify", "launch", "fix", "badge", "version", "mcp", "setup",
+)
+
+
+def _command_name(command) -> str:
+    return command.name or command.callback.__name__
+
+
+app.registered_commands.sort(
+    key=lambda c: (
+        _COMMAND_ORDER.index(_command_name(c))
+        if _command_name(c) in _COMMAND_ORDER
+        else len(_COMMAND_ORDER)
+    )
+)
 
 __all__ = ["app", "console", "err_console"]
