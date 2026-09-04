@@ -7,6 +7,8 @@ Verifies default values, field assignment, and Pydantic behavior for
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from isitsecure.engine.code_analysis.lsp.java_client import JavaLSPClient
@@ -138,3 +140,30 @@ class TestLastErrorContract:
     def test_noop_client_never_reports_an_error(self) -> None:
         # It never attempts anything, so it has nothing to explain.
         assert NoOpLSPClient().last_error is None
+
+
+class TestBaseClientReaderFailure:
+    """The Python and Java clients share BaseLSPClient's reader, so they need
+    the same guarantee: a dead reader is reported, not silently waited on."""
+
+    @pytest.mark.asyncio
+    async def test_fail_pending_records_and_releases(self) -> None:
+        client = PythonLSPClient()
+        waiting: asyncio.Future = asyncio.get_running_loop().create_future()
+        client._pending[1] = waiting
+
+        client._fail_pending("LSP reader stopped: boom")
+
+        assert client.last_error == "LSP reader stopped: boom"
+        assert waiting.done() and waiting.result() is None
+
+    @pytest.mark.asyncio
+    async def test_already_resolved_futures_are_left_alone(self) -> None:
+        client = JavaLSPClient()
+        settled: asyncio.Future = asyncio.get_running_loop().create_future()
+        settled.set_result({"capabilities": {}})
+        client._pending[1] = settled
+
+        client._fail_pending("LSP reader stopped: boom")
+
+        assert settled.result() == {"capabilities": {}}

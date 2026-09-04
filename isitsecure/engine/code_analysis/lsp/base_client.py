@@ -16,6 +16,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from isitsecure.engine.code_analysis.lsp.framing import read_message
 from isitsecure.engine.code_analysis.lsp.protocols import LSPLocation
 from isitsecure.engine.code_analysis.lsp.rpc_errors import format_rpc_error
 from isitsecure.engine.constants import LSPConfig
@@ -247,16 +248,9 @@ class BaseLSPClient:
             return
         try:
             while True:
-                header = await self._process.stdout.readline()
-                if not header:
+                data = await read_message(self._process.stdout)
+                if data is None:
                     break
-                header_str = header.decode().strip()
-                if not header_str.startswith("Content-Length:"):
-                    continue
-                content_length = int(header_str.split(":")[1].strip())
-                await self._process.stdout.readline()
-                body = await self._process.stdout.readexactly(content_length)
-                data = json.loads(body.decode())
                 req_id = data.get("id")
                 rpc_error = format_rpc_error(data)
                 if rpc_error:
@@ -268,10 +262,21 @@ class BaseLSPClient:
                     future = self._pending[req_id]
                     if not future.done():
                         future.set_result(None if rpc_error else data.get("result"))
-        except (asyncio.CancelledError, asyncio.IncompleteReadError):
+        except asyncio.CancelledError:
             pass
         except Exception as e:
-            logger.debug("LSP reader error: %s", e)
+            # The reader dying means no request can ever complete. Say so and
+            # release the waiters, instead of letting each one burn its full
+            # timeout and report "no response from the server".
+            self._fail_pending(f"LSP reader stopped: {e}")
+
+    def _fail_pending(self, reason: str) -> None:
+        """Record why the session is dead and unblock every waiting request."""
+        self._last_error = reason
+        logger.warning("%s", reason)
+        for future in self._pending.values():
+            if not future.done():
+                future.set_result(None)
 
     # --- File management ---
 
