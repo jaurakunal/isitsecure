@@ -20,6 +20,59 @@ from isitsecure.engine.models import (
     FindingSource,
 )
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
+from isitsecure.engine.scanners.dom_xss_scanner import DOMXSSScanner
+
+
+# ---------------------------------------------------------------------------
+# Keep these tests off the network
+# ---------------------------------------------------------------------------
+
+
+class _StubOOBCallbackService:
+    """OOB service that never registers, so both OOB phases no-op."""
+
+    is_registered = False
+
+    async def register(self) -> bool:
+        return False
+
+
+class _StubDOMXSSScanner:
+    """DOM XSS scanner that finds nothing without launching a browser.
+
+    Keeps the real scanner name so the phase still records itself in
+    ``scanners_run`` exactly as a live run would.
+    """
+
+    SCANNER_NAME = DOMXSSScanner.SCANNER_NAME
+
+    async def scan(self, **_kwargs) -> list:
+        return []
+
+
+@pytest.fixture(autouse=True)
+def stub_networked_scanners(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stop ``scan()`` reaching the live internet from a unit test.
+
+    ``scan()`` constructs the OOB callback service and the DOM XSS scanner
+    itself, so there is no seam to inject through — and un-stubbed, every test
+    that drives it registered a real session against the production
+    oob.isitsecure.ai and launched a real Playwright browser against
+    example.com. That cost ~58s per test, ~5 of the suite's 7 minutes, and made
+    these tests fail whenever the OOB host was unreachable.
+
+    Neither collaborator is what this module covers: the OOB service (including
+    the agent's own ``_inject_oob_payloads``) is tested in
+    ``test_oob_callback.py``, and DOM XSS in ``test_dom_xss_scanner.py``.
+    """
+    monkeypatch.setattr(
+        "isitsecure.engine.shared.oob_callback.OOBCallbackService",
+        _StubOOBCallbackService,
+    )
+    monkeypatch.setattr(
+        "isitsecure.engine.scanners.dom_xss_scanner.DOMXSSScanner",
+        _StubDOMXSSScanner,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -214,6 +267,21 @@ class TestDeepSecurityScanAgent:
         report = final.data["report"]
         assert "xss_scanner" in report["scanners_run"]
         assert len(report["findings"]) >= 1
+
+    @pytest.mark.asyncio
+    async def test_dom_xss_phase_runs_on_a_url_only_scan(self) -> None:
+        """The DOM XSS phase must still execute, browser or not.
+
+        Also guards ``stub_networked_scanners``: a stub that skipped the phase
+        instead of standing in for it would make these tests fast and wrong.
+        """
+        agent = _make_mock_agent(
+            endpoints=[DiscoveredEndpoint(url="https://example.com/api/users")],
+        )
+        events = await _collect_events(agent.scan(target_url="https://example.com"))
+
+        report = events[-1].data["report"]
+        assert DOMXSSScanner.SCANNER_NAME in report["scanners_run"]
 
     @pytest.mark.asyncio
     async def test_sast_scanners_run_for_code_only(self) -> None:
