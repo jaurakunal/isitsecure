@@ -38,34 +38,6 @@ class CommonAuthPatterns:
     )
 
 
-class HTTPStatusCodes:
-    """Shared HTTP status code constants used across all DAST scanners.
-
-    DRY: Avoids each scanner defining its own status code constants.
-    """
-
-    OK_MIN = 200
-    OK_MAX = 299
-    REDIRECT_MIN = 300
-    REDIRECT_MAX = 399
-    UNAUTHORIZED = 401
-    FORBIDDEN = 403
-    NOT_FOUND = 404
-    TOO_MANY_REQUESTS = 429
-    LOCKED = 423
-    SERVER_ERROR_MIN = 500
-
-    @classmethod
-    def is_success(cls, status: int) -> bool:
-        """Check if status code indicates success (2xx)."""
-        return cls.OK_MIN <= status <= cls.OK_MAX
-
-    @classmethod
-    def is_redirect(cls, status: int) -> bool:
-        """Check if status code indicates redirect (3xx)."""
-        return cls.REDIRECT_MIN <= status <= cls.REDIRECT_MAX
-
-
 class DeepScanConfig:
     """Top-level configuration for deep security scanning."""
 
@@ -808,19 +780,6 @@ class CrossUserIDORConfig:
 
     ERROR_CROSS_USER_FAILED = "Cross-user IDOR test failed: {error}"
     ERROR_BASELINE_FAILED = "Baseline request failed for {url}: {error}"
-
-
-class ScanRateLimits:
-    """Global rate limits for scanning a single target."""
-
-    MAX_CONCURRENT_REQUESTS = 5
-    PROBE_DELAY_SECONDS = 0.3
-    MAX_TOTAL_REQUESTS_PER_SCAN = 500
-    MAX_REQUESTS_PER_MINUTE = 100
-    SUPABASE_MAX_REQUESTS_PER_SECOND = 10
-    SCAN_TIMEOUT_SECONDS = 600
-    CODE_SCAN_TIMEOUT_SECONDS = 300
-    FULL_SCAN_TIMEOUT_SECONDS = 900
 
 
 class ReportConfig:
@@ -4917,9 +4876,6 @@ class LSPConfig:
     CONFIDENCE_LSP_BOOST = 0.10  # added to existing confidence when LSP agrees
 
     # --- File detection ---
-    # File extensions worth tracing through LSP
-    TRACEABLE_EXTENSIONS = (".ts", ".tsx", ".js", ".jsx", ".mjs")
-
     # Which language server a project needs, by what it is written in.
     # Counted over the scanned tree to pick one server per scan; the language
     # with the most source files wins.
