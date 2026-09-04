@@ -7,7 +7,9 @@ import json
 import pytest
 import typer
 
-from isitsecure import cli
+# `cli` here is the module that owns these helpers; the `isitsecure.cli`
+# package façade deliberately re-exports only `app` and the consoles.
+from isitsecure.cli import main as cli
 from isitsecure.engine import reverify as R
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
 from isitsecure.engine.models import DeepFinding, DeepScanReport, FindingSource

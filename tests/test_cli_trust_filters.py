@@ -7,7 +7,9 @@ running a full scan.
 
 from __future__ import annotations
 
-from isitsecure import cli
+# `cli` here is the module that owns these helpers; the `isitsecure.cli`
+# package façade deliberately re-exports only `app` and the consoles.
+from isitsecure.cli import main as cli
 from isitsecure.engine import baseline as B
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
 from isitsecure.engine.models import DeepFinding, DeepScanReport, FindingSource
