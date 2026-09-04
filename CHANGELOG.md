@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.1](https://github.com/jaurakunal/isitsecure/compare/v0.22.0...v0.22.1) (2026-09-04)
+
+
+### Bug Fixes
+
+* **lsp:** give the TypeScript language server a runtime so repo scans initialize ([#145](https://github.com/jaurakunal/isitsecure/issues/145)) ([#146](https://github.com/jaurakunal/isitsecure/issues/146)) ([ea44db1](https://github.com/jaurakunal/isitsecure/commit/ea44db15896daa994fb8021c1707a928974c3aab))
+
 ## [0.22.0](https://github.com/jaurakunal/isitsecure/compare/v0.21.0...v0.22.0) (2026-08-15)
 
 
