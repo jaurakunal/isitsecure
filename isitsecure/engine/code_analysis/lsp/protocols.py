@@ -67,6 +67,15 @@ class LSPClientProtocol(Protocol):
         """Whether the LSP server is available and initialized."""
         ...
 
+    @property
+    def last_error(self) -> str | None:
+        """The most recent server-reported failure, or None.
+
+        Lets callers report *why* LSP is unavailable in the server's own
+        words instead of guessing at a cause (issue #145).
+        """
+        ...
+
     async def initialize(self, project_path: str) -> bool:
         """Initialize the LSP server for a project.
 

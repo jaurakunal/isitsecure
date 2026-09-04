@@ -42,7 +42,10 @@ def test_every_selectable_mode_has_an_explanation():
 # #54 — pre-flight checks (which warnings fire, per mode / prerequisites)
 # ---------------------------------------------------------------------------
 
-def _run_preflight(monkeypatch, *, mode, chromium, missing_lsp, provider, has_key):
+def _run_preflight(
+    monkeypatch, *, mode, chromium, missing_lsp, provider, has_key,
+    ts_runtime="/fake/typescript/lib/tsserver.js",
+):
     """Run _preflight_checks with fully stubbed detection, return captured text."""
     monkeypatch.setattr(cli, "_chromium_installed", lambda: chromium)
     # Force LSP detection: _first_which returns None (missing) or a fake path.
@@ -51,6 +54,12 @@ def _run_preflight(monkeypatch, *, mode, chromium, missing_lsp, provider, has_ke
     # only variable is _first_which above.
     import shutil
     monkeypatch.setattr(shutil, "which", lambda *_: "found")
+    # The TypeScript runtime lookup hits the real filesystem otherwise, which
+    # would make these tests depend on the host's npm install (#145).
+    from isitsecure.engine.code_analysis.lsp import tsserver_locator
+    monkeypatch.setattr(
+        tsserver_locator, "find_tsserver_js", lambda *_a, **_k: ts_runtime
+    )
 
     printed: list[str] = []
     monkeypatch.setattr(
@@ -94,6 +103,28 @@ def test_code_only_warns_about_missing_lsp(monkeypatch):
         missing_lsp=True, provider="none", has_key=False,
     )
     assert "isitsecure setup --lsp" in out
+
+
+def test_code_only_warns_when_ts_server_has_no_typescript_runtime(monkeypatch):
+    # The language server being installed isn't enough — without a TypeScript
+    # 5.x runtime it refuses to start, and the scan silently degrades (#145).
+    out = _run_preflight(
+        monkeypatch, mode="code-only", chromium=True,
+        missing_lsp=False, provider="none", has_key=False,
+        ts_runtime=None,
+    )
+    assert "TypeScript runtime" in out
+    assert "isitsecure setup --lsp" in out
+
+
+def test_no_runtime_warning_when_the_ts_server_itself_is_missing(monkeypatch):
+    # One warning, not two: "install the language server" already covers it.
+    out = _run_preflight(
+        monkeypatch, mode="code-only", chromium=True,
+        missing_lsp=True, provider="none", has_key=False,
+        ts_runtime=None,
+    )
+    assert "TypeScript runtime" not in out
 
 
 def test_llm_key_warning_only_when_provider_selected_and_missing(monkeypatch):
@@ -162,3 +193,105 @@ def test_scan_with_no_target_shows_human_error(monkeypatch):
     # Plain-language, not the old terse "provide a target URL, a --repo".
     assert "I need either your website" in out
     assert "isitsecure scan https://" in out
+
+
+# ---------------------------------------------------------------------------
+# #145 — `setup --lsp` provisions a TypeScript runtime for the TS language server
+# ---------------------------------------------------------------------------
+
+def _run_ensure_runtime(
+    monkeypatch, tmp_path, *, server_installed=True, runtime=None,
+    npm=True, install_result=(0, ""), installs_runtime=True,
+):
+    """Run _ensure_tsserver_runtime with npm and the locator stubbed out."""
+    import shutil
+    import subprocess
+
+    from isitsecure.engine.code_analysis.lsp import tsserver_locator
+
+    monkeypatch.setattr(
+        cli, "_first_which", lambda bins: "found" if server_installed else None
+    )
+    monkeypatch.setattr(
+        shutil, "which", lambda name: "/usr/bin/npm" if (npm and name == "npm") else None
+    )
+    monkeypatch.setattr(tsserver_locator, "PROVISIONED_ROOT", tmp_path / "lsp")
+
+    calls: list[list[str]] = []
+    found = {"path": runtime}
+
+    def fake_run(cmd, **_kwargs):
+        calls.append(list(cmd))
+        code, output = install_result
+        if code == 0 and installs_runtime:
+            found["path"] = tmp_path / "lsp/node_modules/typescript/lib/tsserver.js"
+        return subprocess.CompletedProcess(cmd, code, stdout=output, stderr=output)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        tsserver_locator, "find_tsserver_js", lambda *_a, **_k: found["path"]
+    )
+
+    printed: list[str] = []
+    monkeypatch.setattr(
+        cli.console, "print", lambda *a, **k: printed.append(" ".join(str(x) for x in a))
+    )
+    cli._ensure_tsserver_runtime()
+    return "\n".join(printed), calls
+
+
+def test_runtime_provisioning_skipped_without_the_language_server(monkeypatch, tmp_path):
+    # Nothing to feed a runtime to — stay quiet rather than install for nobody.
+    out, calls = _run_ensure_runtime(monkeypatch, tmp_path, server_installed=False)
+    assert out == ""
+    assert calls == []
+
+
+def test_existing_runtime_is_reported_and_not_reinstalled(monkeypatch, tmp_path):
+    out, calls = _run_ensure_runtime(
+        monkeypatch, tmp_path, runtime="/usr/lib/typescript/lib/tsserver.js"
+    )
+    assert "/usr/lib/typescript/lib/tsserver.js" in out
+    assert calls == []
+
+
+def test_missing_runtime_is_installed_privately_and_pinned_to_5(monkeypatch, tmp_path):
+    from isitsecure.engine.code_analysis.lsp.tsserver_locator import (
+        TYPESCRIPT_PACKAGE_SPEC,
+    )
+
+    out, calls = _run_ensure_runtime(monkeypatch, tmp_path, runtime=None)
+
+    assert len(calls) == 1
+    cmd = calls[0]
+    assert "install" in cmd and TYPESCRIPT_PACKAGE_SPEC in cmd
+    # Private prefix: never touch the user's global TypeScript.
+    assert "--prefix" in cmd
+    assert str(tmp_path / "lsp") in cmd
+    assert "-g" not in cmd
+    assert "installed" in out
+
+
+def test_install_failure_is_reported_not_claimed_as_success(monkeypatch, tmp_path):
+    out, _calls = _run_ensure_runtime(
+        monkeypatch, tmp_path, runtime=None,
+        install_result=(1, "npm ERR! network timeout"), installs_runtime=False,
+    )
+    assert "installed" not in out
+    assert "network timeout" in out
+
+
+def test_install_that_exits_clean_but_provisions_nothing_is_not_success(
+    monkeypatch, tmp_path
+):
+    out, _calls = _run_ensure_runtime(
+        monkeypatch, tmp_path, runtime=None,
+        install_result=(0, "up to date"), installs_runtime=False,
+    )
+    assert "installed" not in out
+
+
+def test_missing_npm_gives_guidance_instead_of_installing(monkeypatch, tmp_path):
+    out, calls = _run_ensure_runtime(monkeypatch, tmp_path, runtime=None, npm=False)
+    assert calls == []
+    assert "ISITSECURE_TSSERVER_PATH" in out

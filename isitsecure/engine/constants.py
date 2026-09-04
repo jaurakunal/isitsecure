@@ -4920,6 +4920,14 @@ class LSPConfig:
     MSG_UNAVAILABLE = "TypeScript LSP unavailable — using regex-only analysis"
     MSG_INIT_FAILED = "LSP initialization failed: {error}"
     MSG_INIT_SUCCESS = "LSP initialized in {duration:.1f}s"
+    # typescript-language-server carries no TypeScript of its own, and scans
+    # run against an ingested copy with no node_modules — without a runtime it
+    # refuses to start at all (issue #145).
+    MSG_NO_TYPESCRIPT_RUNTIME = (
+        "No TypeScript 5.x runtime (tsserver.js) found for the language "
+        "server. Run `isitsecure setup --lsp` to install one, or set "
+        "ISITSECURE_TSSERVER_PATH to a typescript/lib/tsserver.js."
+    )
     MSG_VALIDATION_COMPLETE = (
         "LSP validation: {confirmed} findings confirmed, "
         "{suppressed} findings suppressed"

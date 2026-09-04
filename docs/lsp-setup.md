@@ -24,7 +24,7 @@ Route file: app/api/tasks/[id]/route.ts
 
 | Language | LSP Server | Install Command | Auth Tracing |
 |---|---|---|---|
-| **TypeScript/JavaScript** | typescript-language-server | `npm install -g typescript-language-server typescript` | Full trace via go-to-definition |
+| **TypeScript/JavaScript** | typescript-language-server | `isitsecure setup --lsp` (server + a private TypeScript 5.x runtime) | Full trace via go-to-definition |
 | **Python** | pylsp or pyright | `pip install python-lsp-server` or `pip install pyright` | Traces Depends(), decorators |
 | **Java/Kotlin** | jdtls | See [jdtls install guide](https://github.com/eclipse-jdtls/eclipse.jdt.ls#installation) | Traces @PreAuthorize, SecurityConfig |
 
@@ -51,22 +51,61 @@ sudo apt-get install -y nodejs
 2. **TypeScript Language Server** — the actual LSP server
 
 ```bash
-# Option A: Install globally (recommended)
-npm install -g typescript-language-server typescript
+# Recommended: installs the server AND the TypeScript runtime it needs
+isitsecure setup --lsp
 
-# Option B: npx (no install needed, slower startup)
-# isitsecure will automatically use npx if typescript-language-server is not found
+# Manual equivalent
+npm install -g typescript-language-server
+npm install --prefix ~/.isitsecure/lsp typescript@5
+```
+
+`npx` also works as a fallback — isitsecure uses it automatically when
+`typescript-language-server` isn't on PATH — but it's slower to start.
+
+3. **A TypeScript 5.x runtime** — the `tsserver.js` the server actually runs
+
+This is a separate requirement, and the one that most often bites:
+
+- `typescript-language-server` ships **no TypeScript of its own**. It resolves
+  `typescript` from the *workspace* and refuses to start when it can't find
+  one (`Could not find a valid TypeScript installation…`).
+- isitsecure scans a **copy** of your project with `node_modules` stripped, so
+  the workspace never has one — meaning a scan can't rely on your project's
+  install even when your editor can.
+- It must be TypeScript **5.x**. `typescript@latest` is now 7.x — the
+  Go-native rewrite — which ships no `lib/tsserver.js` at all and cannot drive
+  the language server.
+
+So `isitsecure setup --lsp` provisions a private TypeScript 5.x under
+`~/.isitsecure/lsp` and passes it to the server as `tsserver.path`. It never
+installs or changes a global `typescript`, so your projects keep whatever
+version they use.
+
+### Where isitsecure looks for the runtime
+
+First match wins:
+
+1. `$ISITSECURE_TSSERVER_PATH` — an explicit path to a `tsserver.js`
+2. The scanned project, then its immediate subdirectories (monorepo packages)
+3. `~/.isitsecure/lsp/node_modules/typescript/lib/tsserver.js` (provisioned)
+4. Next to the `typescript-language-server` binary (a global install that also
+   has a global `typescript` 5.x)
+5. `npm root -g` — the global node_modules root
+
+To pin a specific TypeScript:
+
+```bash
+export ISITSECURE_TSSERVER_PATH=/path/to/node_modules/typescript/lib/tsserver.js
 ```
 
 ### Verification
 
 ```bash
-# Check if everything is set up
-typescript-language-server --version
-# Should output a version number
+# Reports the server AND the TypeScript runtime it will use
+isitsecure setup --check
 
-# Or check via npx
-npx typescript-language-server --version
+# Or check the server by hand
+typescript-language-server --version
 ```
 
 ### How isitsecure Detects LSP
@@ -127,8 +166,24 @@ LSP adds ~2-5 seconds to the scan for initialization and ~0.5s per route traced.
 **"LSP DISABLED: Node.js found but typescript-language-server is not installed"**
 
 ```bash
-npm install -g typescript-language-server typescript
+isitsecure setup --lsp
 ```
+
+**"LSP initialize failed: … Could not find a valid TypeScript installation"**
+
+The language server is installed and healthy, but has no TypeScript 5.x
+`tsserver.js` to run. Install one:
+
+```bash
+isitsecure setup --lsp
+```
+
+Confirm with `isitsecure setup --check`, which prints the exact `tsserver.js`
+that scans will use. If you keep your own TypeScript somewhere unusual, point
+at it with `ISITSECURE_TSSERVER_PATH` instead.
+
+Note that a global `npm install -g typescript` no longer helps on its own:
+that installs 7.x, which has no `lib/tsserver.js`.
 
 **"LSP initialization timed out"**
 
@@ -242,6 +297,7 @@ public SecurityFilterChain filterChain(HttpSecurity http) {
 isitsecure tries LSP servers in this order:
 
 1. **TypeScript** — if `typescript-language-server` or `npx` is available
+   (it also needs a TypeScript 5.x runtime to start — see above)
 2. **Python** — if `pylsp` or `pyright-langserver` is available
 3. **Java** — if `java` runtime + `jdtls` is available
 4. **NoOp** — fallback, regex-only analysis

@@ -6,11 +6,14 @@ parsing without spawning a real tsserver subprocess.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 from pathlib import Path
 
 import pytest
 
+from isitsecure.engine.code_analysis.lsp import tsserver_client
 from isitsecure.engine.code_analysis.lsp.tsserver_client import (
     TypeScriptLSPClient,
 )
@@ -226,3 +229,198 @@ class TestTsconfigManagement:
         assert client._temp_tsconfig is None
         content = json.loads(tsconfig_path.read_text())
         assert content == original
+
+
+# ------------------------------------------------------------------
+# TestInitializeParams (issue #145)
+# ------------------------------------------------------------------
+
+
+class TestInitializeParams:
+    """Tests for the ``initialize`` params, especially ``tsserver.path``.
+
+    typescript-language-server refuses to start when it can't resolve a
+    TypeScript, and a scanned tree never has ``node_modules`` — so the
+    explicit path is the whole reason repo-mode scans work at all.
+    """
+
+    def test_includes_tsserver_path_when_a_runtime_is_found(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        runtime = tmp_path / "typescript" / "lib" / "tsserver.js"
+        runtime.parent.mkdir(parents=True)
+        runtime.write_text("// tsserver")
+        monkeypatch.setattr(
+            tsserver_client, "find_tsserver_js", lambda _p: runtime
+        )
+
+        params = TypeScriptLSPClient()._initialize_params(str(tmp_path))
+
+        assert params["initializationOptions"] == {
+            "tsserver": {"path": str(runtime)}
+        }
+
+    def test_omits_tsserver_path_when_no_runtime_is_found(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Without a runtime we still try — a workspace may resolve one."""
+        monkeypatch.setattr(
+            tsserver_client, "find_tsserver_js", lambda _p: None
+        )
+
+        params = TypeScriptLSPClient()._initialize_params(str(tmp_path))
+
+        assert "initializationOptions" not in params
+
+    def test_keeps_the_standard_handshake_fields(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            tsserver_client, "find_tsserver_js", lambda _p: None
+        )
+
+        params = TypeScriptLSPClient()._initialize_params(str(tmp_path))
+
+        assert params["processId"] is None
+        assert params["rootPath"] == str(tmp_path)
+        assert params["rootUri"] == f"file://{tmp_path}"
+        assert "definition" in params["capabilities"]["textDocument"]
+
+
+# ------------------------------------------------------------------
+# TestErrorReporting (issue #145)
+# ------------------------------------------------------------------
+
+
+class _FakeStdout:
+    """Minimal stdout stub that replays framed LSP messages."""
+
+    def __init__(self, messages: list[dict]) -> None:
+        payload = b""
+        for message in messages:
+            body = json.dumps(message).encode()
+            payload += b"Content-Length: %d\r\n\r\n" % len(body) + body
+        self._buffer = payload
+
+    async def readline(self) -> bytes:
+        index = self._buffer.find(b"\r\n")
+        if index == -1:
+            return b""
+        line, self._buffer = self._buffer[: index + 2], self._buffer[index + 2:]
+        return line
+
+    async def readexactly(self, count: int) -> bytes:
+        chunk, self._buffer = self._buffer[:count], self._buffer[count:]
+        return chunk
+
+
+class _FakeProcess:
+    def __init__(self, messages: list[dict]) -> None:
+        self.stdout = _FakeStdout(messages)
+        self.stdin = None
+        self.stderr = None
+        self.returncode = None
+
+
+class TestErrorReporting:
+    """The server's own explanation must survive the reader loop."""
+
+    def test_last_error_is_none_before_anything_happens(self) -> None:
+        assert TypeScriptLSPClient().last_error is None
+
+    @pytest.mark.asyncio
+    async def test_reader_keeps_the_server_error(self) -> None:
+        client = TypeScriptLSPClient()
+        client._process = _FakeProcess([  # type: ignore[assignment]
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "error": {
+                    "code": -32603,
+                    "message": (
+                        "Request initialize failed with message: Could not "
+                        "find a valid TypeScript installation."
+                    ),
+                },
+            }
+        ])
+        client._pending_methods[1] = "initialize"
+
+        await client._read_responses()
+
+        assert client.last_error is not None
+        assert "-32603" in client.last_error
+        assert "valid TypeScript installation" in client.last_error
+
+    @pytest.mark.asyncio
+    async def test_error_response_still_resolves_the_request_to_none(
+        self,
+    ) -> None:
+        """Callers keep their result-or-None contract."""
+        client = TypeScriptLSPClient()
+        client._process = _FakeProcess([  # type: ignore[assignment]
+            {"jsonrpc": "2.0", "id": 7, "error": {"code": -1, "message": "no"}}
+        ])
+        future: asyncio.Future = asyncio.get_running_loop().create_future()
+        client._pending[7] = future
+
+        await client._read_responses()
+
+        assert future.result() is None
+
+    @pytest.mark.asyncio
+    async def test_successful_response_leaves_last_error_unset(self) -> None:
+        client = TypeScriptLSPClient()
+        client._process = _FakeProcess([  # type: ignore[assignment]
+            {"jsonrpc": "2.0", "id": 1, "result": {"capabilities": {}}}
+        ])
+        future: asyncio.Future = asyncio.get_running_loop().create_future()
+        client._pending[1] = future
+
+        await client._read_responses()
+
+        assert client.last_error is None
+        assert future.result() == {"capabilities": {}}
+
+    @pytest.mark.asyncio
+    async def test_failure_report_uses_the_server_error(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        client = TypeScriptLSPClient()
+        client._last_error = (
+            "[-32603] Could not find a valid TypeScript installation."
+        )
+
+        with caplog.at_level(logging.WARNING):
+            await client._report_initialize_failure()
+
+        assert "valid TypeScript installation" in caplog.text
+        # …and it points at the fix rather than at a missing install.
+        assert "setup --lsp" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_failure_report_without_a_server_error(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A dead/silent server must not be reported as an RPC error."""
+        client = TypeScriptLSPClient()
+
+        with caplog.at_level(logging.WARNING):
+            await client._report_initialize_failure()
+
+        assert "no response" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_failure_report_omits_the_runtime_hint_when_one_was_used(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A runtime we already supplied isn't the thing to go install."""
+        client = TypeScriptLSPClient()
+        client._tsserver_js = tmp_path / "tsserver.js"
+        client._last_error = "[-1] something else went wrong"
+
+        with caplog.at_level(logging.WARNING):
+            await client._report_initialize_failure()
+
+        assert "something else went wrong" in caplog.text
+        assert "setup --lsp" not in caplog.text
