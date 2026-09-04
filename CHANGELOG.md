@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.23.0](https://github.com/jaurakunal/isitsecure/compare/v0.22.4...v0.23.0) (2026-09-04)
+
+
+### Features
+
+* **lsp:** choose the language server from the project, not the machine ([#156](https://github.com/jaurakunal/isitsecure/issues/156)) ([8be1c0c](https://github.com/jaurakunal/isitsecure/commit/8be1c0cb9e3754ed77782be44fe6aa927780f504))
+
 ## [0.22.4](https://github.com/jaurakunal/isitsecure/compare/v0.22.3...v0.22.4) (2026-09-04)
 
 
