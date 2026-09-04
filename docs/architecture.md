@@ -277,7 +277,7 @@ The scanner works at any completeness level:
 |---|---|
 | No LLM API key | Rule-based scanners only. No business logic review, no semantic verification, no triage enrichment |
 | No Playwright | URL ingestion falls back to httpx. No authenticated crawl, no DOM XSS |
-| No TypeScript/Node.js | LSP validation skipped. Auth flow tracing unavailable, more false positives |
+| No language server for the project's language | LSP validation skipped. Auth flow tracing unavailable, more false positives. The server is chosen from the code (see [lsp-setup.md](lsp-setup.md)), so an installed server for a *different* language is never substituted |
 | No TypeScript 5.x runtime | Same — `typescript-language-server` won't start without a `tsserver.js`. `isitsecure setup --lsp` provisions one; see [lsp-setup.md](lsp-setup.md) |
 | No repo URL | SAST skipped entirely. DAST-only scan |
 | Repo fails to clone | Code-only: the scan stops and exits 1 (no report). Full: DAST findings are kept, the reason is recorded in `ingestion_errors`, and the CLI exits 1 — a zero-finding report must never read as "your code is fine" |

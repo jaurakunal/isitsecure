@@ -4920,6 +4920,37 @@ class LSPConfig:
     # File extensions worth tracing through LSP
     TRACEABLE_EXTENSIONS = (".ts", ".tsx", ".js", ".jsx", ".mjs")
 
+    # Which language server a project needs, by what it is written in.
+    # Counted over the scanned tree to pick one server per scan; the language
+    # with the most source files wins.
+    LANGUAGE_EXTENSIONS = {
+        "typescript": (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"),
+        "python": (".py", ".pyi"),
+        "java": (".java", ".kt", ".kts"),
+    }
+
+    # Directories that say nothing about what a project is written in, and can
+    # be enormous. Ingestion strips most of these already; belt and braces for
+    # callers that point us at a working tree.
+    LANGUAGE_SCAN_SKIP_DIRS = frozenset({
+        "node_modules", ".git", ".venv", "venv", "env", "__pycache__",
+        "dist", "build", "out", "target", ".next", ".mypy_cache",
+        ".pytest_cache", ".ruff_cache", "vendor", "site-packages",
+    })
+
+    # Stop counting once a project's language is obvious — a monorepo should
+    # not cost a full-tree walk.
+    LANGUAGE_SCAN_MAX_FILES = 20_000
+
+    MSG_NO_SERVER_FOR_LANGUAGE = (
+        "No {language} language server installed — auth-flow tracing is "
+        "skipped for this scan. Install one with `isitsecure setup --lsp`."
+    )
+    MSG_LANGUAGE_UNRECOGNISED = (
+        "No language with LSP support detected in this project — "
+        "using regex-only analysis."
+    )
+
     # --- Log/event messages ---
     MSG_INIT = "Initializing TypeScript analysis..."
     MSG_TRACING = "Tracing auth flows across {count} routes..."
