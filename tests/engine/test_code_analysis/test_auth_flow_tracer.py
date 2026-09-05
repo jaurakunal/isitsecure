@@ -802,3 +802,83 @@ class TestLocateSymbol:
 
     def test_absent_symbol_returns_none(self) -> None:
         assert AuthFlowTracer._locate_symbol("const a = 1\n", "nope") is None
+
+
+# ---------------------------------------------------------------------------
+# Express middleware is judged on its own body, not its module
+# ---------------------------------------------------------------------------
+
+
+# `requireAuth` does nothing but call next(); `checkToken`, further down the
+# same module, is the one that verifies. Auth helpers cluster like this.
+MIDDLEWARE_MODULE = """export function requireAuth(req, res, next) {
+  next()
+}
+
+export function checkToken(req, res, next) {
+  const user = jwt.verify(req.headers.authorization, SECRET)
+  if (!user) return res.status(401).json({ error: 'Unauthorized' })
+  next()
+}
+"""
+
+ROUTE_USING_IT = (
+    "import { requireAuth } from '../middleware/auth'\n"
+    "router.get('/profile', requireAuth, handler)\n"
+)
+
+
+class TestExpressMiddlewareScoping:
+    @staticmethod
+    def _tracer():
+        repo = _make_repo(
+            file_index={
+                "src/routes/profile.ts": ROUTE_USING_IT,
+                "src/middleware/auth.ts": MIDDLEWARE_MODULE,
+            }
+        )
+        lsp = _make_lsp()
+        lsp.get_definition.return_value = [
+            LSPLocation(
+                file_path="/tmp/test/src/middleware/auth.ts",
+                line=0,          # requireAuth's own declaration
+                character=0,
+            )
+        ]
+        return AuthFlowTracer(lsp, repo)
+
+    @pytest.mark.asyncio
+    async def test_a_sibling_function_does_not_vouch_for_the_middleware(
+        self,
+    ) -> None:
+        """`requireAuth` only calls next(). The `jwt.verify` further down its
+        module belongs to `checkToken`, and searching the whole file — which
+        is what this replaced — reported the route as authenticated."""
+        result = await self._tracer()._trace_express_auth(
+            ROUTE_USING_IT, "/tmp/test/src/routes/profile.ts"
+        )
+        assert result is None or result.has_verified_auth is False
+
+    @pytest.mark.asyncio
+    async def test_middleware_that_does_verify_is_still_confirmed(self) -> None:
+        """The scoping must not cost a true positive: point the definition at
+        `checkToken` and the terminal is found in its own body."""
+        repo = _make_repo(
+            file_index={
+                "src/routes/profile.ts": ROUTE_USING_IT,
+                "src/middleware/auth.ts": MIDDLEWARE_MODULE,
+            }
+        )
+        lsp = _make_lsp()
+        lsp.get_definition.return_value = [
+            LSPLocation(
+                file_path="/tmp/test/src/middleware/auth.ts",
+                line=4,          # checkToken's declaration
+                character=0,
+            )
+        ]
+        result = await AuthFlowTracer(lsp, repo)._trace_express_auth(
+            ROUTE_USING_IT, "/tmp/test/src/routes/profile.ts"
+        )
+        assert result is not None and result.has_verified_auth is True
+        assert "jwt.verify" in result.auth_method
