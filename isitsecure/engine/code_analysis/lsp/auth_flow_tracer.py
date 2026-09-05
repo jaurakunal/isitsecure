@@ -147,6 +147,12 @@ class AuthFlowTracer:
 
         abs_path = self._resolve_path(file_path)
 
+        # Middleware applied without a path guards every route on the router,
+        # so it settles the whole file regardless of what the mounts say.
+        router_wide = await self._trace_express_auth(content, abs_path)
+        if router_wide and router_wide.has_verified_auth:
+            return {route.route_pattern: router_wide for route in routes}
+
         mounts = self._route_mounts(content)
         if mounts:
             # Authoritative: this file says which middleware guards what, so
@@ -201,6 +207,22 @@ class AuthFlowTracer:
         return AuthFlowResult(confidence=0.5)
 
     @staticmethod
+    def _applied_middleware(content: str) -> list[str]:
+        """Middleware applied to a whole router, in application order.
+
+        Only path-less ``.use(...)`` calls: a ``.use('/admin', guard)`` is a
+        mount and belongs to its route, not to the file.
+        """
+        names: list[str] = []
+        for match in re.finditer(LSPConfig.MIDDLEWARE_USE_PATTERN, content):
+            for name in AuthFlowTracer._middleware_names(
+                match.group("middleware")
+            ):
+                if name not in names:
+                    names.append(name)
+        return names[: LSPConfig.MAX_MOUNT_MIDDLEWARE]
+
+    @staticmethod
     def _middleware_names(middleware: str) -> list[str]:
         """The callables named on a mount line, in order.
 
@@ -245,11 +267,6 @@ class AuthFlowTracer:
 
         # Strategy 1: Procedure base (tRPC, NestJS, etc.)
         result = await self._trace_procedure_auth(content, abs_path)
-        if result and result.has_verified_auth:
-            return result
-
-        # Strategy 2: Express middleware
-        result = await self._trace_express_auth(content, abs_path)
         if result and result.has_verified_auth:
             return result
 
@@ -357,24 +374,20 @@ class AuthFlowTracer:
     ) -> AuthFlowResult | None:
         """Trace Express middleware to confirm auth verification.
 
-        The fallback for files that do not mount their routes explicitly;
-        centrally-mounted routes are attributed per route instead.
+        The fallback for files that do not mount their routes explicitly.
+        Centrally-mounted routes are attributed per route; what reaches here
+        is middleware applied without a path — ``router.use(requireAuth)`` —
+        which guards every route on that router, so one verdict for the file
+        is the right shape.
+
+        Which middleware is found by *where it is applied*, not by a list of
+        names. A list can only recognise vocabulary someone thought of in
+        advance: it had five entries, so a project calling its guard
+        ``ensureMember`` was invisible, while the entry ``authenticate``
+        matched that word anywhere in the file, including inside an import it
+        never used.
         """
-        # Look for auth middleware imports/usage
-        auth_patterns = (
-            r'\brequireAuth\b',
-            r'\bverifyAuth\b',
-            r'\bauthenticate\b',
-            r'\bisAuthenticated\b',
-            r'\bpassport\.authenticate\b',
-        )
-
-        for pattern in auth_patterns:
-            match = re.search(pattern, content)
-            if not match:
-                continue
-
-            middleware_name = match.group(0)
+        for middleware_name in self._applied_middleware(content):
             position = self._locate_symbol(content, middleware_name)
             if position is None:
                 continue

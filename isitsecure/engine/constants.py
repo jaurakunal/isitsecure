@@ -4759,6 +4759,12 @@ class LSPConfig:
     )
 
 
+    # Middleware applied without a path — `router.use(requireAuth)` — which
+    # therefore guards every route on that router. The negative lookahead
+    # excludes `.use('/path', mw)`, which is a mount and is attributed to its
+    # own route instead.
+    MIDDLEWARE_USE_PATTERN = r"\.\s*use\s*\(\s*(?!['\"`])(?P<middleware>[^\n]*)"
+
     # How many middlewares on one mount line are worth resolving.
     MAX_MOUNT_MIDDLEWARE = 4
 
