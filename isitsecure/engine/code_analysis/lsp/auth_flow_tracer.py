@@ -355,7 +355,11 @@ class AuthFlowTracer:
     async def _trace_express_auth(
         self, content: str, abs_path: str
     ) -> AuthFlowResult | None:
-        """Trace Express middleware to confirm auth verification."""
+        """Trace Express middleware to confirm auth verification.
+
+        The fallback for files that do not mount their routes explicitly;
+        centrally-mounted routes are attributed per route instead.
+        """
         # Look for auth middleware imports/usage
         auth_patterns = (
             r'\brequireAuth\b',
@@ -371,11 +375,17 @@ class AuthFlowTracer:
                 continue
 
             middleware_name = match.group(0)
-            line, char = self._offset_to_position(content, match.start())
+            position = self._locate_symbol(content, middleware_name)
+            if position is None:
+                continue
+            line, char = position
             chain = [middleware_name]
 
-            # Trace to the middleware definition
-            definition_content = await self._trace_definition(
+            # Only the middleware's own body counts. Auth helpers cluster in
+            # one module, so searching the whole definition file would let a
+            # sibling's terminal vouch for this middleware — the same way a
+            # login route importing `signToken` once looked authenticated.
+            definition_content = await self._trace_definition_body(
                 abs_path, line, char
             )
 
