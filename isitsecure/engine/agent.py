@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, AsyncGenerator
 from urllib.parse import urlparse
 
 from isitsecure.engine.code_analysis.models import CodeFinding
+from isitsecure.engine.scan_context import ScanContext
 from isitsecure.engine.constants import (
     GuidedDASTConfig,
     LLMBusinessLogicConfig,
@@ -246,59 +247,184 @@ class DeepSecurityScanAgent:
             mode = ScanMode.AUTHENTICATED
             logger.info("Auto-upgraded scan mode to AUTHENTICATED (credentials provided)")
 
-        all_findings: list[DeepFinding] = []
-        scanners_run: list[str] = []
-        ingestion_errors: list[str] = []
+        ctx = ScanContext(
+            mode=mode,
+            target_url=target_url,
+            repo_url=repo_url,
+            repo_branch=repo_branch,
+            github_token=github_token,
+            credentials_a=credentials_a,
+            credentials_b=credentials_b,
+        )
 
-        snapshot: CodebaseSnapshot | None = None
-        repo_snapshot: RepoSnapshot | None = None
-        endpoints: list[DiscoveredEndpoint] = []
-        session_a: AuthSession | None = None
-        session_b: AuthSession | None = None
-        supabase_url: str | None = None
-        anon_key: str | None = None
-        tables: list[str] = []
+        async for event in self._phase_url_ingestion(ctx):
+            yield event
+        if ctx.aborted:
+            return
 
+        async for event in self._phase_endpoint_discovery(ctx):
+            yield event
+
+        async for event in self._phase_authenticated_crawl(ctx):
+            yield event
+
+        await self._phase_oob_registration(ctx)
+
+        async for event in self._phase_dast_scanners(ctx):
+            yield event
+
+        async for event in self._phase_authenticated_dast(ctx):
+            yield event
+
+        await self._phase_cross_probe_analysis(ctx)
+
+        await self._phase_oob_collection(ctx)
+
+        async for event in self._phase_repo_ingestion(ctx):
+            yield event
+        if ctx.aborted:
+            return
+
+        async for event in self._phase_lsp_initialization(ctx):
+            yield event
+
+        async for event in self._phase_sast_scanners(ctx):
+            yield event
+
+        async for event in self._phase_lsp_validation(ctx):
+            yield event
+
+        async for event in self._phase_llm_code_review(ctx):
+            yield event
+
+        async for event in self._phase_cross_reference(ctx):
+            yield event
+
+        async for event in self._phase_guided_dast(ctx):
+            yield event
+
+        async for event in self._phase_business_logic(ctx):
+            yield event
+
+        async for event in self._phase_injection_adjudication(ctx):
+            yield event
+
+        async for event in self._phase_triage(ctx):
+            yield event
+
+        # ==============================================================
+        # Phase 10: Build report
+        # ==============================================================
+        duration = time.monotonic() - start_time
+        endpoints_with_ids = [ep for ep in ctx.endpoints if ep.has_id_params]
+        backend = self._resolve_backend(ctx.repo_snapshot, ctx.snapshot, ctx.supabase_url)
+        report = DeepScanReport(
+            target_url=ctx.target_url,
+            repo_url=ctx.repo_url,
+            repo_branch=ctx.repo_snapshot.branch if ctx.repo_snapshot else "",
+            repo_commit_hash=ctx.repo_snapshot.commit_hash if ctx.repo_snapshot else "",
+            framework=self._safe_enum_value(
+                ctx.repo_snapshot.framework if ctx.repo_snapshot else None
+            ),
+            backend=backend,
+            scan_mode=self._safe_enum_value(ctx.mode),
+            total_endpoints_discovered=len(ctx.endpoints),
+            endpoints_with_ids=len(endpoints_with_ids),
+            endpoints_tested=len(ctx.idor_results),
+            routes_in_code=(
+                len(ctx.repo_snapshot.route_map) if ctx.repo_snapshot else 0
+            ),
+            tables_discovered=(
+                len([
+                    p for p in ctx.repo_snapshot.file_index
+                    if "schema" in p.lower()
+                ])
+                if ctx.repo_snapshot
+                else 0
+            ),
+            owner_summary=ctx.owner_summary,
+            findings=self._sort_findings(ctx.all_findings),
+            discovered_endpoints=ctx.endpoints,
+            idor_results=ctx.idor_results,
+            scan_duration_seconds=round(duration, 2),
+            scanners_run=ctx.scanners_run,
+            ingestion_errors=ctx.ingestion_errors,
+            themes=ctx.themes,
+            token_usage=self._collect_token_usage(),
+        )
+
+        yield DeepScanEvent(
+            DeepScanPhase.ANALYZING_RESULTS,
+            OrchestratorConfig.MSG_COMPILING,
+        )
+
+        yield DeepScanEvent(
+            DeepScanPhase.COMPLETE,
+            self._build_summary(report),
+            OrchestratorConfig.PROGRESS_COMPLETE,
+            {"report": report.model_dump(mode="json")},
+        )
+
+        # ==============================================================
+        # Cleanup: Shutdown LSP
+        # ==============================================================
+        if self._lsp_client and ctx.lsp_initialized:
+            try:
+                await self._lsp_client.shutdown()
+            except Exception as e:
+                logger.debug("LSP shutdown error: %s", e)
+
+        reset_reporter(_progress_token)
+
+    async def _phase_url_ingestion(
+        self, ctx: ScanContext
+    ) -> AsyncGenerator[DeepScanEvent, None]:
+        """Phase 1: URL Ingestion"""
         # ==============================================================
         # Phase 1: URL Ingestion
         # ==============================================================
-        if target_url and mode in (ScanMode.URL_ONLY, ScanMode.AUTHENTICATED, ScanMode.FULL):
+        if ctx.target_url and ctx.mode in (ScanMode.URL_ONLY, ScanMode.AUTHENTICATED, ScanMode.FULL):
             yield DeepScanEvent(
                 DeepScanPhase.INGESTING_URL,
-                OrchestratorConfig.MSG_FETCHING_URL.format(url=target_url),
+                OrchestratorConfig.MSG_FETCHING_URL.format(url=ctx.target_url),
                 OrchestratorConfig.PROGRESS_INGESTION,
             )
-            snapshot = await self._ingest_url(target_url)
-            if not snapshot:
+            ctx.snapshot = await self._ingest_url(ctx.target_url)
+            if not ctx.snapshot:
                 yield DeepScanEvent(
                     DeepScanPhase.COMPLETE,
-                    OrchestratorConfig.MSG_INGESTION_FAILED.format(url=target_url),
+                    OrchestratorConfig.MSG_INGESTION_FAILED.format(url=ctx.target_url),
                     data={"error": True},
                 )
+                ctx.aborted = True
                 return
 
             yield DeepScanEvent(
                 DeepScanPhase.INGESTING_URL,
                 OrchestratorConfig.MSG_FETCHED_ASSETS.format(
-                    count=len(snapshot.assets),
-                    js_size=len(snapshot.all_js_content),
+                    count=len(ctx.snapshot.assets),
+                    js_size=len(ctx.snapshot.all_js_content),
                 ),
                 OrchestratorConfig.PROGRESS_INGESTION,
             )
 
+    async def _phase_endpoint_discovery(
+        self, ctx: ScanContext
+    ) -> AsyncGenerator[DeepScanEvent, None]:
+        """Phase 2: Endpoint Discovery"""
         # ==============================================================
         # Phase 2: Endpoint Discovery
         # ==============================================================
-        if snapshot:
+        if ctx.snapshot:
             yield DeepScanEvent(
                 DeepScanPhase.DISCOVERING_ENDPOINTS,
                 OrchestratorConfig.MSG_DISCOVERING,
                 OrchestratorConfig.PROGRESS_ENDPOINT_DISCOVERY,
             )
             _disc_task = asyncio.ensure_future(self._endpoint_scanner.discover(
-                js_content=snapshot.all_js_content,
-                html_content=snapshot.html_content,
-                base_url=target_url,
+                js_content=ctx.snapshot.all_js_content,
+                html_content=ctx.snapshot.html_content,
+                base_url=ctx.target_url,
             ))
             async for _ev in self._drain_progress(
                 _disc_task,
@@ -306,39 +432,43 @@ class DeepSecurityScanAgent:
                 OrchestratorConfig.PROGRESS_ENDPOINT_DISCOVERY,
             ):
                 yield _ev
-            endpoints = _disc_task.result()
+            ctx.endpoints = _disc_task.result()
 
             # Extract Supabase info from discovery results
-            supabase_url, anon_key, tables = self._extract_supabase_info(
-                endpoints, snapshot,
+            ctx.supabase_url, ctx.anon_key, ctx.tables = self._extract_supabase_info(
+                ctx.endpoints, ctx.snapshot,
             )
 
             # Fallback: query Supabase schema directly if no tables found
-            if supabase_url and anon_key and not tables:
-                tables = await self._discover_supabase_tables(
-                    supabase_url, anon_key,
+            if ctx.supabase_url and ctx.anon_key and not ctx.tables:
+                ctx.tables = await self._discover_supabase_tables(
+                    ctx.supabase_url, ctx.anon_key,
                 )
 
         # Build auth provider lazily once Supabase URL + anon key are known
         if (
-            credentials_a
-            and supabase_url
-            and anon_key
+            ctx.credentials_a
+            and ctx.supabase_url
+            and ctx.anon_key
             and not self._auth_provider
         ):
             self._auth_provider = self._build_auth_provider(
-                supabase_url, anon_key,
+                ctx.supabase_url, ctx.anon_key,
             )
-            logger.info("Built auth provider for %s", supabase_url)
+            logger.info("Built auth provider for %s", ctx.supabase_url)
 
+    async def _phase_authenticated_crawl(
+        self, ctx: ScanContext
+    ) -> AsyncGenerator[DeepScanEvent, None]:
+        """Phase 3: Authenticated Crawl (browser login + BFS discovery)"""
         # ==============================================================
         # Phase 3: Authenticated Crawl (browser login + BFS discovery)
         # ==============================================================
-        crawl_result = None
+        ctx.crawl_result = None
         if (
-            credentials_a
-            and target_url
-            and mode in (ScanMode.AUTHENTICATED, ScanMode.FULL)
+            ctx.credentials_a
+            and ctx.target_url
+            and ctx.mode in (ScanMode.AUTHENTICATED, ScanMode.FULL)
         ):
             yield DeepScanEvent(
                 DeepScanPhase.AUTHENTICATING,
@@ -346,44 +476,44 @@ class DeepSecurityScanAgent:
                 OrchestratorConfig.PROGRESS_AUTH_AND_IDOR - 10,
             )
 
-            crawl_result = await self._run_authenticated_crawl(
-                credentials_a, target_url, endpoints,
+            ctx.crawl_result = await self._run_authenticated_crawl(
+                ctx.credentials_a, ctx.target_url, ctx.endpoints,
             )
 
-            if crawl_result and crawl_result.pages_visited > 0:
+            if ctx.crawl_result and ctx.crawl_result.pages_visited > 0:
                 # Merge crawled endpoints into main list
-                existing_urls = {ep.url for ep in endpoints}
+                existing_urls = {ep.url for ep in ctx.endpoints}
                 new_count = 0
-                for ep in crawl_result.discovered_endpoints:
+                for ep in ctx.crawl_result.discovered_endpoints:
                     if ep.url not in existing_urls:
-                        endpoints.append(ep)
+                        ctx.endpoints.append(ep)
                         existing_urls.add(ep.url)
                         new_count += 1
                 logger.info(
                     "Authenticated crawl added %d new endpoints (total: %d)",
-                    new_count, len(endpoints),
+                    new_count, len(ctx.endpoints),
                 )
 
                 # Merge Supabase tables
-                for table in crawl_result.tables_discovered:
-                    if table not in tables:
-                        tables.append(table)
+                for table in ctx.crawl_result.tables_discovered:
+                    if table not in ctx.tables:
+                        ctx.tables.append(table)
 
                 # Build auth session from crawl tokens for downstream scanners
-                auth_header = crawl_result.auth_headers.get(
+                auth_header = ctx.crawl_result.auth_headers.get(
                     SharedPatterns.HEADER_AUTHORIZATION
                 )
                 if auth_header:
                     token = auth_header.removeprefix(SharedPatterns.BEARER_PREFIX)
-                    session_a = AuthSession(
+                    ctx.session_a = AuthSession(
                         user_id=(
-                            credentials_a.email
+                            ctx.credentials_a.email
                             or OrchestratorConfig.DEFAULT_CRAWL_USER_ID
                         ),
                         access_token=token,
-                        headers=crawl_result.auth_headers,
-                        user_email=credentials_a.email,
-                        provider=credentials_a.provider,
+                        headers=ctx.crawl_result.auth_headers,
+                        user_email=ctx.credentials_a.email,
+                        provider=ctx.credentials_a.provider,
                     )
                     logger.info(
                         "Extracted auth session from crawl (token=%s...)",
@@ -392,29 +522,29 @@ class DeepSecurityScanAgent:
 
                     # Wire auth session into JWT scanner so it can test the token
                     if self._jwt_scanner:
-                        self._jwt_scanner._auth_session = session_a
+                        self._jwt_scanner._auth_session = ctx.session_a
 
                 # Propagate the crawl's auth (bearer token AND/OR session cookie)
                 # to the HTTP DAST scanners so they probe protected endpoints
                 # authenticated — NOT gated on a bearer token, since cookie-session
                 # apps (traditional server-rendered web apps) have none. #111
-                if crawl_result.auth_headers:
+                if ctx.crawl_result.auth_headers:
                     for dast_scanner in self._dast_scanners:
                         if hasattr(dast_scanner, "_auth_headers"):
-                            dast_scanner._auth_headers = dict(crawl_result.auth_headers)
+                            dast_scanner._auth_headers = dict(ctx.crawl_result.auth_headers)
 
                 yield DeepScanEvent(
                     DeepScanPhase.AUTHENTICATING,
                     OrchestratorConfig.MSG_CRAWL_SUMMARY.format(
-                        pages=crawl_result.pages_visited,
-                        endpoints=len(crawl_result.discovered_endpoints),
-                        tables=len(crawl_result.tables_discovered),
+                        pages=ctx.crawl_result.pages_visited,
+                        endpoints=len(ctx.crawl_result.discovered_endpoints),
+                        tables=len(ctx.crawl_result.tables_discovered),
                     ),
                 )
             else:
-                if crawl_result and crawl_result.errors:
+                if ctx.crawl_result and ctx.crawl_result.errors:
                     msg = OrchestratorConfig.MSG_CRAWL_ERROR.format(
-                        error=crawl_result.errors[0],
+                        error=ctx.crawl_result.errors[0],
                     )
                 else:
                     msg = OrchestratorConfig.MSG_CRAWL_NO_PAGES
@@ -424,15 +554,15 @@ class DeepSecurityScanAgent:
 
         # Supabase API auth fallback (if crawler didn't produce a session)
         if (
-            not session_a
-            and credentials_a
+            not ctx.session_a
+            and ctx.credentials_a
             and self._auth_provider
-            and mode in (ScanMode.AUTHENTICATED, ScanMode.FULL)
+            and ctx.mode in (ScanMode.AUTHENTICATED, ScanMode.FULL)
         ):
             try:
-                session_a = await self._auth_provider.authenticate(credentials_a)
-                if credentials_b:
-                    session_b = await self._auth_provider.authenticate(credentials_b)
+                ctx.session_a = await self._auth_provider.authenticate(ctx.credentials_a)
+                if ctx.credentials_b:
+                    ctx.session_b = await self._auth_provider.authenticate(ctx.credentials_b)
             except Exception as e:
                 logger.warning("Supabase API authentication failed: %s", e)
                 yield DeepScanEvent(
@@ -444,68 +574,74 @@ class DeepSecurityScanAgent:
         # Logs in both users directly against the API's login endpoint so
         # cross-user IDOR works without a Supabase project or a browser crawl.
         if (
-            not session_a
-            and credentials_a
-            and target_url
-            and mode in (ScanMode.AUTHENTICATED, ScanMode.FULL)
+            not ctx.session_a
+            and ctx.credentials_a
+            and ctx.target_url
+            and ctx.mode in (ScanMode.AUTHENTICATED, ScanMode.FULL)
         ):
             from isitsecure.engine.enums import AuthProvider
-            if credentials_a.provider == AuthProvider.TOKEN:
+            if ctx.credentials_a.provider == AuthProvider.TOKEN:
                 try:
                     from isitsecure.engine.auth.rest_login_auth import (
                         RestLoginAuthProvider,
                     )
-                    rest_auth = RestLoginAuthProvider(target_url)
-                    session_a = await rest_auth.authenticate(credentials_a)
-                    if credentials_b:
-                        session_b = await rest_auth.authenticate(credentials_b)
+                    rest_auth = RestLoginAuthProvider(ctx.target_url)
+                    ctx.session_a = await rest_auth.authenticate(ctx.credentials_a)
+                    if ctx.credentials_b:
+                        ctx.session_b = await rest_auth.authenticate(ctx.credentials_b)
                 except Exception as e:
                     logger.warning("REST login failed: %s", e)
 
         # Wire auth session into JWT scanner (fallback path — API auth)
-        if session_a and self._jwt_scanner and not self._jwt_scanner._auth_session:
-            self._jwt_scanner._auth_session = session_a
+        if ctx.session_a and self._jwt_scanner and not self._jwt_scanner._auth_session:
+            self._jwt_scanner._auth_session = ctx.session_a
 
         # Auth User B (always via API — crawler only handles User A)
         if (
-            session_a
-            and credentials_b
-            and not session_b
+            ctx.session_a
+            and ctx.credentials_b
+            and not ctx.session_b
             and self._auth_provider
         ):
             try:
-                session_b = await self._auth_provider.authenticate(credentials_b)
+                ctx.session_b = await self._auth_provider.authenticate(ctx.credentials_b)
             except Exception as e:
                 logger.warning("User B authentication failed: %s", e)
 
+    async def _phase_oob_registration(self, ctx: ScanContext) -> None:
+        """Phase 3.5: OOB Callback Registration (non-blocking)"""
         # ==============================================================
         # Phase 3.5: OOB Callback Registration (non-blocking)
         # ==============================================================
-        oob_service = None
-        if target_url and mode in (
+        ctx.oob_service = None
+        if ctx.target_url and ctx.mode in (
             ScanMode.URL_ONLY, ScanMode.AUTHENTICATED, ScanMode.FULL,
         ):
             from isitsecure.engine.shared.oob_callback import (
                 OOBCallbackService,
             )
 
-            oob_service = OOBCallbackService()
+            ctx.oob_service = OOBCallbackService()
             try:
                 await asyncio.wait_for(
-                    oob_service.register(),
+                    ctx.oob_service.register(),
                     timeout=ScannerTimeouts.OOB_POLL_SECONDS,
                 )
             except (asyncio.TimeoutError, Exception) as e:
                 logger.warning("OOB registration failed: %s", e)
-                oob_service = None
+                ctx.oob_service = None
 
-            if oob_service and oob_service.is_registered:
-                await self._inject_oob_payloads(oob_service, endpoints)
+            if ctx.oob_service and ctx.oob_service.is_registered:
+                await self._inject_oob_payloads(ctx.oob_service, ctx.endpoints)
 
+    async def _phase_dast_scanners(
+        self, ctx: ScanContext
+    ) -> AsyncGenerator[DeepScanEvent, None]:
+        """Phase 4: DAST Scanners (parallel)"""
         # ==============================================================
         # Phase 4: DAST Scanners (parallel)
         # ==============================================================
-        if endpoints and snapshot:
+        if ctx.endpoints and ctx.snapshot:
             yield DeepScanEvent(
                 DeepScanPhase.DAST_SCANNING,
                 OrchestratorConfig.MSG_DAST_RUNNING,
@@ -514,14 +650,14 @@ class DeepSecurityScanAgent:
             dast_findings: list[DeepFinding] = []
             dast_names: list[str] = []
             async for _kind, _payload in self._run_dast_scanners_streamed(
-                endpoints, snapshot
+                ctx.endpoints, ctx.snapshot
             ):
                 if _kind == "event":
                     yield _payload
                 else:
                     dast_findings, dast_names = _payload
-            all_findings.extend(dast_findings)
-            scanners_run.extend(dast_names)
+            ctx.all_findings.extend(dast_findings)
+            ctx.scanners_run.extend(dast_names)
 
         # Anon RLS deep testing (url-only): probe live Supabase REST API for
         # exposed-read / exposed-write tables using just the anon key. The
@@ -529,52 +665,52 @@ class DeepSecurityScanAgent:
         # gate this to fire only when that path won't — avoids a double-run.
         if (
             self._rls_deep_scanner
-            and supabase_url
-            and anon_key
+            and ctx.supabase_url
+            and ctx.anon_key
             and not (
-                session_a
-                and mode in (ScanMode.AUTHENTICATED, ScanMode.FULL)
+                ctx.session_a
+                and ctx.mode in (ScanMode.AUTHENTICATED, ScanMode.FULL)
             )
         ):
             anon_rls_findings = await run_scanner_safe(
                 "rls_deep",
                 self._rls_deep_scanner.scan(
-                    supabase_url=supabase_url,
-                    anon_key=anon_key,
-                    tables=tables,
+                    supabase_url=ctx.supabase_url,
+                    anon_key=ctx.anon_key,
+                    tables=ctx.tables,
                 ),
                 ScannerTimeouts.IDOR_CROSS_USER_SECONDS,
             )
-            all_findings.extend(anon_rls_findings)
-            scanners_run.append("rls_deep")
+            ctx.all_findings.extend(anon_rls_findings)
+            ctx.scanners_run.append("rls_deep")
 
         # IDOR (unauthenticated — returns IDORTestResult + mutation DeepFindings)
-        idor_results = []
-        if self._idor_scanner and endpoints:
+        ctx.idor_results = []
+        if self._idor_scanner and ctx.endpoints:
             try:
-                idor_results, mutation_findings = await self._idor_scanner.scan(
-                    endpoints
+                ctx.idor_results, mutation_findings = await self._idor_scanner.scan(
+                    ctx.endpoints
                 )
-                all_findings.extend(mutation_findings)
+                ctx.all_findings.extend(mutation_findings)
                 # Convert confirmed read-access IDORs to findings
-                read_idor_findings = self._idor_results_to_findings(idor_results)
-                all_findings.extend(read_idor_findings)
+                read_idor_findings = self._idor_results_to_findings(ctx.idor_results)
+                ctx.all_findings.extend(read_idor_findings)
             except Exception:
                 logger.warning("IDOR scanner failed", exc_info=True)
-                idor_results = []
-            scanners_run.append("idor")
+                ctx.idor_results = []
+            ctx.scanners_run.append("idor")
 
         # DOM XSS (unauthenticated — browser-based sink hooking on page URLs)
         # Only runs when there is no authenticated crawl (which runs its own DOM XSS)
         if (
-            target_url
-            and not crawl_result
-            and mode in (ScanMode.URL_ONLY, ScanMode.FULL)
+            ctx.target_url
+            and not ctx.crawl_result
+            and ctx.mode in (ScanMode.URL_ONLY, ScanMode.FULL)
         ):
             from isitsecure.engine.scanners.dom_xss_scanner import (
                 DOMXSSScanner,
             )
-            page_urls = self._extract_page_urls(target_url, endpoints)
+            page_urls = self._extract_page_urls(ctx.target_url, ctx.endpoints)
             if page_urls:
                 dom_xss_scanner = DOMXSSScanner()
                 dom_xss_findings = await run_scanner_safe(
@@ -582,30 +718,36 @@ class DeepSecurityScanAgent:
                     dom_xss_scanner.scan(pages_to_test=page_urls),
                     ScannerTimeouts.DOM_XSS_SECONDS,
                 )
-                all_findings.extend(dom_xss_findings)
-                scanners_run.append(DOMXSSScanner.SCANNER_NAME)
+                ctx.all_findings.extend(dom_xss_findings)
+                ctx.scanners_run.append(DOMXSSScanner.SCANNER_NAME)
 
+    async def _phase_authenticated_dast(
+        self, ctx: ScanContext
+    ) -> AsyncGenerator[DeepScanEvent, None]:
+        """Phase 5: Authenticated DAST"""
         # ==============================================================
         # Phase 5: Authenticated DAST
         # ==============================================================
-        if session_a and mode in (ScanMode.AUTHENTICATED, ScanMode.FULL):
+        if ctx.session_a and ctx.mode in (ScanMode.AUTHENTICATED, ScanMode.FULL):
             yield DeepScanEvent(
                 DeepScanPhase.AUTHENTICATED_CRAWL,
                 OrchestratorConfig.MSG_AUTH_SCANNING,
                 OrchestratorConfig.PROGRESS_AUTH_AND_IDOR,
             )
             auth_findings, auth_names = await self._run_authenticated_scanners(
-                session_a, session_b, endpoints, target_url,
-                supabase_url, anon_key, tables, crawl_result,
-                js_content=snapshot.all_js_content if snapshot else None,
+                ctx.session_a, ctx.session_b, ctx.endpoints, ctx.target_url,
+                ctx.supabase_url, ctx.anon_key, ctx.tables, ctx.crawl_result,
+                js_content=ctx.snapshot.all_js_content if ctx.snapshot else None,
             )
-            all_findings.extend(auth_findings)
-            scanners_run.extend(auth_names)
+            ctx.all_findings.extend(auth_findings)
+            ctx.scanners_run.extend(auth_names)
 
+    async def _phase_cross_probe_analysis(self, ctx: ScanContext) -> None:
+        """Phase 5.5: Cross-probe analysis"""
         # ==============================================================
         # Phase 5.5: Cross-probe analysis
         # ==============================================================
-        if all_findings:
+        if ctx.all_findings:
             from isitsecure.engine.shared.probe_analyzer import (
                 ProbeAnalyzer,
             )
@@ -613,10 +755,10 @@ class DeepSecurityScanAgent:
             try:
                 analyzer = ProbeAnalyzer()
                 analysis_findings = await asyncio.wait_for(
-                    analyzer.analyze(all_findings),
+                    analyzer.analyze(ctx.all_findings),
                     timeout=ScannerTimeouts.PROBE_ANALYZER_SECONDS,
                 )
-                all_findings.extend(analysis_findings)
+                ctx.all_findings.extend(analysis_findings)
             except asyncio.TimeoutError:
                 logger.warning(
                     "Probe analyzer timed out after %ds",
@@ -627,21 +769,23 @@ class DeepSecurityScanAgent:
                 logger.warning("Probe analyzer failed: %s", e)
                 analysis_findings = []
             if analysis_findings:
-                scanners_run.append("probe_analyzer")
+                ctx.scanners_run.append("probe_analyzer")
 
+    async def _phase_oob_collection(self, ctx: ScanContext) -> None:
+        """Phase 5.6: OOB Callback Collection"""
         # ==============================================================
         # Phase 5.6: OOB Callback Collection
         # ==============================================================
-        if oob_service and oob_service.is_registered:
+        if ctx.oob_service and ctx.oob_service.is_registered:
             try:
                 await asyncio.wait_for(
-                    oob_service.poll(),
+                    ctx.oob_service.poll(),
                     timeout=ScannerTimeouts.OOB_POLL_SECONDS,
                 )
-                oob_findings = oob_service.get_findings()
+                oob_findings = ctx.oob_service.get_findings()
                 if oob_findings:
-                    all_findings.extend(oob_findings)
-                    scanners_run.append("oob_callback")
+                    ctx.all_findings.extend(oob_findings)
+                    ctx.scanners_run.append("oob_callback")
                     logger.info(
                         "OOB callback: %d blind vulnerabilities confirmed",
                         len(oob_findings),
@@ -649,37 +793,41 @@ class DeepSecurityScanAgent:
             except (asyncio.TimeoutError, Exception) as e:
                 logger.warning("OOB poll failed: %s", e)
 
+    async def _phase_repo_ingestion(
+        self, ctx: ScanContext
+    ) -> AsyncGenerator[DeepScanEvent, None]:
+        """Phase 6: Repo Ingestion"""
         # ==============================================================
         # Phase 6: Repo Ingestion
         # ==============================================================
-        if repo_url and mode in (ScanMode.CODE_ONLY, ScanMode.FULL):
+        if ctx.repo_url and ctx.mode in (ScanMode.CODE_ONLY, ScanMode.FULL):
             yield DeepScanEvent(
                 DeepScanPhase.CODE_INGESTION,
-                OrchestratorConfig.MSG_CLONING_REPO.format(repo_url=repo_url),
+                OrchestratorConfig.MSG_CLONING_REPO.format(repo_url=ctx.repo_url),
                 OrchestratorConfig.PROGRESS_CODE_INGESTION,
             )
             try:
-                repo_snapshot = await self._ingest_repo(
-                    repo_url, github_token, repo_branch
+                ctx.repo_snapshot = await self._ingest_repo(
+                    ctx.repo_url, ctx.github_token, ctx.repo_branch
                 )
             except Exception as e:
-                repo_snapshot = None
+                ctx.repo_snapshot = None
                 logger.error(
                     OrchestratorConfig.ERROR_REPO_FAILED.format(error=e)
                 )
-                ingestion_errors.append(str(e))
+                ctx.ingestion_errors.append(str(e))
 
-            if repo_snapshot is None:
-                if not ingestion_errors:
+            if ctx.repo_snapshot is None:
+                if not ctx.ingestion_errors:
                     # No exception, no snapshot: no ingestion service wired.
-                    ingestion_errors.append(
+                    ctx.ingestion_errors.append(
                         "the repository could not be read"
                     )
-                reason = ingestion_errors[-1]
+                reason = ctx.ingestion_errors[-1]
                 # Code-only: the repo was the entire scan. Reporting "no
                 # findings" here would read as a clean bill of health for
                 # code we never opened (issue #147).
-                if mode is ScanMode.CODE_ONLY:
+                if ctx.mode is ScanMode.CODE_ONLY:
                     yield DeepScanEvent(
                         DeepScanPhase.COMPLETE,
                         OrchestratorConfig.ERROR_REPO_FAILED.format(
@@ -687,7 +835,8 @@ class DeepSecurityScanAgent:
                         ),
                         data={"error": True},
                     )
-                    return
+                    ctx.aborted = True
+                return
                 # Full scan: the live-site half is still real, so finish it —
                 # but the report has to say the code was never scanned.
                 yield DeepScanEvent(
@@ -697,15 +846,19 @@ class DeepSecurityScanAgent:
                     data={"error": True},
                 )
 
+    async def _phase_lsp_initialization(
+        self, ctx: ScanContext
+    ) -> AsyncGenerator[DeepScanEvent, None]:
+        """Phase 6.5: LSP Initialization (optional — graceful degradation)"""
         # ==============================================================
         # Phase 6.5: LSP Initialization (optional — graceful degradation)
         # ==============================================================
-        lsp_initialized = False
-        auth_flow_results: dict[str, AuthFlowResult] = {}
+        ctx.lsp_initialized = False
+        ctx.auth_flow_results: dict[str, AuthFlowResult] = {}
         if (
-            repo_snapshot
+            ctx.repo_snapshot
             and self._lsp_client
-            and mode in (ScanMode.CODE_ONLY, ScanMode.FULL)
+            and ctx.mode in (ScanMode.CODE_ONLY, ScanMode.FULL)
         ):
             from isitsecure.engine.code_analysis.lsp.noop_client import (
                 NoOpLSPClient,
@@ -725,11 +878,11 @@ class DeepSecurityScanAgent:
                 import time as _time
                 _lsp_start = _time.monotonic()
                 try:
-                    lsp_initialized = await asyncio.wait_for(
-                        self._lsp_client.initialize(repo_snapshot.clone_path),
+                    ctx.lsp_initialized = await asyncio.wait_for(
+                        self._lsp_client.initialize(ctx.repo_snapshot.clone_path),
                         timeout=LSPConfig.INIT_TIMEOUT_SECONDS,
                     )
-                    if lsp_initialized:
+                    if ctx.lsp_initialized:
                         _lsp_duration = _time.monotonic() - _lsp_start
                         logger.info(
                             LSPConfig.MSG_INIT_SUCCESS.format(
@@ -760,11 +913,15 @@ class DeepSecurityScanAgent:
                         LSPConfig.MSG_INIT_FAILED.format(error=str(e))
                     )
 
+    async def _phase_sast_scanners(
+        self, ctx: ScanContext
+    ) -> AsyncGenerator[DeepScanEvent, None]:
+        """Phase 7: SAST Scanners (parallel)"""
         # ==============================================================
         # Phase 7: SAST Scanners (parallel)
         # ==============================================================
-        sast_code_findings: list[CodeFinding] = []
-        if repo_snapshot and mode in (ScanMode.CODE_ONLY, ScanMode.FULL):
+        ctx.sast_code_findings: list[CodeFinding] = []
+        if ctx.repo_snapshot and ctx.mode in (ScanMode.CODE_ONLY, ScanMode.FULL):
             yield DeepScanEvent(
                 DeepScanPhase.SAST_SCANNING,
                 OrchestratorConfig.MSG_SAST_RUNNING,
@@ -773,19 +930,23 @@ class DeepSecurityScanAgent:
             sast_findings: list[DeepFinding] = []
             sast_names: list[str] = []
             async for _kind, _payload in self._run_sast_scanners_streamed(
-                repo_snapshot
+                ctx.repo_snapshot
             ):
                 if _kind == "event":
                     yield _payload
                 else:
-                    sast_findings, sast_names, sast_code_findings = _payload
-            all_findings.extend(sast_findings)
-            scanners_run.extend(sast_names)
+                    sast_findings, sast_names, ctx.sast_code_findings = _payload
+            ctx.all_findings.extend(sast_findings)
+            ctx.scanners_run.extend(sast_names)
 
+    async def _phase_lsp_validation(
+        self, ctx: ScanContext
+    ) -> AsyncGenerator[DeepScanEvent, None]:
+        """Phase 7.5: LSP Validation (validate/suppress SAST findings)"""
         # ==============================================================
         # Phase 7.5: LSP Validation (validate/suppress SAST findings)
         # ==============================================================
-        if lsp_initialized and repo_snapshot and sast_code_findings:
+        if ctx.lsp_initialized and ctx.repo_snapshot and ctx.sast_code_findings:
             from isitsecure.engine.code_analysis.lsp.auth_flow_tracer import (
                 AuthFlowTracer,
             )
@@ -794,24 +955,24 @@ class DeepSecurityScanAgent:
             yield DeepScanEvent(
                 DeepScanPhase.LSP_VALIDATION,
                 LSPConfig.MSG_TRACING.format(
-                    count=len(repo_snapshot.route_map)
+                    count=len(ctx.repo_snapshot.route_map)
                 ),
                 OrchestratorConfig.PROGRESS_SAST_SCANNERS + 5,
             )
 
             try:
-                tracer = AuthFlowTracer(self._lsp_client, repo_snapshot)
-                auth_flow_results = await asyncio.wait_for(
-                    tracer.trace_routes(repo_snapshot.route_map),
+                tracer = AuthFlowTracer(self._lsp_client, ctx.repo_snapshot)
+                ctx.auth_flow_results = await asyncio.wait_for(
+                    tracer.trace_routes(ctx.repo_snapshot.route_map),
                     timeout=ScannerTimeouts.LSP_VALIDATION_SECONDS,
                 )
 
                 # Validate SAST findings with LSP results
-                before_ids = {f.id for f in sast_code_findings}
+                before_ids = {f.id for f in ctx.sast_code_findings}
                 for scanner in self._sast_scanners:
                     if hasattr(scanner, "validate_with_lsp"):
-                        sast_code_findings = scanner.validate_with_lsp(
-                            sast_code_findings, auth_flow_results
+                        ctx.sast_code_findings = scanner.validate_with_lsp(
+                            ctx.sast_code_findings, ctx.auth_flow_results
                         )
 
                 # Drop the deep findings whose code findings the tracer
@@ -820,22 +981,26 @@ class DeepSecurityScanAgent:
                 # returning them flagged, so filtering the returned list on
                 # `lsp_suppressed` always found nothing.
                 suppressed_ids = before_ids - {
-                    f.id for f in sast_code_findings
+                    f.id for f in ctx.sast_code_findings
                 }
-                all_findings = [
-                    f for f in all_findings
+                ctx.all_findings = [
+                    f for f in ctx.all_findings
                     if f.id not in suppressed_ids
                 ]
 
-                scanners_run.append("lsp_validator")
+                ctx.scanners_run.append("lsp_validator")
 
             except (asyncio.TimeoutError, Exception) as e:
                 logger.warning("LSP validation failed: %s", e)
 
+    async def _phase_llm_code_review(
+        self, ctx: ScanContext
+    ) -> AsyncGenerator[DeepScanEvent, None]:
+        """Phase 8: LLM Review (with cross-scanner + LSP intelligence)"""
         # ==============================================================
         # Phase 8: LLM Review (with cross-scanner + LSP intelligence)
         # ==============================================================
-        if repo_snapshot and self._llm_code_reviewer and mode in (ScanMode.CODE_ONLY, ScanMode.FULL):
+        if ctx.repo_snapshot and self._llm_code_reviewer and ctx.mode in (ScanMode.CODE_ONLY, ScanMode.FULL):
             yield DeepScanEvent(
                 DeepScanPhase.LLM_REVIEW,
                 OrchestratorConfig.MSG_LLM_REVIEW,
@@ -843,50 +1008,58 @@ class DeepSecurityScanAgent:
             )
 
             # Pass SAST findings to LLM reviewer for cross-scanner context
-            if sast_code_findings:
-                self._llm_code_reviewer.set_sast_context(sast_code_findings)
+            if ctx.sast_code_findings:
+                self._llm_code_reviewer.set_sast_context(ctx.sast_code_findings)
 
             # Pass LSP auth flow results for prompt enrichment
-            if auth_flow_results:
-                self._llm_code_reviewer.set_lsp_context(auth_flow_results)
+            if ctx.auth_flow_results:
+                self._llm_code_reviewer.set_lsp_context(ctx.auth_flow_results)
 
             llm_code_findings = await run_scanner_safe(
                 "llm_review",
-                self._llm_code_reviewer.scan(repo_snapshot),
+                self._llm_code_reviewer.scan(ctx.repo_snapshot),
                 ScannerTimeouts.LLM_CODE_REVIEW_SECONDS,
             )
             for cf in llm_code_findings:
-                all_findings.append(self._code_finding_to_deep_finding(cf))
-            scanners_run.append("llm_review")
+                ctx.all_findings.append(self._code_finding_to_deep_finding(cf))
+            ctx.scanners_run.append("llm_review")
 
+    async def _phase_cross_reference(
+        self, ctx: ScanContext
+    ) -> AsyncGenerator[DeepScanEvent, None]:
+        """Phase 9: Cross-reference DAST <-> SAST"""
         # ==============================================================
         # Phase 9: Cross-reference DAST <-> SAST
         # ==============================================================
-        if mode == ScanMode.FULL and self._cross_referencer:
+        if ctx.mode == ScanMode.FULL and self._cross_referencer:
             yield DeepScanEvent(
                 DeepScanPhase.CROSS_REFERENCING,
                 OrchestratorConfig.MSG_CROSS_REF,
                 OrchestratorConfig.PROGRESS_CROSS_REFERENCE,
             )
             dast = [
-                f for f in all_findings
+                f for f in ctx.all_findings
                 if f.source in (FindingSource.DAST_URL, FindingSource.DAST_AUTHENTICATED)
             ]
             sast = [
-                f for f in all_findings
+                f for f in ctx.all_findings
                 if f.source in (FindingSource.SAST_CODE, FindingSource.SAST_GIT_HISTORY)
             ]
             cross_findings = self._cross_referencer.cross_reference(dast, sast)
-            all_findings.extend(cross_findings)
+            ctx.all_findings.extend(cross_findings)
 
+    async def _phase_guided_dast(
+        self, ctx: ScanContext
+    ) -> AsyncGenerator[DeepScanEvent, None]:
+        """Phase 9.1: SAST-Guided DAST (targeted dynamic tests from code)"""
         # ==============================================================
         # Phase 9.1: SAST-Guided DAST (targeted dynamic tests from code)
         # ==============================================================
         if (
-            mode == ScanMode.FULL
+            ctx.mode == ScanMode.FULL
             and self._guided_dast_runner
-            and sast_code_findings
-            and endpoints
+            and ctx.sast_code_findings
+            and ctx.endpoints
         ):
             yield DeepScanEvent(
                 DeepScanPhase.SAST_GUIDED_DAST,
@@ -896,27 +1069,31 @@ class DeepSecurityScanAgent:
             guided_dast_findings = await run_scanner_safe(
                 GuidedDASTConfig.SCANNER_NAME,
                 self._guided_dast_runner.run(
-                    code_findings=sast_code_findings,
-                    endpoints=endpoints,
-                    repo_snapshot=repo_snapshot,
-                    existing_findings=all_findings,
+                    code_findings=ctx.sast_code_findings,
+                    endpoints=ctx.endpoints,
+                    repo_snapshot=ctx.repo_snapshot,
+                    existing_findings=ctx.all_findings,
                 ),
                 ScannerTimeouts.GUIDED_DAST_SECONDS,
             )
-            all_findings.extend(guided_dast_findings)
-            scanners_run.append(GuidedDASTConfig.SCANNER_NAME)
+            ctx.all_findings.extend(guided_dast_findings)
+            ctx.scanners_run.append(GuidedDASTConfig.SCANNER_NAME)
 
+    async def _phase_business_logic(
+        self, ctx: ScanContext
+    ) -> AsyncGenerator[DeepScanEvent, None]:
+        """Phase 9.2: LLM Business Logic Attacks"""
         # ==============================================================
         # Phase 9.2: LLM Business Logic Attacks
         # ==============================================================
         if (
-            repo_snapshot
-            and session_a
-            and session_b
-            and endpoints
-            and target_url
+            ctx.repo_snapshot
+            and ctx.session_a
+            and ctx.session_b
+            and ctx.endpoints
+            and ctx.target_url
             and self._llm_code_reviewer
-            and mode in (ScanMode.AUTHENTICATED, ScanMode.FULL)
+            and ctx.mode in (ScanMode.AUTHENTICATED, ScanMode.FULL)
         ):
             yield DeepScanEvent(
                 DeepScanPhase.LLM_BUSINESS_LOGIC,
@@ -936,7 +1113,7 @@ class DeepSecurityScanAgent:
                 # Build file dict from repo snapshot (file_index is path→content)
                 repo_files = {
                     path: content
-                    for path, content in repo_snapshot.file_index.items()
+                    for path, content in ctx.repo_snapshot.file_index.items()
                     if content
                 }
 
@@ -944,27 +1121,31 @@ class DeepSecurityScanAgent:
                     LLMBusinessLogicConfig.SCANNER_NAME,
                     biz_logic_scanner.scan(
                         repo_files=repo_files,
-                        endpoints=endpoints,
-                        admin_session=session_a,
-                        regular_session=session_b,
-                        target_url=target_url,
+                        endpoints=ctx.endpoints,
+                        admin_session=ctx.session_a,
+                        regular_session=ctx.session_b,
+                        target_url=ctx.target_url,
                     ),
                     ScannerTimeouts.GUIDED_DAST_SECONDS,
                 )
-                all_findings.extend(biz_findings)
-                scanners_run.append(LLMBusinessLogicConfig.SCANNER_NAME)
+                ctx.all_findings.extend(biz_findings)
+                ctx.scanners_run.append(LLMBusinessLogicConfig.SCANNER_NAME)
 
                 yield DeepScanEvent(
                     DeepScanPhase.LLM_BUSINESS_LOGIC,
                     f"LLM Business Logic: {len(biz_findings)} confirmed vulnerabilities",
                 )
 
+    async def _phase_injection_adjudication(
+        self, ctx: ScanContext
+    ) -> AsyncGenerator[DeepScanEvent, None]:
+        """Phase 9.4: LLM injection false-positive adjudication (#5)"""
         # ==============================================================
         # Phase 9.4: LLM injection false-positive adjudication (#5)
         # Runs BEFORE triage so dropped FPs never reach dedup/enrichment/counts.
         # Strict no-op without an LLM client (the --llm-none benchmark floor).
         # ==============================================================
-        if self._injection_adjudicator and all_findings:
+        if self._injection_adjudicator and ctx.all_findings:
             from isitsecure.engine.constants import InjectionAdjudicatorConfig
 
             yield DeepScanEvent(
@@ -972,14 +1153,14 @@ class DeepSecurityScanAgent:
                 InjectionAdjudicatorConfig.PROGRESS_ADJUDICATE,
             )
             try:
-                before = len(all_findings)
-                all_findings = await asyncio.wait_for(
-                    self._injection_adjudicator.adjudicate(all_findings),
+                before = len(ctx.all_findings)
+                ctx.all_findings = await asyncio.wait_for(
+                    self._injection_adjudicator.adjudicate(ctx.all_findings),
                     timeout=ScannerTimeouts.INJECTION_ADJUDICATOR_SECONDS,
                 )
-                dropped = before - len(all_findings)
+                dropped = before - len(ctx.all_findings)
                 if dropped:
-                    scanners_run.append(InjectionAdjudicatorConfig.SCANNER_NAME)
+                    ctx.scanners_run.append(InjectionAdjudicatorConfig.SCANNER_NAME)
                     yield DeepScanEvent(
                         DeepScanPhase.INJECTION_ADJUDICATION,
                         f"Injection adjudicator: dropped {dropped} false positive(s)",
@@ -989,12 +1170,16 @@ class DeepSecurityScanAgent:
             except Exception as exc:  # noqa: BLE001 — fail open, never lose findings
                 logger.warning("Injection adjudicator failed (keeping all): %s", exc)
 
+    async def _phase_triage(
+        self, ctx: ScanContext
+    ) -> AsyncGenerator[DeepScanEvent, None]:
+        """Phase 9.5: LLM Triage (deduplicate, enrich, prioritize)"""
         # ==============================================================
         # Phase 9.5: LLM Triage (deduplicate, enrich, prioritize)
         # ==============================================================
-        owner_summary = None
-        themes = []
-        if self._llm_triage and all_findings:
+        ctx.owner_summary = None
+        ctx.themes = []
+        if self._llm_triage and ctx.all_findings:
             from isitsecure.engine.constants import TriageConfig
 
             yield DeepScanEvent(
@@ -1005,17 +1190,17 @@ class DeepSecurityScanAgent:
             try:
                 triage_result = await asyncio.wait_for(
                     self._llm_triage.triage(
-                        all_findings,
-                        mode,
-                        target_url,
-                        repo_url,
+                        ctx.all_findings,
+                        ctx.mode,
+                        ctx.target_url,
+                        ctx.repo_url,
                     ),
                     timeout=ScannerTimeouts.TRIAGE_SECONDS,
                 )
-                all_findings = triage_result.triaged_findings
-                owner_summary = triage_result.owner_summary
-                themes = triage_result.themes
-                scanners_run.append(TriageConfig.SCANNER_NAME)
+                ctx.all_findings = triage_result.triaged_findings
+                ctx.owner_summary = triage_result.owner_summary
+                ctx.themes = triage_result.themes
+                ctx.scanners_run.append(TriageConfig.SCANNER_NAME)
             except asyncio.TimeoutError:
                 logger.warning(
                     "Triage timed out after %ds", ScannerTimeouts.TRIAGE_SECONDS,
@@ -1023,69 +1208,6 @@ class DeepSecurityScanAgent:
             except Exception as e:
                 logger.warning("Triage failed: %s: %s", type(e).__name__, e)
 
-        # ==============================================================
-        # Phase 10: Build report
-        # ==============================================================
-        duration = time.monotonic() - start_time
-        endpoints_with_ids = [ep for ep in endpoints if ep.has_id_params]
-        backend = self._resolve_backend(repo_snapshot, snapshot, supabase_url)
-        report = DeepScanReport(
-            target_url=target_url,
-            repo_url=repo_url,
-            repo_branch=repo_snapshot.branch if repo_snapshot else "",
-            repo_commit_hash=repo_snapshot.commit_hash if repo_snapshot else "",
-            framework=self._safe_enum_value(
-                repo_snapshot.framework if repo_snapshot else None
-            ),
-            backend=backend,
-            scan_mode=self._safe_enum_value(mode),
-            total_endpoints_discovered=len(endpoints),
-            endpoints_with_ids=len(endpoints_with_ids),
-            endpoints_tested=len(idor_results),
-            routes_in_code=(
-                len(repo_snapshot.route_map) if repo_snapshot else 0
-            ),
-            tables_discovered=(
-                len([
-                    p for p in repo_snapshot.file_index
-                    if "schema" in p.lower()
-                ])
-                if repo_snapshot
-                else 0
-            ),
-            owner_summary=owner_summary,
-            findings=self._sort_findings(all_findings),
-            discovered_endpoints=endpoints,
-            idor_results=idor_results,
-            scan_duration_seconds=round(duration, 2),
-            scanners_run=scanners_run,
-            ingestion_errors=ingestion_errors,
-            themes=themes,
-            token_usage=self._collect_token_usage(),
-        )
-
-        yield DeepScanEvent(
-            DeepScanPhase.ANALYZING_RESULTS,
-            OrchestratorConfig.MSG_COMPILING,
-        )
-
-        yield DeepScanEvent(
-            DeepScanPhase.COMPLETE,
-            self._build_summary(report),
-            OrchestratorConfig.PROGRESS_COMPLETE,
-            {"report": report.model_dump(mode="json")},
-        )
-
-        # ==============================================================
-        # Cleanup: Shutdown LSP
-        # ==============================================================
-        if self._lsp_client and lsp_initialized:
-            try:
-                await self._lsp_client.shutdown()
-            except Exception as e:
-                logger.debug("LSP shutdown error: %s", e)
-
-        reset_reporter(_progress_token)
 
     # ------------------------------------------------------------------
     # Progress draining

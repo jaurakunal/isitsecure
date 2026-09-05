@@ -105,6 +105,11 @@ The repository is cloned (shallow, to temp dir) and indexed:
 
 18 SAST scanners then run in parallel against the indexed codebase (plus the LLM-powered Semantic Rule Verifier when an API key is available). One of them, the **Semgrep Taint Analyzer** (`semgrep_taint`), is a deterministic source→sink injection floor for JS/TS, Python, Java, and Kotlin that sits beneath the LLM code reviewer: it catches the mechanical SQLi/XSS/SSRF/path-traversal/command-injection/SSTI cases reproducibly and for free, leaving the LLM to cover business logic and uncatalogued libraries. It is opt-in (`[taint]` extra) and no-ops if the `semgrep` binary is absent.
 
+Each phase is a method on the agent (`_phase_url_ingestion`,
+`_phase_dast_scanners`, …) taking a `ScanContext` — the twenty-seven values
+that cross a phase boundary, named in `engine/scan_context.py` rather than
+held as locals. `scan()` itself is the sequence of those calls.
+
 ### Phase 7.5: LSP Validation
 
 If TypeScript and Node.js are available, the **TypeScript Language Server** is used to trace auth flows.
