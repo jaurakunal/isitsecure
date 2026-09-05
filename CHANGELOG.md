@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.23.6](https://github.com/jaurakunal/isitsecure/compare/v0.23.5...v0.23.6) (2026-09-05)
+
+
+### Bug Fixes
+
+* **lsp:** find Express middleware by where it is applied, not by name ([#170](https://github.com/jaurakunal/isitsecure/issues/170)) ([a7823a3](https://github.com/jaurakunal/isitsecure/commit/a7823a3ac720fd587f8b88d98793f455dc250de2))
+
 ## [0.23.5](https://github.com/jaurakunal/isitsecure/compare/v0.23.4...v0.23.5) (2026-09-05)
 
 
