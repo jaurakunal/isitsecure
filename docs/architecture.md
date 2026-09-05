@@ -121,6 +121,10 @@ Route file: app/api/tasks/[id]/route.ts
         → Auth IS genuinely applied → suppress false positive
 ```
 
+Findings the tracer disproves are removed from the report, matched back **per
+route** — a finding carries the route it is about, so one guarded route in a
+file of a hundred cannot vouch for the rest.
+
 This is unique — no commercial SAST tool uses compiler-level definition resolution to verify that auth middleware actually works.
 
 ### Phase 8: LLM Code Review

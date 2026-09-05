@@ -148,14 +148,40 @@ router.get('/tasks', requireAuth, async (req, res) => {
 })
 ```
 
-**Next.js inline auth:**
+**Next.js inline auth — including your own helpers:**
 ```typescript
-// Is getServerSession actually called before data access?
-export async function GET() {
-  const session = await getServerSession()
-  // LSP traces: getServerSession → authOptions → providers
+import { getUserFromRequest } from "@/lib/auth"   // your code, not a library
+
+export async function PATCH(request: Request) {
+  const user = getUserFromRequest(request)
+  // LSP traces: getUserFromRequest → lib/auth.ts → verifyToken()
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 }
 ```
+
+No pattern list can name `getUserFromRequest` — it's your project's invention —
+so the tracer resolves the call and looks for the terminal in **that function's
+own body**, not the whole module. Scoping matters: helpers cluster, so a login
+route importing `signToken` from the file that also defines `verifyToken` would
+otherwise look authenticated.
+
+**Centrally-mounted Express routes, per route:**
+```typescript
+app.use('/api/BasketItems', security.isAuthorized())   // traced → verified
+app.post('/api/Challenges', security.denyAll())        // traced → verified
+app.get('/api/Products', ...)                          // no guard → not verified
+```
+
+A single `server.ts` can mount a hundred routes of which a handful are guarded,
+so each route is answered from **its own mount line**. One verdict for the whole
+file would either miss every guard or vouch for every unguarded neighbour —
+and vouching is the dangerous direction, because a suppressed finding is a
+vulnerability the report no longer mentions.
+
+Middleware that delegates to a library counts as the terminal, because tracing
+deliberately will not follow into `node_modules`: `expressJwt` (express-jwt),
+`requiresAuth` (express-openid-connect), `ensureLoggedIn` (connect-ensure-login),
+alongside the direct `jwt.verify` / `getUser` / `getServerSession` forms.
 
 ### Performance Impact
 
