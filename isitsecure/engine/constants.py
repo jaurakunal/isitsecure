@@ -4752,6 +4752,23 @@ class LSPConfig:
         "exclude": ["node_modules", "dist", "build", ".next"],
     }
 
+    # tsserver loads a project asynchronously after the first didOpen, and
+    # answers definition requests in the meantime by pointing at the import
+    # statement rather than the real declaration. These bound the wait for it
+    # to finish: a loaded project answers correctly first time and pays
+    # nothing, a cold one is retried until it does.
+    PROJECT_LOAD_RETRIES = 6
+    PROJECT_LOAD_BACKOFF_SECONDS = 0.5
+
+    # How many project-local helpers a route may be followed through when
+    # looking for the auth terminal. Routes import few symbols; this only
+    # bounds a pathological file.
+    MAX_INLINE_TRACE_SYMBOLS = 6
+
+    # Module prefixes that mean "this project's own code", as opposed to a
+    # package in node_modules. The auth helper we're chasing is project code.
+    LOCAL_MODULE_PREFIXES = (".", "@/", "~/", "src/")
+
     # --- Auth terminal patterns ---
     # Functions/methods that confirm real authentication is happening.
     # Generic patterns that work across frameworks (Supabase, Firebase,
