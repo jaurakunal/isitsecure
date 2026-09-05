@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.23.2](https://github.com/jaurakunal/isitsecure/compare/v0.23.1...v0.23.2) (2026-09-05)
+
+
+### Bug Fixes
+
+* **lsp:** make LSP suppression actually remove findings ([7c416b1](https://github.com/jaurakunal/isitsecure/commit/7c416b1d3629693840feaec60812b803e972d7ab))
+* **lsp:** resolve auth helpers so the tracer can confirm auth at all ([b2c7b93](https://github.com/jaurakunal/isitsecure/commit/b2c7b93c5c82c603f2ee2e2f6a4d2e39e20e632e))
+
 ## [0.23.1](https://github.com/jaurakunal/isitsecure/compare/v0.23.0...v0.23.1) (2026-09-04)
 
 
