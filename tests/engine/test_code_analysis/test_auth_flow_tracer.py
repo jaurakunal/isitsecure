@@ -822,9 +822,13 @@ export function checkToken(req, res, next) {
 }
 """
 
+# Applied without a path, so it guards every route on this router — the shape
+# `_trace_express_auth` serves. A `.use('/admin', guard)` would be a mount and
+# is attributed to its own route instead.
 ROUTE_USING_IT = (
     "import { requireAuth } from '../middleware/auth'\n"
-    "router.get('/profile', requireAuth, handler)\n"
+    "router.use(requireAuth)\n"
+    "router.get('/profile', handler)\n"
 )
 
 
@@ -882,3 +886,104 @@ class TestExpressMiddlewareScoping:
         )
         assert result is not None and result.has_verified_auth is True
         assert "jwt.verify" in result.auth_method
+
+
+class TestAppliedMiddlewareDiscovery:
+    """Middleware is found by where it is applied, not by a list of names.
+
+    The list this replaced had five entries, so it could only recognise
+    vocabulary someone had thought of in advance.
+    """
+
+    def test_a_project_specific_guard_is_found(self) -> None:
+        """`ensureMember` is nobody's convention — it is this app's word."""
+        src = "router.use(ensureMember)\nrouter.get('/x', handler)\n"
+        assert AuthFlowTracer._applied_middleware(src) == ["ensureMember"]
+
+    def test_a_qualified_call_yields_the_member(self) -> None:
+        src = "app.use(security.isAuthorized())\n"
+        assert AuthFlowTracer._applied_middleware(src) == ["isAuthorized"]
+
+    def test_mounted_middleware_is_left_to_its_route(self) -> None:
+        """`.use('/admin', guard)` guards one path, not the whole router, and
+        is attributed per route — counting it here would let it vouch for
+        every other route in the file."""
+        src = "app.use('/admin', requireAdmin)\n"
+        assert AuthFlowTracer._applied_middleware(src) == []
+
+    def test_both_forms_in_one_file_are_kept_apart(self) -> None:
+        src = (
+            "app.use(requestLogger)\n"
+            "app.use('/admin', requireAdmin)\n"
+            "app.use(sessionGuard)\n"
+        )
+        assert AuthFlowTracer._applied_middleware(src) == [
+            "requestLogger",
+            "sessionGuard",
+        ]
+
+    def test_several_middlewares_in_one_call_keep_their_order(self) -> None:
+        src = "app.use(cors(), sessionGuard, auditLog)\n"
+        assert AuthFlowTracer._applied_middleware(src) == [
+            "cors",
+            "sessionGuard",
+            "auditLog",
+        ]
+
+    def test_a_name_mentioned_but_never_applied_is_not_middleware(self) -> None:
+        """The old list matched `authenticate` anywhere in the file — an
+        unused import was enough to claim a route was guarded."""
+        src = "import { authenticate } from 'passport'\nconst x = 1\n"
+        assert AuthFlowTracer._applied_middleware(src) == []
+
+    def test_duplicates_collapse(self) -> None:
+        src = "app.use(guard)\nrouter.use(guard)\n"
+        assert AuthFlowTracer._applied_middleware(src) == ["guard"]
+
+    def test_the_count_is_bounded(self) -> None:
+        from isitsecure.engine.constants import LSPConfig
+
+        src = "".join(f"app.use(mw{i})\n" for i in range(12))
+        assert (
+            len(AuthFlowTracer._applied_middleware(src))
+            == LSPConfig.MAX_MOUNT_MIDDLEWARE
+        )
+
+
+class TestRouterWideMiddlewareWins:
+    """`router.use(guard)` guards every route on the router, including ones
+    whose own mount line names no middleware."""
+
+    @pytest.mark.asyncio
+    async def test_a_router_wide_guard_covers_a_mounted_route(self) -> None:
+        routes_src = (
+            "import { ensureMember } from '../auth/membership'\n"
+            "router.use(ensureMember)\n"
+            "router.get('/team/:id', handler)\n"
+        )
+        guard = (
+            "export function ensureMember(req, res, next) {\n"
+            "  const user = verifyToken(req.headers.authorization)\n"
+            "  if (!user) return res.status(401).json({ error: 'no' })\n"
+            "  next()\n"
+            "}\n"
+        )
+        repo = _make_repo(
+            file_index={
+                "src/routes/team.ts": routes_src,
+                "src/auth/membership.ts": guard,
+            },
+        )
+        lsp = _make_lsp()
+        lsp.get_definition.return_value = [
+            LSPLocation(
+                file_path="/tmp/test/src/auth/membership.ts", line=0, character=0
+            )
+        ]
+        route = _make_route("src/routes/team.ts", "/team/:id")
+
+        results = await AuthFlowTracer(lsp, repo).trace_routes([route])
+
+        result = results["src/routes/team.ts:/team/:id"]
+        assert result.has_verified_auth is True
+        assert result.middleware_chain == ["ensureMember"]

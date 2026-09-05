@@ -165,6 +165,18 @@ own body**, not the whole module. Scoping matters: helpers cluster, so a login
 route importing `signToken` from the file that also defines `verifyToken` would
 otherwise look authenticated.
 
+**Router-wide Express middleware:**
+```typescript
+import { ensureMember } from "../auth/membership"   // your name, not a convention
+router.use(ensureMember)                            // guards every route below
+router.get('/team/:id', handler)
+```
+
+Middleware applied without a path guards the whole router, so it settles every
+route in the file. It's found by **where it's applied** — a path-less `.use()`
+— not by a list of names: a list can only recognise vocabulary someone thought
+of in advance, and `ensureMember` is your project's word.
+
 **Centrally-mounted Express routes, per route:**
 ```typescript
 app.use('/api/BasketItems', security.isAuthorized())   // traced → verified
