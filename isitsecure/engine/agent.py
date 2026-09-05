@@ -47,7 +47,6 @@ if TYPE_CHECKING:
         AuthSession,
     )
     from isitsecure.engine.code_analysis.lsp.protocols import (
-        AuthFlowResult,
         LSPClientProtocol,
     )
     from isitsecure.engine.code_analysis.protocols import (
@@ -464,7 +463,6 @@ class DeepSecurityScanAgent:
         # ==============================================================
         # Phase 3: Authenticated Crawl (browser login + BFS discovery)
         # ==============================================================
-        ctx.crawl_result = None
         if (
             ctx.credentials_a
             and ctx.target_url
@@ -613,7 +611,6 @@ class DeepSecurityScanAgent:
         # ==============================================================
         # Phase 3.5: OOB Callback Registration (non-blocking)
         # ==============================================================
-        ctx.oob_service = None
         if ctx.target_url and ctx.mode in (
             ScanMode.URL_ONLY, ScanMode.AUTHENTICATED, ScanMode.FULL,
         ):
@@ -853,8 +850,6 @@ class DeepSecurityScanAgent:
         # ==============================================================
         # Phase 6.5: LSP Initialization (optional — graceful degradation)
         # ==============================================================
-        ctx.lsp_initialized = False
-        ctx.auth_flow_results: dict[str, AuthFlowResult] = {}
         if (
             ctx.repo_snapshot
             and self._lsp_client
@@ -920,7 +915,6 @@ class DeepSecurityScanAgent:
         # ==============================================================
         # Phase 7: SAST Scanners (parallel)
         # ==============================================================
-        ctx.sast_code_findings: list[CodeFinding] = []
         if ctx.repo_snapshot and ctx.mode in (ScanMode.CODE_ONLY, ScanMode.FULL):
             yield DeepScanEvent(
                 DeepScanPhase.SAST_SCANNING,
@@ -1177,8 +1171,6 @@ class DeepSecurityScanAgent:
         # ==============================================================
         # Phase 9.5: LLM Triage (deduplicate, enrich, prioritize)
         # ==============================================================
-        ctx.owner_summary = None
-        ctx.themes = []
         if self._llm_triage and ctx.all_findings:
             from isitsecure.engine.constants import TriageConfig
 
