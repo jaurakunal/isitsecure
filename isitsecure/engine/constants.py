@@ -4752,6 +4752,16 @@ class LSPConfig:
         "exclude": ["node_modules", "dist", "build", ".next"],
     }
 
+    # Express-style mounts: `app.use('/path', mw)`, `router.get('/path', mw)`.
+    ROUTE_MOUNT_PATTERN = (
+        r"\.\s*(?:use|all|get|post|put|patch|delete|head|options)\s*\(\s*"
+        r"['\"`]([^'\"`]+)['\"`]\s*,(?P<middleware>[^\n]*)"
+    )
+
+
+    # How many middlewares on one mount line are worth resolving.
+    MAX_MOUNT_MIDDLEWARE = 4
+
     # tsserver loads a project asynchronously after the first didOpen, and
     # answers definition requests in the meantime by pointing at the import
     # statement rather than the real declaration. These bound the wait for it
@@ -4795,6 +4805,12 @@ class LSPConfig:
         r'createServerClient\s*\(',
         # Passport
         r'passport\.authenticate\s*\(',
+        # Express auth middleware that verifies for you. The terminal is then
+        # inside the package, which tracing deliberately will not enter, so
+        # the middleware itself has to count as the terminal.
+        r'expressJwt\s*\(',        # express-jwt
+        r'requiresAuth\s*\(',      # express-openid-connect (Auth0)
+        r'ensureLoggedIn\s*\(',    # connect-ensure-login
         # Firebase
         r'admin\.auth\(\)\.verifyIdToken\s*\(',
         r'getAuth\(\)\.verifyIdToken\s*\(',

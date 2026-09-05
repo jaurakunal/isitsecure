@@ -31,3 +31,8 @@ class CodeFinding(BaseModel):
     # LSP validation (backward-compatible defaults)
     lsp_validated: bool = False
     lsp_suppressed: bool = False
+
+    # The route this finding is about, when it is about one. LSP auth-flow
+    # results are per route, so matching a finding back to them needs it —
+    # matching on file alone hands every route in a file one verdict.
+    route_pattern: str = ""

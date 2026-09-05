@@ -458,16 +458,24 @@ class RouteAuthAnalyzer:
             AuthFlowResult,
         )
 
-        # Try exact match: file_path:route_pattern
-        for key, result in auth_flow_results.items():
-            if key.startswith(finding.file_path + ":"):
-                return result
+        if finding.route_pattern:
+            return auth_flow_results.get(
+                f"{finding.file_path}:{finding.route_pattern}"
+            )
 
-        # Try file-only match
-        for key, result in auth_flow_results.items():
-            if key.startswith(finding.file_path):
-                return result
-
+        # No route on the finding: only answer from the file when every route
+        # in it agrees. One `server.ts` can mount a hundred routes of which a
+        # handful are guarded, and picking any one of their verdicts would
+        # suppress findings on the rest — hiding real vulnerabilities.
+        in_file = [
+            result
+            for key, result in auth_flow_results.items()
+            if key.startswith(finding.file_path + ":")
+        ]
+        if in_file and all(
+            r.has_verified_auth == in_file[0].has_verified_auth for r in in_file
+        ):
+            return in_file[0]
         return None
 
     def _has_auth_check(self, content: str) -> bool:
@@ -539,6 +547,7 @@ class RouteAuthAnalyzer:
             title=title,
             description=description,
             file_path=route.file_path,
+            route_pattern=route.route_pattern,
             line_number=line_number,
             code_snippet=CodeContextExtractor.extract(
                 route.content, line_number

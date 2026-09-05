@@ -105,10 +105,9 @@ class AuthFlowTracer:
                         )
                     )
                     continue
-                # Assign the file-level result to each route in that file
                 for route in file_routes:
                     key = f"{route.file_path}:{route.route_pattern}"
-                    results[key] = result
+                    results[key] = result.get(route.route_pattern, AuthFlowResult())
 
         traced = len(results)
         auth_found = sum(1 for r in results.values() if r.has_verified_auth)
@@ -125,20 +124,124 @@ class AuthFlowTracer:
 
     async def _trace_file(
         self, file_path: str, routes: list[RouteEntry]
-    ) -> AuthFlowResult:
-        """Trace auth flow for a single file.
+    ) -> dict[str, AuthFlowResult]:
+        """Trace auth flow for one file, per route.
 
-        Strategy (tried in order):
+        A file that mounts its routes explicitly — the Express shape, where
+        one ``server.ts`` can carry a hundred of them — is answered per route
+        from its own mount line. That distinction is the whole point: in Juice
+        Shop 20 of 150 mounts are guarded, so a single verdict for the file
+        would either miss all twenty or vouch for the other hundred and
+        thirty. Vouching is the dangerous direction, because a suppressed
+        finding is a vulnerability the report no longer mentions.
+
+        Files without mounts fall back to whole-file strategies, in order:
         1. Procedure bases: protectedProcedure, tenantProcedure, etc.
         2. Express middleware: requireAuth, verifyAuth, etc.
         3. Auth decorators: @UseGuards, @login_required, @PreAuthorize
-        4. Inline auth calls: getUser, getSession, jwt.verify, etc.
+        4. Inline auth calls, following project-local helpers one hop.
         """
         content = self._get_file_content(file_path)
         if not content:
-            return AuthFlowResult()
+            return {}
 
         abs_path = self._resolve_path(file_path)
+
+        mounts = self._route_mounts(content)
+        if mounts:
+            # Authoritative: this file says which middleware guards what, so
+            # a route with no auth on its mount line has none. Falling back to
+            # a file-wide scan here is what would let one guarded route vouch
+            # for its unguarded neighbours.
+            per_route: dict[str, AuthFlowResult] = {}
+            for route in routes:
+                middleware = mounts.get(route.route_pattern)
+                per_route[route.route_pattern] = (
+                    await self._verify_mount_middleware(middleware, content, abs_path)
+                    if middleware
+                    else AuthFlowResult(confidence=0.5)
+                )
+            return per_route
+
+        result = await self._trace_whole_file(content, abs_path)
+        return {route.route_pattern: result for route in routes}
+
+    @staticmethod
+    def _route_mounts(content: str) -> dict[str, str]:
+        """Map each mounted route pattern to the middleware named beside it."""
+        mounts: dict[str, str] = {}
+        for match in re.finditer(LSPConfig.ROUTE_MOUNT_PATTERN, content):
+            pattern, middleware = match.group(1), match.group("middleware")
+            # First mount wins; later ones are usually narrower duplicates.
+            mounts.setdefault(pattern, middleware)
+        return mounts
+
+    async def _verify_mount_middleware(
+        self, middleware: str, content: str, abs_path: str
+    ) -> AuthFlowResult:
+        """Resolve the middleware on a mount line and look for auth in it."""
+        for name in self._middleware_names(middleware):
+            position = self._locate_symbol(content, name)
+            if position is None:
+                continue
+            line, char = position
+            definition = await self._trace_definition_body(abs_path, line, char)
+            if not definition:
+                continue
+
+            auth_method = self._find_auth_terminal(definition)
+            if auth_method:
+                return AuthFlowResult(
+                    has_verified_auth=True,
+                    auth_method=auth_method,
+                    middleware_chain=[name],
+                    confidence=LSPConfig.CONFIDENCE_LSP_CONFIRMED,
+                    trace_depth=1,
+                )
+        return AuthFlowResult(confidence=0.5)
+
+    @staticmethod
+    def _middleware_names(middleware: str) -> list[str]:
+        """The callables named on a mount line, in order.
+
+        Both shapes are common and both must resolve::
+
+            app.use('/x', security.isAuthorized())   -> isAuthorized
+            router.get('/x', requireAuth, handler)   -> requireAuth, handler
+
+        Taking the last identifier of each argument yields the member for a
+        qualified call and the name itself for a bare reference. The route
+        handler comes along too; it simply contains no auth terminal.
+        """
+        names: list[str] = []
+        for argument in middleware.split(","):
+            identifiers = re.findall(r"[A-Za-z_]\w*", argument)
+            if identifiers and identifiers[-1] not in names:
+                names.append(identifiers[-1])
+        return names[: LSPConfig.MAX_MOUNT_MIDDLEWARE]
+
+    @staticmethod
+    def _locate_symbol(content: str, name: str) -> tuple[int, int] | None:
+        """Position of ``name`` at a use site, preferring not the import line.
+
+        Asking for the definition of an import specifier is answered with the
+        import itself, which is the shape ``_is_unresolved`` waits on — so
+        query where the symbol is used instead.
+        """
+        fallback: tuple[int, int] | None = None
+        for line_number, line in enumerate(content.split("\n")):
+            for match in re.finditer(rf"\b{re.escape(name)}\b", line):
+                position = (line_number, match.start())
+                if line.lstrip().startswith("import"):
+                    fallback = fallback or position
+                    continue
+                return position
+        return fallback
+
+    async def _trace_whole_file(
+        self, content: str, abs_path: str
+    ) -> AuthFlowResult:
+        """Whole-file strategies, for files that do not mount routes."""
 
         # Strategy 1: Procedure base (tRPC, NestJS, etc.)
         result = await self._trace_procedure_auth(content, abs_path)

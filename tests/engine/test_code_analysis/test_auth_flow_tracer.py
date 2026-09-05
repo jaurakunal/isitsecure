@@ -725,3 +725,80 @@ class TestIsUnresolved:
     def test_unknown_content_is_treated_as_resolved(self) -> None:
         tracer = self._tracer("")
         assert tracer._is_unresolved([_Loc("/r.ts", 0)], "/r.ts") is False
+
+
+# ---------------------------------------------------------------------------
+# Per-route attribution for centrally-mounted (Express) routes
+# ---------------------------------------------------------------------------
+
+
+SERVER = """
+app.use('/api/BasketItems', security.isAuthorized())
+app.post('/api/Challenges', security.denyAll())
+app.get('/api/Products', productController())
+router.get('/profile', requireAuth, handler)
+"""
+
+
+class TestRouteMounts:
+    def test_each_mounted_route_maps_to_its_own_middleware(self) -> None:
+        mounts = AuthFlowTracer._route_mounts(SERVER)
+        assert "isAuthorized" in mounts["/api/BasketItems"]
+        assert "denyAll" in mounts["/api/Challenges"]
+
+    def test_an_unguarded_route_is_still_recorded(self) -> None:
+        """It has to appear, so it can be answered "no auth" rather than
+        falling through to a file-wide scan that a neighbour would pass."""
+        assert "/api/Products" in AuthFlowTracer._route_mounts(SERVER)
+
+    def test_a_file_that_mounts_nothing_yields_nothing(self) -> None:
+        assert AuthFlowTracer._route_mounts("const x = 1\n") == {}
+
+    def test_the_first_mount_wins(self) -> None:
+        src = "app.use('/x', authGuard())\napp.use('/x', other())\n"
+        assert "authGuard" in AuthFlowTracer._route_mounts(src)["/x"]
+
+
+class TestMiddlewareNames:
+    def test_a_qualified_call_yields_the_member(self) -> None:
+        assert AuthFlowTracer._middleware_names(" security.isAuthorized())") == [
+            "isAuthorized"
+        ]
+
+    def test_a_bare_reference_yields_the_name(self) -> None:
+        """Express middleware is as often passed by reference as called."""
+        assert AuthFlowTracer._middleware_names(" requireAuth, handler)") == [
+            "requireAuth",
+            "handler",
+        ]
+
+    def test_several_middlewares_keep_their_order(self) -> None:
+        names = AuthFlowTracer._middleware_names(
+            " security.isAuthorized(), security.appendUserId())"
+        )
+        assert names == ["isAuthorized", "appendUserId"]
+
+    def test_the_count_is_bounded(self) -> None:
+        from isitsecure.engine.constants import LSPConfig
+
+        args = ", ".join(f"mw{i}()" for i in range(10))
+        assert (
+            len(AuthFlowTracer._middleware_names(args))
+            == LSPConfig.MAX_MOUNT_MIDDLEWARE
+        )
+
+
+class TestLocateSymbol:
+    def test_prefers_a_use_site_over_the_import(self) -> None:
+        """Asking for the definition of an import specifier is answered with
+        the import itself, which is the shape the retry waits on."""
+        src = "import { requireAuth } from './auth'\nrouter.get('/x', requireAuth)\n"
+        line, _char = AuthFlowTracer._locate_symbol(src, "requireAuth")
+        assert line == 1
+
+    def test_falls_back_to_the_import_when_that_is_all_there_is(self) -> None:
+        src = "import { requireAuth } from './auth'\n"
+        assert AuthFlowTracer._locate_symbol(src, "requireAuth") == (0, 9)
+
+    def test_absent_symbol_returns_none(self) -> None:
+        assert AuthFlowTracer._locate_symbol("const a = 1\n", "nope") is None
