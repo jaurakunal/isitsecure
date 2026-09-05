@@ -324,7 +324,20 @@ class AuthFlowTracer:
     async def _trace_inline_auth(
         self, content: str, abs_path: str
     ) -> AuthFlowResult | None:
-        """Check for inline auth calls (getUser, getSession, etc.)."""
+        """Check for inline auth calls, following local helpers one hop.
+
+        A route may verify auth itself (``supabase.auth.getUser()`` in the
+        handler), which the terminal patterns catch directly. Far more often
+        it calls the project's own helper::
+
+            import { getUserFromRequest } from "@/lib/auth"
+            const user = getUserFromRequest(request)   // -> verifyToken()
+
+        The terminal is then a file away, and no pattern list can name it —
+        ``getUserFromRequest`` is this project's invention. Resolving it is
+        exactly what go-to-definition is for, and not doing so meant every
+        such route looked unauthenticated.
+        """
         auth_method = self._find_auth_terminal(content)
         if auth_method:
             return AuthFlowResult(
@@ -334,11 +347,102 @@ class AuthFlowTracer:
                 confidence=LSPConfig.CONFIDENCE_LSP_CONFIRMED,
                 trace_depth=0,
             )
+
+        for symbol in self._called_local_imports(content):
+            match = re.search(rf"\b{re.escape(symbol)}\s*\(", content)
+            if not match:
+                continue
+            line, char = self._offset_to_position(content, match.start())
+            definition = await self._trace_definition_body(abs_path, line, char)
+            if not definition:
+                continue
+
+            auth_method = self._find_auth_terminal(definition)
+            if auth_method:
+                return AuthFlowResult(
+                    has_verified_auth=True,
+                    auth_method=auth_method,
+                    middleware_chain=[symbol],
+                    confidence=LSPConfig.CONFIDENCE_LSP_CONFIRMED,
+                    trace_depth=1,
+                )
         return None
+
+    @staticmethod
+    def _called_local_imports(content: str) -> list[str]:
+        """Named imports from the project's own modules that this file calls.
+
+        Package imports are skipped: a helper that verifies *this* app's
+        sessions lives in the app. Note ``@/lib/auth`` is a project alias
+        while ``@supabase/supabase-js`` is a package — only the former starts
+        with ``@/``.
+        """
+        symbols: list[str] = []
+        for match in re.finditer(
+            r"import\s*\{([^}]*)\}\s*from\s*[\'\"]([^\'\"]+)[\'\"]", content
+        ):
+            names, module = match.group(1), match.group(2)
+            if not module.startswith(LSPConfig.LOCAL_MODULE_PREFIXES):
+                continue
+            for raw in names.split(","):
+                # `foo as bar` is called as `bar`
+                name = raw.split(" as ")[-1].strip()
+                if not name or name in symbols:
+                    continue
+                if re.search(rf"\b{re.escape(name)}\s*\(", content):
+                    symbols.append(name)
+        return symbols[: LSPConfig.MAX_INLINE_TRACE_SYMBOLS]
 
     # ------------------------------------------------------------------
     # LSP-powered definition tracing
     # ------------------------------------------------------------------
+
+    async def _resolve_definition(
+        self, file_path: str, line: int, character: int
+    ) -> list | None:
+        """Go-to-definition, waiting out the project load if it isn't ready.
+
+        tsserver builds its program asynchronously after the first
+        ``didOpen``. Until that finishes it still answers definition
+        requests — by pointing at the *import statement* in the querying
+        file rather than the declaration it names. That answer is
+        indistinguishable from success unless you look at where it landed,
+        so every trace silently stopped at the import and no route ever
+        looked authenticated.
+
+        A loaded project answers correctly on the first try and pays
+        nothing here; a cold one is retried until it does.
+        """
+        for attempt in range(LSPConfig.PROJECT_LOAD_RETRIES):
+            locations = await self._lsp.get_definition(
+                file_path, line, character
+            )
+            if not locations or not self._is_unresolved(locations, file_path):
+                return locations
+            await asyncio.sleep(
+                LSPConfig.PROJECT_LOAD_BACKOFF_SECONDS * (attempt + 1)
+            )
+        return locations
+
+    def _is_unresolved(self, locations: list, file_path: str) -> bool:
+        """True when every location is an import line in the querying file.
+
+        That is the shape tsserver returns before its program is built. A
+        genuinely local declaration also lands in the same file, so the
+        import check is what separates "not ready" from "defined here".
+        """
+        content = self._get_file_content_absolute(file_path)
+        if not content:
+            return False
+        lines = content.split("\n")
+        for loc in locations:
+            if loc.file_path != file_path:
+                return False
+            if not (0 <= loc.line < len(lines)):
+                return False
+            if not lines[loc.line].lstrip().startswith(("import ", "import{")):
+                return False
+        return True
 
     async def _trace_definition(
         self,
@@ -354,7 +458,7 @@ class AuthFlowTracer:
         if depth >= LSPConfig.MAX_TRACE_DEPTH:
             return None
 
-        locations = await self._lsp.get_definition(file_path, line, character)
+        locations = await self._resolve_definition(file_path, line, character)
         if not locations:
             return None
 
@@ -373,6 +477,51 @@ class AuthFlowTracer:
                 return def_content
 
         return None
+
+    async def _trace_definition_body(
+        self, file_path: str, line: int, character: int
+    ) -> str | None:
+        """Go-to-definition, returning only the resolved symbol's own body.
+
+        Scoping matters: helper functions cluster in one module, so a file
+        reached by resolving *any* symbol usually also contains the auth
+        terminals belonging to its siblings. Searching the whole file made a
+        login route — which imports ``signToken`` from the same module that
+        defines ``verifyToken`` — look authenticated.
+        """
+        locations = await self._resolve_definition(file_path, line, character)
+        if not locations:
+            return None
+
+        for loc in locations:
+            if loc.file_path == file_path and loc.line == line:
+                continue
+            if "node_modules" in loc.file_path:
+                continue
+            content = self._get_file_content_absolute(loc.file_path)
+            if content:
+                return self._enclosing_block(content, loc.line)
+        return None
+
+    @staticmethod
+    def _enclosing_block(content: str, line: int) -> str:
+        """The declaration starting at ``line``, up to its closing brace.
+
+        Ends at the first closing brace in the declaration's own column, so a
+        top-level function stops before its neighbours. Falls back to the
+        remainder of the file if no such brace is found.
+        """
+        lines = content.split("\n")
+        if not (0 <= line < len(lines)):
+            return content
+
+        start = lines[line]
+        indent = len(start) - len(start.lstrip())
+        closing = (" " * indent) + "}"
+        for end in range(line + 1, len(lines)):
+            if lines[end].rstrip() == closing:
+                return "\n".join(lines[line : end + 1])
+        return "\n".join(lines[line:])
 
     # ------------------------------------------------------------------
     # Pattern matching helpers (DRY — shared across strategies)

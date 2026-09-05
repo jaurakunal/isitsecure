@@ -573,3 +573,155 @@ class TestTraceFallback:
         # trace it, so the tracer can't confirm it — falls to fallback
         assert result.has_verified_auth is False
         assert result.confidence == 0.5
+
+
+# ---------------------------------------------------------------------------
+# Definition resolution: local helpers, scoping, and project-load readiness
+# ---------------------------------------------------------------------------
+
+
+class _Loc:
+    def __init__(self, file_path: str, line: int) -> None:
+        self.file_path, self.line = file_path, line
+
+
+# ---------------------------------------------------------------------------
+# _called_local_imports
+# ---------------------------------------------------------------------------
+
+
+class TestCalledLocalImports:
+    def test_finds_a_called_helper_from_a_project_alias(self) -> None:
+        src = '''
+import { getUserFromRequest } from "@/lib/auth"
+export async function GET(request: Request) {
+  const user = getUserFromRequest(request)
+}
+'''
+        assert AuthFlowTracer._called_local_imports(src) == ["getUserFromRequest"]
+
+    def test_relative_imports_count_as_local(self) -> None:
+        src = 'import { requireUser } from "../lib/auth"\nrequireUser(req)\n'
+        assert AuthFlowTracer._called_local_imports(src) == ["requireUser"]
+
+    def test_package_imports_are_skipped(self) -> None:
+        """`@/lib/auth` is a project alias; `@supabase/supabase-js` is a
+        package. Only the first is this app's own code."""
+        src = (
+            'import { createClient } from "@supabase/supabase-js"\n'
+            'import { NextResponse } from "next/server"\n'
+            "createClient()\nNextResponse.json({})\n"
+        )
+        assert AuthFlowTracer._called_local_imports(src) == []
+
+    def test_imported_but_never_called_is_ignored(self) -> None:
+        src = 'import { helper, unused } from "@/lib/x"\nhelper()\n'
+        assert AuthFlowTracer._called_local_imports(src) == ["helper"]
+
+    def test_aliased_import_is_matched_on_its_local_name(self) -> None:
+        src = 'import { getUser as currentUser } from "@/lib/auth"\ncurrentUser(req)\n'
+        assert AuthFlowTracer._called_local_imports(src) == ["currentUser"]
+
+    def test_duplicates_are_not_repeated(self) -> None:
+        src = 'import { f } from "@/a"\nimport { f } from "@/b"\nf()\n'
+        assert AuthFlowTracer._called_local_imports(src) == ["f"]
+
+    def test_the_number_of_symbols_is_bounded(self) -> None:
+        """One definition request per symbol — a wide import list must not
+        turn one route into a dozen LSP round trips."""
+        from isitsecure.engine.constants import LSPConfig
+
+        names = [f"f{i}" for i in range(20)]
+        src = (
+            'import { ' + ", ".join(names) + ' } from "@/lib/x"\n'
+            + "\n".join(f"{n}()" for n in names)
+        )
+        found = AuthFlowTracer._called_local_imports(src)
+        assert len(found) == LSPConfig.MAX_INLINE_TRACE_SYMBOLS
+
+
+# ---------------------------------------------------------------------------
+# _enclosing_block
+# ---------------------------------------------------------------------------
+
+
+MODULE = '''export function signToken(payload: object) {
+  return sign(payload)
+}
+
+export function verifyToken(token: string) {
+  return jwt.verify(token, SECRET)
+}
+'''
+
+
+class TestEnclosingBlock:
+    def test_returns_only_the_declaration_at_that_line(self) -> None:
+        """The bug this prevents: a login route imports `signToken` from the
+        module that also defines `verifyToken`, and searching the whole file
+        made the route look authenticated."""
+        block = AuthFlowTracer._enclosing_block(MODULE, 0)
+        assert "signToken" in block
+        assert "verifyToken" not in block
+
+    def test_a_later_declaration_is_scoped_too(self) -> None:
+        block = AuthFlowTracer._enclosing_block(MODULE, 4)
+        assert "jwt.verify" in block
+        assert "signToken" not in block
+
+    def test_out_of_range_line_returns_everything(self) -> None:
+        assert AuthFlowTracer._enclosing_block(MODULE, 999) == MODULE
+
+    def test_unterminated_declaration_returns_the_remainder(self) -> None:
+        src = "export function open() {\n  doThing()\n"
+        assert "doThing" in AuthFlowTracer._enclosing_block(src, 0)
+
+    def test_indented_declaration_ends_at_its_own_indent(self) -> None:
+        src = "class A {\n  method() {\n    check()\n  }\n\n  other() {}\n}\n"
+        block = AuthFlowTracer._enclosing_block(src, 1)
+        assert "check()" in block
+        assert "other()" not in block
+
+
+# ---------------------------------------------------------------------------
+# _is_unresolved
+# ---------------------------------------------------------------------------
+
+
+ROUTE = '''import { getUserFromRequest } from "@/lib/auth"
+
+export function GET(request: Request) {
+  const user = getUserFromRequest(request)
+}
+'''
+
+
+class TestIsUnresolved:
+    @staticmethod
+    def _tracer(content: str) -> AuthFlowTracer:
+        tracer = AuthFlowTracer.__new__(AuthFlowTracer)
+        tracer._get_file_content_absolute = lambda _p: content  # type: ignore[method-assign]
+        return tracer
+
+    def test_a_hit_on_the_import_line_means_the_project_is_still_loading(
+        self,
+    ) -> None:
+        """tsserver answers with the import statement until its program is
+        built — indistinguishable from success unless you look at where it
+        landed."""
+        tracer = self._tracer(ROUTE)
+        assert tracer._is_unresolved([_Loc("/r.ts", 0)], "/r.ts") is True
+
+    def test_a_definition_in_another_file_is_resolved(self) -> None:
+        tracer = self._tracer(ROUTE)
+        assert tracer._is_unresolved([_Loc("/lib/auth.ts", 5)], "/r.ts") is False
+
+    def test_a_same_file_declaration_is_resolved_not_pending(self) -> None:
+        """A locally-declared helper legitimately resolves to this file; only
+        landing on an *import* line means "not ready"."""
+        tracer = self._tracer(ROUTE)
+        assert tracer._is_unresolved([_Loc("/r.ts", 2)], "/r.ts") is False
+
+    def test_unknown_content_is_treated_as_resolved(self) -> None:
+        tracer = self._tracer("")
+        assert tracer._is_unresolved([_Loc("/r.ts", 0)], "/r.ts") is False
