@@ -358,6 +358,42 @@ class TestLSPInitialization:
 
 class TestLSPValidation:
     @pytest.mark.asyncio
+    async def test_a_disproved_finding_is_removed_from_the_report(self) -> None:
+        """The whole point of LSP validation.
+
+        `validate_with_lsp` *drops* the findings it disproves rather than
+        returning them flagged, so the suppressed set is what left the list.
+        """
+        kept, disproved = _code_finding(), _code_finding(suppressed=True)
+        scanner = _sast_scanner(
+            [kept, disproved],
+            # Mirrors the real analyzer: suppressed findings do not come back.
+            validate=lambda findings, _flows: [
+                f for f in findings if not f.lsp_suppressed
+            ],
+        )
+        ingestion = AsyncMock()
+        ingestion.ingest.return_value = _repo_snapshot()
+
+        agent = _agent(
+            repo_ingestion_service=ingestion,
+            lsp_client=_lsp_client(),
+            sast_scanners=[scanner],
+        )
+        with patch(
+            "isitsecure.engine.code_analysis.lsp.auth_flow_tracer.AuthFlowTracer"
+        ) as tracer_cls:
+            tracer_cls.return_value.trace_routes = AsyncMock(return_value={})
+            events = await _collect(agent.scan(
+                repo_url="https://github.com/o/r", scan_mode=ScanMode.CODE_ONLY
+            ))
+
+        report = _report(events)
+        assert "lsp_validator" in report["scanners_run"]
+        assert len(report["findings"]) == 1
+        assert report["findings"][0]["id"] == kept.id
+
+    @pytest.mark.asyncio
     async def test_findings_the_tracer_confirms_are_kept(self) -> None:
         """Suppression must remove only what was disproved, nothing else."""
         a, b = _code_finding(), _code_finding()

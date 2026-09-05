@@ -807,16 +807,20 @@ class DeepSecurityScanAgent:
                 )
 
                 # Validate SAST findings with LSP results
+                before_ids = {f.id for f in sast_code_findings}
                 for scanner in self._sast_scanners:
                     if hasattr(scanner, "validate_with_lsp"):
                         sast_code_findings = scanner.validate_with_lsp(
                             sast_code_findings, auth_flow_results
                         )
 
-                # Rebuild all_findings from validated sast_code_findings
-                # (remove suppressed findings from the deep findings list)
-                suppressed_ids = {
-                    f.id for f in sast_code_findings if f.lsp_suppressed
+                # Drop the deep findings whose code findings the tracer
+                # disproved. Derive that from what actually left the list:
+                # validate_with_lsp *removes* suppressed findings rather than
+                # returning them flagged, so filtering the returned list on
+                # `lsp_suppressed` always found nothing.
+                suppressed_ids = before_ids - {
+                    f.id for f in sast_code_findings
                 }
                 all_findings = [
                     f for f in all_findings
@@ -2258,6 +2262,10 @@ class DeepSecurityScanAgent:
                 github_url=cf.github_url,
             )
         return DeepFinding(
+            # Keep the code finding's identity: LSP validation matches deep
+            # findings back to the code findings it suppressed, and a fresh
+            # uuid here made that match impossible.
+            id=cf.id,
             source=FindingSource.SAST_CODE,
             category=cf.category,
             severity=cf.severity,
