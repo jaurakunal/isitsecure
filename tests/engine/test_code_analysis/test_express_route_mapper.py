@@ -25,7 +25,7 @@ class TestExpressRouteMapperBasic:
         self, tmp_path: Path
     ) -> None:
         """Scanner returns empty list when JS files contain no Express patterns."""
-        src_dir = tmp_path / ExpressRouteMapperConfig.SOURCE_DIRS[0]
+        src_dir = tmp_path / "src"
         src_dir.mkdir(parents=True)
         plain_file = src_dir / "utils.js"
         plain_file.write_text(
@@ -240,3 +240,150 @@ class TestMountPoints:
         routes = self.mapper.map_routes(str(tmp_path))
         assert len(routes) == 1
         assert routes[0].content == content
+
+
+class TestRouteFileDiscovery:
+    """Which files the mapper treats as this application's routes.
+
+    Two questions, both of which used to be answered wrong. Where to look:
+    a fixed list of directory names — src, routes, api — reported zero routes
+    for any project that names its own, and "zero routes" is indistinguishable
+    from "no Express here" for every stage downstream. And what counts: a repo
+    also holds route-shaped code that never runs, and reporting missing auth
+    on a fixture is a finding about nothing.
+    """
+
+    def setup_method(self) -> None:
+        self.mapper = ExpressRouteMapper()
+
+    ROUTE = (
+        "const express = require('express');\n"
+        "const router = express.Router();\n"
+        "router.get('/widgets', (req, res) => res.json([]));\n"
+        "module.exports = router;\n"
+    )
+
+    def _write(self, root: Path, rel: str, body: str) -> None:
+        target = root / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(body)
+
+    def _app(self, root: Path, *requires: str) -> None:
+        """A root entry point that requires the given route modules."""
+        body = "const express = require('express');\nconst app = express();\n"
+        body += "".join(f"app.use(require('./{r}'));\n" for r in requires)
+        self._write(root, "server.js", body)
+
+    def _patterns(self, root: Path) -> list[str]:
+        return [r.route_pattern for r in self.mapper.map_routes(str(root))]
+
+    def test_finds_routes_outside_the_conventional_directories(
+        self, tmp_path: Path
+    ) -> None:
+        """NodeGoat's shape: routes under app/routes, which no list reached."""
+        self._write(tmp_path, "app/routes/widgets.js", self.ROUTE)
+        self._app(tmp_path, "app/routes/widgets")
+        assert "/widgets" in self._patterns(tmp_path)
+
+    def test_finds_routes_at_any_depth(self, tmp_path: Path) -> None:
+        self._write(tmp_path, "services/billing/http/v2/handlers.js", self.ROUTE)
+        self._app(tmp_path, "services/billing/http/v2/handlers")
+        assert "/widgets" in self._patterns(tmp_path)
+
+    def test_still_finds_routes_in_the_conventional_directories(
+        self, tmp_path: Path
+    ) -> None:
+        """Widening the search must not lose what the old list did find."""
+        self._write(tmp_path, "src/routes/widgets.js", self.ROUTE)
+        self._app(tmp_path, "src/routes/widgets")
+        assert "/widgets" in self._patterns(tmp_path)
+
+    def test_vendored_code_is_not_scanned(self, tmp_path: Path) -> None:
+        """A dependency's routes are not this project's attack surface, and
+        node_modules is where a whole-tree walk would otherwise drown."""
+        self._write(tmp_path, "node_modules/express-thing/lib/routes.js", self.ROUTE)
+        assert self.mapper.map_routes(str(tmp_path)) == []
+
+    def test_hidden_directories_are_not_scanned(self, tmp_path: Path) -> None:
+        self._write(tmp_path, ".git/hooks/routes.js", self.ROUTE)
+        assert self.mapper.map_routes(str(tmp_path)) == []
+
+    def test_build_output_is_not_scanned(self, tmp_path: Path) -> None:
+        """dist/ is a copy of src/, so scanning it doubles every finding."""
+        self._write(tmp_path, "dist/routes.js", self.ROUTE)
+        assert self.mapper.map_routes(str(tmp_path)) == []
+
+    def test_non_code_files_are_ignored(self, tmp_path: Path) -> None:
+        self._write(tmp_path, "app/routes/widgets.md", self.ROUTE)
+        assert self.mapper.map_routes(str(tmp_path)) == []
+
+    def test_the_walk_is_bounded(self, tmp_path: Path, monkeypatch) -> None:
+        """A pathological tree must not make the scan unbounded."""
+        from isitsecure.engine.constants import ExpressRouteMapperConfig
+
+        monkeypatch.setattr(ExpressRouteMapperConfig, "MAX_FILES_SCANNED", 2)
+        for i in range(50):
+            self._write(tmp_path, f"pkg{i}/routes.js", self.ROUTE)
+        assert len(self.mapper.map_routes(str(tmp_path))) < 50
+
+
+class TestUnreachableRouteFiles:
+    """Route-shaped code that the application never loads.
+
+    Juice Shop ships 135 of these under data/static/codefixes — fixtures for
+    its own coding challenges. Mapping them produced 84 findings about
+    missing auth on code that does not run.
+    """
+
+    def setup_method(self) -> None:
+        self.mapper = ExpressRouteMapper()
+
+    ROUTE = TestRouteFileDiscovery.ROUTE
+    _write = TestRouteFileDiscovery._write
+    _app = TestRouteFileDiscovery._app
+    _patterns = TestRouteFileDiscovery._patterns
+
+    def _snippet(self, root: Path, rel: str) -> None:
+        self._write(
+            root,
+            rel,
+            "const router = require('express').Router();\n"
+            "router.get('/snippet', (req, res) => res.json([]));\n",
+        )
+
+    def test_a_file_nothing_imports_is_not_a_route(self, tmp_path: Path) -> None:
+        self._write(tmp_path, "src/routes/widgets.js", self.ROUTE)
+        self._app(tmp_path, "src/routes/widgets")
+        self._snippet(tmp_path, "data/static/codefixes/challenge_1.js")
+        patterns = self._patterns(tmp_path)
+        assert "/widgets" in patterns
+        assert "/snippet" not in patterns
+
+    def test_a_neighbour_of_a_reachable_route_is_kept(
+        self, tmp_path: Path
+    ) -> None:
+        """Route files are often loaded by globbing a directory, which leaves
+        no import to find. Missing a real route is the worse mistake, so one
+        reachable file vouches for its directory."""
+        self._write(tmp_path, "src/routes/widgets.js", self.ROUTE)
+        self._app(tmp_path, "src/routes/widgets")
+        self._snippet(tmp_path, "src/routes/gadgets.js")
+        assert "/snippet" in self._patterns(tmp_path)
+
+    def test_an_entry_point_needs_no_importer(self, tmp_path: Path) -> None:
+        """Nothing imports the file the process starts from."""
+        self._write(tmp_path, "server.js", self.ROUTE)
+        assert "/widgets" in self._patterns(tmp_path)
+
+    def test_a_conventional_entry_name_needs_no_importer(
+        self, tmp_path: Path
+    ) -> None:
+        self._write(tmp_path, "app/routes/index.js", self.ROUTE)
+        assert "/widgets" in self._patterns(tmp_path)
+
+    def test_nothing_reachable_keeps_everything(self, tmp_path: Path) -> None:
+        """When no candidate looks wired the graph is uninformative — the
+        entry point may be a .jsx or a compiled artefact this walk never
+        read — and pruning on no evidence would drop the whole project."""
+        self._write(tmp_path, "src/http/widgets.js", self.ROUTE)
+        assert "/widgets" in self._patterns(tmp_path)
