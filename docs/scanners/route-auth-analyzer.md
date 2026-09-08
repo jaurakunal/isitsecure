@@ -15,6 +15,26 @@ The analyzer is **framework-aware**:
 - **Express**: Scans `app.get()`, `router.post()` patterns
 - **tRPC**: Checks if procedures use `protectedProcedure` vs `publicProcedure`
 
+### Routes it deliberately stays quiet about
+
+Some routes are meant to be open, and flagging them is noise. The exemption
+list is deliberately short and is about what a route **is**, not about what we
+found on it:
+
+- health and status endpoints (`/health`, `/ping`, `/status`, `/ready`, …)
+- API documentation (`/docs`, `/swagger`, `/openapi`) and the root path
+- webhook receivers (`/webhook`, `/stripe`), which are signature-verified
+  rather than auth-gated
+
+App-specific route names are kept out of it on purpose: a scanned app that
+happens to reuse one would have a real finding silently suppressed.
+
+Not finding a guard is never itself grounds for staying quiet. A rule that
+exempted any GET route the mapper reported no auth on read that backwards —
+it is the exact condition a missing-auth finding exists to report — and
+because the Express mapper always answers true or false and never "unknown",
+no Express GET route could produce a missing-auth finding at all.
+
 ## Why It Matters
 
 A single API route without authentication is often enough for a full data breach:

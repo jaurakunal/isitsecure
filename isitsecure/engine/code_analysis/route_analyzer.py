@@ -305,14 +305,17 @@ class RouteAuthAnalyzer:
         if any(ind in pattern for ind in self._PUBLIC_ROUTE_INDICATORS):
             return True
 
-        # Route mapper explicitly marked as public (has_auth_check=False)
-        # AND the route is a read-only GET — likely intentionally public
-        if (
-            route.has_auth_check is False
-            and all(m == "GET" for m in route.http_methods)
-        ):
-            return True
-
+        # Deliberately no rule here for "the mapper found no auth on a GET".
+        # That was read as evidence the route is *intentionally* open, when it
+        # is the exact condition a missing-auth finding exists to report. The
+        # Express mapper always answers True or False, never None, so between
+        # that rule and `has_auth_check is True` no Express GET route could
+        # produce a missing-auth finding at all: 49 of Juice Shop's 104 and 13
+        # of NodeGoat's 19 were skipped here without being looked at.
+        #
+        # A route is public because of what it is — a health check, a webhook
+        # — not because we failed to find a guard on it. Absence of evidence
+        # belongs in the finding, not in the decision to stay quiet.
         return False
 
     def _analyze_server_actions(self, repo: RepoSnapshot) -> list[CodeFinding]:
