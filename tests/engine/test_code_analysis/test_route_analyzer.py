@@ -477,3 +477,140 @@ class TestRouteAuthAnalyzer:
         route = _make_route("", http_methods=["GET"])
         line = self.analyzer._find_relevant_line("", route)
         assert line is None
+
+
+# ---------------------------------------------------------------------------
+# _is_intentionally_public
+# ---------------------------------------------------------------------------
+
+
+class TestIntentionallyPublic:
+    """Which routes are exempt from the missing-auth check.
+
+    A route is public because of what it *is* — a health check, a webhook —
+    never because we looked for a guard and did not find one. Treating the
+    second as the first is how 49 of Juice Shop's 104 routes and 13 of
+    NodeGoat's 19 were skipped without being examined.
+    """
+
+    def setup_method(self) -> None:
+        self.analyzer = RouteAuthAnalyzer()
+
+    @staticmethod
+    def _route(pattern: str, method: str = "GET", has_auth=None) -> RouteEntry:
+        return RouteEntry(
+            file_path="server.ts",
+            http_methods=[method],
+            route_pattern=pattern,
+            has_auth_check=has_auth,
+            content=f"app.get('{pattern}', handler)",
+        )
+
+    def test_a_health_check_is_public(self) -> None:
+        assert self.analyzer._is_intentionally_public(self._route("/health"))
+
+    def test_a_webhook_is_public(self) -> None:
+        assert self.analyzer._is_intentionally_public(
+            self._route("/api/webhook/stripe", "POST")
+        )
+
+    def test_an_unguarded_get_is_not_public(self) -> None:
+        """The regression this guards: `has_auth_check is False` on a GET was
+        read as "deliberately open" when it is the exact condition a
+        missing-auth finding exists to report."""
+        route = self._route("/api/Products", "GET", has_auth=False)
+        assert not self.analyzer._is_intentionally_public(route)
+
+    def test_an_unguarded_get_produces_a_finding(self) -> None:
+        route = self._route("/rest/wallet/balance", "GET", has_auth=False)
+        titles = [f.title for f in self.analyzer._analyze_route(route)]
+        assert RouteAuthAnalyzerConfig.TITLE_MISSING_AUTH in titles
+
+    def test_a_guarded_get_still_produces_no_finding(self) -> None:
+        """Removing the exemption must not start flagging routes the mapper
+        did find a guard on."""
+        route = self._route("/api/BasketItems", "GET", has_auth=True)
+        titles = [f.title for f in self.analyzer._analyze_route(route)]
+        assert RouteAuthAnalyzerConfig.TITLE_MISSING_AUTH not in titles
+
+    def test_an_unguarded_post_still_produces_a_finding(self) -> None:
+        """POST was never exempt; it must stay that way."""
+        route = self._route("/api/Recycles", "POST", has_auth=False)
+        titles = [f.title for f in self.analyzer._analyze_route(route)]
+        assert RouteAuthAnalyzerConfig.TITLE_MISSING_AUTH in titles
+
+    def test_a_root_path_is_still_public(self) -> None:
+        """`/` is exempt by name, not by method, and stays so."""
+        assert self.analyzer._is_intentionally_public(
+            self._route("/", "GET", has_auth=False)
+        )
+
+
+# ---------------------------------------------------------------------------
+# LSP suppression is per method
+# ---------------------------------------------------------------------------
+
+
+class TestLSPSuppressionIsPerMethod:
+    """A verdict belongs to one method, not to a path.
+
+    Juice Shop leaves `GET /api/Recycles` open and guards
+    `POST /api/Recycles` on the very next line. Answering a finding from the
+    path alone hands one of them the other's verdict — and in the direction
+    that suppresses, that hides a live vulnerability.
+    """
+
+    def setup_method(self) -> None:
+        self.analyzer = RouteAuthAnalyzer()
+
+    @staticmethod
+    def _finding(analyzer, method: str) -> object:
+        route = RouteEntry(
+            file_path="server.ts",
+            http_methods=[method],
+            route_pattern="/api/Recycles",
+            has_auth_check=False,
+            content="app.get('/api/Recycles', open)\n",
+        )
+        return analyzer._create_finding(
+            route=route,
+            title=RouteAuthAnalyzerConfig.TITLE_MISSING_AUTH,
+            description="no auth",
+            severity=SeverityLevel(RouteAuthAnalyzerConfig.SEVERITY_MISSING_AUTH),
+            category=FindingCategory.AUTH_WEAKNESS,
+        )
+
+    @staticmethod
+    def _results():
+        from isitsecure.engine.code_analysis.lsp.auth_flow_tracer import (
+            AuthFlowTracer,
+        )
+        from isitsecure.engine.code_analysis.lsp.protocols import AuthFlowResult
+
+        return {
+            AuthFlowTracer.result_key("server.ts", "GET", "/api/Recycles"):
+                AuthFlowResult(has_verified_auth=False, confidence=0.5),
+            AuthFlowTracer.result_key("server.ts", "POST", "/api/Recycles"):
+                AuthFlowResult(has_verified_auth=True, auth_method="isAuthorized"),
+        }
+
+    def test_the_guarded_method_is_suppressed(self) -> None:
+        kept = self.analyzer.validate_with_lsp(
+            [self._finding(self.analyzer, "POST")], self._results()
+        )
+        assert kept == []
+
+    def test_the_open_method_is_not(self) -> None:
+        """The bug: the POST's guard used to answer for the GET too."""
+        kept = self.analyzer.validate_with_lsp(
+            [self._finding(self.analyzer, "GET")], self._results()
+        )
+        assert len(kept) == 1
+
+    def test_a_finding_with_no_method_needs_agreement(self) -> None:
+        """Nothing identifies which mount it came from, so a verdict is only
+        safe to apply when every method on the route agrees."""
+        finding = self._finding(self.analyzer, "GET")
+        finding.http_methods = []
+        kept = self.analyzer.validate_with_lsp([finding], self._results())
+        assert len(kept) == 1

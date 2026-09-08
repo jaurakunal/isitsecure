@@ -36,3 +36,8 @@ class CodeFinding(BaseModel):
     # results are per route, so matching a finding back to them needs it —
     # matching on file alone hands every route in a file one verdict.
     route_pattern: str = ""
+
+    # And the method, for the same reason one level down: one path is
+    # routinely mounted twice with different guards, so a verdict looked up by
+    # path alone can be the other method's.
+    http_methods: list[str] = Field(default_factory=list)

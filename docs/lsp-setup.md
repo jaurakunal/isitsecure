@@ -209,6 +209,26 @@ file would either miss every guard or vouch for every unguarded neighbour —
 and vouching is the dangerous direction, because a suppressed finding is a
 vulnerability the report no longer mentions.
 
+A verdict belongs to one **method**, not to a path, because the same path is
+routinely mounted more than once:
+
+```javascript
+app.get('/api/Recycles', recycles.blockRecycleItems())   // open
+app.post('/api/Recycles', security.isAuthorized())       // guarded
+```
+
+Answering both from the path would either report the guarded POST or clear the
+open GET. A path-wide `app.use('/api/BasketItems', security.isAuthorized())` is
+different again — it stands in front of *every* method on that path, including
+ones with a mount of their own, so it is checked first and settles the route
+when it verifies.
+
+Trailing comments on a mount line are ignored. They are not middleware, and
+reading the last name on the line meant `app.post('/api/Products',
+security.isAuthorized()) // vuln-code-snippet neutral-line
+changeProductChallenge` resolved `changeProductChallenge` while dropping the
+guard beside it.
+
 Middleware that delegates to a library counts as the terminal, because tracing
 deliberately will not follow into `node_modules`: `expressJwt` (express-jwt),
 `requiresAuth` (express-openid-connect), `ensureLoggedIn` (connect-ensure-login),
