@@ -4780,10 +4780,22 @@ class LSPConfig:
     }
 
     # Express-style mounts: `app.use('/path', mw)`, `router.get('/path', mw)`.
+    # The verb is captured because one path is routinely mounted several times
+    # with different guards — Juice Shop leaves `GET /api/Recycles` open and
+    # guards `POST /api/Recycles` on the next line.
     ROUTE_MOUNT_PATTERN = (
-        r"\.\s*(?:use|all|get|post|put|patch|delete|head|options)\s*\(\s*"
-        r"['\"`]([^'\"`]+)['\"`]\s*,(?P<middleware>[^\n]*)"
+        r"\.\s*(?P<verb>use|all|get|post|put|patch|delete|head|options)\s*\(\s*"
+        r"['\"`](?P<path>[^'\"`]+)['\"`]\s*,(?P<middleware>[^\n]*)"
     )
+
+    # `.use('/path', mw)` and `.all('/path', mw)` apply to every method on that
+    # path, so their verdict answers any method that has no mount of its own.
+    MOUNT_ANY_METHOD = "*"
+
+    # A trailing comment is not middleware. Juice Shop annotates its mounts
+    # (`// vuln-code-snippet neutral-line changeProductChallenge`) and the last
+    # identifier on the line was that annotation, not the guard beside it.
+    LINE_COMMENT_PATTERN = r"//.*$|/\*.*?\*/"
 
 
     # Middleware applied without a path — `router.use(requireAuth)` — which

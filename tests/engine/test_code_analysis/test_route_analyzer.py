@@ -544,3 +544,73 @@ class TestIntentionallyPublic:
         assert self.analyzer._is_intentionally_public(
             self._route("/", "GET", has_auth=False)
         )
+
+
+# ---------------------------------------------------------------------------
+# LSP suppression is per method
+# ---------------------------------------------------------------------------
+
+
+class TestLSPSuppressionIsPerMethod:
+    """A verdict belongs to one method, not to a path.
+
+    Juice Shop leaves `GET /api/Recycles` open and guards
+    `POST /api/Recycles` on the very next line. Answering a finding from the
+    path alone hands one of them the other's verdict — and in the direction
+    that suppresses, that hides a live vulnerability.
+    """
+
+    def setup_method(self) -> None:
+        self.analyzer = RouteAuthAnalyzer()
+
+    @staticmethod
+    def _finding(analyzer, method: str) -> object:
+        route = RouteEntry(
+            file_path="server.ts",
+            http_methods=[method],
+            route_pattern="/api/Recycles",
+            has_auth_check=False,
+            content="app.get('/api/Recycles', open)\n",
+        )
+        return analyzer._create_finding(
+            route=route,
+            title=RouteAuthAnalyzerConfig.TITLE_MISSING_AUTH,
+            description="no auth",
+            severity=SeverityLevel(RouteAuthAnalyzerConfig.SEVERITY_MISSING_AUTH),
+            category=FindingCategory.AUTH_WEAKNESS,
+        )
+
+    @staticmethod
+    def _results():
+        from isitsecure.engine.code_analysis.lsp.auth_flow_tracer import (
+            AuthFlowTracer,
+        )
+        from isitsecure.engine.code_analysis.lsp.protocols import AuthFlowResult
+
+        return {
+            AuthFlowTracer.result_key("server.ts", "GET", "/api/Recycles"):
+                AuthFlowResult(has_verified_auth=False, confidence=0.5),
+            AuthFlowTracer.result_key("server.ts", "POST", "/api/Recycles"):
+                AuthFlowResult(has_verified_auth=True, auth_method="isAuthorized"),
+        }
+
+    def test_the_guarded_method_is_suppressed(self) -> None:
+        kept = self.analyzer.validate_with_lsp(
+            [self._finding(self.analyzer, "POST")], self._results()
+        )
+        assert kept == []
+
+    def test_the_open_method_is_not(self) -> None:
+        """The bug: the POST's guard used to answer for the GET too."""
+        kept = self.analyzer.validate_with_lsp(
+            [self._finding(self.analyzer, "GET")], self._results()
+        )
+        assert len(kept) == 1
+
+    def test_a_finding_with_no_method_needs_agreement(self) -> None:
+        """Nothing identifies which mount it came from, so a verdict is only
+        safe to apply when every method on the route agrees."""
+        finding = self._finding(self.analyzer, "GET")
+        finding.http_methods = []
+        kept = self.analyzer.validate_with_lsp([finding], self._results())
+        assert len(kept) == 1

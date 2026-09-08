@@ -106,8 +106,13 @@ class AuthFlowTracer:
                     )
                     continue
                 for route in file_routes:
-                    key = f"{route.file_path}:{route.route_pattern}"
-                    results[key] = result.get(route.route_pattern, AuthFlowResult())
+                    for method in route.http_methods:
+                        key = self.result_key(
+                            route.file_path, method, route.route_pattern
+                        )
+                        results[key] = result.get(
+                            (method, route.route_pattern), AuthFlowResult()
+                        )
 
         traced = len(results)
         auth_found = sum(1 for r in results.values() if r.has_verified_auth)
@@ -118,13 +123,23 @@ class AuthFlowTracer:
         )
         return results
 
+    @staticmethod
+    def result_key(file_path: str, method: str, route_pattern: str) -> str:
+        """The key one route's verdict is filed under.
+
+        The method is part of it because a verdict is per method: one path is
+        routinely mounted twice with different guards, and a single key let
+        whichever was traced last answer for both.
+        """
+        return f"{file_path}:{method} {route_pattern}"
+
     # ------------------------------------------------------------------
     # Per-file tracing
     # ------------------------------------------------------------------
 
     async def _trace_file(
         self, file_path: str, routes: list[RouteEntry]
-    ) -> dict[str, AuthFlowResult]:
+    ) -> dict[tuple[str, str], AuthFlowResult]:
         """Trace auth flow for one file, per route.
 
         A file that mounts its routes explicitly — the Express shape, where
@@ -151,7 +166,7 @@ class AuthFlowTracer:
         # so it settles the whole file regardless of what the mounts say.
         router_wide = await self._trace_express_auth(content, abs_path)
         if router_wide and router_wide.has_verified_auth:
-            return {route.route_pattern: router_wide for route in routes}
+            return self._for_every_method(routes, router_wide)
 
         mounts = self._route_mounts(content)
         if mounts:
@@ -159,27 +174,94 @@ class AuthFlowTracer:
             # a route with no auth on its mount line has none. Falling back to
             # a file-wide scan here is what would let one guarded route vouch
             # for its unguarded neighbours.
-            per_route: dict[str, AuthFlowResult] = {}
+            per_route: dict[tuple[str, str], AuthFlowResult] = {}
             for route in routes:
-                middleware = mounts.get(route.route_pattern)
-                per_route[route.route_pattern] = (
-                    await self._verify_mount_middleware(middleware, content, abs_path)
-                    if middleware
-                    else AuthFlowResult(confidence=0.5)
-                )
+                for method in route.http_methods:
+                    per_route[(method, route.route_pattern)] = (
+                        await self._verify_route_mount(
+                            mounts, method, route.route_pattern,
+                            content, abs_path,
+                        )
+                    )
             return per_route
 
         result = await self._trace_whole_file(content, abs_path)
-        return {route.route_pattern: result for route in routes}
+        return self._for_every_method(routes, result)
+
+    async def _verify_route_mount(
+        self,
+        mounts: dict[tuple[str, str], str],
+        method: str,
+        route_pattern: str,
+        content: str,
+        abs_path: str,
+    ) -> AuthFlowResult:
+        """The verdict for one method of one route, from its mount lines.
+
+        A path may be mounted twice over: `app.use('/api/BasketItems',
+        security.isAuthorized())` guards every method on that path, and
+        `app.post('/api/BasketItems', handler)` still runs through it. So the
+        path-wide mount is asked first and settles the route when it verifies
+        — treating it as a fallback for methods with no mount of their own had
+        an unguarded handler override the guard standing in front of it.
+
+        The method's own mount answers when the path-wide one does not.
+        """
+        path_wide = mounts.get((LSPConfig.MOUNT_ANY_METHOD, route_pattern))
+        if path_wide:
+            result = await self._verify_mount_middleware(
+                path_wide, content, abs_path
+            )
+            if result.has_verified_auth:
+                return result
+
+        own = mounts.get((method, route_pattern))
+        if own:
+            return await self._verify_mount_middleware(own, content, abs_path)
+
+        return AuthFlowResult(confidence=0.5)
 
     @staticmethod
-    def _route_mounts(content: str) -> dict[str, str]:
-        """Map each mounted route pattern to the middleware named beside it."""
-        mounts: dict[str, str] = {}
+    def _for_every_method(
+        routes: list[RouteEntry], result: AuthFlowResult
+    ) -> dict[tuple[str, str], AuthFlowResult]:
+        """One verdict, filed against every method of every route in it.
+
+        Router-wide middleware and whole-file strategies answer the file, not
+        a mount line, so no method on it is distinguished.
+        """
+        return {
+            (method, route.route_pattern): result
+            for route in routes
+            for method in route.http_methods
+        }
+
+    @staticmethod
+    def _route_mounts(content: str) -> dict[tuple[str, str], str]:
+        """Map each mounted (method, path) to the middleware named beside it.
+
+        Keyed by method as well as path, because one path is routinely mounted
+        several times with different guards::
+
+            app.get('/api/Recycles', recycles.blockRecycleItems())
+            app.post('/api/Recycles', security.isAuthorized())
+
+        Keying by path alone let the first line settle the second, so a guarded
+        POST was reported as unauthenticated. `.use` and `.all` take
+        ``MOUNT_ANY_METHOD``: they apply to every method on that path and
+        answer whichever ones have no mount of their own.
+        """
+        mounts: dict[tuple[str, str], str] = {}
         for match in re.finditer(LSPConfig.ROUTE_MOUNT_PATTERN, content):
-            pattern, middleware = match.group(1), match.group("middleware")
+            verb = match.group("verb").lower()
+            method = (
+                LSPConfig.MOUNT_ANY_METHOD
+                if verb in ("use", "all")
+                else verb.upper()
+            )
+            key = (method, match.group("path"))
             # First mount wins; later ones are usually narrower duplicates.
-            mounts.setdefault(pattern, middleware)
+            mounts.setdefault(key, match.group("middleware"))
         return mounts
 
     async def _verify_mount_middleware(
@@ -234,7 +316,16 @@ class AuthFlowTracer:
         Taking the last identifier of each argument yields the member for a
         qualified call and the name itself for a bare reference. The route
         handler comes along too; it simply contains no auth terminal.
+
+        Comments are stripped first. Juice Shop annotates its mounts, and
+        ``app.post('/api/Products', security.isAuthorized()) //
+        vuln-code-snippet neutral-line changeProductChallenge`` yielded
+        ``changeProductChallenge`` — the annotation, with the guard beside it
+        dropped entirely, so the route read as unguarded.
         """
+        middleware = re.sub(
+            LSPConfig.LINE_COMMENT_PATTERN, "", middleware, flags=re.DOTALL
+        )
         names: list[str] = []
         for argument in middleware.split(","):
             identifiers = re.findall(r"[A-Za-z_]\w*", argument)

@@ -462,9 +462,38 @@ class RouteAuthAnalyzer:
         )
 
         if finding.route_pattern:
-            return auth_flow_results.get(
-                f"{finding.file_path}:{finding.route_pattern}"
+            from isitsecure.engine.code_analysis.lsp.auth_flow_tracer import (
+                AuthFlowTracer,
             )
+
+            # A verdict is per method: `GET /api/Recycles` is open where
+            # `POST /api/Recycles` is guarded, so a finding about one must not
+            # be answered with the other's result.
+            for method in finding.http_methods:
+                result = auth_flow_results.get(
+                    AuthFlowTracer.result_key(
+                        finding.file_path, method, finding.route_pattern
+                    )
+                )
+                if result is not None:
+                    return result
+
+            # A finding that names no method is answered from the route only
+            # when every method on it agrees — same reason as the file-level
+            # case below.
+            suffix = f":{finding.route_pattern}"
+            on_route = [
+                result
+                for key, result in auth_flow_results.items()
+                if key.startswith(finding.file_path + ":")
+                and key.endswith(suffix)
+            ]
+            if on_route and all(
+                r.has_verified_auth == on_route[0].has_verified_auth
+                for r in on_route
+            ):
+                return on_route[0]
+            return None
 
         # No route on the finding: only answer from the file when every route
         # in it agrees. One `server.ts` can mount a hundred routes of which a
@@ -551,6 +580,7 @@ class RouteAuthAnalyzer:
             description=description,
             file_path=route.file_path,
             route_pattern=route.route_pattern,
+            http_methods=list(route.http_methods),
             line_number=line_number,
             code_snippet=CodeContextExtractor.extract(
                 route.content, line_number

@@ -41,10 +41,12 @@ def _make_repo(
     )
 
 
-def _make_route(file_path: str, pattern: str = "/api/test") -> RouteEntry:
+def _make_route(
+    file_path: str, pattern: str = "/api/test", method: str = "GET"
+) -> RouteEntry:
     return RouteEntry(
         file_path=file_path,
-        http_methods=["GET"],
+        http_methods=[method],
         route_pattern=pattern,
     )
 
@@ -94,12 +96,12 @@ class TestAuthFlowTracerBasic:
 
         # Both routes should have results (mapped from the single file trace)
         assert len(results) == 2
-        assert "src/routes/api.ts:/api/users" in results
-        assert "src/routes/api.ts:/api/posts" in results
+        assert "src/routes/api.ts:GET /api/users" in results
+        assert "src/routes/api.ts:GET /api/posts" in results
 
         # Both should share the same result (same file traced once)
-        r1 = results["src/routes/api.ts:/api/users"]
-        r2 = results["src/routes/api.ts:/api/posts"]
+        r1 = results["src/routes/api.ts:GET /api/users"]
+        r2 = results["src/routes/api.ts:GET /api/posts"]
         assert r1.confidence == r2.confidence
 
 
@@ -149,7 +151,7 @@ class TestTRPCTracing:
         routes = [_make_route("src/server/routers/user.ts", "/api/user.getProfile")]
 
         results = await tracer.trace_routes(routes)
-        result = results["src/server/routers/user.ts:/api/user.getProfile"]
+        result = results["src/server/routers/user.ts:GET /api/user.getProfile"]
 
         assert result.has_verified_auth is True
         assert result.confidence == 0.95
@@ -175,7 +177,7 @@ class TestTRPCTracing:
 
         routes = [_make_route("src/server/routers/health.ts", "/api/health.check")]
         results = await tracer.trace_routes(routes)
-        result = results["src/server/routers/health.ts:/api/health.check"]
+        result = results["src/server/routers/health.ts:GET /api/health.check"]
 
         # Public procedures have no verified auth -- the tracer's _trace_file
         # only keeps results where has_verified_auth is True, so this falls
@@ -214,7 +216,7 @@ class TestTRPCTracing:
         tracer = AuthFlowTracer(lsp, repo)
         routes = [_make_route("src/router.ts")]
         results = await tracer.trace_routes(routes)
-        result = results["src/router.ts:/api/test"]
+        result = results["src/router.ts:GET /api/test"]
 
         assert result.has_verified_auth is True
         assert "getUser" in result.auth_method
@@ -260,7 +262,7 @@ class TestExpressTracing:
         tracer = AuthFlowTracer(lsp, repo)
         routes = [_make_route("src/routes/profile.ts", "/profile")]
         results = await tracer.trace_routes(routes)
-        result = results["src/routes/profile.ts:/profile"]
+        result = results["src/routes/profile.ts:GET /profile"]
 
         assert result.has_verified_auth is True
         assert "requireAuth" in result.middleware_chain
@@ -298,9 +300,9 @@ class TestExpressTracing:
         ]
 
         tracer = AuthFlowTracer(lsp, repo)
-        routes = [_make_route("src/routes/data.ts", "/data")]
+        routes = [_make_route("src/routes/data.ts", "/data", method="POST")]
         results = await tracer.trace_routes(routes)
-        result = results["src/routes/data.ts:/data"]
+        result = results["src/routes/data.ts:POST /data"]
 
         assert result.has_verified_auth is True
         assert "verifyAuth" in result.middleware_chain
@@ -320,7 +322,7 @@ class TestExpressTracing:
 
         routes = [_make_route("src/routes/health.ts", "/health")]
         results = await tracer.trace_routes(routes)
-        result = results["src/routes/health.ts:/health"]
+        result = results["src/routes/health.ts:GET /health"]
 
         assert result.has_verified_auth is False
         assert result.confidence == 0.5  # fallback confidence
@@ -357,7 +359,7 @@ class TestDecoratorTracing:
 
         routes = [_make_route("src/users/users.controller.ts", "/users")]
         results = await tracer.trace_routes(routes)
-        result = results["src/users/users.controller.ts:/users"]
+        result = results["src/users/users.controller.ts:GET /users"]
 
         assert result.has_verified_auth is True
         assert "UseGuards" in result.auth_method
@@ -382,7 +384,7 @@ class TestDecoratorTracing:
 
         routes = [_make_route("views/profile.py", "/profile")]
         results = await tracer.trace_routes(routes)
-        result = results["views/profile.py:/profile"]
+        result = results["views/profile.py:GET /profile"]
 
         assert result.has_verified_auth is True
         assert "login_required" in result.auth_method
@@ -409,7 +411,7 @@ class TestDecoratorTracing:
 
         routes = [_make_route("src/controllers/UserController.java", "/admin")]
         results = await tracer.trace_routes(routes)
-        result = results["src/controllers/UserController.java:/admin"]
+        result = results["src/controllers/UserController.java:GET /admin"]
 
         assert result.has_verified_auth is True
         assert "PreAuthorize" in result.auth_method
@@ -431,7 +433,7 @@ class TestDecoratorTracing:
 
         routes = [_make_route("src/handlers/health.ts", "/health")]
         results = await tracer.trace_routes(routes)
-        result = results["src/handlers/health.ts:/health"]
+        result = results["src/handlers/health.ts:GET /health"]
 
         assert result.has_verified_auth is False
         assert result.confidence == 0.5
@@ -462,7 +464,7 @@ class TestCJSImportFallback:
 
         routes = [_make_route("src/routers/user.js", "/api/user.getProfile")]
         results = await tracer.trace_routes(routes)
-        result = results["src/routers/user.js:/api/user.getProfile"]
+        result = results["src/routers/user.js:GET /api/user.getProfile"]
 
         assert result.has_verified_auth is True
         assert "protectedProcedure" in result.auth_method
@@ -489,7 +491,7 @@ class TestCJSImportFallback:
 
         routes = [_make_route("src/app/api/me/route.ts", "/api/me")]
         results = await tracer.trace_routes(routes)
-        result = results["src/app/api/me/route.ts:/api/me"]
+        result = results["src/app/api/me/route.ts:GET /api/me"]
 
         assert result.has_verified_auth is True
         assert "getUser" in result.auth_method
@@ -513,7 +515,7 @@ class TestCJSImportFallback:
 
         routes = [_make_route("src/app/api/items/route.ts", "/api/items")]
         results = await tracer.trace_routes(routes)
-        result = results["src/app/api/items/route.ts:/api/items"]
+        result = results["src/app/api/items/route.ts:GET /api/items"]
 
         assert result.has_verified_auth is False
         assert result.confidence == 0.5
@@ -544,7 +546,7 @@ class TestTraceFallback:
         tracer = AuthFlowTracer(lsp, repo)
         routes = [_make_route("src/routes/secret.ts", "/secret")]
         results = await tracer.trace_routes(routes)
-        result = results["src/routes/secret.ts:/secret"]
+        result = results["src/routes/secret.ts:GET /secret"]
 
         # Without LSP tracing the definition, requireAuth can't be confirmed
         # unless the definition is in the file_index. Since we didn't include
@@ -567,7 +569,7 @@ class TestTraceFallback:
         tracer = AuthFlowTracer(lsp, repo)
         routes = [_make_route("src/routes/items.ts", "/items")]
         results = await tracer.trace_routes(routes)
-        result = results["src/routes/items.ts:/items"]
+        result = results["src/routes/items.ts:GET /items"]
 
         # authenticate is detected as an auth pattern, but LSP can't
         # trace it, so the tracer can't confirm it — falls to fallback
@@ -772,20 +774,40 @@ router.get('/profile', requireAuth, handler)
 class TestRouteMounts:
     def test_each_mounted_route_maps_to_its_own_middleware(self) -> None:
         mounts = AuthFlowTracer._route_mounts(SERVER)
-        assert "isAuthorized" in mounts["/api/BasketItems"]
-        assert "denyAll" in mounts["/api/Challenges"]
+        assert "isAuthorized" in mounts[("*", "/api/BasketItems")]
+        assert "denyAll" in mounts[("POST", "/api/Challenges")]
 
     def test_an_unguarded_route_is_still_recorded(self) -> None:
         """It has to appear, so it can be answered "no auth" rather than
         falling through to a file-wide scan that a neighbour would pass."""
-        assert "/api/Products" in AuthFlowTracer._route_mounts(SERVER)
+        assert ("GET", "/api/Products") in AuthFlowTracer._route_mounts(SERVER)
 
     def test_a_file_that_mounts_nothing_yields_nothing(self) -> None:
         assert AuthFlowTracer._route_mounts("const x = 1\n") == {}
 
     def test_the_first_mount_wins(self) -> None:
         src = "app.use('/x', authGuard())\napp.use('/x', other())\n"
-        assert "authGuard" in AuthFlowTracer._route_mounts(src)["/x"]
+        assert "authGuard" in AuthFlowTracer._route_mounts(src)[("*", "/x")]
+
+    def test_the_same_path_keeps_a_verdict_per_method(self) -> None:
+        """Juice Shop leaves `GET /api/Recycles` open and guards the POST on
+        the very next line. Keyed by path alone, the first settled both."""
+        src = (
+            "app.get('/api/Recycles', recycles.blockRecycleItems())\n"
+            "app.post('/api/Recycles', security.isAuthorized())\n"
+        )
+        mounts = AuthFlowTracer._route_mounts(src)
+        assert "blockRecycleItems" in mounts[("GET", "/api/Recycles")]
+        assert "isAuthorized" in mounts[("POST", "/api/Recycles")]
+
+    def test_use_and_all_apply_to_any_method(self) -> None:
+        """They mount a path, not a method, so they answer whichever methods
+        have no mount of their own."""
+        mounts = AuthFlowTracer._route_mounts(
+            "app.use('/x', guard())\napp.all('/y', other())\n"
+        )
+        assert ("*", "/x") in mounts
+        assert ("*", "/y") in mounts
 
 
 class TestMiddlewareNames:
@@ -1013,7 +1035,7 @@ class TestRouterWideMiddlewareWins:
 
         results = await AuthFlowTracer(lsp, repo).trace_routes([route])
 
-        result = results["src/routes/team.ts:/team/:id"]
+        result = results["src/routes/team.ts:GET /team/:id"]
         assert result.has_verified_auth is True
         assert result.middleware_chain == ["ensureMember"]
 
@@ -1151,7 +1173,7 @@ class TestAliasFollowing:
     async def test_a_guarded_route_is_verified_through_its_alias(self) -> None:
         tracer, _ = self._tracer()
         results = await tracer.trace_routes([_make_route(self.ROUTES, "/dashboard")])
-        result = results[f"{self.ROUTES}:/dashboard"]
+        result = results[f"{self.ROUTES}:GET /dashboard"]
         assert result.has_verified_auth
         assert "jwt.verify" in result.auth_method
 
@@ -1162,7 +1184,7 @@ class TestAliasFollowing:
         falsely cleared."""
         tracer, _ = self._tracer(resolve_alias=False)
         results = await tracer.trace_routes([_make_route(self.ROUTES, "/dashboard")])
-        assert not results[f"{self.ROUTES}:/dashboard"].has_verified_auth
+        assert not results[f"{self.ROUTES}:GET /dashboard"].has_verified_auth
 
     async def test_a_self_referential_alias_terminates(self) -> None:
         """A cycle must end in an answer, not a hang."""
@@ -1178,7 +1200,7 @@ class TestAliasFollowing:
             _ScriptedLSP(definitions, files), _make_repo(file_index=files)
         )
         results = await tracer.trace_routes([_make_route("a.js", "/x")])
-        assert not results["a.js:/x"].has_verified_auth
+        assert not results["a.js:GET /x"].has_verified_auth
 
     async def test_the_hop_count_is_bounded(self) -> None:
         """Aliases chained past MAX_TRACE_DEPTH stop rather than recurse on,
