@@ -4741,6 +4741,16 @@ class LSPConfig:
     # --- Performance guards ---
     MAX_FILES_TO_OPEN = 100
     MAX_TRACE_DEPTH = 5  # prevent infinite recursion in go-to-definition chains
+
+    # A declaration that is nothing but another name for something else:
+    # `const isLoggedIn = sessionHandler.isLoggedInMiddleware;`. The right-hand
+    # side must be a bare (possibly dotted) name — a call or an arrow body
+    # means this *is* the implementation, so tracing stops here.
+    ALIAS_DECLARATION_PATTERN = (
+        r"^\s*(?:const|let|var|this\.[\w$]+|exports\.[\w$]+"
+        r"|module\.exports\.[\w$]+)?\s*[\w$.]+\s*=\s*"
+        r"(?P<target>[\w$]+(?:\.[\w$]+)*)\s*;?\s*$"
+    )
     MAX_CONCURRENT_REQUESTS = 10
 
     # --- tsserver command detection ---

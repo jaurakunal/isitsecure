@@ -177,6 +177,25 @@ route in the file. It's found by **where it's applied** — a path-less `.use()`
 — not by a list of names: a list can only recognise vocabulary someone thought
 of in advance, and `ensureMember` is your project's word.
 
+**Middleware reached through a local alias:**
+```javascript
+const isLoggedIn = sessionHandler.isLoggedInMiddleware   // just another name
+app.get('/dashboard', isLoggedIn, handler.show)
+```
+
+Go-to-definition on `isLoggedIn` lands on the alias, not the implementation.
+Stopping there reads an assignment with no auth in it and calls the route
+unguarded — the dangerous direction, since the route *is* guarded. A
+declaration whose whole right-hand side is a name gets followed to what it
+names, up to `MAX_TRACE_DEPTH` hops; anything with a call or a function body
+is the implementation and is read where it stands.
+
+Whether the next hop resolves is the language server's call. In untyped
+CommonJS — a property assigned as `this.x = …` inside a constructor, reached
+through `new Handler(db)` — tsserver returns no definition at all, and the
+trace stops at the alias. That route stays *unverified* rather than falsely
+cleared, so its findings are reported, not suppressed.
+
 **Centrally-mounted Express routes, per route:**
 ```typescript
 app.use('/api/BasketItems', security.isAuthorized())   // traced → verified

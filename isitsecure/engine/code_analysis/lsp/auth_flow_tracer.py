@@ -560,15 +560,20 @@ class AuthFlowTracer:
         content = self._get_file_content_absolute(file_path)
         if not content:
             return False
-        lines = content.split("\n")
         for loc in locations:
             if loc.file_path != file_path:
                 return False
-            if not (0 <= loc.line < len(lines)):
-                return False
-            if not lines[loc.line].lstrip().startswith(("import ", "import{")):
+            if not self._is_import_line(content, loc.line):
                 return False
         return True
+
+    @staticmethod
+    def _is_import_line(content: str, line: int) -> bool:
+        """True when ``line`` is an import statement rather than a body."""
+        lines = content.split("\n")
+        if not (0 <= line < len(lines)):
+            return False
+        return lines[line].lstrip().startswith(("import ", "import{"))
 
     async def _trace_definition(
         self,
@@ -605,7 +610,12 @@ class AuthFlowTracer:
         return None
 
     async def _trace_definition_body(
-        self, file_path: str, line: int, character: int
+        self,
+        file_path: str,
+        line: int,
+        character: int,
+        depth: int = 0,
+        seen: frozenset[tuple[str, int, int]] = frozenset(),
     ) -> str | None:
         """Go-to-definition, returning only the resolved symbol's own body.
 
@@ -614,38 +624,108 @@ class AuthFlowTracer:
         terminals belonging to its siblings. Searching the whole file made a
         login route — which imports ``signToken`` from the same module that
         defines ``verifyToken`` — look authenticated.
+
+        A declaration that is only another name for something else is
+        followed, up to ``MAX_TRACE_DEPTH`` hops. One hop lands on the
+        alias, not the implementation::
+
+            const isLoggedIn = sessionHandler.isLoggedInMiddleware;
+
+        Stopping there reads an assignment with no auth in it and concludes
+        the route is unguarded — the dangerous direction, since the route
+        *is* guarded. Local aliases like this are how a project shortens a
+        name it uses twenty times, so they sit directly between the route
+        and every guard it applies. ``seen`` closes the cycle a
+        self-referential alias would otherwise open.
         """
+        key = (file_path, line, character)
+        if key in seen or depth >= LSPConfig.MAX_TRACE_DEPTH:
+            return None
+        seen = seen | {key}
+
         locations = await self._resolve_definition(file_path, line, character)
         if not locations:
             return None
 
         for loc in locations:
-            if loc.file_path == file_path and loc.line == line:
-                continue
             if "node_modules" in loc.file_path:
                 continue
             content = self._get_file_content_absolute(loc.file_path)
-            if content:
-                return self._enclosing_block(content, loc.line)
+            if not content:
+                continue
+            # A location on an import line in the file we asked from is the
+            # unresolved answer, not a declaration; its "body" would be
+            # whatever happens to follow the import. A location that lands
+            # back on the query itself is not: that is a symbol declared
+            # right there, and reading it is the whole point.
+            if loc.file_path == file_path and self._is_import_line(
+                content, loc.line
+            ):
+                continue
+
+            block = self._enclosing_block(content, loc.line)
+            alias_column = self._alias_target_column(block)
+            if alias_column is not None:
+                followed = await self._trace_definition_body(
+                    loc.file_path, loc.line, alias_column, depth + 1, seen
+                )
+                if followed:
+                    return followed
+            return block
         return None
+
+    @staticmethod
+    def _alias_target_column(block: str) -> int | None:
+        """Column of the symbol an alias declaration points at, if it is one.
+
+        An alias is a declaration whose whole right-hand side is a name —
+        ``const isLoggedIn = sessionHandler.isLoggedInMiddleware;``. Anything
+        with a call or a function body is the implementation itself and is
+        answered where it stands.
+
+        The column returned is the *last* segment of a dotted path, because
+        that is the member whose definition is wanted:
+        ``sessionHandler.isLoggedInMiddleware`` resolves to the assignment in
+        the session module, while ``sessionHandler`` resolves only to the
+        local variable holding the object.
+        """
+        first_line = block.split("\n", 1)[0]
+        match = re.match(LSPConfig.ALIAS_DECLARATION_PATTERN, first_line)
+        if not match:
+            return None
+        target = match.group("target")
+        return match.start("target") + target.rfind(".") + 1
 
     @staticmethod
     def _enclosing_block(content: str, line: int) -> str:
         """The declaration starting at ``line``, up to its closing brace.
 
         Ends at the first closing brace in the declaration's own column, so a
-        top-level function stops before its neighbours. Falls back to the
-        remainder of the file if no such brace is found.
+        top-level function stops before its neighbours. Trailing punctuation
+        is ignored, so an assigned function — which closes on ``};`` or
+        ``});`` rather than a bare brace — ends where it actually ends
+        instead of running to the end of the file and picking up whatever
+        its neighbours do.
+
+        Falls back to the remainder of the file if no such brace is found.
         """
         lines = content.split("\n")
         if not (0 <= line < len(lines)):
             return content
 
         start = lines[line]
+        # A statement that opens no block is the whole declaration. Scanning
+        # on for a closing brace it never opened runs into the *next*
+        # declaration's brace and returns a block that includes neighbours —
+        # which is how an alias to something unguarded could be vouched for
+        # by a guard defined twenty lines below it.
+        if start.count("{") <= start.count("}"):
+            return start
+
         indent = len(start) - len(start.lstrip())
         closing = (" " * indent) + "}"
         for end in range(line + 1, len(lines)):
-            if lines[end].rstrip() == closing:
+            if lines[end].rstrip().rstrip(";,)") == closing:
                 return "\n".join(lines[line : end + 1])
         return "\n".join(lines[line:])
 
