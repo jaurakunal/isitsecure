@@ -259,6 +259,26 @@ The repo ingestion phase uses framework-specific route mappers:
 
 All mappers implement `RouteMapperProtocol` and are registered in `factory.py`. Adding a new language requires implementing one mapper — no changes to existing code.
 
+`ExpressRouteMapper` searches the whole repository rather than a list of
+directory names, because Express projects put routes wherever they like — a
+list of `src`, `routes`, `api` mapped **zero** routes for a project keeping
+them in `app/routes`, and downstream nothing can tell "no routes" apart from
+"did not look". Vendored and generated directories (`node_modules`, `dist`,
+`.git`, …) are pruned, and the walk is capped at
+`ExpressRouteMapperConfig.MAX_FILES_SCANNED`.
+
+Searching everywhere then raises a second question, since a repo also holds
+route-shaped code that never runs — Juice Shop ships 135 route definitions
+under `data/static/codefixes` as fixtures for its own coding challenges. A
+candidate is kept only if it is **reachable**: imported by another file
+(per `ImportGraphBuilder`), or an entry point nothing imports because it *is*
+the start (a top-level script, or `server`/`app`/`index`/`main`). Route files
+are often loaded by globbing a directory, which leaves no import to find, so
+one reachable route file keeps every route file beside it; and if *nothing*
+looks reachable the graph is uninformative — the entry point may be a `.jsx`
+or a compiled artefact — so the filter stands down rather than dropping the
+whole project.
+
 ## Design Principles
 
 ### Protocol-Based (Dependency Inversion)

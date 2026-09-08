@@ -669,6 +669,35 @@ class TestEnclosingBlock:
         assert "jwt.verify" in block
         assert "signToken" not in block
 
+    def test_a_statement_that_opens_no_block_is_just_that_line(self) -> None:
+        """An alias opens no block, so there is none to scan for. Scanning
+        anyway runs into the *next* declaration's closing brace and returns a
+        body containing neighbours — which is how an alias to something
+        unguarded gets vouched for by a guard defined below it."""
+        src = (
+            "const isLoggedIn = handler.isLoggedInMiddleware;\n"
+            "app.get('/x', (req, res) => {\n"
+            "  jwt.verify(req.token);\n"
+            "});\n"
+        )
+        block = AuthFlowTracer._enclosing_block(src, 0)
+        assert block == "const isLoggedIn = handler.isLoggedInMiddleware;"
+        assert "jwt.verify" not in block
+
+    def test_an_assigned_function_ends_at_its_closing_brace(self) -> None:
+        """`};` closes a function expression just as `}` closes a
+        declaration; not accepting it ran the body to the end of the file."""
+        src = (
+            "this.requireUser = (req, res, next) => {\n"
+            "  if (!req.user) return res.status(401).end();\n"
+            "  next();\n"
+            "};\n"
+            "this.other = () => { getUser(); };\n"
+        )
+        block = AuthFlowTracer._enclosing_block(src, 0)
+        assert "status(401)" in block
+        assert "getUser" not in block
+
     def test_out_of_range_line_returns_everything(self) -> None:
         assert AuthFlowTracer._enclosing_block(MODULE, 999) == MODULE
 
@@ -987,3 +1016,188 @@ class TestRouterWideMiddlewareWins:
         result = results["src/routes/team.ts:/team/:id"]
         assert result.has_verified_auth is True
         assert result.middleware_chain == ["ensureMember"]
+
+
+# ---------------------------------------------------------------------------
+# Definition-body extraction and alias following
+# ---------------------------------------------------------------------------
+
+
+class TestAliasTargetColumn:
+    """Which declarations are only another name for something else."""
+
+    def test_a_dotted_alias_points_at_its_last_segment(self) -> None:
+        """`sessionHandler` resolves to the local variable; only
+        `isLoggedInMiddleware` resolves to the middleware itself."""
+        line = "    const isLoggedIn = sessionHandler.isLoggedInMiddleware;"
+        column = AuthFlowTracer._alias_target_column(line)
+        assert line[column:] == "isLoggedInMiddleware;"
+
+    def test_a_bare_alias_points_at_the_name(self) -> None:
+        line = "const guard = requireAuth;"
+        column = AuthFlowTracer._alias_target_column(line)
+        assert line[column:] == "requireAuth;"
+
+    def test_an_export_assignment_is_an_alias(self) -> None:
+        line = "module.exports.guard = internal.guard"
+        assert AuthFlowTracer._alias_target_column(line) is not None
+
+    def test_a_function_body_is_not_an_alias(self) -> None:
+        """This is the implementation — tracing stops here, not one hop on."""
+        line = "this.isLoggedInMiddleware = (req, res, next) => {"
+        assert AuthFlowTracer._alias_target_column(line) is None
+
+    def test_a_call_is_not_an_alias(self) -> None:
+        line = 'const ErrorHandler = require("./error").errorHandler;'
+        assert AuthFlowTracer._alias_target_column(line) is None
+
+    def test_a_construction_is_not_an_alias(self) -> None:
+        line = "const sessionHandler = new SessionHandler(db);"
+        assert AuthFlowTracer._alias_target_column(line) is None
+
+
+class _ScriptedLSP:
+    """An LSP that answers each symbol honestly, from its own position.
+
+    A mock that returns one file for every query proves nothing: a route can
+    then come out verified through a symbol that has no auth in it at all.
+    Definitions are keyed by the exact (file, line, column) asked about.
+    """
+
+    def __init__(self, definitions: dict, files: dict[str, str]) -> None:
+        self._definitions = definitions
+        self._files = files
+        self.queries: list[tuple[str, int, int]] = []
+
+    @property
+    def is_available(self) -> bool:
+        return True
+
+    async def initialize(self, path: str) -> bool:
+        return True
+
+    async def get_definition(self, file_path: str, line: int, character: int):
+        self.queries.append((file_path, line, character))
+        target = self._definitions.get((file_path, line, character))
+        return [LSPLocation(file_path=target[0], line=target[1], character=0)] if target else []
+
+    async def get_references(self, *a, **k):
+        return None
+
+    async def get_hover(self, *a, **k):
+        return None
+
+    async def shutdown(self) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+class TestAliasFollowing:
+    """Following a local alias to the middleware it names.
+
+    `const isLoggedIn = sessionHandler.isLoggedInMiddleware` is how a project
+    shortens a name it applies to twenty routes. Stopping at the alias reads
+    an assignment with no auth in it and calls every one of those routes
+    unguarded.
+    """
+
+    ROOT = "/tmp/test"
+    ROUTES = "routes.js"
+    SESSION = "session.js"
+    ROUTES_ABS = f"{ROOT}/{ROUTES}"
+    SESSION_ABS = f"{ROOT}/{SESSION}"
+
+    ROUTES_SRC = (
+        "const sessionHandler = new SessionHandler(db);\n"
+        "const isLoggedIn = sessionHandler.isLoggedInMiddleware;\n"
+        "app.get('/dashboard', isLoggedIn, handler.show);\n"
+    )
+    SESSION_SRC = (
+        "this.isLoggedInMiddleware = (req, res, next) => {\n"
+        "  if (!jwt.verify(req.token)) return res.status(401).end();\n"
+        "  next();\n"
+        "};\n"
+    )
+
+    def _column(self, src: str, line: int, needle: str, occurrence: int = 0) -> int:
+        text = src.split("\n")[line]
+        index = -1
+        for _ in range(occurrence + 1):
+            index = text.index(needle, index + 1)
+        return index
+
+    def _tracer(self, *, resolve_alias: bool = True):
+        files = {self.ROUTES: self.ROUTES_SRC, self.SESSION: self.SESSION_SRC}
+        mount_col = self._column(self.ROUTES_SRC, 2, "isLoggedIn")
+        decl_col = self._column(self.ROUTES_SRC, 1, "isLoggedIn")
+        alias_col = self._column(self.ROUTES_SRC, 1, "isLoggedInMiddleware")
+        definitions = {
+            (self.ROUTES_ABS, 2, mount_col): (self.ROUTES_ABS, 1),
+            (self.ROUTES_ABS, 1, decl_col): (self.ROUTES_ABS, 1),
+        }
+        if resolve_alias:
+            definitions[(self.ROUTES_ABS, 1, alias_col)] = (self.SESSION_ABS, 0)
+        lsp = _ScriptedLSP(definitions, files)
+        repo = _make_repo(file_index=files)
+        return AuthFlowTracer(lsp, repo), lsp
+
+    async def test_an_alias_resolves_to_the_middleware_it_names(self) -> None:
+        tracer, _ = self._tracer()
+        body = await tracer._trace_definition_body(
+            self.ROUTES_ABS, 2, self._column(self.ROUTES_SRC, 2, "isLoggedIn")
+        )
+        assert "jwt.verify" in body
+
+    async def test_a_guarded_route_is_verified_through_its_alias(self) -> None:
+        tracer, _ = self._tracer()
+        results = await tracer.trace_routes([_make_route(self.ROUTES, "/dashboard")])
+        result = results[f"{self.ROUTES}:/dashboard"]
+        assert result.has_verified_auth
+        assert "jwt.verify" in result.auth_method
+
+    async def test_an_unresolvable_second_hop_does_not_verify(self) -> None:
+        """When the alias target cannot be resolved — an untyped property on
+        a constructed object, say — the alias line is the honest answer, and
+        it has no auth in it, so the route stays unverified rather than
+        falsely cleared."""
+        tracer, _ = self._tracer(resolve_alias=False)
+        results = await tracer.trace_routes([_make_route(self.ROUTES, "/dashboard")])
+        assert not results[f"{self.ROUTES}:/dashboard"].has_verified_auth
+
+    async def test_a_self_referential_alias_terminates(self) -> None:
+        """A cycle must end in an answer, not a hang."""
+        src = "const guard = guard;\napp.get('/x', guard, h);\n"
+        files = {"a.js": src}
+        abs_path = f"{self.ROOT}/a.js"
+        definitions = {
+            (abs_path, 1, self._column(src, 1, "guard")): (abs_path, 0),
+            (abs_path, 0, self._column(src, 0, "guard")): (abs_path, 0),
+            (abs_path, 0, self._column(src, 0, "guard", 1)): (abs_path, 0),
+        }
+        tracer = AuthFlowTracer(
+            _ScriptedLSP(definitions, files), _make_repo(file_index=files)
+        )
+        results = await tracer.trace_routes([_make_route("a.js", "/x")])
+        assert not results["a.js:/x"].has_verified_auth
+
+    async def test_the_hop_count_is_bounded(self) -> None:
+        """Aliases chained past MAX_TRACE_DEPTH stop rather than recurse on,
+        and the last body reached is still returned."""
+        from isitsecure.engine.constants import LSPConfig
+
+        depth = LSPConfig.MAX_TRACE_DEPTH + 3
+        src = "\n".join(f"const a{i} = a{i + 1};" for i in range(depth))
+        files = {"chain.js": src}
+        abs_path = f"{self.ROOT}/chain.js"
+        definitions = {
+            (abs_path, i, self._column(src, i, f"a{i + 1}")): (abs_path, i + 1)
+            for i in range(depth)
+        }
+        tracer = AuthFlowTracer(
+            _ScriptedLSP(definitions, files), _make_repo(file_index=files)
+        )
+        body = await tracer._trace_definition_body(
+            abs_path, 0, self._column(src, 0, "a1")
+        )
+        assert body is not None
+        assert len(tracer._lsp.queries) <= LSPConfig.MAX_TRACE_DEPTH

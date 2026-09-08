@@ -14,11 +14,17 @@ DIP: Depends on ``RouteMapperProtocol`` (abstraction), not on any
 from __future__ import annotations
 
 import logging
+import os
+import posixpath
 import re
 from pathlib import Path
 
+from isitsecure.engine.code_analysis.import_graph import ImportGraphBuilder
 from isitsecure.engine.code_analysis.protocols import RouteEntry
-from isitsecure.engine.constants import ExpressRouteMapperConfig
+from isitsecure.engine.constants import (
+    ExpressRouteMapperConfig,
+    SharedPatterns,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -84,37 +90,98 @@ class ExpressRouteMapper:
     # ------------------------------------------------------------------
 
     def _find_route_files(self, root: Path) -> list[Path]:
-        """Find files that contain Express route definitions."""
-        candidates: list[Path] = []
+        """Find the files that define this application's Express routes.
 
-        # Search in standard source directories
-        for source_dir_name in ExpressRouteMapperConfig.SOURCE_DIRS:
-            source_dir = root / source_dir_name
-            if not source_dir.is_dir():
-                continue
+        The whole tree is walked, minus vendored and generated directories.
+        Guessing at directory names — src, routes, api — meant a project that
+        keeps its routes anywhere else had none of them mapped, and nothing
+        downstream could tell the difference between "no routes" and "did not
+        look": NodeGoat, whose routes live in app/routes, mapped zero.
 
-            for ext in ExpressRouteMapperConfig.CODE_EXTENSIONS:
-                for file_path in source_dir.rglob(f"*{ext}"):
-                    candidates.append(file_path)
+        Walking everything then needs a second question, because a repo holds
+        code that is never wired into the running app: Juice Shop ships 135
+        route definitions under data/static/codefixes as fixtures for its own
+        coding challenges. They look exactly like routes, and reporting
+        missing auth on them is 84 findings about code that does not run.
+        So a candidate has to be reachable — imported by something, or an
+        entry point nothing imports because it *is* the start.
 
-        # Also check root-level entry files (main.js, app.js, server.js, index.js)
-        for name in ("main", "app", "server", "index"):
-            for ext in ExpressRouteMapperConfig.CODE_EXTENSIONS:
-                entry = root / f"{name}{ext}"
-                if entry.is_file() and entry not in candidates:
-                    candidates.append(entry)
+        Files loaded dynamically (``readdirSync('./routes').forEach(require)``)
+        have no import to find, so a directory that holds one reachable route
+        file keeps all of them. Erring that way costs noise; erring the other
+        way drops real routes, and a route nobody maps is a route nobody
+        checks.
+        """
+        code_files = self._read_code_files(root)
+        candidates = [
+            path for path, content in code_files.items()
+            if self._is_express_file(content)
+        ]
+        if not candidates:
+            return []
 
-        # Filter to only files that actually contain Express patterns
-        route_files: list[Path] = []
-        for file_path in candidates:
-            try:
-                content = file_path.read_text(encoding="utf-8", errors="replace")
-                if self._is_express_file(content):
-                    route_files.append(file_path)
-            except OSError:
-                continue
+        fan_in = ImportGraphBuilder().build_fan_in_map(code_files)
+        reachable = {
+            path for path in candidates
+            if fan_in.get(path) or self._is_entry_point(path)
+        }
+        if not reachable:
+            # Nothing looks wired, which says more about the graph than the
+            # code: the entry point may be a .jsx, a .cjs or a compiled
+            # artefact this walk never read. Pruning on no evidence at all
+            # would drop every route in the project.
+            return [root / path for path in candidates]
 
-        return route_files
+        reachable_dirs = {posixpath.dirname(path) for path in reachable}
+
+        return [
+            root / path for path in candidates
+            if path in reachable or posixpath.dirname(path) in reachable_dirs
+        ]
+
+    @staticmethod
+    def _read_code_files(root: Path) -> dict[str, str]:
+        """Every source file under ``root``, keyed by repo-relative path.
+
+        The import graph needs the whole picture, not just the route files:
+        what makes a route file reachable is being imported by a file that is
+        itself no route file at all.
+        """
+        code_files: dict[str, str] = {}
+
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [
+                d for d in dirnames
+                if d not in SharedPatterns.VENDOR_DIRS and not d.startswith(".")
+            ]
+            for name in filenames:
+                if not name.endswith(ExpressRouteMapperConfig.CODE_EXTENSIONS):
+                    continue
+                file_path = Path(dirpath) / name
+                try:
+                    content = file_path.read_text(
+                        encoding="utf-8", errors="replace"
+                    )
+                except OSError:
+                    continue
+                relative = file_path.relative_to(root).as_posix()
+                code_files[relative] = content
+            if len(code_files) >= ExpressRouteMapperConfig.MAX_FILES_SCANNED:
+                break
+
+        return code_files
+
+    @staticmethod
+    def _is_entry_point(relative_path: str) -> bool:
+        """Whether nothing importing this file is expected.
+
+        The process starts somewhere, and that file is imported by no other:
+        a top-level script, or one of the conventional entry names.
+        """
+        if "/" not in relative_path:
+            return True
+        stem = posixpath.basename(relative_path).rsplit(".", 1)[0]
+        return stem in ExpressRouteMapperConfig.ENTRY_POINT_STEMS
 
     @staticmethod
     def _is_express_file(content: str) -> bool:

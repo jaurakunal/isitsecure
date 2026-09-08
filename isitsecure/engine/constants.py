@@ -6,6 +6,16 @@ from isitsecure.engine.enums import FindingCategory, SeverityLevel
 class SharedPatterns:
     """Shared regex patterns and constants used across multiple scanners."""
 
+    # Directories that hold someone else's code or build output. Several
+    # scanners walk a repo and every one of them needs this list; keeping one
+    # copy is why it lives here rather than beside each walker.
+    VENDOR_DIRS = frozenset({
+        "node_modules", ".git", ".venv", "venv", "env", "__pycache__",
+        "dist", "build", "out", "target", ".next", ".nuxt", ".output",
+        ".mypy_cache", ".pytest_cache", ".ruff_cache", "vendor",
+        "site-packages", "coverage", ".terraform",
+    })
+
     UUID_PATTERN = (
         r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
     )
@@ -3580,11 +3590,18 @@ class ExpressRouteMapperConfig:
 
     SCANNER_NAME = "express_route_mapper"
 
-    # Directories to search for Express route files
-    SOURCE_DIRS = ("src", "routes", "src/routes", "api", "src/api")
-
     # File extensions to scan
     CODE_EXTENSIONS = (".js", ".ts", ".mjs")
+
+    # No list of source directory names. Express projects put routes wherever
+    # they like — NodeGoat uses app/routes, which a list of src/routes/api
+    # never reached, so its routes were not mapped at all and every later
+    # stage silently had nothing to work on. The whole tree is walked instead,
+    # minus vendored code, and this caps what that can cost.
+    MAX_FILES_SCANNED = 20_000
+
+    # Files nothing is expected to import, because the process starts there.
+    ENTRY_POINT_STEMS = frozenset({"server", "app", "index", "main"})
 
     # Regex patterns for Express route definitions
     # Captures: (method, path) from app.get('/path', ...) or router.post('/path', ...)
@@ -4724,6 +4741,16 @@ class LSPConfig:
     # --- Performance guards ---
     MAX_FILES_TO_OPEN = 100
     MAX_TRACE_DEPTH = 5  # prevent infinite recursion in go-to-definition chains
+
+    # A declaration that is nothing but another name for something else:
+    # `const isLoggedIn = sessionHandler.isLoggedInMiddleware;`. The right-hand
+    # side must be a bare (possibly dotted) name — a call or an arrow body
+    # means this *is* the implementation, so tracing stops here.
+    ALIAS_DECLARATION_PATTERN = (
+        r"^\s*(?:const|let|var|this\.[\w$]+|exports\.[\w$]+"
+        r"|module\.exports\.[\w$]+)?\s*[\w$.]+\s*=\s*"
+        r"(?P<target>[\w$]+(?:\.[\w$]+)*)\s*;?\s*$"
+    )
     MAX_CONCURRENT_REQUESTS = 10
 
     # --- tsserver command detection ---
@@ -4927,11 +4954,7 @@ class LSPConfig:
     # Directories that say nothing about what a project is written in, and can
     # be enormous. Ingestion strips most of these already; belt and braces for
     # callers that point us at a working tree.
-    LANGUAGE_SCAN_SKIP_DIRS = frozenset({
-        "node_modules", ".git", ".venv", "venv", "env", "__pycache__",
-        "dist", "build", "out", "target", ".next", ".mypy_cache",
-        ".pytest_cache", ".ruff_cache", "vendor", "site-packages",
-    })
+    LANGUAGE_SCAN_SKIP_DIRS = SharedPatterns.VENDOR_DIRS
 
     # Stop counting once a project's language is obvious — a monorepo should
     # not cost a full-tree walk.
