@@ -33,7 +33,7 @@ from isitsecure.engine.code_analysis.protocols import (
     RepoSnapshot,
     RouteEntry,
 )
-from isitsecure.engine.constants import LSPConfig
+from isitsecure.engine.constants import LSPConfig, SharedPatterns
 
 logger = logging.getLogger(__name__)
 
@@ -210,7 +210,7 @@ class AuthFlowTracer:
         path_wide = mounts.get((LSPConfig.MOUNT_ANY_METHOD, route_pattern))
         if path_wide:
             result = await self._verify_mount_middleware(
-                path_wide, content, abs_path
+                path_wide, content, abs_path, path_wide=True
             )
             if result.has_verified_auth:
                 return result
@@ -265,10 +265,35 @@ class AuthFlowTracer:
         return mounts
 
     async def _verify_mount_middleware(
-        self, middleware: str, content: str, abs_path: str
+        self, middleware: str, content: str, abs_path: str,
+        path_wide: bool = False,
     ) -> AuthFlowResult:
-        """Resolve the middleware on a mount line and look for auth in it."""
-        for name in self._middleware_names(middleware):
+        """Resolve the middleware on a mount line and look for auth in it.
+
+        Two shapes count, the same two the router-wide path accepts. A
+        middleware that calls a *terminal* — `expressJwt`, `jwt.verify` — is
+        verifying a token itself. One that *rejects* — a 401 or 403 on the
+        failing branch — has decided the request may not proceed, which is
+        equally an auth decision though it names no library:
+
+            if (decodedToken?.data?.role === roles.accounting) next()
+            else res.status(403).json({ error: 'Malicious activity detected' })
+
+        Only the terminal was checked here, so role guards like that one read
+        as unguarded and their routes were reported as having no auth at all.
+
+        Rejection only counts for something that actually *guards* the route,
+        which on a method mount means: not the last argument. The last one is
+        the handler, and every handler has an error path — `changePassword`
+        answers 401 to "current password is not correct", which says nothing
+        about whether the route is authenticated. Accepting that suppressed
+        four routes on the strength of their own validation errors.
+
+        `.use` and `.all` mount middleware rather than a handler, so on those
+        every argument is a guard.
+        """
+        names = self._middleware_names(middleware)
+        for index, name in enumerate(names):
             position = self._locate_symbol(content, name)
             if position is None:
                 continue
@@ -282,6 +307,16 @@ class AuthFlowTracer:
                 return AuthFlowResult(
                     has_verified_auth=True,
                     auth_method=auth_method,
+                    middleware_chain=[name],
+                    confidence=LSPConfig.CONFIDENCE_LSP_CONFIRMED,
+                    trace_depth=1,
+                )
+
+            guards_route = path_wide or index < len(names) - 1
+            if guards_route and self._has_enforcement(definition):
+                return AuthFlowResult(
+                    has_verified_auth=True,
+                    auth_method=f"{name} (rejects unauthorized)",
                     middleware_chain=[name],
                     confidence=LSPConfig.CONFIDENCE_LSP_CONFIRMED,
                     trace_depth=1,
@@ -324,7 +359,7 @@ class AuthFlowTracer:
         dropped entirely, so the route read as unguarded.
         """
         middleware = re.sub(
-            LSPConfig.LINE_COMMENT_PATTERN, "", middleware, flags=re.DOTALL
+            SharedPatterns.JS_COMMENT_PATTERN, "", middleware, flags=re.DOTALL
         )
         names: list[str] = []
         for argument in middleware.split(","):

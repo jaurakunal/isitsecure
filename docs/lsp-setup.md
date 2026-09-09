@@ -229,6 +229,24 @@ security.isAuthorized()) // vuln-code-snippet neutral-line
 changeProductChallenge` resolved `changeProductChallenge` while dropping the
 guard beside it.
 
+**Guards that reject rather than verify:**
+```javascript
+if (decodedToken?.data?.role === roles.accounting) next()
+else res.status(403).json({ error: 'Malicious activity detected' })
+```
+
+A middleware naming no auth library at all still makes an auth decision when
+it refuses the request: a 401 or 403 on the failing branch means an
+unauthenticated caller never reaches the handler. Requiring a library call
+meant role guards like this read as unguarded.
+
+Only what actually *guards* a route counts, though. On `app.get(path, a, b)`
+the last argument is the handler, and every handler has an error path —
+`changePassword` answers 401 to "current password is not correct", which says
+nothing about whether the route is authenticated. So rejection is read from
+the arguments before the handler, and from every argument of a `.use`/`.all`
+mount, which carries no handler.
+
 Middleware that delegates to a library counts as the terminal, because tracing
 deliberately will not follow into `node_modules`: `expressJwt` (express-jwt),
 `requiresAuth` (express-openid-connect), `ensureLoggedIn` (connect-ensure-login),

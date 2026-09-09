@@ -35,6 +35,25 @@ it is the exact condition a missing-auth finding exists to report — and
 because the Express mapper always answers true or false and never "unknown",
 no Express GET route could produce a missing-auth finding at all.
 
+### How a guard is recognised before the language server runs
+
+The Express mapper answers `has_auth_check` from the mount line, and a `True`
+suppresses the route's missing-auth finding outright — so it is matched
+narrowly: known guard names, on **word boundaries**, against the route's
+**arguments** only, with comments stripped.
+
+Each of those bounds exists because it was once missing. `checkAuth` matched
+inside `checkAuthorEmail`, and `authenticate` inside `authenticatedUsers` —
+the handler that *returns* Juice Shop's user list — so both routes were
+cleared. Scanning the whole line also meant `app.get('/api/authenticate',
+handler)` was guarded by its own URL.
+
+The list cannot name a project's own vocabulary (`isLoggedIn`, `ensureMember`)
+and is not meant to: it is the cheap answer for scans with no language server.
+What a guard actually *does* is decided by the auth-flow tracer, which
+resolves it and reads its body. A `False` here is only an absence of evidence
+— the route is still examined either way.
+
 ## Why It Matters
 
 A single API route without authentication is often enough for a full data breach:

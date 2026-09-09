@@ -207,14 +207,17 @@ class ExpressRouteMapper:
             method = match.group(1).upper()
             path = match.group(2)
 
-            # Get the full line context for auth detection
-            line_start = content.rfind("\n", 0, match.start()) + 1
+            # Only what is *applied* to the route can guard it: the
+            # arguments after the path. The whole line also holds the path
+            # itself and any trailing comment, and matching those made
+            # `app.get('/api/authenticate', handler)` look guarded by its own
+            # URL.
             line_end = content.find("\n", match.end())
             if line_end == -1:
                 line_end = len(content)
-            line_context = content[line_start:line_end]
+            arguments = content[match.end():line_end]
 
-            has_auth = self._detect_auth_middleware(line_context)
+            has_auth = self._detect_auth_middleware(arguments)
 
             routes.append(
                 RouteEntry(
@@ -253,13 +256,31 @@ class ExpressRouteMapper:
     # Auth middleware detection
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _detect_auth_middleware(line_context: str) -> bool:
-        """Detect if auth middleware is present in the route definition line."""
-        return any(
-            indicator in line_context
-            for indicator in ExpressRouteMapperConfig.AUTH_MIDDLEWARE_INDICATORS
+    _AUTH_INDICATOR_RE = re.compile(
+        "|".join(
+            rf"\b{re.escape(name)}\b"
+            for name in ExpressRouteMapperConfig.AUTH_MIDDLEWARE_INDICATORS
         )
+    )
+
+    @classmethod
+    def _detect_auth_middleware(cls, arguments: str) -> bool:
+        """Whether an auth guard is applied among a route's arguments.
+
+        Word boundaries, not substrings. `checkAuth` matched inside
+        `checkAuthorEmail` and `authenticate` inside `authenticatedUsers` —
+        the handler that *returns* Juice Shop's user list — and because a
+        True here suppresses the route's missing-auth finding outright, each
+        of those was a vulnerability the report stopped mentioning.
+
+        A False is only ever a missing finding's absence of evidence: the
+        route is still examined, and the tracer still reads what the guard
+        does.
+        """
+        arguments = re.sub(
+            SharedPatterns.JS_COMMENT_PATTERN, "", arguments, flags=re.DOTALL
+        )
+        return bool(cls._AUTH_INDICATOR_RE.search(arguments))
 
     # ------------------------------------------------------------------
     # Mount prefix resolution

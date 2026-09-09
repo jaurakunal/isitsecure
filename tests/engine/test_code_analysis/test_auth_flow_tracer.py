@@ -1223,3 +1223,87 @@ class TestAliasFollowing:
         )
         assert body is not None
         assert len(tracer._lsp.queries) <= LSPConfig.MAX_TRACE_DEPTH
+
+
+@pytest.mark.asyncio
+class TestRejectionCountsAsAuth:
+    """A guard that rejects is a guard, but a handler that errors is not.
+
+    `isAccounting` names no auth library — it compares a role and answers 403
+    otherwise. Requiring a *terminal* call meant role guards read as unguarded
+    and their routes were reported as having no auth at all.
+    """
+
+    ROOT = "/tmp/test"
+    SERVER = "server.ts"
+    SERVER_ABS = f"{ROOT}/{SERVER}"
+    GUARDS = "guards.ts"
+    GUARDS_ABS = f"{ROOT}/{GUARDS}"
+
+    GUARD_SRC = (
+        "export const isAccounting = () => {\n"
+        "  return (req, res, next) => {\n"
+        "    if (decoded?.data?.role === roles.accounting) next()\n"
+        "    else res.status(403).json({ error: 'Malicious activity' })\n"
+        "  }\n"
+        "}\n"
+    )
+    # A handler, not a guard: its 401 is about the password being wrong.
+    HANDLER_SRC = (
+        "export const changePassword = () => {\n"
+        "  return (req, res, next) => {\n"
+        "    if (!req.query.new) return res.status(401).send('empty')\n"
+        "    res.json({ ok: true })\n"
+        "  }\n"
+        "}\n"
+    )
+
+    def _tracer(self, mount_line: str):
+        server = f"const app = express()\n{mount_line}\n"
+        files = {
+            self.SERVER: server,
+            self.GUARDS: self.GUARD_SRC + "\n" + self.HANDLER_SRC,
+        }
+        guard_line = (self.GUARD_SRC + "\n" + self.HANDLER_SRC).split("\n")
+        definitions = {}
+        for symbol, line in (("isAccounting", 0), ("changePassword", 7)):
+            for index, text in enumerate(server.split("\n")):
+                column = text.find(symbol)
+                if column != -1:
+                    definitions[(self.SERVER_ABS, index, column)] = (
+                        self.GUARDS_ABS, line
+                    )
+        assert guard_line[7].startswith("export const changePassword")
+        lsp = _ScriptedLSP(definitions, files)
+        return AuthFlowTracer(lsp, _make_repo(file_index=files))
+
+    async def _verdict(self, mount_line: str, method: str, pattern: str):
+        tracer = self._tracer(mount_line)
+        results = await tracer.trace_routes(
+            [_make_route(self.SERVER, pattern, method=method)]
+        )
+        return results[f"{self.SERVER}:{method} {pattern}"]
+
+    async def test_a_role_guard_that_rejects_is_verified(self) -> None:
+        verdict = await self._verdict(
+            "app.get('/orders', security.isAccounting(), allOrders())",
+            "GET", "/orders",
+        )
+        assert verdict.has_verified_auth
+        assert "isAccounting" in verdict.auth_method
+
+    async def test_a_handlers_own_error_path_is_not_auth(self) -> None:
+        """The last argument is the handler, and every handler has an error
+        path — accepting it cleared routes on their own validation errors."""
+        verdict = await self._verdict(
+            "app.get('/change-password', changePassword())",
+            "GET", "/change-password",
+        )
+        assert not verdict.has_verified_auth
+
+    async def test_a_path_wide_mount_is_all_middleware(self) -> None:
+        """`.use` mounts no handler, so its last argument guards too."""
+        verdict = await self._verdict(
+            "app.use('/orders', security.isAccounting())", "GET", "/orders"
+        )
+        assert verdict.has_verified_auth
