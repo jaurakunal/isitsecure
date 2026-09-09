@@ -23,7 +23,7 @@ Tests for server-side injection vulnerabilities by sending payloads to API endpo
 
 6. **SSTI (Server-Side Template Injection)** — Sends `{{7*7}}` and checks if `49` appears in the response, indicating template evaluation.
 
-Each payload is injected into **path parameters** (templated `{id}`-style segments), **query parameters**, and **JSON body fields** — not just the query string — so injection in REST-style path components is covered. Endpoints are ranked by a shared prioritizer so the most likely-injectable ones are tested first within the scanner's time budget.
+Each payload is injected into **path parameters** (templated `{id}`-style segments), **query parameters**, and **JSON body fields** — not just the query string — so injection in REST-style path components is covered. Endpoints are ranked by a shared prioritizer so the most likely-injectable ones are tested first within the scanner's time budget. File-upload endpoints rank high despite having no parameters at all: their payload is the file, which is where XXE and traversal filenames arrive.
 
 All payloads are **read-only** — no data modification or exfiltration is attempted.
 

@@ -72,6 +72,16 @@ def score(ep: DiscoveredEndpoint, dimension: PriorityDimension) -> int:
             s += 3
         if method in _STATE_METHODS:
             s += 1  # body injection surface
+        if ep.category is EndpointCategory.FILE_ACCESS:
+            # Not every injection arrives in a parameter. A file upload's
+            # payload *is* the body — XXE through an uploaded .xml, traversal
+            # through a filename — so it takes no parameters by construction,
+            # and every signal above reads that as nothing to test.
+            #
+            # Juice Shop's /file-upload scored zero and ranked 73rd of 77
+            # against a cap of 30, so the two XXE vulnerabilities behind it
+            # were unreachable however good the probe was.
+            s += 3
 
     elif dimension is PriorityDimension.IDOR:
         # Object-level access control needs an object id and matters most on

@@ -46,6 +46,8 @@ This matters because SPAs hide their API surface in JavaScript bundles, server-r
 
 **Endpoint prioritization + time budget** — before the DAST scanners run, a shared prioritizer (`endpoint_prioritizer.rank()`) scores endpoints per attack dimension (INJECTION, IDOR, XSS, CSRF, AUTH) so the most likely-vulnerable endpoints are tested first. Each scanner then works within a per-scanner `TimeBudget`, checking `budget.expired()` between endpoints so high-risk paths get covered before the external hard timeout cancels the scanner. The injection, XSS, IDOR, CSRF, auth-bypass, and HTTP-probe scanners all use this shared prioritizer.
 
+Ranking has to account for injection that arrives somewhere other than a parameter. A file upload takes no query string, no path parameter and no body field — its payload *is* the file — so every parameter-shaped signal scores it zero and a cap of 30 never reaches it. `EndpointCategory.FILE_ACCESS` therefore counts toward the INJECTION dimension: on Juice Shop that moved `/file-upload` from 73rd of 77 to 6th, and with it the two XXE vulnerabilities behind it.
+
 ### Phase 3: Authenticated Crawl
 
 If credentials are provided:
