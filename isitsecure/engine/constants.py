@@ -3626,6 +3626,10 @@ class ExpressRouteMapperConfig:
     # Files nothing is expected to import, because the process starts there.
     ENTRY_POINT_STEMS = frozenset({"server", "app", "index", "main"})
 
+    # A route handler that runs past this is not going to be understood by
+    # reading further, and an unclosed paren must not walk the whole file.
+    MAX_HANDLER_CHARS = 20_000
+
     # Regex patterns for Express route definitions
     # Captures: (method, path) from app.get('/path', ...) or router.post('/path', ...)
     ROUTE_DEFINITION_PATTERN = (

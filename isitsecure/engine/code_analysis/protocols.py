@@ -32,6 +32,12 @@ class RouteEntry(BaseModel):
     has_auth_check: bool | None = None
     content: str = ""
 
+    # The route's own arguments — its middleware and handler — where the
+    # mapper could delimit them. `content` is the whole file, which one
+    # `server.ts` shares between a hundred routes; anything judged per route
+    # has to be judged on this instead.
+    handler_source: str = ""
+
 
 class WorkspaceInfo(BaseModel):
     """Metadata for a single workspace inside a monorepo.
