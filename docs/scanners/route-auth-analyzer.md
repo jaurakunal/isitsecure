@@ -68,6 +68,39 @@ What a guard actually *does* is decided by the auth-flow tracer, which
 resolves it and reads its body. A `False` here is only an absence of evidence
 — the route is still examined either way.
 
+### Auth checked inside the route's own handler
+
+A route often has no named guard on its mount line and checks auth in its
+body instead:
+
+```js
+router.get('/orders', (req, res) => {
+  const session = getServerSession(req)
+  if (!session) return res.status(401).end()
+  ...
+```
+
+The Express mapper answers "no guard" for that, since an anonymous function
+has no name to recognise — but "no known name applied here" is not "no auth",
+so the route's **own handler** is examined before the finding is raised.
+
+Its own, and not the file's: one `server.ts` shares its content with a hundred
+routes, and searching that would let a single guarded neighbour clear all of
+them.
+
+Two things must both be present. Looking up an identity is not authentication
+on its own — it is most of what an IDOR looks like:
+
+```js
+const user = getUser(req.params.id)   // an id from the caller
+res.json(user)                        // and nobody refused
+```
+
+Accepting that would suppress the finding for a route whose whole problem is
+that it never checks who is asking. A handler that authenticates also turns
+someone away, so a refusal — a 401, a 403, an auth error — is required
+alongside.
+
 ## Why It Matters
 
 A single API route without authentication is often enough for a full data breach:

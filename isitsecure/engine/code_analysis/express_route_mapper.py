@@ -228,6 +228,7 @@ class ExpressRouteMapper:
                     route_pattern=path,
                     has_auth_check=has_auth,
                     content=content,
+                    handler_source=self._call_arguments(content, match.end()),
                 )
             )
 
@@ -255,6 +256,54 @@ class ExpressRouteMapper:
     # ------------------------------------------------------------------
     # Auth middleware detection
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _call_arguments(content: str, start: int) -> str:
+        """The rest of a route's arguments, to the call's closing paren.
+
+        A route handler is one argument of `app.get(path, ...)`, and it can
+        run for a hundred lines. Delimiting it needs the paren depth, not a
+        line: the mount line alone stops at the arrow, and the whole file
+        belongs to every route in it equally.
+
+        Parens inside strings and comments are skipped: a route body is full
+        of both, and a lone `)` in either would otherwise end the handler
+        early. Returns what it has if the call is never closed — a truncated
+        handler is still that handler's code, where the remainder of the file
+        would be somebody else's.
+        """
+        depth = 1
+        index = start
+        quote = ""
+        limit = min(len(content), start + ExpressRouteMapperConfig.MAX_HANDLER_CHARS)
+
+        while index < limit:
+            char = content[index]
+            if quote:
+                if char == "\\":
+                    index += 2
+                    continue
+                if char == quote:
+                    quote = ""
+            elif content.startswith("//", index):
+                newline = content.find("\n", index)
+                index = limit if newline == -1 else newline
+                continue
+            elif content.startswith("/*", index):
+                close = content.find("*/", index + 2)
+                index = limit if close == -1 else close + 2
+                continue
+            elif char in "\"'`":
+                quote = char
+            elif char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0:
+                    return content[start:index]
+            index += 1
+
+        return content[start:limit]
 
     _AUTH_INDICATOR_RE = re.compile(
         "|".join(

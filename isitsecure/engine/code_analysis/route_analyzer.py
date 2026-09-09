@@ -24,7 +24,10 @@ from isitsecure.engine.code_analysis.protocols import (
     RepoSnapshot,
     RouteEntry,
 )
-from isitsecure.engine.constants import RouteAuthAnalyzerConfig
+from isitsecure.engine.constants import (
+    LSPConfig,
+    RouteAuthAnalyzerConfig,
+)
 from isitsecure.engine.shared.code_utils import find_line_number
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
 
@@ -203,11 +206,23 @@ class RouteAuthAnalyzer:
             return findings
 
         # --- Determine auth status ---
-        # Priority 1: Trust route mapper's classification
+        # A mapper's True is a guard named on the mount line. Its False is
+        # narrower than it looks: no *known name* was applied there, which is
+        # not the same as no auth. A route may check inside its handler, and
+        # an anonymous arrow function offers no name to recognise:
+        #
+        #     router.get('/', (req, res, next) => {
+        #       const user = authenticatedUsers.get(req.cookies.token)
+        #       if (!user) { next(new Error('...')); return }
+        #
+        # So a False is re-examined against the route's own handler. Its own:
+        # `content` is the whole file, and one `server.ts` shares that between
+        # a hundred routes, so scanning it would let a single guarded
+        # neighbour clear all of them — the mistake fixed in #168 and #170.
         if route.has_auth_check is True:
             has_auth = True
         elif route.has_auth_check is False:
-            has_auth = False
+            has_auth = self._handler_authenticates(route)
         else:
             # has_auth_check is None (unknown) — fall back to content scan
             has_auth = self._has_auth_check(route.content)
@@ -291,6 +306,36 @@ class RouteAuthAnalyzer:
 
         # Everything else (tRPC routers, Express files) is multi-route
         return False
+
+    def _handler_authenticates(self, route: RouteEntry) -> bool:
+        """Whether a route's own handler both identifies a caller and refuses.
+
+        Both are required, and the conjunction is the whole point. Looking up
+        an identity is not authentication on its own — it is most of what an
+        IDOR looks like::
+
+            app.get('/profile/:id', (req, res) => {
+              const user = getUser(req.params.id)   // no caller involved
+              res.json(user)                        // and nothing refused
+            })
+
+        Accepting `getUser(` there would suppress the finding for a route
+        whose whole problem is that it never checks who is asking. A handler
+        that authenticates also turns someone away, which is the shape
+        `_has_enforcement` recognises.
+        """
+        handler = route.handler_source
+        if not handler:
+            return False
+        return self._has_auth_check(handler) and self._has_enforcement(handler)
+
+    @staticmethod
+    def _has_enforcement(content: str) -> bool:
+        """Whether the code refuses a request — a 401/403 or an auth error."""
+        return any(
+            re.search(pattern, content)
+            for pattern in LSPConfig.AUTH_ENFORCEMENT_PATTERNS
+        )
 
     def _is_intentionally_public(self, route: RouteEntry) -> bool:
         """Check if a route is intentionally public and should not be flagged.

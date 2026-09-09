@@ -682,3 +682,89 @@ class TestWebhookRoutesAreJudgedByBehaviour:
         data. A fragment match cannot tell them apart."""
         route = self._route("/api/health-records", "export async function GET() {}\n")
         assert not self.analyzer._is_intentionally_public(route)
+
+
+class TestHandlerScopedAuth:
+    """Auth checked inside a route's own handler (#183).
+
+    The Express mapper answers `has_auth_check=False` when no known guard
+    *name* sits on the mount line — which an anonymous handler never has.
+    That was believed outright, so a route checking auth in its own body was
+    reported as having none.
+    """
+
+    def setup_method(self) -> None:
+        self.analyzer = RouteAuthAnalyzer()
+
+    @staticmethod
+    def _route(handler: str, pattern: str = "/orders") -> RouteEntry:
+        return RouteEntry(
+            file_path="routes/orders.ts",
+            http_methods=["GET"],
+            route_pattern=pattern,
+            has_auth_check=False,
+            content="a hundred other routes live here too\n",
+            handler_source=handler,
+        )
+
+    GUARDED = (
+        ", (req, res) => {\n"
+        "  const session = getServerSession(req)\n"
+        "  if (!session) return res.status(401).end()\n"
+        "  res.json(orders)\n"
+        "}"
+    )
+    # Looks up a user, refuses nobody. This is what an IDOR looks like.
+    LOOKS_UP_A_USER = (
+        ", (req, res) => {\n"
+        "  const user = getUser(req.params.id)\n"
+        "  res.json(user)\n"
+        "}"
+    )
+
+    def test_a_handler_that_identifies_and_refuses_is_authenticated(self) -> None:
+        titles = [f.title for f in self.analyzer._analyze_route(self._route(self.GUARDED))]
+        assert RouteAuthAnalyzerConfig.TITLE_MISSING_AUTH not in titles
+
+    def test_looking_up_a_user_is_not_authenticating(self) -> None:
+        """The conjunction's whole purpose: `getUser(req.params.id)` takes an
+        id from the caller and refuses nobody, which is the vulnerability
+        rather than the defence."""
+        route = self._route(self.LOOKS_UP_A_USER)
+        assert not self.analyzer._handler_authenticates(route)
+        titles = [f.title for f in self.analyzer._analyze_route(route)]
+        assert RouteAuthAnalyzerConfig.TITLE_MISSING_AUTH in titles
+
+    def test_refusing_without_identifying_is_not_authenticating(self) -> None:
+        """A 400-guard on a missing field is not an auth check."""
+        route = self._route(
+            ", (req, res) => {\n"
+            "  if (!req.body.name) return res.status(401).end()\n"
+            "  res.json(ok)\n"
+            "}"
+        )
+        assert not self.analyzer._handler_authenticates(route)
+
+    def test_the_file_is_not_searched_in_the_handler_s_place(self) -> None:
+        """One `server.ts` shares its content with a hundred routes, so a
+        guarded neighbour must not clear an unguarded route."""
+        route = RouteEntry(
+            file_path="server.ts",
+            http_methods=["GET"],
+            route_pattern="/open",
+            has_auth_check=False,
+            content=(
+                "app.get('/guarded', (req, res) => {\n"
+                "  const s = getServerSession(req)\n"
+                "  if (!s) return res.status(401).end()\n"
+                "})\n"
+            ),
+            handler_source=", (req, res) => res.json(everything)",
+        )
+        assert not self.analyzer._handler_authenticates(route)
+
+    def test_a_route_with_no_handler_source_is_unchanged(self) -> None:
+        """Mappers for other frameworks do not set it; they must keep their
+        existing behaviour."""
+        route = self._route("", pattern="/legacy")
+        assert not self.analyzer._handler_authenticates(route)
