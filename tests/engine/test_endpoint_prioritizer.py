@@ -43,6 +43,58 @@ class TestInjectionDimension:
         assert "http://x/rest/products/search" in top
 
 
+class TestInjectionReachesFileUploads:
+    """A file upload takes no parameters, and that is not a reason to skip it.
+
+    Its payload *is* the body — XXE through an uploaded .xml, traversal
+    through a filename — so every parameter-shaped signal reads it as nothing
+    to test. Juice Shop's /file-upload scored zero and ranked 73rd of 77
+    against a cap of 30, which made the two XXE vulnerabilities behind it
+    unreachable however good the probe was.
+    """
+
+    def test_an_upload_outranks_a_bare_collection(self):
+        upload = _ep("http://x/file-upload", category=EndpointCategory.FILE_ACCESS)
+        bare = _ep("http://x/api/Products")
+        assert score(upload, PriorityDimension.INJECTION) > score(
+            bare, PriorityDimension.INJECTION
+        )
+
+    def test_an_upload_survives_a_realistic_cap(self):
+        """The regression this guards: buried past every parameterless
+        neighbour, so a cap of 30 never reaches it."""
+        crowd = [_ep(f"http://x/api/Thing{i}") for i in range(60)]
+        upload = _ep("http://x/file-upload", category=EndpointCategory.FILE_ACCESS)
+        ranked = rank([*crowd, upload], PriorityDimension.INJECTION)
+
+        assert upload in ranked[:30]
+
+    def test_a_parameterised_endpoint_still_outranks_nothing(self):
+        """Widening reach must not demote the parameter surface injection
+        actually lives in."""
+        searchy = _ep("http://x/rest/products/search", query_params=["q"])
+        upload = _ep("http://x/file-upload", category=EndpointCategory.FILE_ACCESS)
+        assert score(searchy, PriorityDimension.INJECTION) > score(
+            upload, PriorityDimension.INJECTION
+        )
+
+    def test_other_dimensions_are_untouched(self):
+        """Only injection changed; a file endpoint must not start
+        outranking an id-bearing resource for IDOR."""
+        upload = _ep("http://x/file-upload", category=EndpointCategory.FILE_ACCESS)
+        owned = _ep(
+            "http://x/api/Users/1", path_params=True,
+            category=EndpointCategory.USER_DATA, requires_auth=True,
+        )
+        for dimension in (
+            PriorityDimension.IDOR,
+            PriorityDimension.XSS,
+            PriorityDimension.CSRF,
+            PriorityDimension.AUTH,
+        ):
+            assert score(owned, dimension) >= score(upload, dimension), dimension
+
+
 class TestIdorDimension:
     def test_id_bearing_sensitive_resource_ranks_first(self):
         eps = [
