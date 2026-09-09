@@ -16,6 +16,12 @@ class SharedPatterns:
         "site-packages", "coverage", ".terraform",
     })
 
+    # A comment is not code. Both the route mapper and the auth-flow tracer
+    # read a mount line to find the middleware on it, and both were fooled by
+    # what came after a `//` — Juice Shop annotates its mounts, and the
+    # annotation was taken for the guard.
+    JS_COMMENT_PATTERN = r"//.*$|/\*.*?\*/"
+
     UUID_PATTERN = (
         r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
     )
@@ -3617,8 +3623,16 @@ class ExpressRouteMapperConfig:
         r"""['"](/[^'"]*?)['"]"""
     )
 
-    # Patterns that indicate auth middleware in route chain.
-    # These are generic names used across Express.js applications.
+    # Names that, applied to a route, indicate an auth guard. Matched on word
+    # boundaries against the *arguments* of the mount — never the path, never
+    # a comment — because a substring anywhere on the line said
+    # `checkAuthorEmail` was `checkAuth` and `authenticatedUsers` was
+    # `authenticate`, and a True here suppresses the route's missing-auth
+    # finding outright.
+    #
+    # It cannot name a project's own vocabulary and is not meant to: this is
+    # the cheap answer for scans with no language server. What a guard
+    # actually does is decided by AuthFlowTracer, which reads its body.
     AUTH_MIDDLEWARE_INDICATORS = (
         "requireAuth",
         "verifyAuth",
@@ -4792,10 +4806,6 @@ class LSPConfig:
     # path, so their verdict answers any method that has no mount of its own.
     MOUNT_ANY_METHOD = "*"
 
-    # A trailing comment is not middleware. Juice Shop annotates its mounts
-    # (`// vuln-code-snippet neutral-line changeProductChallenge`) and the last
-    # identifier on the line was that annotation, not the guard beside it.
-    LINE_COMMENT_PATTERN = r"//.*$|/\*.*?\*/"
 
 
     # Middleware applied without a path — `router.use(requireAuth)` — which

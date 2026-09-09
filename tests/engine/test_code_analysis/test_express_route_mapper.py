@@ -387,3 +387,59 @@ class TestUnreachableRouteFiles:
         read — and pruning on no evidence would drop the whole project."""
         self._write(tmp_path, "src/http/widgets.js", self.ROUTE)
         assert "/widgets" in self._patterns(tmp_path)
+
+
+class TestAuthMiddlewareDetection:
+    """Whether a guard is applied to a route, from its mount line alone.
+
+    This runs before any language server, and a True suppresses the route's
+    missing-auth finding outright — so a wrong True is a vulnerability the
+    report stops mentioning. A wrong False only costs a finding that is
+    examined anyway.
+    """
+
+    def test_a_guard_among_the_arguments_is_found(self) -> None:
+        assert ExpressRouteMapper._detect_auth_middleware(", requireAuth, handler)")
+
+    def test_a_qualified_guard_is_found(self) -> None:
+        assert ExpressRouteMapper._detect_auth_middleware(
+            ", passport.authenticate('jwt'), handler)"
+        )
+
+    def test_a_handler_that_merely_contains_a_guard_name_is_not_one(self) -> None:
+        """`checkAuthorEmail` is not `checkAuth`. Substring matching read it
+        as one and cleared the route."""
+        assert not ExpressRouteMapper._detect_auth_middleware(", checkAuthorEmail)")
+
+    def test_a_handler_named_for_authenticated_things_is_not_a_guard(self) -> None:
+        """Juice Shop's `authenticatedUsers` *returns* the user list; it
+        matched `authenticate` and cleared the route that exposes it."""
+        assert not ExpressRouteMapper._detect_auth_middleware(
+            ", utils.asyncHandler(authenticatedUsers()))"
+        )
+
+    def test_requireauthorrole_is_not_requireauth(self) -> None:
+        assert not ExpressRouteMapper._detect_auth_middleware(", requireAuthorRole)")
+
+    def test_a_guard_named_only_in_a_comment_does_not_count(self) -> None:
+        assert not ExpressRouteMapper._detect_auth_middleware(
+            ", handler) // TODO: add requireAuth here"
+        )
+
+    def test_the_route_path_is_not_scanned(self, tmp_path: Path) -> None:
+        """The path is not applied to the route, it *is* the route — so an
+        endpoint named /authenticate must not clear itself."""
+        (tmp_path / "server.js").write_text(
+            "const app = require('express')();\n"
+            "app.get('/api/authenticate', handler);\n"
+        )
+        routes = ExpressRouteMapper().map_routes(str(tmp_path))
+        assert [r.has_auth_check for r in routes] == [False]
+
+    def test_a_genuinely_guarded_route_is_still_marked(self, tmp_path: Path) -> None:
+        (tmp_path / "server.js").write_text(
+            "const app = require('express')();\n"
+            "app.get('/api/things', requireAuth, handler);\n"
+        )
+        routes = ExpressRouteMapper().map_routes(str(tmp_path))
+        assert [r.has_auth_check for r in routes] == [True]
