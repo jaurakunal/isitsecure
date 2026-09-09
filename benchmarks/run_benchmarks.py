@@ -71,7 +71,13 @@ class Target:
     expect: list[Expectation] = field(default_factory=list)   # recall
     forbid: list[Expectation] = field(default_factory=list)   # false positives
     ready_timeout: int = 180
-    scan_timeout: int = 1800      # hard cap on the scan itself (seconds)
+    # Hard cap on the scan itself. This is a measurement budget, not a
+    # statement about how long a scan should take: when it trips, the run
+    # yields no report at all, so a target that outgrows it stops being
+    # measured rather than scoring lower. Raised from 1800 when Juice Shop's
+    # authenticated scan crossed it — the url-only leg finishes in a few
+    # minutes, but the authenticated one probes every endpoint as two users.
+    scan_timeout: int = 3600
     down_cmd: list[str] = field(default_factory=list)
     notes: str = ""
     # Authenticated scanning (two-user cross-user IDOR uses -b variants; a
