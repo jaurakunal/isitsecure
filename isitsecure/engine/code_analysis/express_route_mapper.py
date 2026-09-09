@@ -204,8 +204,8 @@ class ExpressRouteMapper:
         for match in re.finditer(
             ExpressRouteMapperConfig.ROUTE_DEFINITION_PATTERN, content
         ):
-            method = match.group(1).upper()
-            path = match.group(2)
+            method = match.group("method").upper()
+            path = match.group("path")
 
             # Only what is *applied* to the route can guard it: the
             # arguments after the path. The whole line also holds the path

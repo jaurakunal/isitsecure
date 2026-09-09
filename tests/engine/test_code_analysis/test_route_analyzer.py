@@ -509,8 +509,11 @@ class TestIntentionallyPublic:
     def test_a_health_check_is_public(self) -> None:
         assert self.analyzer._is_intentionally_public(self._route("/health"))
 
-    def test_a_webhook_is_public(self) -> None:
-        assert self.analyzer._is_intentionally_public(
+    def test_a_webhook_path_is_not_public_on_its_name(self) -> None:
+        """Receivers authenticate by verifying a signature, which is checked
+        for directly — see TestWebhookRoutesAreJudgedByBehaviour. The path
+        cannot tell a receiver from an endpoint that sends one."""
+        assert not self.analyzer._is_intentionally_public(
             self._route("/api/webhook/stripe", "POST")
         )
 
@@ -614,3 +617,68 @@ class TestLSPSuppressionIsPerMethod:
         finding.http_methods = []
         kept = self.analyzer.validate_with_lsp([finding], self._results())
         assert len(kept) == 1
+
+
+class TestWebhookRoutesAreJudgedByBehaviour:
+    """A path containing "webhook" used to exempt a route outright.
+
+    Webhook receivers do authenticate — by verifying the sender's signature,
+    the sender holding no session to present — so the *rationale* was sound.
+    The path is not evidence of it, though: an endpoint with "webhook" in its
+    name may equally be one that **sends** them, which is an SSRF sink. The
+    test app's `/api/webhooks/test` is exactly that, and was silenced.
+    """
+
+    def setup_method(self) -> None:
+        self.analyzer = RouteAuthAnalyzer()
+
+    @staticmethod
+    def _route(pattern: str, content: str) -> RouteEntry:
+        return RouteEntry(
+            file_path="route.ts",
+            http_methods=["POST"],
+            route_pattern=pattern,
+            content=content,
+        )
+
+    SENDS_A_WEBHOOK = (
+        "export async function POST(request) {\n"
+        "  const { webhook_url } = await request.json()\n"
+        "  await fetch(webhook_url, { method: 'POST' })\n"
+        "}\n"
+    )
+    VERIFIES_A_SIGNATURE = (
+        "export async function POST(request) {\n"
+        "  const sig = request.headers.get('stripe-signature')\n"
+        "  const event = stripe.webhooks.constructEvent(body, sig, secret)\n"
+        "}\n"
+    )
+
+    def test_a_webhook_path_alone_no_longer_exempts(self) -> None:
+        route = self._route("/api/webhooks/test", self.SENDS_A_WEBHOOK)
+        assert not self.analyzer._is_intentionally_public(route)
+        titles = [f.title for f in self.analyzer._analyze_route(route)]
+        assert RouteAuthAnalyzerConfig.TITLE_MISSING_AUTH in titles
+
+    def test_verifying_a_signature_counts_as_authentication(self) -> None:
+        """A receiver that checks the signature is authenticated, whatever
+        its path is called."""
+        route = self._route("/api/hooks/incoming", self.VERIFIES_A_SIGNATURE)
+        titles = [f.title for f in self.analyzer._analyze_route(route)]
+        assert RouteAuthAnalyzerConfig.TITLE_MISSING_AUTH not in titles
+
+    def test_a_stripe_path_alone_no_longer_exempts(self) -> None:
+        route = self._route("/api/stripe/hook", self.SENDS_A_WEBHOOK)
+        assert not self.analyzer._is_intentionally_public(route)
+
+    def test_conventional_public_endpoints_are_still_exempt(self) -> None:
+        for pattern in ("/health", "/livez", "/readyz", "/", "/openapi"):
+            assert self.analyzer._is_intentionally_public(
+                self._route(pattern, "export async function GET() {}\n")
+            ), pattern
+
+    def test_exemption_is_exact_not_a_substring(self) -> None:
+        """`/health` is a liveness probe; `/api/health-records` is patient
+        data. A fragment match cannot tell them apart."""
+        route = self._route("/api/health-records", "export async function GET() {}\n")
+        assert not self.analyzer._is_intentionally_public(route)

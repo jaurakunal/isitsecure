@@ -161,20 +161,26 @@ class RouteAuthAnalyzer:
 
         return findings
 
-    # Routes that are intentionally public — never flag for missing auth
+    # Routes that are public by definition, exempt from the missing-auth
+    # check. Every entry is a name standardised outside this project —
+    # Kubernetes probe endpoints and the conventional API-documentation paths
+    # — and matching is exact, never a substring.
+    #
+    # Nothing app-specific belongs here, and neither does anything matched by
+    # a fragment: a scanned app that happens to reuse the word gets a real
+    # finding silently suppressed, and silence is indistinguishable from
+    # having looked. A project with its own public route suppresses that
+    # finding by fingerprint (`--suppress`), which is visible and reversible.
+    #
+    # "/" stays: a site's home page is public by convention, and removing it
+    # was measured to cost three false positives and buy nothing. The case
+    # that seemed to justify removing it — Juice Shop's /dataerasure, which
+    # declares `router.get('/')` — turned out to authenticate inside its
+    # handler, so the exemption was hiding no vulnerability there.
     _PUBLIC_ROUTE_PATTERNS = frozenset({
         "/health", "/ping", "/status", "/ready", "/livez", "/readyz",
         "/", "/docs", "/swagger", "/openapi",
     })
-
-    # Generic substrings that indicate intentionally public endpoints. Kept
-    # deliberately minimal — app-specific route names must NOT live here, or a
-    # scanned app that happens to reuse the name gets its missing-auth finding
-    # silently suppressed. Make this configurable per project instead.
-    _PUBLIC_ROUTE_INDICATORS = (
-        "/webhook",
-        "/stripe",  # Stripe webhooks are signature-verified, not auth-gated
-    )
 
     def _analyze_route(self, route: RouteEntry) -> list[CodeFinding]:
         """Analyze a single API route for security issues.
@@ -301,9 +307,13 @@ class RouteAuthAnalyzer:
         if pattern in self._PUBLIC_ROUTE_PATTERNS:
             return True
 
-        # Substring matches
-        if any(ind in pattern for ind in self._PUBLIC_ROUTE_INDICATORS):
-            return True
+        # No substring matching, and in particular no exemption for a path
+        # containing "webhook". Webhook receivers authenticate by verifying
+        # the sender's signature rather than a session, so they are answered
+        # where every other route is: by what the handler does. The path
+        # cannot tell a receiver from an endpoint that *sends* a webhook —
+        # which is an SSRF sink, and was being silenced as though it were
+        # signature-verified.
 
         # Deliberately no rule here for "the mapper found no auth on a GET".
         # That was read as evidence the route is *intentionally* open, when it

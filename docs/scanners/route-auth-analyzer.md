@@ -21,13 +21,27 @@ Some routes are meant to be open, and flagging them is noise. The exemption
 list is deliberately short and is about what a route **is**, not about what we
 found on it:
 
-- health and status endpoints (`/health`, `/ping`, `/status`, `/ready`, …)
+- health and liveness probes (`/health`, `/ping`, `/status`, `/ready`,
+  `/livez`, `/readyz`)
 - API documentation (`/docs`, `/swagger`, `/openapi`) and the root path
-- webhook receivers (`/webhook`, `/stripe`), which are signature-verified
-  rather than auth-gated
 
-App-specific route names are kept out of it on purpose: a scanned app that
-happens to reuse one would have a real finding silently suppressed.
+Every one is a name standardised outside your project, and matching is
+**exact** — `/health` is a liveness probe, `/api/health-records` is patient
+data, and a fragment match cannot tell them apart. App-specific names are kept
+out on purpose: a scanned app that happens to reuse one would have a real
+finding silently suppressed. For a route of your own that is public by design,
+suppress the finding by fingerprint (`--suppress`), which is visible and
+reversible where this list is neither.
+
+**Webhook receivers are not on it.** They do authenticate — by verifying the
+sender's signature, the sender having no session to present — so exempting
+them by path was the right idea checked the wrong way. A path is not evidence:
+an endpoint with "webhook" in its name may equally be one that *sends* them,
+which is an SSRF sink, and the test app's `/api/webhooks/test` is exactly that.
+Signature verification is now detected directly — `constructEvent`,
+`timingSafeEqual`, a `stripe-signature` / `x-hub-signature` / `svix-signature`
+header read — so a receiver that checks its signature counts as authenticated
+wherever it lives, and one that does not is reported.
 
 Not finding a guard is never itself grounds for staying quiet. A rule that
 exempted any GET route the mapper reported no auth on read that backwards —
