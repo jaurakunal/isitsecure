@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.24.1](https://github.com/jaurakunal/isitsecure/compare/v0.24.0...v0.24.1) (2026-09-09)
+
+
+### Bug Fixes
+
+* **dast:** deliver the XXE payload as an uploaded file, not only as a body ([#192](https://github.com/jaurakunal/isitsecure/issues/192)) ([c08a062](https://github.com/jaurakunal/isitsecure/commit/c08a0629377b60fdce8a94b55c43e8c2feab6620))
+
 ## [0.24.0](https://github.com/jaurakunal/isitsecure/compare/v0.23.10...v0.24.0) (2026-09-09)
 
 
