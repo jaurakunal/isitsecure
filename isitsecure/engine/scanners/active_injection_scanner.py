@@ -25,6 +25,7 @@ import httpx
 from isitsecure.engine.constants import (
     DeepScanConfig,
     InjectionConfig,
+    SharedPatterns,
     TemplateInjectionConfig,
 )
 from isitsecure.engine.models import (
@@ -683,24 +684,80 @@ class ActiveInjectionScanner(AuthAwareScanner):
         client: RateLimitedClient,
         endpoint: DiscoveredEndpoint,
     ) -> DeepFinding | None:
-        """Test if an endpoint accepting XML is vulnerable to XXE injection.
+        """Test if an endpoint is vulnerable to XXE injection.
 
-        Only tests endpoints that accept XML content types. Sends a payload
-        with an external entity referencing /etc/passwd and checks the
-        response for file-system content indicators.
+        The payload carries an external entity referencing /etc/passwd; a
+        response echoing file-system content is the proof.
+
+        It is delivered two ways, because an endpoint that accepts XML as a
+        *file* rejects it as a body. Juice Shop's /file-upload answers 400 to
+        a raw XML post and parses the very same payload when it arrives as an
+        attachment — and both of its XXE challenges live there. That shape is
+        not a quirk: SVG, DOCX and XLSX are zipped XML, and SAML assertions
+        and sitemap imports arrive as uploads too, so an XXE probe that only
+        posts raw bodies misses the class.
         """
-        # Pre-check: probe with OPTIONS or HEAD to see if XML is accepted
-        accepts_xml = await self._endpoint_accepts_xml(client, endpoint)
-        if not accepts_xml:
+        # The body probe keeps its existing gate: an endpoint that advertises
+        # no XML and is not a POST is not worth a raw XML body.
+        if await self._endpoint_accepts_xml(client, endpoint):
+            finding = await self._probe_xxe(
+                client, endpoint, self._xxe_bodies(), "raw XML body"
+            )
+            if finding:
+                return finding
+
+        return await self._probe_xxe(
+            client, endpoint, self._xxe_uploads(endpoint), "uploaded file"
+        )
+
+    @staticmethod
+    def _xxe_bodies() -> list[dict]:
+        """XXE delivered as the request body, one per XML content type."""
+        return [
+            {"content": InjectionConfig.XXE_PAYLOAD,
+             "headers": {"Content-Type": content_type}}
+            for content_type in InjectionConfig.XXE_CONTENT_TYPES
+        ]
+
+    @staticmethod
+    def _xxe_uploads(endpoint: DiscoveredEndpoint) -> list[dict]:
+        """XXE delivered as an uploaded file, on endpoints that take files.
+
+        Only upload-shaped paths, so an ordinary API endpoint is not sent a
+        multipart body it never asked for. Servers route on the extension,
+        so each candidate filename is its own attempt.
+        """
+        path = urlparse(endpoint.url).path.lower()
+        if not any(
+            indicator in path
+            for indicator in SharedPatterns.UPLOAD_PATH_INDICATORS
+        ):
+            return []
+        return [
+            {"files": {
+                InjectionConfig.XXE_UPLOAD_FIELD: (
+                    filename, InjectionConfig.XXE_PAYLOAD, content_type,
+                )
+            }}
+            for filename in InjectionConfig.XXE_UPLOAD_FILENAMES
+            for content_type in InjectionConfig.XXE_CONTENT_TYPES[:1]
+        ]
+
+    async def _probe_xxe(
+        self,
+        client: RateLimitedClient,
+        endpoint: DiscoveredEndpoint,
+        attempts: list[dict],
+        delivery: str,
+    ) -> DeepFinding | None:
+        """Send each XXE attempt and look for file content in the response."""
+        if not attempts:
             return None
 
-        for content_type in InjectionConfig.XXE_CONTENT_TYPES:
+        for attempt in attempts:
             try:
                 response = await client.request(
-                    "POST",
-                    endpoint.url,
-                    content=InjectionConfig.XXE_PAYLOAD,
-                    headers={"Content-Type": content_type},
+                    "POST", endpoint.url, **attempt
                 )
                 body = response.text
             except (httpx.HTTPError, Exception):
@@ -731,7 +788,7 @@ class ActiveInjectionScanner(AuthAwareScanner):
                         ),
                         technical_detail=(
                             f"Matched file-system indicator: {match.group(0)} | "
-                            f"Content-Type used: {content_type}"
+                            f"Delivered as: {delivery}"
                         ),
                         evidence=body[:500],
                         confidence=InjectionConfig.CONFIDENCE_XXE,

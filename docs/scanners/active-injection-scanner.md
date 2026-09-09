@@ -14,7 +14,12 @@ Tests for server-side injection vulnerabilities by sending payloads to API endpo
 
 4. **NoSQL Injection** — Sends MongoDB operator payloads (`[$ne]=null`) and checks for response size inflation, indicating the query returned more data than intended.
 
-5. **XXE (XML External Entity)** — For endpoints accepting XML, injects `<!ENTITY xx SYSTEM "/etc/passwd">` and checks for file content indicators in the response.
+5. **XXE (XML External Entity)** — Injects `<!ENTITY xx SYSTEM "/etc/passwd">` and checks for file content indicators in the response. Delivered **two ways**, because an endpoint that accepts XML as a *file* rejects it as a request body:
+
+   - as the request body, on endpoints that advertise an XML content type or are POST;
+   - as an **uploaded file** (`.xml`, `.svg`) on upload-shaped paths — SVG, DOCX and XLSX are zipped XML, and SAML assertions and sitemap imports arrive as attachments, so an XXE probe that only posts raw bodies misses the whole class.
+
+   The upload delivery is not gated on the recorded HTTP method: discovery records most endpoints as GET, and an upload endpoint is worth probing either way.
 
 6. **SSTI (Server-Side Template Injection)** — Sends `{{7*7}}` and checks if `49` appears in the response, indicating template evaluation.
 

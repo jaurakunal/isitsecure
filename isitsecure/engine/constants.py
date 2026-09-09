@@ -39,6 +39,14 @@ class SharedPatterns:
         r"(?i)x-signature-ed25519",     # Discord
     )
 
+    # Paths that take an uploaded file. Matched as substrings of the path,
+    # which is deliberately loose: the cost of probing a non-upload endpoint
+    # with a multipart body is one request that 400s.
+    UPLOAD_PATH_INDICATORS = (
+        "/upload", "/file", "/media", "/attachment",
+        "/image", "/avatar", "/document", "/import",
+    )
+
     UUID_PATTERN = (
         r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
     )
@@ -1517,6 +1525,17 @@ class InjectionConfig:
 
     XXE_CONTENT_TYPES = ("application/xml", "text/xml")
 
+    # An endpoint that accepts XML *as a file* rejects it as a body. Juice
+    # Shop's /file-upload answers 400 to a raw XML post and parses the same
+    # payload happily when it arrives as an attachment, and both of its XXE
+    # challenges live there. Real ones look the same: SVG, DOCX and XLSX are
+    # zipped XML, SAML assertions and sitemap imports are XML uploads.
+    #
+    # Extensions, because servers route on them. The field name is the one
+    # nearly every upload form uses; a wrong guess costs one 400.
+    XXE_UPLOAD_FILENAMES = ("xxe.xml", "xxe.svg")
+    XXE_UPLOAD_FIELD = "file"
+
     XXE_PAYLOAD = (
         '<?xml version="1.0"?>'
         '<!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>'
@@ -2817,11 +2836,11 @@ class FileUploadConfig:
     CONFIDENCE_UNRESTRICTED = 0.85
     CONFIDENCE_PATH_TRAVERSAL = 0.90
 
-    # Endpoint indicators for file upload
-    UPLOAD_PATH_INDICATORS = (
-        "/upload", "/file", "/media", "/attachment",
-        "/image", "/avatar", "/document", "/import",
-    )
+    # Endpoint indicators for file upload. Shared, because an upload is a
+    # delivery mechanism rather than a vulnerability class: the injection
+    # scanner needs to know an endpoint takes files so it can post its XML
+    # payload as one.
+    UPLOAD_PATH_INDICATORS = SharedPatterns.UPLOAD_PATH_INDICATORS
     UPLOAD_CONTENT_TYPES = ("multipart/form-data",)
 
     # Dangerous file types to test: (extension, content_type, payload)
