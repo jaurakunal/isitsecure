@@ -22,6 +22,23 @@ class SharedPatterns:
     # annotation was taken for the guard.
     JS_COMMENT_PATTERN = r"//.*$|/\*.*?\*/"
 
+    # Verifying a request signature authenticates the caller as surely as a
+    # session does — it is how a webhook receiver is *meant* to authenticate,
+    # the sender holding no session to present. Detected by what the handler
+    # does, because the path says nothing: an endpoint with "webhook" in its
+    # name may equally be one that *sends* them, which is an SSRF sink rather
+    # than a receiver.
+    SIGNATURE_VERIFICATION_PATTERNS = (
+        r"constructEvent\s*\(",        # stripe.webhooks.constructEvent
+        r"timingSafeEqual\s*\(",       # constant-time digest comparison
+        r"verifySignature\s*\(",
+        r"verify_signature\s*\(",
+        r"(?i)x-hub-signature",         # GitHub, Meta
+        r"(?i)stripe-signature",
+        r"(?i)svix-signature",          # Svix, Clerk
+        r"(?i)x-signature-ed25519",     # Discord
+    )
+
     UUID_PATTERN = (
         r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
     )
@@ -1010,7 +1027,7 @@ class RouteAuthAnalyzerConfig:
         r'requireAuth\s*\(',
         r'withAuth\s*\(',
         r'isAuthenticated',
-    )
+    ) + SharedPatterns.SIGNATURE_VERIFICATION_PATTERNS
 
     # Patterns indicating authorization/ownership check
     OWNERSHIP_CHECK_PATTERNS = (
@@ -3612,8 +3629,9 @@ class ExpressRouteMapperConfig:
     # Regex patterns for Express route definitions
     # Captures: (method, path) from app.get('/path', ...) or router.post('/path', ...)
     ROUTE_DEFINITION_PATTERN = (
-        r'(?:app|router)\s*\.\s*(get|post|put|patch|delete|all)\s*\(\s*'
-        r"""['"](/[^'"]*?)['"]"""
+        r'(?:app|router)\s*\.\s*'
+        r'(?P<method>get|post|put|patch|delete|all)\s*\(\s*'
+        r"""['"](?P<path>/[^'"]*?)['"]"""
     )
 
     # Regex pattern for app.use mount points
@@ -4877,7 +4895,7 @@ class LSPConfig:
         # bcrypt/argon (password verification)
         r'bcrypt\.compare\s*\(',
         r'argon2\.verify\s*\(',
-    )
+    ) + SharedPatterns.SIGNATURE_VERIFICATION_PATTERNS
 
     # Patterns that confirm auth enforcement (throws/returns on failure).
     # Generic across frameworks — matches status codes and error types.
