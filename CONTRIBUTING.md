@@ -71,18 +71,26 @@ chokes on silently costs you the release: release-please logs
 `commit could not be parsed`, counts zero commits and opens no PR, so the code
 merges and the changelog entry simply never appears.
 
-The one that has actually bitten us is a backticked code fragment whose
-parentheses do not balance to the parser's eye:
+What breaks it is **nested parentheses on one line** — an inner `(` opened
+while an outer one is still unclosed. A call inside a call is the usual way in:
 
 ```
-`app.use('/x', security.isAuthorized())` stands in front of every method
-                                    ^^^ Error: unexpected token '(' ... valid tokens [)]
+app.use('/x', security.isAuthorized())     <-- breaks: `isAuthorized(` opens
+                          ^                    inside the open `app.use(`
+Error: unexpected token '(' ... valid tokens [)]
+
+if (a === b) next()                        <-- fine: the parens are sequential,
+app.get('/x', handler)                         never nested
 ```
 
-Describe such code in prose, or trim it to a balanced fragment
-(`security.isAuthorized`). If a release you expected does not appear, read the
-release-please run log before anything else — the workflow reports success
-either way.
+So sequential parens are safe and nesting is not. Write the inner call without
+its parens (`security.isAuthorized`), split the fragment across two lines, or
+describe it in prose. This has cost two releases so far.
+
+If a release you expected does not appear, read the release-please run log
+before anything else: the workflow reports **success** either way, and the
+only evidence is a `commit could not be parsed` line followed by
+`Considering: 0 commits`.
 
 ## Reporting bugs / security issues
 
