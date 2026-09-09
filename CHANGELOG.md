@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.23.9](https://github.com/jaurakunal/isitsecure/compare/v0.23.8...v0.23.9) (2026-09-09)
+
+
+### Bug Fixes
+
+* **sast:** judge a webhook route by what it verifies, not by its path ([#181](https://github.com/jaurakunal/isitsecure/issues/181)) ([4b4eed8](https://github.com/jaurakunal/isitsecure/commit/4b4eed8f86ff382d96392c3102b29bd879c91f41))
+
 ## [0.23.8](https://github.com/jaurakunal/isitsecure/compare/v0.23.7...v0.23.8) (2026-09-09)
 
 
