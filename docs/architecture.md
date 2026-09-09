@@ -279,6 +279,29 @@ looks reachable the graph is uninformative — the entry point may be a `.jsx`
 or a compiled artefact — so the filter stands down rather than dropping the
 whole project.
 
+### Endpoint Discovery
+
+For a single-page app, the served HTML is a shell: the routes and the API
+calls both live in the JavaScript bundle, which `EndpointDiscoveryScanner`
+parses alongside the HTML.
+
+Two kinds of path appear there, and only one is attack surface — the routes
+the app's own router renders are not endpoints, while the paths it calls are.
+They are told apart by **how each is written**, a request-making token
+(`fetch`, `axios`, `url:`, `hostServer`, …) just before the path:
+
+```js
+uploader = new Es({url: Z.hostServer + "/file-upload", ...})   // an endpoint
+{path: "/about", component: AboutComponent}                    // a route
+```
+
+This replaced a list of interesting-looking directory names (`/dashboard`,
+`/api`, `/apps`, `/admin`, `/account`). On Juice Shop that list kept 11 of 55
+paths and discarded `/file-upload`, `/dataerasure`, `/profile` and
+`/data-export` — and a scanner cannot test an endpoint nothing told it about,
+so the four file-upload vulnerabilities behind `/file-upload` were unreachable
+no matter how good the file-upload scanner was.
+
 ## Design Principles
 
 ### Protocol-Based (Dependency Inversion)

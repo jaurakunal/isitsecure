@@ -115,7 +115,7 @@ class EndpointDiscoveryScanner:
         await self._discover_html_forms(html_content, base_url, raw_endpoints)
 
         # Phase 3: Extract app routes that might be API routes
-        self._extract_app_routes(all_content, base_url, raw_endpoints)
+        self._extract_requested_paths(all_content, base_url, raw_endpoints)
 
         # Post-process: detect params, categorize
         endpoints = list(raw_endpoints.values())
@@ -604,18 +604,36 @@ class EndpointDiscoveryScanner:
 
     # --- Phase 3: App route extraction ---
 
-    def _extract_app_routes(
+    def _extract_requested_paths(
         self,
         content: str,
         base_url: str,
         endpoints: dict[str, DiscoveredEndpoint],
     ) -> None:
-        """Extract app routes that might be API-backed pages.
+        """Extract paths the bundle uses as the target of a request.
 
-        Routes like /dashboard/home or /account/settings may have
-        corresponding API calls. We add them as potential endpoints
-        to probe.
+        A single-page app names two kinds of path: the routes its own router
+        renders, and the endpoints it calls. Only the second is attack
+        surface, and the difference is visible in how each is written —
+
+            uploader = new Es({url: Z.hostServer + "/file-upload", ...})
+            {path: "about", component: AboutComponent}
+
+        — so a path is kept when a request-making token sits just before it.
+
+        This used to be a list of interesting-looking names: /dashboard,
+        /api, /apps, /admin, /account. It discarded 44 of Juice Shop's 55
+        paths — /file-upload, /dataerasure, /profile, /data-export among
+        them — because a name list can only recognise vocabulary someone
+        thought of in advance. /file-upload alone gates four vulnerabilities
+        that no scanner could reach, since a scanner cannot test an endpoint
+        nothing told it about.
         """
+        context = re.compile(
+            EndpointDiscoveryConfig.REQUEST_CONTEXT_PATTERN, re.IGNORECASE
+        )
+        window = EndpointDiscoveryConfig.REQUEST_CONTEXT_WINDOW
+
         for match in re.finditer(
             EndpointDiscoveryConfig.ROUTE_PATH_PATTERN, content
         ):
@@ -629,14 +647,11 @@ class EndpointDiscoveryScanner:
             if route.startswith(("/_next", "/ROOT", "/node_modules")):
                 continue
 
-            # Routes with /dashboard, /api, or resource-like segments are interesting
-            if any(
-                seg in route.lower()
-                for seg in ("/dashboard", "/api", "/apps", "/admin", "/account")
-            ):
+            preceding = content[max(0, match.start() - window):match.start()]
+            if context.search(preceding):
                 self._add_endpoint(
                     endpoints, route, base_url,
-                    EndpointMethod.GET, "app_route",
+                    EndpointMethod.GET, "requested_path",
                 )
 
     # --- Helpers ---

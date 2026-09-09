@@ -532,26 +532,71 @@ class TestEndpointDiscoveryScanner:
         scanner._extract_tables_from_openapi("not json", "https://x.supabase.co", endpoints)
         assert len(endpoints) == 0
 
-    # --- App routes ---
+    # --- Requested paths ---
+    #
+    # A single-page app names two kinds of path: the routes its router
+    # renders, and the endpoints it calls. Only the second is attack surface,
+    # and how each is written tells them apart.
 
     @pytest.mark.asyncio
-    async def test_extract_app_routes(self, scanner: EndpointDiscoveryScanner):
-        """Should extract routes with interesting segments like /dashboard."""
-        content = '"/dashboard/home"'
+    async def test_extracts_a_path_used_as_a_request_target(
+        self, scanner: EndpointDiscoveryScanner
+    ):
+        content = 'uploader = new Es({url: host + "/file-upload", token})'
         endpoints: dict[str, DiscoveredEndpoint] = {}
-        scanner._extract_app_routes(content, BASE_URL, endpoints)
+        scanner._extract_requested_paths(content, BASE_URL, endpoints)
 
         assert len(endpoints) == 1
         ep = list(endpoints.values())[0]
-        assert "/dashboard/home" in ep.url
-        assert ep.source_pattern == "app_route"
+        assert "/file-upload" in ep.url
+        assert ep.source_pattern == "requested_path"
+
+    @pytest.mark.asyncio
+    async def test_extracts_regardless_of_the_name(
+        self, scanner: EndpointDiscoveryScanner
+    ):
+        """The regression this guards: an allowlist of /dashboard, /api,
+        /apps, /admin, /account discarded 44 of Juice Shop's 55 paths."""
+        content = 'fetch("/dataerasure"); axios.post("/erasure-request")'
+        endpoints: dict[str, DiscoveredEndpoint] = {}
+        scanner._extract_requested_paths(content, BASE_URL, endpoints)
+
+        urls = " ".join(e.url for e in endpoints.values())
+        assert "/dataerasure" in urls
+        assert "/erasure-request" in urls
+
+    @pytest.mark.asyncio
+    async def test_a_router_route_is_not_an_endpoint(
+        self, scanner: EndpointDiscoveryScanner
+    ):
+        """`{path: "about"}` renders a view; nothing is requested."""
+        content = '{path: "/about", component: AboutComponent}'
+        endpoints: dict[str, DiscoveredEndpoint] = {}
+        scanner._extract_requested_paths(content, BASE_URL, endpoints)
+
+        assert len(endpoints) == 0
+
+    @pytest.mark.asyncio
+    async def test_a_dashboard_route_still_needs_a_request(
+        self, scanner: EndpointDiscoveryScanner
+    ):
+        """Names no longer earn inclusion on their own — including the ones
+        the old allowlist trusted."""
+        endpoints: dict[str, DiscoveredEndpoint] = {}
+        scanner._extract_requested_paths('"/dashboard/home"', BASE_URL, endpoints)
+        assert len(endpoints) == 0
+
+        scanner._extract_requested_paths(
+            'fetch("/dashboard/home")', BASE_URL, endpoints
+        )
+        assert len(endpoints) == 1
 
     @pytest.mark.asyncio
     async def test_skip_frontend_routes(self, scanner: EndpointDiscoveryScanner):
         """Known frontend-only routes should be skipped."""
-        content = '"/login"'
+        content = 'fetch("/login")'
         endpoints: dict[str, DiscoveredEndpoint] = {}
-        scanner._extract_app_routes(content, BASE_URL, endpoints)
+        scanner._extract_requested_paths(content, BASE_URL, endpoints)
 
         assert len(endpoints) == 0
 
@@ -560,11 +605,23 @@ class TestEndpointDiscoveryScanner:
         self, scanner: EndpointDiscoveryScanner
     ):
         """Internal framework paths like /_next should be skipped."""
-        content = '"/_next/data/abc123"'
+        content = 'fetch("/_next/data/abc123")'
         endpoints: dict[str, DiscoveredEndpoint] = {}
-        scanner._extract_app_routes(content, BASE_URL, endpoints)
+        scanner._extract_requested_paths(content, BASE_URL, endpoints)
 
         assert len(endpoints) == 0
+
+    @pytest.mark.asyncio
+    async def test_the_context_window_is_bounded(
+        self, scanner: EndpointDiscoveryScanner
+    ):
+        """A fetch call far above must not vouch for an unrelated path."""
+        content = 'fetch("/a");' + " " * 200 + '"/unrelated"'
+        endpoints: dict[str, DiscoveredEndpoint] = {}
+        scanner._extract_requested_paths(content, BASE_URL, endpoints)
+
+        urls = " ".join(e.url for e in endpoints.values())
+        assert "/unrelated" not in urls
 
     # --- Integration ---
 

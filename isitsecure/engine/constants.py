@@ -145,6 +145,22 @@ class EndpointDiscoveryConfig:
     )
 
     # Route path patterns found in minified JS (Next.js, React Router, etc.)
+    # A path is worth probing when the bundle uses it to *make a request*.
+    # The alternative — a list of interesting-looking names — kept
+    # /dashboard, /api, /apps, /admin, /account and discarded 44 of Juice
+    # Shop's 55 paths, /file-upload and /dataerasure among them. A name list
+    # can only recognise vocabulary someone thought of in advance; how a path
+    # is used is visible in the code.
+    REQUEST_CONTEXT_PATTERN = (
+        r"(?:fetch|axios|XMLHttpRequest|\.open|\.get|\.post|\.put|\.patch"
+        r"|\.delete|url\s*:|baseURL|hostServer|apiUrl|endpoint)"
+    )
+
+    # How far back to look for that context. A bundler puts the request call
+    # and its URL close together; widening this starts catching the previous
+    # statement's call instead.
+    REQUEST_CONTEXT_WINDOW = 60
+
     ROUTE_PATH_PATTERN = r'"(/[a-zA-Z][a-zA-Z0-9_/\-]{2,50})"'
 
     # External API base URL pattern (e.g., https://api.example.com)
