@@ -71,24 +71,35 @@ chokes on silently costs you the release: release-please logs
 `commit could not be parsed`, counts zero commits and opens no PR, so the code
 merges and the changelog entry simply never appears.
 
-What breaks it is **nested parentheses on one line** — an inner `(` opened
-while an outer one is still unclosed. A call inside a call is the usual way in:
+CI checks this on every pull request (the **commit messages** job), running
+the same parser release-please uses. You should not have to think about the
+rule below — but when the job fails, this is what it is telling you.
+
+What breaks it is a line that **begins** with a token containing nested
+parentheses:
 
 ```
-app.use('/x', security.isAuthorized())     <-- breaks: `isAuthorized(` opens
-                          ^                    inside the open `app.use(`
-Error: unexpected token '(' ... valid tokens [)]
-
-if (a === b) next()                        <-- fine: the parens are sequential,
-app.get('/x', handler)                         never nested
+`app.post('/x', security.appendUserId())`, where position cannot   <-- breaks
+    `app.post('/x', security.appendUserId())` indented four spaces <-- fine
+the call `app.post('/x', security.appendUserId())` mid-sentence    <-- fine
+`security.isAuthorized()` at the start, only one level             <-- fine
 ```
 
-So sequential parens are safe and nesting is not. Write the inner call without
-its parens (`security.isAuthorized`), split the fragment across two lines, or
-describe it in prose. This has cost two releases so far.
+So indent code fragments by four spaces, or put a word in front of them.
+Position in the line is what matters, not the parens themselves.
 
-If a release you expected does not appear, read the release-please run log
-before anything else: the workflow reports **success** either way, and the
+(This rule was mis-derived twice from examples before anyone ran the parser,
+which is why CI runs the parser rather than the rule.)
+
+To check before you push:
+
+```bash
+npm install --no-save @conventional-commits/parser@0.4.1
+node .github/scripts/check-commit-messages.mjs origin/main..HEAD
+```
+
+If a release you expected does not appear anyway, read the release-please run
+log before anything else: the workflow reports **success** either way, and the
 only evidence is a `commit could not be parsed` line followed by
 `Considering: 0 commits`.
 

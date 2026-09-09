@@ -30,6 +30,26 @@ jobs:
       - run: pip install -e ".[all,dev]"
       - run: pytest -q
 
+  commit-messages:
+    name: commit messages
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      # The parser release-please itself uses, pinned to the same version. A
+      # message it cannot read is skipped there *silently* — the workflow
+      # still reports success and no release PR appears — so this is a gate
+      # rather than advisory. It has cost two releases.
+      - run: npm install --no-save @conventional-commits/parser@0.4.1
+      - run: >
+          node .github/scripts/check-commit-messages.mjs
+          ${{ github.event.pull_request.base.sha }}..HEAD
+
   lint:
     name: ruff (advisory)
     runs-on: ubuntu-latest
