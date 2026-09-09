@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.23.8](https://github.com/jaurakunal/isitsecure/compare/v0.23.7...v0.23.8) (2026-09-09)
+
+
+### Bug Fixes
+
+* **sast:** count a guard that rejects, and stop reading handler names as guards ([#179](https://github.com/jaurakunal/isitsecure/issues/179)) ([6d3d7ee](https://github.com/jaurakunal/isitsecure/commit/6d3d7ee68db9f4ff6815f3b2ff0344634fc70d70))
+
 ## [0.23.7](https://github.com/jaurakunal/isitsecure/compare/v0.23.6...v0.23.7) (2026-09-09)
 
 
