@@ -763,3 +763,136 @@ class TestAuthBypassSQLi:
         eps = [_make_endpoint(url="https://app.example.com/rest/products/search")]
         assert scanner._derive_base_url(eps) == "https://app.example.com"
         assert scanner._derive_base_url([]) is None
+
+
+# ---------------------------------------------------------------------------
+# XXE delivery (#188)
+# ---------------------------------------------------------------------------
+
+
+class TestXXEDelivery:
+    """How the XXE payload reaches the parser.
+
+    An endpoint that accepts XML as a *file* rejects it as a body. Juice
+    Shop's /file-upload answers 400 to a raw XML post and parses the same
+    payload when it arrives as an attachment; both of its XXE challenges are
+    there. SVG, DOCX and XLSX are zipped XML, so the shape is common.
+    """
+
+    @staticmethod
+    def _endpoint(path: str) -> DiscoveredEndpoint:
+        return DiscoveredEndpoint(
+            url=f"https://example.com{path}",
+            method=EndpointMethod.POST,
+            source_pattern="test",
+        )
+
+    def test_an_upload_path_is_probed_as_a_file(self) -> None:
+        scanner = ActiveInjectionScanner()
+        attempts = scanner._xxe_uploads(self._endpoint("/file-upload"))
+
+        assert attempts, "an upload endpoint must get a multipart attempt"
+        for attempt in attempts:
+            assert "files" in attempt
+            field, (filename, payload, _) = next(iter(attempt["files"].items()))
+            assert field == InjectionConfig.XXE_UPLOAD_FIELD
+            assert payload == InjectionConfig.XXE_PAYLOAD
+            assert filename in InjectionConfig.XXE_UPLOAD_FILENAMES
+
+    def test_extensions_are_varied(self) -> None:
+        """Servers route on the extension, so one filename is not enough."""
+        scanner = ActiveInjectionScanner()
+        names = {
+            next(iter(a["files"].values()))[0]
+            for a in scanner._xxe_uploads(self._endpoint("/upload"))
+        }
+        assert len(names) > 1
+
+    def test_an_ordinary_endpoint_gets_no_multipart_body(self) -> None:
+        """A path that takes no files should not be sent one."""
+        scanner = ActiveInjectionScanner()
+        assert scanner._xxe_uploads(self._endpoint("/api/Products")) == []
+
+    def test_the_body_probe_is_unchanged(self) -> None:
+        """The raw-body delivery keeps its content types; this adds a
+        delivery rather than replacing one."""
+        scanner = ActiveInjectionScanner()
+        attempts = scanner._xxe_bodies()
+
+        assert len(attempts) == len(InjectionConfig.XXE_CONTENT_TYPES)
+        for attempt in attempts:
+            assert attempt["content"] == InjectionConfig.XXE_PAYLOAD
+            assert attempt["headers"]["Content-Type"] in (
+                InjectionConfig.XXE_CONTENT_TYPES
+            )
+
+    @pytest.mark.asyncio
+    async def test_file_content_in_the_response_is_the_proof(self) -> None:
+        """The finding is raised on /etc/passwd coming back, not on a status
+        code — the endpoint answers 500 while leaking the file."""
+        scanner = ActiveInjectionScanner()
+        leaked = (
+            "Error: deprecated: <root>root:x:0:0:root:/root:/sbin/nologin"
+            "</root>"
+        )
+        client = AsyncMock()
+        client.request.return_value = _make_response(500, leaked)
+
+        finding = await scanner._probe_xxe(
+            client,
+            self._endpoint("/file-upload"),
+            scanner._xxe_uploads(self._endpoint("/file-upload")),
+            "uploaded file",
+        )
+
+        assert finding is not None
+        assert finding.title == InjectionConfig.TITLE_XXE
+        assert "uploaded file" in finding.technical_detail
+
+    @pytest.mark.asyncio
+    async def test_a_clean_response_raises_nothing(self) -> None:
+        scanner = ActiveInjectionScanner()
+        client = AsyncMock()
+        client.request.return_value = _make_response(200, '{"ok": true}')
+
+        finding = await scanner._probe_xxe(
+            client,
+            self._endpoint("/file-upload"),
+            scanner._xxe_uploads(self._endpoint("/file-upload")),
+            "uploaded file",
+        )
+        assert finding is None
+
+    @pytest.mark.asyncio
+    async def test_an_upload_is_probed_even_when_recorded_as_get(self) -> None:
+        """The end-to-end path, and the real-world case: discovery records
+        almost every endpoint as GET, so the body probe declines it — the
+        upload delivery has to run regardless of the recorded method."""
+        scanner = ActiveInjectionScanner()
+        endpoint = DiscoveredEndpoint(
+            url="https://example.com/file-upload",
+            method=EndpointMethod.GET,
+            source_pattern="test",
+        )
+        leaked = "<root>root:x:0:0:root:/root:/sbin/nologin</root>"
+        client = AsyncMock()
+        client.request.return_value = _make_response(500, leaked)
+
+        finding = await scanner._test_xxe_injection(client, endpoint)
+
+        assert finding is not None, (
+            "a GET-recorded upload endpoint must still be probed as a file"
+        )
+        assert "uploaded file" in finding.technical_detail
+
+    @pytest.mark.asyncio
+    async def test_no_attempts_means_no_requests(self) -> None:
+        scanner = ActiveInjectionScanner()
+        client = AsyncMock()
+
+        finding = await scanner._probe_xxe(
+            client, self._endpoint("/api/Products"), [], "uploaded file"
+        )
+
+        assert finding is None
+        client.request.assert_not_called()
