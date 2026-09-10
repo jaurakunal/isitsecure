@@ -127,6 +127,15 @@ TARGETS: list[Target] = [
         url="http://localhost:5001",
         ready_url="http://localhost:5001/",
         down_cmd=["docker", "rm", "-f", "bench_vampi_vuln"],
+        # VAmPI ships an empty database and seeds it from /createdb. Without
+        # this the app answers HTTP 500 to every data route, so IDOR has
+        # nothing to find — and /createdb is itself a discovered endpoint, so
+        # a scan seeds the target by scanning it. Whether IDOR sees data then
+        # depends on whether some scanner reached /createdb first, which made
+        # the target's IDOR result a coin flip rather than a measurement.
+        pre_scan=["bash", "-c",
+                  "curl -s -o /dev/null http://localhost:5001/createdb || true"],
+
         expect=[
             Expectation("SQL injection (OWASP API8/Injection)", **SQLI),
             Expectation("Broken object-level auth / IDOR", **IDOR),
@@ -141,6 +150,15 @@ TARGETS: list[Target] = [
         url="http://localhost:5002",
         ready_url="http://localhost:5002/",
         down_cmd=["docker", "rm", "-f", "bench_vampi_secure"],
+        # VAmPI ships an empty database and seeds it from /createdb. Without
+        # this the app answers HTTP 500 to every data route, so IDOR has
+        # nothing to find — and /createdb is itself a discovered endpoint, so
+        # a scan seeds the target by scanning it. Whether IDOR sees data then
+        # depends on whether some scanner reached /createdb first, which made
+        # the target's IDOR result a coin flip rather than a measurement.
+        pre_scan=["bash", "-c",
+                  "curl -s -o /dev/null http://localhost:5002/createdb || true"],
+
         # Secure build: injection/IDOR findings would be FALSE POSITIVES.
         forbid=[
             Expectation("SQL injection (should be absent)", **SQLI),
