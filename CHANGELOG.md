@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.25.1](https://github.com/jaurakunal/isitsecure/compare/v0.25.0...v0.25.1) (2026-09-10)
+
+
+### Bug Fixes
+
+* **triage:** group findings by how many places they have to be fixed in ([#198](https://github.com/jaurakunal/isitsecure/issues/198)) ([a351089](https://github.com/jaurakunal/isitsecure/commit/a3510896605e6939efd061fd6a58b93171fef466))
+
 ## [0.25.0](https://github.com/jaurakunal/isitsecure/compare/v0.24.2...v0.25.0) (2026-09-10)
 
 
