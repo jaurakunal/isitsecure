@@ -47,7 +47,7 @@ class CORSScanner(AuthAwareScanner):
     @property
     def scan_categories(self) -> list[FindingCategory]:
         """Finding categories this scanner can detect."""
-        return [FindingCategory.AUTH_WEAKNESS]
+        return [FindingCategory.CORS_MISCONFIGURATION]
 
     async def scan(
         self,
@@ -312,7 +312,7 @@ class CORSScanner(AuthAwareScanner):
         """Construct a DeepFinding for a CORS misconfiguration."""
         return DeepFinding(
             source=FindingSource.DAST_URL,
-            category=FindingCategory.AUTH_WEAKNESS,
+            category=FindingCategory.CORS_MISCONFIGURATION,
             severity=severity,
             title=title,
             description=description,

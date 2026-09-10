@@ -1171,9 +1171,9 @@ class DeepSecurityScanAgent:
         # ==============================================================
         # Phase 9.5: LLM Triage (deduplicate, enrich, prioritize)
         # ==============================================================
-        if self._llm_triage and ctx.all_findings:
-            from isitsecure.engine.constants import TriageConfig
+        from isitsecure.engine.constants import TriageConfig
 
+        if self._llm_triage and ctx.all_findings:
             yield DeepScanEvent(
                 DeepScanPhase.TRIAGE,
                 TriageConfig.MSG_TRIAGING,
@@ -1200,6 +1200,27 @@ class DeepSecurityScanAgent:
             except Exception as e:
                 logger.warning("Triage failed: %s: %s", type(e).__name__, e)
 
+        elif ctx.all_findings:
+            # Deduplication needs no LLM — it is a rule about remediation
+            # scope, not a judgement — but it lived behind the triage phase,
+            # so `--llm none` shipped the raw list: 296 findings on Juice
+            # Shop, of which 272 were five real issues restated once per
+            # endpoint. Anyone scanning without an API key got the version
+            # that is unreadable.
+            from isitsecure.engine.triage.llm_triage_service import (
+                LLMTriageService,
+            )
+
+            before = len(ctx.all_findings)
+            ctx.all_findings, merged = LLMTriageService._rule_based_dedup(
+                ctx.all_findings
+            )
+            if merged:
+                yield DeepScanEvent(
+                    DeepScanPhase.TRIAGE,
+                    f"Grouped {before} findings into {len(ctx.all_findings)}",
+                    TriageConfig.PROGRESS_TRIAGE,
+                )
 
     # ------------------------------------------------------------------
     # Progress draining
