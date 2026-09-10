@@ -10,27 +10,40 @@ logger = logging.getLogger(__name__)
 
 
 class ScannerTimeouts:
-    """Per-scanner timeout configuration."""
+    """Per-scanner timeout configuration.
 
-    DEFAULT_SECONDS = 60
-    AUTHENTICATED_CRAWLER_SECONDS = 300  # Browser login + BFS crawl of 50 pages
-    IDOR_CROSS_USER_SECONDS = 120
-    PRIVILEGE_ESCALATION_SECONDS = 180  # 8 tests: differential, mutation replay, object write, etc.
+    These are now the *only* bound on how much of an application a scanner
+    covers: the endpoint caps that used to stop work after the first 20 or 30
+    endpoints are gone, because probing costs HTTP requests rather than
+    tokens and a cap of 30 against 77 endpoints was a coin flip about which
+    half got examined.
+
+    They are correspondingly generous. A scan that takes an hour and finishes
+    is worth more than one that takes ten minutes and quietly skipped two
+    thirds of the surface — provided it says what it is doing, which is what
+    `progress.emit` is for. Timing out is now a real failure signal rather
+    than the normal way a scanner ends.
+    """
+
+    DEFAULT_SECONDS = 600
+    AUTHENTICATED_CRAWLER_SECONDS = 900  # Browser login + BFS crawl of 50 pages
+    IDOR_CROSS_USER_SECONDS = 1800
+    PRIVILEGE_ESCALATION_SECONDS = 1800  # 8 tests: differential, mutation replay, object write, etc.
     GIT_SECRET_SCAN_SECONDS = 90
     SEMGREP_TAINT_SECONDS = 150  # above SemgrepAnalyzer's own 120s subprocess timeout
     LLM_CODE_REVIEW_SECONDS = 900  # 15 min — reviews in parallel batches (includes import-graph files)
-    LSP_VALIDATION_SECONDS = 120   # 2 min — LSP init + auth flow tracing
+    LSP_VALIDATION_SECONDS = 600   # 2 min — LSP init + auth flow tracing
     TRIAGE_SECONDS = 900           # 15 min — batched LLM triage + themes + owner summary
     INJECTION_ADJUDICATOR_SECONDS = 240  # 4 min — batched LLM genuine-vs-benign injection review (#5)
-    XSS_ACTIVE_SECONDS = 600       # 10 min — 20 endpoints × 5 params × 3 probe stages (deep)
-    XSS_QUICK_SECONDS = 120        # 2 min — reflected + POST-body only, no DOM pass (quick, #118)
-    INJECTION_ACTIVE_SECONDS = 900  # 15 min — 30 endpoints × 5 params, time-based SQLi (3s sleeps)
-    AUTH_BYPASS_SECONDS = 300       # 5 min — multiple login attempts + timing measurements
-    RATE_LIMIT_SECONDS = 300        # 5 min — 100+ burst requests
-    HTTP_PROBE_SECONDS = 180        # 3 min — TRACE, host injection, directory listing, CRLF
+    XSS_ACTIVE_SECONDS = 3600       # 10 min — 20 endpoints × 5 params × 3 probe stages (deep)
+    XSS_QUICK_SECONDS = 900        # 2 min — reflected + POST-body only, no DOM pass (quick, #118)
+    INJECTION_ACTIVE_SECONDS = 5400  # 15 min — 30 endpoints × 5 params, time-based SQLi (3s sleeps)
+    AUTH_BYPASS_SECONDS = 1800       # 5 min — multiple login attempts + timing measurements
+    RATE_LIMIT_SECONDS = 900        # 5 min — 100+ burst requests
+    HTTP_PROBE_SECONDS = 900        # 3 min — TRACE, host injection, directory listing, CRLF
     PROBE_ANALYZER_SECONDS = 30     # Pure data analysis, no HTTP requests
-    GUIDED_DAST_SECONDS = 600       # 10 min — SAST-guided test cases
-    DOM_XSS_SECONDS = 900           # 15 min — Playwright: navigate + hook sinks on up to 30 pages
+    GUIDED_DAST_SECONDS = 1800       # 10 min — SAST-guided test cases
+    DOM_XSS_SECONDS = 1800           # 15 min — Playwright: navigate + hook sinks on up to 30 pages
     OOB_POLL_SECONDS = 30           # OOB callback poll (just HTTP calls, no scanning)
 
 

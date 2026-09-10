@@ -6,6 +6,21 @@ from isitsecure.engine.enums import FindingCategory, SeverityLevel
 class SharedPatterns:
     """Shared regex patterns and constants used across multiple scanners."""
 
+    # Endpoint caps used to bound probing. They are gone, because the thing
+    # they were protecting is not scarce: measured over nine scans, a DAST
+    # run costs $0.12-$0.18 and probing is HTTP requests, not tokens. Going
+    # from 59 endpoints to 154 moved the bill by five cents, and every one of
+    # those caps silently decided which half of an application was examined —
+    # a cap of 30 against 77 endpoints is a coin flip about what gets found.
+    #
+    # What still bounds a scan is time, per scanner, via TimeBudget. That
+    # bound is honest: it stops work when work is taking too long, rather
+    # than pretending the first 30 endpoints are the interesting ones.
+    #
+    # Caps on LLM prompt size and on out-of-band registrations are NOT this
+    # and remain: those bound tokens and an external service, both scarce.
+    UNBOUNDED_ENDPOINTS = 1_000_000
+
     # Directories that hold someone else's code or build output. Several
     # scanners walk a repo and every one of them needs this list; keeping one
     # copy is why it lives here rather than beside each walker.
@@ -95,7 +110,14 @@ class DeepScanConfig:
 class EndpointDiscoveryConfig:
     """Configuration for API endpoint discovery from JS bundles."""
 
-    MAX_ENDPOINTS_TO_DISCOVER = 100
+    MAX_ENDPOINTS_TO_DISCOVER = SharedPatterns.UNBOUNDED_ENDPOINTS
+
+    # The cap above bounds how many endpoints are *found*; these are then
+    # multiplied along two derived axes — an /{id} twin per collection, and
+    # a state-changing twin per endpoint when --probe-writes is on. Bounding
+    # the total instead starved the derived ones, which are generated last
+    # and so were truncated first. This is the ceiling on the product.
+    MAX_ENDPOINTS_TOTAL = MAX_ENDPOINTS_TO_DISCOVER * 4
     # Server-rendered HTML crawl: only triggered when JS/OpenAPI discovery
     # found few endpoints, and bounded to a small number of same-origin pages.
     HTML_CRAWL_TRIGGER = 10
@@ -261,7 +283,7 @@ class EndpointDiscoveryConfig:
 class IDORConfig:
     """Configuration for IDOR vulnerability testing."""
 
-    MAX_ENDPOINTS_TO_TEST = 50
+    MAX_ENDPOINTS_TO_TEST = SharedPatterns.UNBOUNDED_ENDPOINTS
     MAX_IDOR_PROBES_PER_ENDPOINT = 5
     HTTP_TIMEOUT_SECONDS = SharedPatterns.DEFAULT_HTTP_TIMEOUT_SECONDS
     MAX_CONCURRENT_PROBES = SharedPatterns.DEFAULT_MAX_CONCURRENT
@@ -1131,7 +1153,7 @@ class XSSConfig:
     """Configuration for active XSS scanning."""
 
     SCANNER_NAME = "xss_scanner"
-    MAX_ENDPOINTS_TO_TEST = 20
+    MAX_ENDPOINTS_TO_TEST = SharedPatterns.UNBOUNDED_ENDPOINTS
     MAX_PARAMS_PER_ENDPOINT = 5
     HTTP_TIMEOUT_SECONDS = 10
     MAX_CONCURRENT = SharedPatterns.DEFAULT_MAX_CONCURRENT
@@ -1253,7 +1275,7 @@ class XSSConfig:
     )
 
     # POST body XSS testing
-    MAX_POST_ENDPOINTS_TO_TEST = 15
+    MAX_POST_ENDPOINTS_TO_TEST = SharedPatterns.UNBOUNDED_ENDPOINTS
     MAX_POST_BODY_FIELDS = 25  # cap canaried fields per endpoint (bounds body size)
     # Fallback field names when an endpoint carried no discovered form fields.
     POST_BODY_FIELD_NAMES = (
@@ -1393,7 +1415,7 @@ class InjectionConfig:
     """Configuration for active injection scanning."""
 
     SCANNER_NAME = "active_injection_scanner"
-    MAX_ENDPOINTS_TO_TEST = 30
+    MAX_ENDPOINTS_TO_TEST = SharedPatterns.UNBOUNDED_ENDPOINTS
     MAX_PARAMS_PER_ENDPOINT = 5
     HTTP_TIMEOUT_SECONDS = 15
     MAX_CONCURRENT = SharedPatterns.DEFAULT_MAX_CONCURRENT
@@ -1604,7 +1626,7 @@ class CSRFConfig:
     """Configuration for CSRF scanning."""
 
     SCANNER_NAME = "csrf_scanner"
-    MAX_ENDPOINTS_TO_TEST = 30
+    MAX_ENDPOINTS_TO_TEST = SharedPatterns.UNBOUNDED_ENDPOINTS
     HTTP_TIMEOUT_SECONDS = 10
 
     CONFIDENCE_NO_CSRF_TOKEN = 0.85
@@ -1861,10 +1883,10 @@ class PrivilegeEscalationConfig:
     JSON_RECORD_KEYS = ("data", "result", "results", "items")
 
     # Limits
-    MAX_AUTH_ENDPOINTS_TO_TEST = 30
+    MAX_AUTH_ENDPOINTS_TO_TEST = SharedPatterns.UNBOUNDED_ENDPOINTS
     MAX_MUTATIONS_TO_REPLAY = 20
     MAX_RESOURCES_FOR_WRITE_TEST = 15
-    MAX_DIFFERENTIAL_ENDPOINTS = 20
+    MAX_DIFFERENTIAL_ENDPOINTS = SharedPatterns.UNBOUNDED_ENDPOINTS
 
     # Differential response thresholds
     DIFFERENTIAL_SIZE_RATIO = 1.5  # Admin response 50%+ larger → suspicious
@@ -6272,7 +6294,7 @@ class SecurityHeadersScannerConfig:
     REQUEST_DELAY_SECONDS = 0.3
 
     # Maximum number of representative endpoints to test
-    MAX_ENDPOINTS_TO_TEST = 5
+    MAX_ENDPOINTS_TO_TEST = SharedPatterns.UNBOUNDED_ENDPOINTS
 
     # --- Header names ---
     HEADER_HSTS = "strict-transport-security"
@@ -6395,7 +6417,7 @@ class CORSConfig:
     HTTP_TIMEOUT_SECONDS = SharedPatterns.DEFAULT_HTTP_TIMEOUT_SECONDS
     MAX_CONCURRENT = SharedPatterns.DEFAULT_MAX_CONCURRENT
     PROBE_DELAY = SharedPatterns.DEFAULT_PROBE_DELAY
-    MAX_ENDPOINTS_TO_TEST = 5
+    MAX_ENDPOINTS_TO_TEST = SharedPatterns.UNBOUNDED_ENDPOINTS
     PATH_PREFIX_DEPTH = 2
 
     # CORS response header names
@@ -6553,7 +6575,7 @@ class AuthBypassConfig:
     RESPONSE_BODY_PREVIEW_LENGTH = 500
 
     # Maximum protected endpoints to test for auth header bypass
-    MAX_AUTH_BYPASS_ENDPOINTS = 5
+    MAX_AUTH_BYPASS_ENDPOINTS = SharedPatterns.UNBOUNDED_ENDPOINTS
 
     # Lockout testing
     LOCKOUT_ATTEMPT_COUNT = 10
@@ -6713,10 +6735,10 @@ class HTTPProbeConfig:
 
     SCANNER_NAME = "http_probe_scanner"
 
-    MAX_ENDPOINTS_TO_TEST = 5
+    MAX_ENDPOINTS_TO_TEST = SharedPatterns.UNBOUNDED_ENDPOINTS
     MAX_CONCURRENT = 3
     PROBE_DELAY = 0.2
-    MAX_METHOD_TEST_ENDPOINTS = 3
+    MAX_METHOD_TEST_ENDPOINTS = SharedPatterns.UNBOUNDED_ENDPOINTS
 
     # --- Method tampering ---
     DANGEROUS_METHODS = ("TRACE", "CONNECT")
@@ -6861,7 +6883,7 @@ class TemplateInjectionConfig:
         ("{{7*'7'}}", "7777777", "Jinja2 string multiplication"),
     )
 
-    MAX_ENDPOINTS_TO_TEST = 10
+    MAX_ENDPOINTS_TO_TEST = SharedPatterns.UNBOUNDED_ENDPOINTS
     MAX_PARAMS_PER_ENDPOINT = 3
 
     CONFIDENCE_SSTI = 0.90

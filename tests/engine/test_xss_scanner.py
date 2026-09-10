@@ -249,13 +249,19 @@ class TestReflectedXSS:
         assert len(findings) == 0
 
     @pytest.mark.asyncio
-    async def test_respects_max_endpoints(self) -> None:
-        """Should not test more than MAX_ENDPOINTS_TO_TEST endpoints."""
+    async def test_tests_every_endpoint_it_is_given(self) -> None:
+        """No endpoint cap: the bound is the scanner's time budget.
+
+        This asserted a cap of 20, which against an app with 77 endpoints
+        decided which quarter got examined. Probing costs HTTP requests
+        rather than tokens — measured, a DAST scan runs $0.12-$0.18 whether
+        it covers 59 endpoints or 154 — so the endpoint was never the scarce
+        thing being protected.
+        """
         scanner = XSSScanner()
-        # Create more endpoints than the limit
         endpoints = [
             _make_endpoint(url=f"https://example.com/page{i}?q=test")
-            for i in range(XSSConfig.MAX_ENDPOINTS_TO_TEST + 20)
+            for i in range(40)
         ]
 
         call_count = 0
@@ -277,12 +283,9 @@ class TestReflectedXSS:
 
             await scanner.scan(endpoints)
 
-        # Each endpoint with existing query params has 1 param ("q") and
-        # 3 probes per param
-        max_expected_calls = (
-            XSSConfig.MAX_ENDPOINTS_TO_TEST * len(XSSConfig.REFLECTION_PROBES)
-        )
-        assert call_count <= max_expected_calls
+        # One param ("q") per endpoint, one call per reflection probe. Every
+        # endpoint is reached, where a cap of 20 would have stopped halfway.
+        assert call_count == 40 * len(XSSConfig.REFLECTION_PROBES)
 
     @pytest.mark.asyncio
     async def test_handles_request_exception_gracefully(self) -> None:

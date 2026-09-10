@@ -682,7 +682,14 @@ class TestEndpointDiscoveryScanner:
 
             endpoints = await scanner.discover(js_content, "", BASE_URL)
 
-        assert len(endpoints) <= EndpointDiscoveryConfig.MAX_ENDPOINTS_TO_DISCOVER
+        # MAX_ENDPOINTS_TO_DISCOVER bounds what is *found*; those are then
+        # multiplied along derived axes (an /{id} twin, and a state-changing
+        # twin under --probe-writes), so the product has its own ceiling.
+        # Bounding the total instead truncated the derived endpoints, which
+        # are generated last.
+        found = [e for e in endpoints if e.source_pattern != "id_variant"]
+        assert len(found) <= EndpointDiscoveryConfig.MAX_ENDPOINTS_TO_DISCOVER
+        assert len(endpoints) <= EndpointDiscoveryConfig.MAX_ENDPOINTS_TOTAL
 
     # --- Deduplication ---
 
@@ -898,3 +905,109 @@ class TestOpenAPISpecParsing:
 
     def test_non_json_spec_returns_none(self, scanner):
         assert scanner._try_parse_spec("<html>not json</html>") is None
+
+
+# ---------------------------------------------------------------------------
+# State-changing method variants (opt-in)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def _no_network():
+    """Discovery probes API base URLs over HTTP; these tests are about the
+    static derivation, so the probe is stubbed out rather than waited on."""
+    with patch(
+        "isitsecure.engine.scanners.endpoint_discovery.RateLimitedClient"
+    ) as mock_cls:
+        client = AsyncMock()
+        client.get = AsyncMock(side_effect=httpx.HTTPError("stubbed"))
+        client.__aenter__ = AsyncMock(return_value=client)
+        client.__aexit__ = AsyncMock(return_value=None)
+        mock_cls.return_value = client
+        yield
+
+
+@pytest.mark.usefixtures("_no_network")
+class TestMethodVariants:
+    """Reaching the mutation surface.
+
+    A path in a JS bundle carries no method, so everything is discovered as a
+    GET. Scanners that filter on `method in (POST, PUT, PATCH)` then find
+    nothing to do, which left stored XSS, mass assignment and CSRF untested
+    on every target. REST says which methods a shape accepts.
+
+    Off by default: deriving them makes a scan write to whatever it is
+    pointed at.
+    """
+
+    JS = 'fetch("/api/Products"); fetch("/rest/basket")'
+
+    @pytest.mark.asyncio
+    async def test_off_by_default(self) -> None:
+        eps = await EndpointDiscoveryScanner().discover(self.JS, "", BASE_URL)
+        assert {e.method for e in eps} == {EndpointMethod.GET}
+
+    @pytest.mark.asyncio
+    async def test_a_collection_gains_post(self) -> None:
+        eps = await EndpointDiscoveryScanner(probe_writes=True).discover(
+            self.JS, "", BASE_URL
+        )
+        methods = {
+            e.method for e in eps if e.url.endswith("/api/Products")
+        }
+        assert EndpointMethod.POST in methods
+
+    @pytest.mark.asyncio
+    async def test_an_item_gains_put_not_post(self) -> None:
+        """POST to a collection, PUT to an item — the shape decides."""
+        eps = await EndpointDiscoveryScanner(probe_writes=True).discover(
+            self.JS, "", BASE_URL
+        )
+        methods = {
+            e.method for e in eps if e.url.endswith("/api/Products/1")
+        }
+        assert EndpointMethod.PUT in methods
+        assert EndpointMethod.POST not in methods
+
+    @pytest.mark.asyncio
+    async def test_delete_is_never_derived(self) -> None:
+        """A scanner that deletes a customer's data to prove it could is not
+        worth the finding."""
+        eps = await EndpointDiscoveryScanner(probe_writes=True).discover(
+            self.JS, "", BASE_URL
+        )
+        assert EndpointMethod.DELETE not in {e.method for e in eps}
+
+    @pytest.mark.asyncio
+    async def test_the_get_surface_is_unchanged(self) -> None:
+        """Opting in must add to what is tested, never replace it."""
+        plain = await EndpointDiscoveryScanner().discover(self.JS, "", BASE_URL)
+        writes = await EndpointDiscoveryScanner(probe_writes=True).discover(
+            self.JS, "", BASE_URL
+        )
+        gets = {e.url for e in writes if e.method is EndpointMethod.GET}
+        assert {e.url for e in plain} <= gets
+
+    @pytest.mark.asyncio
+    async def test_variants_are_not_starved_by_the_cap(
+        self, monkeypatch
+    ) -> None:
+        """The regression this guards: the cap applied after variants were
+        appended, so the PUT twins — generated last — were cut first and
+        never survived at all.
+
+        The cap is patched low rather than exceeded, since it is now
+        effectively unbounded and building a million endpoints to prove a
+        point about ordering is its own kind of mistake."""
+        from isitsecure.engine.constants import EndpointDiscoveryConfig
+
+        monkeypatch.setattr(
+            EndpointDiscoveryConfig, "MAX_ENDPOINTS_TO_DISCOVER", 5
+        )
+        many = "".join(f'fetch("/api/Thing{i}");' for i in range(20))
+        eps = await EndpointDiscoveryScanner(probe_writes=True).discover(
+            many, "", BASE_URL
+        )
+        methods = {e.method for e in eps}
+        assert EndpointMethod.POST in methods
+        assert EndpointMethod.PUT in methods
