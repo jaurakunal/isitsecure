@@ -117,11 +117,24 @@ def _make_service(
 class TestRuleBasedDedup:
     """Test rule-based deduplication (pre-filter, no LLM)."""
 
-    def test_identical_titles_keep_highest_severity(self) -> None:
+    def test_identical_titles_at_one_location_keep_highest_severity(self) -> None:
+        """Same title *and* same place — one fix, so the stronger reading of
+        it survives.
+
+        The endpoint is explicit because an IDOR is fixed per handler: the
+        same title on two endpoints is two ownership checks and must not
+        collapse. See tests/engine/test_remediation_scope.py.
+        """
         service, _ = _make_service()
         findings = [
-            _make_finding(finding_id="f1", title="Missing auth", severity=SeverityLevel.MEDIUM),
-            _make_finding(finding_id="f2", title="Missing auth", severity=SeverityLevel.HIGH),
+            _make_finding(
+                finding_id="f1", title="Missing auth",
+                severity=SeverityLevel.MEDIUM, endpoint_url="https://x/a",
+            ),
+            _make_finding(
+                finding_id="f2", title="Missing auth",
+                severity=SeverityLevel.HIGH, endpoint_url="https://x/a",
+            ),
         ]
         deduped, removed = service._rule_based_dedup(findings)
         assert len(deduped) == 1
@@ -139,12 +152,17 @@ class TestRuleBasedDedup:
         assert removed == 0
 
     def test_prefers_llm_over_sast_on_tie(self) -> None:
+        """Two reports of the same thing in the same place — the richer one
+        survives. The endpoint is shared because that is what makes them the
+        same thing; two rate-limit gaps on two routes are two fixes."""
         service, _ = _make_service()
         findings = [
             _make_finding(finding_id="sast", title="Rate limit issue",
-                          scanner_name="express_middleware_analyzer"),
+                          scanner_name="express_middleware_analyzer",
+                          endpoint_url="https://x/a"),
             _make_finding(finding_id="llm", title="Rate limit issue",
-                          scanner_name="llm_code_reviewer"),
+                          scanner_name="llm_code_reviewer",
+                          endpoint_url="https://x/a"),
         ]
         deduped, _ = service._rule_based_dedup(findings)
         assert len(deduped) == 1

@@ -338,6 +338,32 @@ It is off by default: it makes a scan write to whatever it is pointed at.
 DELETE is derived and deliberately never emitted — a scanner that destroys a
 record to prove it could is not worth the finding.
 
+### Remediation scope
+
+Findings arrive one per affected location, which is right for detection and
+wrong for reporting. `RemediationScope` says how many places a category has
+to be fixed in, and deduplication follows it:
+
+| scope | means | reported | categories |
+|---|---|---|---|
+| `SERVER` | one config change covers everything | once, listing affected endpoints as evidence | missing headers, CORS, mixed content, source maps, SRI |
+| `INSTANCE` | each occurrence is its own fix | every one, never collapsed across locations | IDOR, injection, auth, privilege escalation, business logic, open redirect |
+| `SHARED_ROOT` | one cause, many call sites | grouped under the cause, sites listed | exposed secrets, dependencies, RLS, client exposure |
+
+The two failure modes point opposite ways, which is why one rule cannot serve
+both. "Missing Content-Security-Policy" restated on 76 endpoints buries a
+report; four IDORs collapsed into one hides three vulnerabilities behind
+something that looks handled. Deduplicating on the title alone — the only
+signal available before this existed — does the first correctly and the
+second silently.
+
+Every pass consults it, the fuzzy title pass included: that one is the
+loosest, so a wrong merge there is both most likely and least visible.
+
+Deduplication needs no LLM, and no longer waits for one. It used to sit
+behind the triage phase, so `--llm none` shipped the raw list — 296 findings
+on Juice Shop, of which 272 were five issues restated per endpoint.
+
 ## Design Principles
 
 ### Protocol-Based (Dependency Inversion)

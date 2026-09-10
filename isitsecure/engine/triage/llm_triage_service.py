@@ -36,6 +36,8 @@ from isitsecure.engine.enums import (
     ImpactCategory,
     LikelihoodLevel,
     ScanMode,
+    REMEDIATION_SCOPE,
+    RemediationScope,
 )
 from isitsecure.engine.models import (
     DeepFinding,
@@ -60,6 +62,11 @@ class TriageResult:
     triaged_findings: list[DeepFinding] = field(default_factory=list)
     owner_summary: OwnerSummary = field(default_factory=OwnerSummary)
     themes: list[SecurityTheme] = field(default_factory=list)
+
+
+# How many affected endpoints to name before summarising the rest. Long
+# enough to show the spread, short enough that a finding stays readable.
+MAX_AFFECTED_SHOWN = 8
 
 
 class LLMTriageService:
@@ -286,16 +293,66 @@ class LLMTriageService:
                     )
             return best
 
+        def _scope_of(f: DeepFinding) -> RemediationScope:
+            return REMEDIATION_SCOPE.get(f.category, RemediationScope.INSTANCE)
+
+        def _location_of(f: DeepFinding) -> str:
+            """Where a finding has to be fixed — endpoint, else source line."""
+            if f.endpoint_url:
+                return f.endpoint_url
+            if f.code_location:
+                return (
+                    f"{f.code_location.file_path}:"
+                    f"{f.code_location.line_number}"
+                )
+            return f.id
+
+        def _merge_locations(group: list[DeepFinding]) -> DeepFinding:
+            """Keep one finding and record every endpoint it was seen on.
+
+            The list is the point. "Missing Content-Security-Policy" on one
+            URL reads like one page is misconfigured; the same finding
+            carrying 76 endpoints says the server has no CSP at all, which is
+            both the truth and what tells someone the single fix is worth
+            making.
+            """
+            best = _pick_best(group)
+            endpoints = sorted({
+                f.endpoint_url for f in group if f.endpoint_url
+            })
+            if len(endpoints) > 1:
+                shown = endpoints[:MAX_AFFECTED_SHOWN]
+                more = len(endpoints) - len(shown)
+                best.description += (
+                    f"\n\nAffects {len(endpoints)} endpoints: "
+                    + ", ".join(shown)
+                    + (f", and {more} more" if more else "")
+                )
+            return best
+
         removed = 0
 
-        # Pass 1: Exact title match
+        # Pass 1: same title — collapsed only where one fix covers every
+        # occurrence.
+        #
+        # Collapsing on the title alone was right for a missing header and
+        # wrong for everything that needs fixing in more than one place: four
+        # IDORs on four endpoints share a title and are four separate
+        # ownership checks, and keeping one of them discarded three real
+        # vulnerabilities behind a report that looked handled. What decides
+        # is the category's remediation scope, not the wording.
         title_groups: dict[str, list[DeepFinding]] = defaultdict(list)
         for f in findings:
-            title_groups[f.title.lower().strip()].append(f)
+            if _scope_of(f) is RemediationScope.INSTANCE:
+                # Per location, so two endpoints stay two findings.
+                key = f"{f.title.lower().strip()}|{_location_of(f)}"
+            else:
+                key = f.title.lower().strip()
+            title_groups[key].append(f)
 
         after_p1: list[DeepFinding] = []
         for group in title_groups.values():
-            after_p1.append(_pick_best(group))
+            after_p1.append(_merge_locations(group))
             removed += len(group) - 1
 
         # Pass 2: Same file + same line number
@@ -303,6 +360,11 @@ class LLMTriageService:
         for f in after_p1:
             if f.code_location and f.code_location.line_number:
                 key = f"{f.code_location.file_path}:{f.code_location.line_number}"
+                # Same source line reached from two endpoints is still two
+                # fixes when the category says so — a shared handler with a
+                # missing ownership check needs one per route it serves.
+                if _scope_of(f) is RemediationScope.INSTANCE and f.endpoint_url:
+                    key = f"{key}|{f.endpoint_url}"
             else:
                 key = f"__no_loc_{f.id}"
             loc_groups[key].append(f)
@@ -363,11 +425,22 @@ class LLMTriageService:
                 # Never fuzzy-merge two live findings that target DIFFERENT
                 # endpoints — same-template titles (e.g. per-table RLS findings
                 # that differ only by the table name) are distinct issues, not
-                # textual duplicates. Pure-SAST cross-file merges are untouched.
+                # textual duplicates.
                 if (
                     f1.endpoint_url
                     and f2.endpoint_url
                     and f1.endpoint_url != f2.endpoint_url
+                ):
+                    continue
+                # The same holds across files, which the endpoint check
+                # cannot see: "Missing auth on /orders" and "Missing auth on
+                # /users" overlap on two words in three and are two handlers
+                # somebody has to fix. Fuzzy matching is the loosest pass
+                # here, so it is the one where a wrong merge is most likely
+                # and least visible.
+                if (
+                    _scope_of(f1) is RemediationScope.INSTANCE
+                    and _location_of(f1) != _location_of(f2)
                 ):
                     continue
                 overlap = len(w1 & w2) / max(len(w1), len(w2))

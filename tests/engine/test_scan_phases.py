@@ -50,16 +50,23 @@ def _finding(title: str = "A finding", **kwargs) -> DeepFinding:
     return DeepFinding(**defaults)
 
 
-def _code_finding(suppressed: bool = False):
+def _code_finding(suppressed: bool = False, route: str = "route"):
+    """A SAST finding. ``route`` distinguishes two of them.
+
+    Two findings identical in title, file and line are one finding, and
+    deduplication now says so — so a test about suppression has to make its
+    findings genuinely different, or it cannot tell a suppressed finding from
+    a merged duplicate.
+    """
     from isitsecure.engine.code_analysis.models import CodeFinding
 
     return CodeFinding(
         scanner_name="route_auth",
         severity=SeverityLevel.HIGH,
         category=FindingCategory.AUTH_WEAKNESS,
-        title="Missing auth",
+        title=f"Missing auth on /{route}",
         description="d",
-        file_path="src/api/route.ts",
+        file_path=f"src/api/{route}.ts",
         line_number=10,
         confidence=0.85,
         lsp_suppressed=suppressed,
@@ -396,7 +403,7 @@ class TestLSPValidation:
     @pytest.mark.asyncio
     async def test_findings_the_tracer_confirms_are_kept(self) -> None:
         """Suppression must remove only what was disproved, nothing else."""
-        a, b = _code_finding(), _code_finding()
+        a, b = _code_finding(route="orders"), _code_finding(route="users")
         scanner = _sast_scanner([a, b], validate=lambda findings, _fl: findings)
         ingestion = AsyncMock()
         ingestion.ingest.return_value = _repo_snapshot()

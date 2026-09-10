@@ -46,6 +46,85 @@ class FindingCategory(str, Enum):
     BUSINESS_LOGIC = "business_logic"
 
 
+class RemediationScope(str, Enum):
+    """How many places a finding has to be fixed in.
+
+    Findings arrive one per affected location, which is right for detection
+    and wrong for reporting: "Missing Content-Security-Policy" on 76
+    endpoints is one header on one server, while an IDOR on 4 endpoints is 4
+    ownership checks somebody has to write. Collapsing by title — the only
+    signal available before this existed — gets the first right and the
+    second catastrophically wrong, discarding three real vulnerabilities and
+    showing a report that looks handled.
+
+    What separates them is not the scanner or the wording. It is whether one
+    change fixes every instance.
+    """
+
+    SERVER = "server"
+    """One configuration change covers every endpoint.
+
+    Report once, and keep the affected endpoints as evidence — the list is
+    what tells someone the header is missing everywhere rather than on the
+    one URL that happened to be kept.
+    """
+
+    INSTANCE = "instance"
+    """Each occurrence is its own fix, in its own handler.
+
+    Never collapsed across locations. Two IDORs are two ownership checks; a
+    report showing one of them is a report that hides the other.
+    """
+
+    SHARED_ROOT = "shared_root"
+    """One cause, many call sites — a vulnerable helper, a leaked credential
+    used in several places, a dependency imported all over.
+
+    Grouped under the cause, with the sites listed: fixing it once is right,
+    but whoever fixes it needs to know what it touched, and whoever verifies
+    it needs somewhere to look.
+    """
+
+
+# How much of an application each finding category makes someone change.
+# Deliberately a table rather than a method on the enum: it is a judgement
+# about remediation, revisited as categories are added, and worth reading in
+# one place.
+REMEDIATION_SCOPE: dict["FindingCategory", RemediationScope] = {}
+
+
+def _classify() -> None:
+    """Populate REMEDIATION_SCOPE once FindingCategory is defined."""
+    c, s = FindingCategory, RemediationScope
+    REMEDIATION_SCOPE.update({
+        # --- Server configuration: one header, one policy, one setting ---
+        c.MISSING_HEADERS: s.SERVER,
+        c.CORS_MISCONFIGURATION: s.SERVER,
+        c.MIXED_CONTENT: s.SERVER,
+        c.SOURCE_MAP_LEAK: s.SERVER,
+        c.MISSING_SRI: s.SERVER,
+
+        # --- One handler at a time. Each of these is somebody writing a
+        # check in a specific place; a second occurrence is a second fix. ---
+        c.IDOR: s.INSTANCE,
+        c.INJECTION_RISK: s.INSTANCE,
+        c.AUTH_WEAKNESS: s.INSTANCE,
+        c.PRIVILEGE_ESCALATION: s.INSTANCE,
+        c.BUSINESS_LOGIC: s.INSTANCE,
+        c.OPEN_REDIRECT: s.INSTANCE,
+        c.EXPOSED_API_ENDPOINT: s.INSTANCE,
+        c.INFO_DISCLOSURE: s.INSTANCE,
+        c.DEAD_FUNCTIONALITY: s.INSTANCE,
+        c.UNENCRYPTED_PII: s.INSTANCE,
+
+        # --- One cause reached from many places ---
+        c.EXPOSED_SECRETS: s.SHARED_ROOT,      # rotate the key, fix each use
+        c.DEPENDENCY_VULNERABILITY: s.SHARED_ROOT,  # bump once, imported widely
+        c.RLS_MISCONFIGURATION: s.SHARED_ROOT,  # one policy, many tables
+        c.CLIENT_EXPOSURE: s.SHARED_ROOT,      # one bundle, many leaked values
+    })
+
+
 class AssetType(str, Enum):
     """Types of web assets captured during ingestion."""
 
@@ -312,3 +391,6 @@ class ReviewTriggerType(str, Enum):
     RISK_INDICATOR = "risk_indicator"
     IMPORT_GRAPH_CENTRALITY = "import_graph_centrality"
     INJECTION_PATTERN_FLAG = "injection_pattern_flag"
+
+
+_classify()
