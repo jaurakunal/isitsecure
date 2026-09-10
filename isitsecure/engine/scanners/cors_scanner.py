@@ -13,6 +13,7 @@ import logging
 from urllib.parse import urlparse
 
 from isitsecure.engine.constants import CORSConfig, DeepScanConfig
+from isitsecure.engine.shared.progress import emit
 from isitsecure.engine.models import (
     DASTProbeCaptureEntry,
     DeepFinding,
@@ -76,7 +77,10 @@ class CORSScanner(AuthAwareScanner):
             user_agent=DeepScanConfig.USER_AGENT,
             extra_headers=self.auth_headers,
         ) as client:
-            for ep in representative:
+            for tested, ep in enumerate(representative):
+                emit(
+                    f"CORS: probing {tested + 1}/{len(representative)} {ep.url}"
+                )
                 ep_findings = await self._test_endpoint(client, ep)
                 findings.extend(ep_findings)
 

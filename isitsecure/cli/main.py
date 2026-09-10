@@ -292,6 +292,16 @@ def scan(
     github_token: Optional[str] = typer.Option(None, "--github-token", envvar="GITHUB_TOKEN"),
     mode: str = typer.Option("auto", "--mode", "-m", help="Scan mode: auto|url-only|code-only|authenticated|full"),
     depth: str = typer.Option("quick", "--depth", help="Scan depth: quick (fast, default) | deep (adds time-based SQLi, active XSS, and other slow/aggressive probes)"),
+    probe_writes: bool = typer.Option(
+        False, "--probe-writes",
+        help=(
+            "Test the mutation surface: derive POST/PUT endpoints from REST "
+            "shape so stored XSS, mass assignment and CSRF can be reached. "
+            "The scan WRITES to the target — records created, notifications "
+            "possibly sent. Use on an app you own or have authorization to "
+            "test, not blindly against production."
+        ),
+    ),
     auth_email: Optional[str] = typer.Option(None, "--auth-email", help="Auth email/username for authenticated scanning (user A)"),
     auth_password: Optional[str] = typer.Option(None, "--auth-password", help="Auth password (user A)"),
     auth_email_b: Optional[str] = typer.Option(None, "--auth-email-b", help="Second user's email/username — enables cross-user IDOR testing"),
@@ -366,6 +376,7 @@ def scan(
         judgment_llm_client=judgment_llm_client,
         repo_ingestion_service=repo_service,
         depth=scan_depth,
+        probe_writes=probe_writes,
     )
 
     # Build credentials

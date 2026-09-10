@@ -13,6 +13,7 @@ import re
 from http.cookies import SimpleCookie
 
 from isitsecure.engine.constants import CSRFConfig, DeepScanConfig
+from isitsecure.engine.shared.progress import emit
 from isitsecure.engine.models import (
     DeepFinding,
     DiscoveredEndpoint,
@@ -106,7 +107,14 @@ class CSRFScanner(AuthAwareScanner):
             user_agent=DeepScanConfig.USER_AGENT,
             extra_headers=self.auth_headers,
         ) as client:
-            for ep in rank(endpoints, PriorityDimension.CSRF)[: CSRFConfig.MAX_ENDPOINTS_TO_TEST]:
+            ranked = rank(endpoints, PriorityDimension.CSRF)[
+                : CSRFConfig.MAX_ENDPOINTS_TO_TEST
+            ]
+            for tested, ep in enumerate(ranked):
+                emit(
+                    f"CSRF: forged-origin probe {tested + 1}/{len(ranked)} "
+                    f"{ep.method.value} {ep.url}"
+                )
                 finding = await self._test_forged_origin(client, ep)
                 if finding:
                     findings.append(finding)

@@ -53,6 +53,16 @@ class EndpointDiscoveryScanner:
         "delete": EndpointMethod.DELETE,
     }
 
+    def __init__(self, probe_writes: bool = False) -> None:
+        """
+        Args:
+            probe_writes: derive state-changing methods from REST shape, so
+                scanners can reach the mutation surface. Off by default: it
+                makes a scan send POST/PUT/DELETE, which writes to whatever
+                is being scanned.
+        """
+        self._probe_writes = probe_writes
+
     # Routes that are purely frontend pages, not API endpoints
     _SKIP_FRONTEND_ROUTES = {
         "/login", "/register", "/signup", "/signin",
@@ -123,6 +133,13 @@ class EndpointDiscoveryScanner:
             self._detect_parameters(endpoint)
             self._categorize_endpoint(endpoint)
 
+        # The cap bounds how much of the app is discovered, so it applies to
+        # what was found — not to what is derived from it. Appending variants
+        # first and truncating afterwards starved them: they are generated
+        # last, so they were cut first, and the PUT twins of /{id} endpoints
+        # never survived at all.
+        endpoints = endpoints[: EndpointDiscoveryConfig.MAX_ENDPOINTS_TO_DISCOVER]
+
         # Generate /{id} variants for REST collection endpoints so IDOR and
         # per-param injection have object-level targets to test (e.g.
         # /api/Products -> /api/Products/1).
@@ -130,13 +147,25 @@ class EndpointDiscoveryScanner:
             self._categorize_endpoint(variant)
             endpoints.append(variant)
 
+        # Everything above is discovered as a GET, because a path in a bundle
+        # carries no method. That leaves the mutation surface untested by
+        # every scanner: stored XSS, mass assignment, CSRF and the rest live
+        # behind POST and PUT, and a scanner filtering on `method == POST`
+        # finds nothing to do. REST says which methods a shape accepts —
+        # POST to a collection, PUT and DELETE to an item — the same
+        # convention `_build_id_variants` already reads.
+        if self._probe_writes:
+            for variant in self._build_method_variants(endpoints, raw_endpoints):
+                self._categorize_endpoint(variant)
+                endpoints.append(variant)
+
         logger.info(
             "EndpointDiscovery complete: %d unique endpoints from %d bytes of content",
             len(endpoints),
             len(all_content),
         )
         emit(f"discovered {len(endpoints)} endpoint(s)")
-        return endpoints[: EndpointDiscoveryConfig.MAX_ENDPOINTS_TO_DISCOVER]
+        return endpoints[: EndpointDiscoveryConfig.MAX_ENDPOINTS_TOTAL]
 
     # --- Phase 1: Static extraction methods ---
 
@@ -785,6 +814,38 @@ class EndpointDiscoveryScanner:
                     path_param_names=["id"],
                 )
             )
+        return variants
+
+    def _build_method_variants(
+        self,
+        endpoints: list[DiscoveredEndpoint],
+        seen: dict[str, DiscoveredEndpoint],
+    ) -> list[DiscoveredEndpoint]:
+        """State-changing twins of REST-shaped endpoints.
+
+        A collection takes POST; an item takes PUT and DELETE. Both follow
+        from the shape alone, which is why no list of paths is involved.
+
+        DELETE is derived but not emitted. The others write a record that can
+        be inspected and rolled back; DELETE destroys one, and a scanner that
+        deletes a customer's data to prove it could is not worth the finding.
+        """
+        variants: list[DiscoveredEndpoint] = []
+        for ep in endpoints:
+            if ep.method is not EndpointMethod.GET:
+                continue
+            method = (
+                EndpointMethod.PUT if ep.has_path_params
+                else EndpointMethod.POST
+            )
+            key = f"{method.value}:{ep.url}"
+            if key in seen:
+                continue
+            variant = ep.model_copy(
+                update={"method": method, "source_pattern": "rest_method"}
+            )
+            seen[key] = variant
+            variants.append(variant)
         return variants
 
     def _detect_parameters(self, endpoint: DiscoveredEndpoint) -> None:

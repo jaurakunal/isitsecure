@@ -98,9 +98,15 @@ class TestRunScannerSafe:
 class TestScannerTimeouts:
     """Tests for ScannerTimeouts constants."""
 
-    def test_default_timeout_value(self) -> None:
-        """Default timeout should be 60 seconds."""
-        assert ScannerTimeouts.DEFAULT_SECONDS == 60
+    def test_default_timeout_is_generous(self) -> None:
+        """Time is the only bound left on coverage, so it is not tight.
+
+        Was 60s, alongside endpoint caps that stopped a scanner after 20 or
+        30 endpoints. With those gone a scanner walks the whole surface, and
+        a minute is no longer the right ceiling — timing out should mean
+        something is wrong, not that the app was large.
+        """
+        assert ScannerTimeouts.DEFAULT_SECONDS >= 300
 
     def test_llm_timeout_is_longest(self) -> None:
         """LLM code review should have the longest timeout."""

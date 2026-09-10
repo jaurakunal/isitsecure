@@ -17,6 +17,7 @@ import uuid
 from urllib.parse import parse_qs, urlencode, urlparse
 
 from isitsecure.engine.constants import DeepScanConfig, XSSConfig
+from isitsecure.engine.shared.progress import emit
 from isitsecure.engine.models import (
     DeepFinding,
     DiscoveredEndpoint,
@@ -304,7 +305,15 @@ class XSSScanner(AuthAwareScanner):
                         "XSSScanner: POST-body budget reached, tested %d/%d endpoints",
                         tested, len(candidates),
                     )
+                    emit(
+                        f"XSS: time budget reached after {tested}/"
+                        f"{len(candidates)} write endpoints"
+                    )
                     break
+                emit(
+                    f"XSS: body probe {tested + 1}/{len(candidates)} "
+                    f"{endpoint.method.value} {urlparse(endpoint.url).path}"
+                )
                 finding = await self._test_single_post_body(client, endpoint)
                 if finding:
                     findings.append(finding)

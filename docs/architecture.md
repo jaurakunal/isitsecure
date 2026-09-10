@@ -304,6 +304,40 @@ paths and discarded `/file-upload`, `/dataerasure`, `/profile` and
 so the four file-upload vulnerabilities behind `/file-upload` were unreachable
 no matter how good the file-upload scanner was.
 
+### Coverage limits
+
+Scanners used to stop after a fixed number of endpoints — 20 for XSS, 30 for
+injection, 5 for CORS. Against an app with 77 endpoints those caps decided
+which quarter got examined, in ranked order, and nothing said so.
+
+They are gone. Probing costs HTTP requests rather than tokens: measured over
+nine scans, a DAST run costs $0.12–$0.18 whether it covers 59 endpoints or
+154, while a SAST run is a flat ~$1.28 because its cost is the LLM reading
+files. The endpoint was never the scarce thing.
+
+What bounds a scan now is **time**, per scanner, via `TimeBudget` — raised
+accordingly, since timing out should mean something is wrong rather than that
+the app was large. A scan that takes half an hour and finishes beats one that
+takes ten minutes having skipped two thirds of the surface, provided it says
+what it is doing: every scanner that walks endpoints emits per-endpoint
+progress, so a long run is legible rather than silent.
+
+Two caps remain because they bound something genuinely scarce:
+`MAX_ENDPOINTS_IN_PROMPT` (LLM tokens) and `MAX_OOB_POST_ENDPOINTS`
+(registrations against an external callback service).
+
+### Testing the mutation surface
+
+`--probe-writes` derives state-changing endpoints from REST shape — POST to a
+collection, PUT to an item — because a path in a JS bundle carries no method,
+so everything is otherwise discovered as a GET and scanners filtering on
+POST/PUT find nothing to do. Stored XSS, mass assignment and CSRF all live
+behind that filter.
+
+It is off by default: it makes a scan write to whatever it is pointed at.
+DELETE is derived and deliberately never emitted — a scanner that destroys a
+record to prove it could is not worth the finding.
+
 ## Design Principles
 
 ### Protocol-Based (Dependency Inversion)
