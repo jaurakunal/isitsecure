@@ -218,19 +218,39 @@ class MassAssignmentScanner(AuthAwareScanner):
             # Fallback: string matching
             return str(field_name) in response_body and str(field_value) in response_body
 
-        # Check top-level dict
-        if isinstance(data, dict):
-            return _dict_has_field(data, field_name, field_value)
+        return _contains_field(data, field_name, field_value)
 
-        # Check array of dicts (common for Supabase)
-        if isinstance(data, list):
-            return any(
-                _dict_has_field(item, field_name, field_value)
-                for item in data
-                if isinstance(item, dict)
-            )
 
+# Most APIs wrap the created object in an envelope -- {"status": .., "data": ..},
+# {"result": ..}, JSON:API's {"data": {"attributes": ..}}. A top-level-only
+# check calls every one of those "not reflected" and reports nothing, which is
+# how a live, confirmed mass assignment reads as clean. Search the whole tree
+# instead of guessing at envelope key names.
+MAX_RESPONSE_DEPTH = 8
+
+
+def _contains_field(
+    data: Any, field_name: str, field_value: Any, depth: int = 0
+) -> bool:
+    """Whether the field appears anywhere in a decoded JSON response."""
+    if depth > MAX_RESPONSE_DEPTH:
         return False
+
+    if isinstance(data, dict):
+        if _dict_has_field(data, field_name, field_value):
+            return True
+        return any(
+            _contains_field(value, field_name, field_value, depth + 1)
+            for value in data.values()
+        )
+
+    if isinstance(data, list):
+        return any(
+            _contains_field(item, field_name, field_value, depth + 1)
+            for item in data
+        )
+
+    return False
 
 
 def _dict_has_field(data: dict[str, Any], field_name: str, field_value: Any) -> bool:

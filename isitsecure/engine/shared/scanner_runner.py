@@ -29,23 +29,25 @@ class ScannerTimeouts:
 
     DEFAULT_SECONDS = 600
     AUTHENTICATED_CRAWLER_SECONDS = 900  # Browser login + BFS crawl of 50 pages
-    IDOR_CROSS_USER_SECONDS = 1800
-    PRIVILEGE_ESCALATION_SECONDS = 1800  # 8 tests: differential, mutation replay, object write, etc.
+    IDOR_CROSS_USER_SECONDS = 1800   # 30 min
+    PRIVILEGE_ESCALATION_SECONDS = 1800  # 30 min — 8 tests: differential, mutation replay, object write, etc.
     GIT_SECRET_SCAN_SECONDS = 90
     SEMGREP_TAINT_SECONDS = 150  # above SemgrepAnalyzer's own 120s subprocess timeout
     LLM_CODE_REVIEW_SECONDS = 900  # 15 min — reviews in parallel batches (includes import-graph files)
-    LSP_VALIDATION_SECONDS = 600   # 2 min — LSP init + auth flow tracing
+    LSP_VALIDATION_SECONDS = 600   # 10 min — LSP init + auth flow tracing
     TRIAGE_SECONDS = 900           # 15 min — batched LLM triage + themes + owner summary
     INJECTION_ADJUDICATOR_SECONDS = 240  # 4 min — batched LLM genuine-vs-benign injection review (#5)
-    XSS_ACTIVE_SECONDS = 3600       # 10 min — 20 endpoints × 5 params × 3 probe stages (deep)
-    XSS_QUICK_SECONDS = 900        # 2 min — reflected + POST-body only, no DOM pass (quick, #118)
-    INJECTION_ACTIVE_SECONDS = 5400  # 15 min — 30 endpoints × 5 params, time-based SQLi (3s sleeps)
-    AUTH_BYPASS_SECONDS = 1800       # 5 min — multiple login attempts + timing measurements
-    RATE_LIMIT_SECONDS = 900        # 5 min — 100+ burst requests
-    HTTP_PROBE_SECONDS = 900        # 3 min — TRACE, host injection, directory listing, CRLF
+    XSS_ACTIVE_SECONDS = 3600       # 60 min — every endpoint × 5 params × 3 probe stages (deep)
+    XSS_QUICK_SECONDS = 900        # 15 min — reflected + POST-body only, no DOM pass (quick, #118)
+    INJECTION_ACTIVE_SECONDS = 5400  # 90 min — every endpoint × 5 params, time-based SQLi (3s sleeps).
+    # The largest single budget by far, and the one that decides how long a
+    # full scan takes: any wall-clock cap below this cannot fit one scan.
+    AUTH_BYPASS_SECONDS = 1800       # 30 min — multiple login attempts + timing measurements
+    RATE_LIMIT_SECONDS = 900        # 15 min — 100+ burst requests
+    HTTP_PROBE_SECONDS = 900        # 15 min — TRACE, host injection, directory listing, CRLF
     PROBE_ANALYZER_SECONDS = 30     # Pure data analysis, no HTTP requests
-    GUIDED_DAST_SECONDS = 1800       # 10 min — SAST-guided test cases
-    DOM_XSS_SECONDS = 1800           # 15 min — Playwright: navigate + hook sinks on up to 30 pages
+    GUIDED_DAST_SECONDS = 1800       # 30 min — SAST-guided test cases
+    DOM_XSS_SECONDS = 1800           # 30 min — Playwright: navigate + hook sinks on up to 30 pages
     OOB_POLL_SECONDS = 30           # OOB callback poll (just HTTP calls, no scanning)
 
 

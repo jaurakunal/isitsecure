@@ -35,7 +35,12 @@ Phase 11: Fix Generation         ─── AI generates code patches (optional, 
 
 The scanner first understands your application's attack surface using **four complementary discovery strategies** (`EndpointDiscoveryScanner`), so it works on SPAs, classic server-rendered apps, and frontend-less REST APIs alike:
 
-1. **Playwright** navigates to your URL and captures the rendered HTML + all loaded JavaScript bundles
+1. **Playwright** navigates to your URL and captures the rendered HTML + all loaded JavaScript bundles.
+   Bundles are collected from `<script src>` **and** from `<link href="….js">` — modulepreload,
+   preload and prefetch. A code-split SPA ships its entry bundle as a `<script>` and every lazy
+   route chunk as a `<link>`, so a script-only sweep sees the shell and none of the routes. On
+   Juice Shop that gap hid 10 of the 13 JavaScript files, and with them `/api/Users` and
+   `/api/Feedbacks`: adding the `<link>` source took url-only discovery from 61 endpoints to 123
 2. **Seven regex patterns** extract API endpoints from the JS code: fetch calls, axios requests, Supabase `from()` queries, route definitions, parameterized paths
 3. **OpenAPI/Swagger spec discovery** — probes 13 well-known spec locations (`/openapi.json`, `/swagger.json`, `/v3/api-docs`, `/v2/api-docs`, `/swagger/v1/swagger.json`, `/.well-known/openapi.json`, …) for each API base, parses any spec it finds, and extracts every declared endpoint with its methods, path parameters (including `{templated}` segments), and query parameters. This surfaces APIs with no crawlable frontend
 4. **HTML form/link discovery** (`html_endpoint_extractor`) — parses server-rendered pages with a stdlib `HTMLParser` to extract `<form action>` targets (with their `<input>`/`<select>`/`<textarea>` field names as parameters) and `<a href>` links that carry query parameters. This surfaces classic MVC apps that have no JS API bundle. It runs both in url-only discovery (bounded same-origin crawl) and inside the authenticated crawler after each page load
@@ -363,7 +368,7 @@ It is off by default: it makes a scan write to whatever it is pointed at.
 DELETE is derived and deliberately never emitted — a scanner that destroys a
 record to prove it could is not worth the finding.
 
-Measured on Juice Shop, url-only: **26/45 → 32/45**, gaining CSRF, SSTI,
+Measured on Juice Shop, url-only: **26/45 → 33/45**, gaining CSRF, SSTI,
 three of the five XSS challenges and one IDOR, losing nothing. The scan takes
 about 48 minutes against 27, since the inventory doubles.
 

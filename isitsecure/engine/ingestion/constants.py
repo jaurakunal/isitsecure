@@ -10,7 +10,10 @@ class ScanConfig:
     PAGE_LOAD_TIMEOUT_MS = 60000
     ASSET_FETCH_TIMEOUT_SECONDS = 15
     MAX_JS_BUNDLE_SIZE_BYTES = 10 * 1024 * 1024  # 10MB
-    MAX_ASSETS_TO_FETCH = 20
+    # A code-split SPA routinely ships 30-80 chunks. 20 was enough when
+    # only <script src> was collected; once preloaded chunks count too,
+    # a low cap silently truncates the API surface we can discover.
+    MAX_ASSETS_TO_FETCH = 100
     MAX_PROBE_CONTENT_LENGTH = 5000
     MIN_INLINE_SCRIPT_LENGTH = 50
 

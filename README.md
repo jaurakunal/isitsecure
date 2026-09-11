@@ -198,15 +198,16 @@ Measured on OWASP Juice Shop v20.1.1, url-only:
 
 | | without | with `--probe-writes` |
 |---|---|---|
-| **recall** | 26/45 (58%) | **32/45 (71%)** |
+| **recall** | 26/45 (58%) | **33/45 (73%)** |
 | CSRF | 0/1 | 1/1 |
 | SSTI | 0/1 | 1/1 |
 | XSS | 1/7 | 4/7 |
 | IDOR | 2/5 | 3/5 |
+| mass assignment | 0/2 | 1/2 |
 
 **It is off by default, and should stay off for anything you do not own.**
 The scan *writes to the target*: it creates records, and an endpoint that
-sends email or charges a card will do so. It also takes roughly 48 minutes
+sends email or charges a card will do so. It also takes roughly 72 minutes
 against 27 on that app, since the inventory doubles.
 
 `DELETE` is derived and deliberately never sent — a scanner that destroys a
@@ -290,6 +291,7 @@ record to prove it could is not worth the finding.
 
 | Feature | What It Does |
 |---|---|
+| Lazy-Chunk Bundle Collection | Collects JavaScript from `<link rel=modulepreload/preload/prefetch>` as well as `<script src>` — a code-split SPA ships its routes as `<link>` chunks, so a script-only sweep sees the shell and none of the API surface |
 | OpenAPI/Swagger Discovery | Probes `/openapi.json`, `/swagger.json`, `/v3/api-docs` and parses the spec into testable endpoints — finds attack surface on APIs with no crawlable frontend |
 | HTML Form/Link Discovery | Reads `<form>`/`<input>`/query-links from server-rendered pages (bounded url-only crawl + inside the authenticated crawler) — finds attack surface on classic MVC apps with no JS API bundle |
 | Endpoint Prioritizer + Time Budget | Ranks likely-vulnerable endpoints first and tests within a per-scanner time budget, so high-risk paths get covered before the clock runs out |
@@ -730,7 +732,7 @@ isitsecure scan http://localhost:4000 --repo ./test-app --mode full
 
 isitsecure ships a repeatable benchmark harness that scores **recall** (of the vulnerability classes an app is known to have, how many we catch) and **false positives** (findings that must not appear against a hardened build) on public, deliberately-vulnerable apps.
 
-**Measured coverage — be realistic about what a scanner catches.** On [OWASP Juice Shop](https://owasp.org/www-project-juice-shop/) `v20.1.1` — a deliberately hard benchmark of 113 challenges — isitsecure detects **58% of the 45 DAST-detectable challenge classes** in a url-only scan, scored automatically against the app's own `/api/Challenges` list. `--probe-writes` takes that to **71%** and an authenticated two-user pass to **64%** (they find different things: writes buy the stored-XSS, CSRF and SSTI challenges, authentication buys cross-user object access). All three are **deterministic and reproducible in one command** (`python benchmarks/run_benchmarks.py juiceshop`, ~27 min — identical on repeat runs). It's perfect on SQL injection (7/7, including login/authentication-bypass SQLi — a tautology that logs in where a real credential is rejected), file upload (4/4) and XXE (2/2), and strong on exposed data/secrets, open redirects and misconfiguration. The **remaining gaps are SSRF (0/2), mass assignment (0/2), rate limiting, and the stored/header XSS variants**, plus challenges needing multi-step business-logic exploitation. **NoSQL injection is a known weak class:** the detector finds common operator-injection leaks but is noisy — it can false-positive on endpoints with naturally variable responses, so treat NoSQL findings as leads to confirm, not confirmed bugs. In other words: a solid automated first pass that catches whole classes of real bugs in one command — **not** a substitute for a manual pentest. Full per-class breakdown, gaps, and methodology are in [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
+**Measured coverage — be realistic about what a scanner catches.** On [OWASP Juice Shop](https://owasp.org/www-project-juice-shop/) `v20.1.1` — a deliberately hard benchmark of 113 challenges — isitsecure detects **58% of the 45 DAST-detectable challenge classes** in a url-only scan, scored automatically against the app's own `/api/Challenges` list. `--probe-writes` takes that to **73%** and an authenticated two-user pass to **64%** (they find different things: writes buy the stored-XSS, CSRF and SSTI challenges, authentication buys cross-user object access). All three are **deterministic and reproducible in one command** (`python benchmarks/run_benchmarks.py juiceshop`, ~27 min — identical on repeat runs). It's perfect on SQL injection (7/7, including login/authentication-bypass SQLi — a tautology that logs in where a real credential is rejected), file upload (4/4) and XXE (2/2), and strong on exposed data/secrets, open redirects and misconfiguration. The **remaining gaps are SSRF (0/2), the captcha-gated half of mass assignment (1/2), rate limiting, and the stored/header XSS variants**, plus challenges needing multi-step business-logic exploitation. **NoSQL injection is a known weak class:** the detector finds common operator-injection leaks but is noisy — it can false-positive on endpoints with naturally variable responses, so treat NoSQL findings as leads to confirm, not confirmed bugs. In other words: a solid automated first pass that catches whole classes of real bugs in one command — **not** a substitute for a manual pentest. Full per-class breakdown, gaps, and methodology are in [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
 
 ```bash
 python benchmarks/run_benchmarks.py juiceshop   # OWASP Juice Shop — the headline recall number

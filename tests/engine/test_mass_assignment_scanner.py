@@ -263,3 +263,39 @@ class TestEdgeCases:
         assert not MassAssignmentScanner._field_in_response(
             "role", "admin", "nothing relevant"
         )
+
+
+class TestEnvelopedResponses:
+    """A created object is rarely at the top level of the response."""
+
+    def test_field_inside_data_envelope(self) -> None:
+        """{"status": .., "data": {..}} is the most common API shape."""
+        body = '{"status":"success","data":{"id":28,"role":"admin","email":null}}'
+        assert MassAssignmentScanner._field_in_response("role", "admin", body)
+
+    def test_field_inside_jsonapi_attributes(self) -> None:
+        """JSON:API nests the object two levels down."""
+        body = '{"data":{"type":"users","attributes":{"is_admin":true}}}'
+        assert MassAssignmentScanner._field_in_response("is_admin", True, body)
+
+    def test_field_inside_array_of_envelopes(self) -> None:
+        """A list response still has to be searched element by element."""
+        body = '{"results":[{"user":{"plan":"free"}},{"user":{"plan":"enterprise"}}]}'
+        assert MassAssignmentScanner._field_in_response(
+            "plan", "enterprise", body
+        )
+
+    def test_nested_wrong_value_is_not_a_hit(self) -> None:
+        """Finding the key nested is not enough -- the value must match."""
+        body = '{"status":"success","data":{"role":"customer"}}'
+        assert not MassAssignmentScanner._field_in_response("role", "admin", body)
+
+    def test_absent_field_stays_absent_however_deep(self) -> None:
+        """Recursion must not turn a clean response into a finding."""
+        body = '{"status":"success","data":{"a":{"b":{"c":[1,2,{"d":"e"}]}}}}'
+        assert not MassAssignmentScanner._field_in_response("role", "admin", body)
+
+    def test_depth_is_bounded(self) -> None:
+        """A pathologically deep response must not blow the stack."""
+        body = "{" + '"a":{' * 400 + '"role":"admin"' + "}" * 400 + "}"
+        assert not MassAssignmentScanner._field_in_response("role", "admin", body)
