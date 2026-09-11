@@ -14,8 +14,8 @@ _Runs: 2026-09 · `--llm none` (pure DAST detection, no LLM) · Juice Shop pinne
 
 | Target | Mode | Recall | False positives | Findings |
 |---|---|--:|--:|--:|
-| `juiceshop` | url-only | **26/45 (58%)** — per-challenge, deterministic | not yet measured | 26 |
-| `juiceshop` | url-only + `--probe-writes` | **32/45 (71%)** | not yet measured | 74 |
+| `juiceshop` | url-only | **26–27/45 (58–60%)** — per-challenge, deterministic | **3 IDOR** (see triage below) | 30 |
+| `juiceshop-writes` | url-only + `--probe-writes` | **33/45 (73%)** | 8 unmatched of 95 | 95 |
 | `juiceshop-auth` | authenticated, two-user | **29/45 (64%)** | not yet measured | 35 |
 | `vampi-vulnerable` | url-only | **3/3** (SQLi, IDOR, headers) | — | 8–10 |
 | `vampi-secure` | url-only | — | **2** (IDOR) | 7–9 |
@@ -84,11 +84,11 @@ registered users.
 | xss | 1/7 | **4/7** | 2/7 |
 | csrf | 0/1 | **1/1** | 0/1 |
 | ssti | 0/1 | **1/1** | 0/1 |
-| mass_assignment | 0/2 | 0/2 | 0/2 |
+| mass_assignment | 0/2 | **1/2** | 0/2 |
 | ssrf | 0/2 | 0/2 | 0/2 |
 | auth | 0/1 | 0/1 | 0/1 |
 | rate_limit | 0/1 | 0/1 | 0/1 |
-| **total** | **26/45** | **32/45** | **29/45** |
+| **total** | **26/45** | **33/45** | **29/45** |
 
 **Biggest gaps (the recall levers):**
 
@@ -115,9 +115,49 @@ registered users.
   posted a raw XML body, where that endpoint takes XML as an uploaded file.
   Three separate fixes, none of them to a scanner's detection logic.
 
-- **mass_assignment is 0/2 even with `--probe-writes`**, despite both challenges
-  needing a POST that the flag now supplies — so something beyond method
-  discovery blocks them. Open.
+- **mass_assignment is 1/2**, and getting there took two fixes in different
+  layers. `POST /api/Users` was never in the inventory: Juice Shop ships 10 of
+  its 13 JavaScript files as `<link rel="modulepreload">` chunks, and ingestion
+  only collected `<script src>`. Once discovered, the probe *was* accepted —
+  201, `role: admin` echoed back — but the reflection check only inspected the
+  top level of the response, and the object came wrapped in
+  `{"status":"success","data":{…}}`. A live, challenge-solving mass assignment
+  read as clean. Fixing discovery alone, or the envelope alone, yields nothing.
+
+  The other half, `feedbackChallenge`, stays open for a different reason: the
+  probe sends the escalation field with **no valid base payload**, and
+  `POST /api/Feedbacks` also demands a captcha. That is app-specific
+  anti-automation rather than a generic gap, so it is documented in
+  [the scanner's doc](../docs/scanners/mass-assignment-scanner.md) rather than
+  special-cased.
+
+### url-only false positives (triaged 2026-09)
+
+The scorecard counts unmatched findings but the harness used to discard the
+report that said *which*, so this was unanswerable without a re-run;
+`--report-dir` now keeps it. Of the 8 unmatched on a url-only run, 5 are IDOR
+claims, hand-verified against the live app:
+
+| endpoint | response | verdict |
+|---|---|---|
+| `/api/Recycles/1` | `{"UserId":2,"AddressId":4,…}` | **real** — another user's record, unauthenticated |
+| `/rest/memories` | `{"UserId":13,…,"email":…}` | **real** — leaks users and emails |
+| `/rest/user/whoami` | `{"user":{}}` | **false positive** |
+| `/api/Deliverys/1` | `{"name":"One Day Delivery","price":0.99}` | **false positive** — public catalogue |
+| `/api/Products/1` | public product | **false positive** — public catalogue |
+
+The `whoami` case has a specific cause worth recording: `_response_has_data` is
+a *length* test standing in for a *content* test — any JSON body of at least 10
+bytes counts as data, and `{"user":{}}` is 11. The remaining three unmatched are
+real-but-unscored (localStorage token, missing HSTS/CSP, wildcard CORS).
+
+> **`--probe-writes` takes ~72 minutes** (measured: injection 39 min, IDOR 14,
+> DOM-XSS 5, the other eleven scanners ~2 min between them, over a 248-endpoint
+> inventory). Its harness budget is 3h. It previously sat at 1h, which returned
+> *no report at all* — a scan that blows its budget is scored as an error, not
+> as lower recall, so too small a budget erases the measurement rather than
+> shrinking it. One scanner's own ceiling (injection, 90 min) already exceeded
+> that 1h cap, so this mode could never have fit inside it.
 
 ## Authenticated cross-user BOLA (manually verified — heavy to reproduce)
 
@@ -129,7 +169,7 @@ challenges, taking `idor` from 2/5 to **4/5**.
 
 It is now harness-scored at **29/45 (64%)** rather than measured by hand, and
 runs in one command like the others. Note it scores *lower* than
-`--probe-writes` (32/45) while finding different things — authentication buys
+`--probe-writes` (33/45) while finding different things — authentication buys
 the object-access challenges, writes buy the stored/CSRF/SSTI ones. Nothing
 stops both being used together; that combination has not been measured.
 

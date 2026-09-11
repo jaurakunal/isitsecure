@@ -68,6 +68,9 @@ class Target:
     url: str                      # base URL to scan once ready
     ready_url: str                # URL to poll for readiness
     scan_mode: str = "url-only"
+    # Extra CLI flags for the scan. A mode we publish a recall number
+    # for has to be reproducible with one command, same as the others.
+    extra_args: list[str] = field(default_factory=list)
     expect: list[Expectation] = field(default_factory=list)   # recall
     forbid: list[Expectation] = field(default_factory=list)   # false positives
     ready_timeout: int = 180
@@ -244,6 +247,25 @@ TARGETS: list[Target] = [
               "(the '36% url-only' headline number).",
     ),
     Target(
+        name="juiceshop-writes",
+        up_cmd=["docker", "run", "-d", "--name", "bench_juiceshop",
+                "-p", "3000:3000", "bkimminich/juice-shop:v20.1.1"],
+        url="http://localhost:3000",
+        ready_url="http://localhost:3000/",
+        down_cmd=["docker", "rm", "-f", "bench_juiceshop"],
+        ready_timeout=300,
+        extra_args=["--probe-writes"],
+        # Measured at 72m16s. The old 3600s default cut this off 12 minutes
+        # short and yielded NO report at all -- a timeout is scored as an
+        # error, not a lower recall, so too small a budget erases the whole
+        # measurement. 3h leaves room for the injection scanner, which used
+        # 39 of its 90-minute budget here and is free to use all of it.
+        scan_timeout=10800,
+        ground_truth="juiceshop",
+        notes="OWASP Juice Shop with --probe-writes — the mutation surface. "
+              "Writes to the target, so it needs a disposable container.",
+    ),
+    Target(
         name="juiceshop-auth",
         up_cmd=["docker", "run", "-d", "--name", "bench_juiceshop",
                 "-p", "3000:3000", "bkimminich/juice-shop:v20.1.1"],
@@ -291,6 +313,14 @@ def wait_ready(url: str, timeout: int) -> bool:
     return False
 
 
+# When set, each target's raw report is kept here instead of discarded.
+# The scorecard reports how many findings went unmatched but not WHICH --
+# and an unmatched finding is either a real-but-undocumented vuln or a
+# false positive, which is exactly the distinction you re-run a 30-minute
+# scan to make. Keep the report and it is answerable without the re-run.
+REPORT_DIR: str | None = None
+
+
 def scan(target: Target) -> list[dict] | None:
     """Run isitsecure and return its findings.
 
@@ -301,6 +331,7 @@ def scan(target: Target) -> list[dict] | None:
         out = f.name
     cmd = ["isitsecure", "scan", target.url, "--mode", target.scan_mode,
            "--llm", "none", "--output", "json", "-f", out]
+    cmd += target.extra_args
     if target.auth_email and target.auth_password:
         cmd += ["--auth-email", target.auth_email,
                 "--auth-password", target.auth_password]
@@ -325,10 +356,18 @@ def scan(target: Target) -> list[dict] | None:
             return None
         return data.get("findings", [])
     finally:
-        try:
-            os.unlink(out)
-        except OSError:
-            pass
+        if REPORT_DIR:
+            kept = os.path.join(REPORT_DIR, f"{target.name}.json")
+            try:
+                os.replace(out, kept)
+                print(f"    report kept at {kept}")
+            except OSError:
+                pass
+        else:
+            try:
+                os.unlink(out)
+            except OSError:
+                pass
 
 
 def score(findings: list[dict], target: Target) -> dict:
@@ -467,7 +506,14 @@ def main() -> int:
     ap.add_argument("targets", nargs="*", help="target names (default: vampi + sast-injection)")
     ap.add_argument("--keep", action="store_true", help="don't tear down containers")
     ap.add_argument("--all", action="store_true", help="include heavy compose targets")
+    ap.add_argument("--report-dir", help="keep each target's raw JSON report here "
+                                         "(so unmatched findings can be triaged)")
     args = ap.parse_args()
+
+    global REPORT_DIR
+    if args.report_dir:
+        os.makedirs(args.report_dir, exist_ok=True)
+        REPORT_DIR = args.report_dir
 
     by_name = {t.name: t for t in TARGETS}
     docker_names, want_sast, unknown = resolve_selection(args.targets, args.all)

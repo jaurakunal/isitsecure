@@ -10,14 +10,22 @@ Semgrep taint layer against a local injection fixture (see below).
 pip install -e ".[all]"          # isitsecure on PATH + browser deps
 python benchmarks/run_benchmarks.py            # default: VAmPI (both builds) + sast-injection
 python benchmarks/run_benchmarks.py juiceshop  # OWASP Juice Shop — the headline recall number
+python benchmarks/run_benchmarks.py juiceshop-writes  # + --probe-writes (mutates the target; ~72 min)
 python benchmarks/run_benchmarks.py --all      # + NodeGoat + crAPI + Juice Shop (heavy)
 python benchmarks/run_benchmarks.py crapi      # a single target
 python benchmarks/run_benchmarks.py sast-injection            # taint recall/FP, no Docker
 python benchmarks/run_benchmarks.py --keep vampi-vulnerable   # leave it running
+python benchmarks/run_benchmarks.py juiceshop --report-dir /tmp/r  # keep the raw JSON reports
 ```
 
 Docker is required for every target **except** `sast-injection`, which instead
 needs the `semgrep` binary (`pipx install semgrep` or `pip install semgrep`).
+
+`--report-dir DIR` keeps each target's raw JSON report instead of discarding
+it. The scorecard says *how many* findings went unmatched but not *which*, and
+an unmatched finding is either a real-but-undocumented vulnerability or a false
+positive — exactly the distinction worth a look. Without the report, answering
+that means re-running a scan that can take over an hour.
 
 ## What it measures
 
