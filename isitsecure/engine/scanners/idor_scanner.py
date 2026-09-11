@@ -38,6 +38,7 @@ from isitsecure.engine.models import (
 )
 from isitsecure.engine.shared.endpoint_prioritizer import PriorityDimension, rank
 from isitsecure.engine.shared.progress import emit
+from isitsecure.engine.shared.time_budget import TimeBudget
 from isitsecure.engine.shared.rate_limited_client import RateLimitedClient
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
 from urllib.parse import quote
@@ -77,6 +78,7 @@ class IDORScanner:
         )
 
         testable = testable[: IDORConfig.MAX_ENDPOINTS_TO_TEST]
+        budget = TimeBudget()
         results: list[IDORTestResult] = []
         mutation_findings: list[DeepFinding] = []
 
@@ -87,6 +89,9 @@ class IDORScanner:
             user_agent=DeepScanConfig.USER_AGENT,
         ) as client:
             for endpoint in testable:
+                if budget.expired():
+                    emit("IDOR: out of time, returning what was found")
+                    break
                 emit(f"IDOR: testing {endpoint.url}")
                 result = await self._test_endpoint(client, endpoint)
                 results.append(result)
@@ -94,6 +99,9 @@ class IDORScanner:
             # Mutation IDOR: test PUT/PATCH/DELETE with swapped IDs
             mutation_testable = self._filter_mutation_endpoints(endpoints)
             for endpoint in mutation_testable[: IDORConfig.MAX_ENDPOINTS_TO_TEST]:
+                if budget.expired():
+                    emit("IDOR: out of time during mutation tests")
+                    break
                 emit(f"IDOR: mutation test {endpoint.method.value} {endpoint.url}")
                 findings = await self._test_mutation_idor(
                     client, endpoint

@@ -326,6 +326,31 @@ Two caps remain because they bound something genuinely scarce:
 `MAX_ENDPOINTS_IN_PROMPT` (LLM tokens) and `MAX_OOB_POST_ENDPOINTS`
 (registrations against an external callback service).
 
+### When a scanner runs out of time
+
+`run_scanner_safe` cancels a scanner at its hard timeout, and a cancelled
+coroutine cannot hand anything back — so every finding it had accumulated is
+discarded. Measured: `http_probe_scanner` ran 901s against a 900s timeout
+holding four real findings, an exposed `/.env` among them, and reported none
+of them.
+
+Scanners therefore stop *themselves*. The runner publishes its deadline; a
+`TimeBudget()` with no argument inherits it, so a scanner opts in with two
+lines and never needs to know its own timeout — which is how the inner and
+outer values drift apart. The hard cancel remains as a backstop for something
+genuinely hung, and logs loudly when it fires, because reaching it now means
+a scanner failed to yield rather than merely ran long.
+
+Granularity matters more than it looks. Checking between phases is not
+enough when one phase walks the whole inventory: it enters before the
+deadline, runs 800s, and is cancelled with everything in it. The check
+belongs in the per-endpoint loop.
+
+Order matters too. `http_probe` runs its fixed-cost checks — the ones probing
+a handful of known paths — before the ones that scale with the inventory, so
+a large app cannot spend its whole budget on method tampering and never reach
+the check that finds an exposed `.env`.
+
 ### Testing the mutation surface
 
 `--probe-writes` derives state-changing endpoints from REST shape — POST to a

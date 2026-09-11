@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 
 from isitsecure.engine.constants import CORSConfig, DeepScanConfig
 from isitsecure.engine.shared.progress import emit
+from isitsecure.engine.shared.time_budget import TimeBudget
 from isitsecure.engine.models import (
     DASTProbeCaptureEntry,
     DeepFinding,
@@ -77,7 +78,11 @@ class CORSScanner(AuthAwareScanner):
             user_agent=DeepScanConfig.USER_AGENT,
             extra_headers=self.auth_headers,
         ) as client:
+            budget = TimeBudget()
             for tested, ep in enumerate(representative):
+                if budget.expired():
+                    emit("CORS: out of time, returning what was found")
+                    break
                 emit(
                     f"CORS: probing {tested + 1}/{len(representative)} {ep.url}"
                 )

@@ -14,6 +14,7 @@ from http.cookies import SimpleCookie
 
 from isitsecure.engine.constants import CSRFConfig, DeepScanConfig
 from isitsecure.engine.shared.progress import emit
+from isitsecure.engine.shared.time_budget import TimeBudget
 from isitsecure.engine.models import (
     DeepFinding,
     DiscoveredEndpoint,
@@ -110,7 +111,11 @@ class CSRFScanner(AuthAwareScanner):
             ranked = rank(endpoints, PriorityDimension.CSRF)[
                 : CSRFConfig.MAX_ENDPOINTS_TO_TEST
             ]
+            budget = TimeBudget()
             for tested, ep in enumerate(ranked):
+                if budget.expired():
+                    emit("CSRF: out of time, returning what was found")
+                    break
                 emit(
                     f"CSRF: forged-origin probe {tested + 1}/{len(ranked)} "
                     f"{ep.method.value} {ep.url}"

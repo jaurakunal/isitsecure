@@ -5,6 +5,8 @@ import logging
 from typing import Any, Coroutine
 
 from isitsecure.engine.models import DeepFinding
+from isitsecure.engine.shared.progress import emit
+from isitsecure.engine.shared.time_budget import scanner_deadline
 
 logger = logging.getLogger(__name__)
 
@@ -66,10 +68,22 @@ async def run_scanner_safe(
         List of findings, or empty list on failure.
     """
     try:
-        return await asyncio.wait_for(scan_coro, timeout=timeout_seconds)
+        # Publish the deadline so the scanner can stop itself and RETURN what
+        # it found. A cancel here discards everything: http_probe_scanner ran
+        # 901s against a 900s timeout holding four real findings — an exposed
+        # /.env among them — and reported none of them.
+        with scanner_deadline(timeout_seconds):
+            return await asyncio.wait_for(scan_coro, timeout=timeout_seconds)
     except asyncio.TimeoutError:
         logger.warning(
-            "Scanner '%s' timed out after %ss", scanner_name, timeout_seconds
+            "Scanner '%s' timed out after %ss — findings discarded. It did "
+            "not stop on the cooperative deadline, which means either it has "
+            "no TimeBudget or it blocked between checks.",
+            scanner_name, timeout_seconds,
+        )
+        emit(
+            f"{scanner_name}: hard timeout at {timeout_seconds}s, "
+            "findings lost"
         )
         return []
     except Exception as e:
