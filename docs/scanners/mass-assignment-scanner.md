@@ -8,6 +8,16 @@ Sends POST/PATCH requests with extra fields that shouldn't be accepted — `is_a
 
 Also tests Supabase-specific escalation fields via the REST API.
 
+### Where it looks in the response
+
+The injected field is searched for **anywhere in the response body**, not just at the top level. Most APIs wrap the object they just created in an envelope — `{"status": "success", "data": {...}}`, `{"result": {...}}`, JSON:API's `{"data": {"attributes": {...}}}` — and a top-level-only check reads every one of those as "not reflected". That is how a confirmed, reproducible mass assignment reports as clean.
+
+The value still has to match: finding `role` nested somewhere proves nothing if it came back as `customer`.
+
+### What it does not do yet
+
+The probe sends the escalation field **on its own**, with no valid base payload. An endpoint that validates its required fields rejects that request outright, so the escalation never gets evaluated. This is the reason Juice Shop's `feedbackChallenge` (a `POST /api/Feedbacks` that also demands a captcha) is out of reach while `registerAdminChallenge` (a `POST /api/Users` that accepts a bare body) is not.
+
 ## Why It Matters
 
 If your API blindly accepts all fields from the request body, attackers can:

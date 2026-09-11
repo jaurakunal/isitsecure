@@ -29,6 +29,21 @@ class URLIngestionService:
     SCRIPT_SRC_PATTERN = re.compile(
         r'<script[^>]+src=["\']([^"\']+)["\']', re.IGNORECASE
     )
+    # Bundlers emit lazy-loaded chunks as <link rel="modulepreload"> rather
+    # than <script src>, so a script-only sweep sees the entry bundle and
+    # none of the route chunks — which is where most of an SPA's API surface
+    # lives. A <link> pointing at JavaScript exists to load that JavaScript,
+    # whatever the rel says, so match on the href instead of on a rel list.
+    LINK_JS_PATTERN = re.compile(
+        r'<link[^>]+href=["\'](?P<link>[^"\']+\.m?js(?:\?[^"\']*)?)["\']', re.IGNORECASE
+    )
+    # One pass over the document so scripts and preloaded chunks come back
+    # interleaved as they appear, rather than all of one then all of the other.
+    JAVASCRIPT_REF_PATTERN = re.compile(
+        r'<script[^>]+src=["\'](?P<script>[^"\']+)["\']'
+        r'|' + LINK_JS_PATTERN.pattern,
+        re.IGNORECASE,
+    )
     SOURCE_MAP_COMMENT_PATTERN = re.compile(
         r"//[#@]\s*sourceMappingURL=(\S+)"
     )
@@ -118,8 +133,7 @@ class URLIngestionService:
         """Extract script URLs from HTML and fetch their content."""
         assets: list[PageAsset] = []
 
-        script_urls = self.SCRIPT_SRC_PATTERN.findall(html_content)
-        script_urls = script_urls[: ScanConfig.MAX_ASSETS_TO_FETCH]
+        script_urls = self._javascript_urls(html_content)
 
         inline_scripts = self.INLINE_SCRIPT_PATTERN.findall(html_content)
         for i, content in enumerate(inline_scripts):
@@ -148,6 +162,25 @@ class URLIngestionService:
                     assets.append(asset)
 
         return assets
+
+    def _javascript_urls(self, html_content: str) -> list[str]:
+        """Every JavaScript URL the page references, in document order.
+
+        Both <script src> and <link href="...js"> (modulepreload/preload/
+        prefetch), de-duplicated so a chunk that is both preloaded and
+        scripted is fetched once. Document order matters because the cap
+        truncates the tail: collecting all scripts before any chunk would
+        let a script-heavy page starve out the chunks, which are the half
+        that carries the lazy-loaded API surface.
+        """
+        seen: set[str] = set()
+        urls: list[str] = []
+        for match in self.JAVASCRIPT_REF_PATTERN.finditer(html_content):
+            src = match.group("script") or match.group("link")
+            if src and src not in seen:
+                seen.add(src)
+                urls.append(src)
+        return urls[: ScanConfig.MAX_ASSETS_TO_FETCH]
 
     async def _fetch_single_asset(
         self,
