@@ -14,11 +14,11 @@ _Runs: 2026-09 · `--llm none` (pure DAST detection, no LLM) · Juice Shop pinne
 
 | Target | Mode | Recall | False positives | Findings |
 |---|---|--:|--:|--:|
-| `juiceshop` | url-only | **26–27/45 (58–60%)** — per-challenge, deterministic | **3 IDOR** (see triage below) | 30 |
-| `juiceshop-writes` | url-only + `--probe-writes` | **33/45 (73%)** | 8 unmatched of 95 | 95 |
-| `juiceshop-auth` | authenticated, two-user | **29/45 (64%)** | not yet measured | 35 |
-| `vampi-vulnerable` | url-only | **3/3** (SQLi, IDOR, headers) | — | 8–10 |
-| `vampi-secure` | url-only | — | **2** (IDOR) | 7–9 |
+| `juiceshop` | url-only | **24/45 (53%)** — per-challenge, deterministic | idor read-FPs removed (see below) | 28 |
+| `juiceshop-writes` | url-only + `--probe-writes` | **32/45 (71%)** | mutation-IDOR still noisy (see below) | 86 |
+| `juiceshop-auth` | authenticated, two-user | **30/45 (67%)** | not yet measured | 35 |
+| `vampi-vulnerable` | url-only | **2/3** (SQLi, headers; IDOR needs auth) | — | 8–10 |
+| `vampi-secure` | url-only | — | **0** (was 2 IDOR — fixed) | 7–9 |
 | `nodegoat-auth` | authenticated | **3/3** (headers + injection + XSS) | unmeasured | 19 |
 | `sast-injection` | code-only | **46/46 (100%)** — taint, per-class, deterministic | **0** | 46 |
 
@@ -63,7 +63,7 @@ FP**. This is the baseline the taint layer and future rule packs must hold.
 
 ## Juice Shop — per-class breakdown (`juiceshop`, url-only, v20.1.1)
 
-Recall **26/45 (58%)** url-only, deterministic across runs. Of 113 challenges,
+Recall **24/45 (53%)** url-only, deterministic across runs. Of 113 challenges,
 68 are out of scope for DAST (crypto, CTF mechanics, deep business logic,
 SAST-only).
 
@@ -80,7 +80,7 @@ registered users.
 | open_redirect | 2/2 | 2/2 | 2/2 |
 | info_disclosure | 2/2 | 2/2 | 2/2 |
 | nosql | 2/3 | 2/3 | 2/3 |
-| idor | 2/5 | 3/5 | **4/5** |
+| idor | **0/5** | 3/5† | 3/5 |
 | xss | 1/7 | **4/7** | 2/7 |
 | csrf | 0/1 | **1/1** | 0/1 |
 | ssti | 0/1 | **1/1** | 0/1 |
@@ -88,7 +88,9 @@ registered users.
 | ssrf | 0/2 | 0/2 | 0/2 |
 | auth | 0/1 | 0/1 | 0/1 |
 | rate_limit | 0/1 | 0/1 | 0/1 |
-| **total** | **26/45** | **33/45** | **29/45** |
+| **total** | **24/45** | **32/45** | **30/45** |
+
+† `--probe-writes` idor comes from the **mutation** path (PUT/PATCH with a swapped id), which is separate from the read path this change corrected and still has the same over-crediting bug — several of its findings (`/search/1`, `/nftUnlocked/1`, `/application-configuration/1`) are false. That path is the next IDOR fix. Non-idor wobble between runs (±1–2 in xss/ssti) is canary/run variance, not this change.
 
 **Biggest gaps (the recall levers):**
 
@@ -131,31 +133,35 @@ registered users.
   [the scanner's doc](../docs/scanners/mass-assignment-scanner.md) rather than
   special-cased.
 
-### url-only false positives (triaged 2026-09)
+### url-only IDOR: why it is now 0/5
 
-The scorecard counts unmatched findings but the harness used to discard the
-report that said *which*, so this was unanswerable without a re-run;
-`--report-dir` now keeps it. Of the 8 unmatched on a url-only run, 5 are IDOR
-claims, hand-verified against the live app:
+The url-only idor score used to be 2/5. Both credits were **coincidental**: an
+unauthenticated GET of `/api/Products/{id}` returned a public product, the
+scanner flagged it "IDOR — accessible via direct ID reference", and the harness
+matched that finding's URL to the `changeProduct` and `forgedReview` *write*
+challenges purely on the token "product". The scanner was not detecting either
+challenge; it was reading the public catalogue and being credited for two
+unrelated write vulns.
 
-| endpoint | response | verdict |
-|---|---|---|
-| `/api/Recycles/1` | `{"UserId":2,"AddressId":4,…}` | **real** — another user's record, unauthenticated |
-| `/rest/memories` | `{"UserId":13,…,"email":…}` | **real** — leaks users and emails |
-| `/rest/user/whoami` | `{"user":{}}` | ~~false positive~~ **fixed** — empty envelopes no longer count as data |
-| `/api/Deliverys/1` | `{"name":"One Day Delivery","price":0.99}` | **false positive** — public catalogue |
-| `/api/Products/1` | public product | **false positive** — public catalogue |
+The deeper problem: an **unauthenticated** probe cannot tell public data from a
+leak. `/api/Products/{id}` (public) and `/api/Recycles/{id}` (a user's private
+orders) both return a different record per id with no auth — only ownership
+intent, invisible here, separates them. The swap path also never actually
+compared the swapped response to the original (`response_differs` was set to
+"data came back"), so an endpoint that ignores the id entirely still counted.
 
-The `whoami` case had a specific cause: `_response_has_data` was a *length* test
-standing in for a *content* test — any JSON body of at least 10 bytes counted as
-data, and `{"user":{}}` is 11. **Fixed** — it now requires the decoded body to
-hold a substantive value (any scalar; empty containers, null and blank strings
-do not count), judged by structure so no envelope key name is guessed. The
-`Deliverys`/`Products` pair is a *different* bug — a swapped id returns the same
-public-catalogue record, and the swap probe reports "differs" whenever data
-comes back rather than comparing it to the original; that needs response
-discrimination and is still open. The remaining three unmatched are
-real-but-unscored (localStorage token, missing HSTS/CSP, wildcard CORS).
+Both are now fixed together: the swap comparison is real (an id that yields the
+same response is not an object reference), and **no unauthenticated read is
+CONFIRMED or LIKELY** — that verdict belongs to the cross-user path, which
+proves user B can read user A's object. The measurable proof that this heuristic
+had no discriminative power: on VAmPI it scored 3/3 on the *vulnerable* build
+**and** 2 false positives on the *secured* build — firing identically on both.
+The fix removes the VAmPI-secure false positives (2 → 0) and, honestly, the
+VAmPI-vulnerable "detection" too (3/3 → 2/3), because url-only never soundly
+detected it. Real IDOR is the authenticated cross-user pass.
+
+The `whoami` empty-envelope case (a JSON body of ≥10 bytes carrying `{"user":{}}`)
+was fixed separately in v0.25.7.
 
 > **`--probe-writes` takes ~72 minutes** (measured: injection 39 min, IDOR 14,
 > DOM-XSS 5, the other eleven scanners ~2 min between them, over a 248-endpoint
@@ -171,11 +177,13 @@ A **two-user** authenticated run (`juiceshop-auth`: register users A + B, token
 login, `--auth-email-b`) exercises cross-user object access — it harvests owned
 resource ids as user A and confirms user B (a different identity) can reach them
 while an anonymous request cannot. This surfaces Juice Shop's **basket BOLA**
-challenges, taking `idor` from 2/5 to **4/5**.
+challenges. With the url-only read credits gone, authenticated `idor` is **3/5**
+(the cross-user basket findings plus one product credit; it was reported 4/5
+when the coincidental read credits still counted).
 
-It is now harness-scored at **29/45 (64%)** rather than measured by hand, and
-runs in one command like the others. Note it scores *lower* than
-`--probe-writes` (33/45) while finding different things — authentication buys
+It is now harness-scored at **30/45 (67%)** rather than measured by hand, and
+runs in one command like the others. Note it scores near
+`--probe-writes` (32/45) while finding different things — authentication buys
 the object-access challenges, writes buy the stored/CSRF/SSTI ones. Nothing
 stops both being used together; that combination has not been measured.
 

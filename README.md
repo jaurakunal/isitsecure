@@ -198,12 +198,14 @@ Measured on OWASP Juice Shop v20.1.1, url-only:
 
 | | without | with `--probe-writes` |
 |---|---|---|
-| **recall** | 26/45 (58%) | **33/45 (73%)** |
+| **recall** | 24/45 (53%) | **32/45 (71%)** |
 | CSRF | 0/1 | 1/1 |
 | SSTI | 0/1 | 1/1 |
 | XSS | 1/7 | 4/7 |
-| IDOR | 2/5 | 3/5 |
+| IDOR | 0/5 | 3/5† |
 | mass assignment | 0/2 | 1/2 |
+
+† `--probe-writes` IDOR is the mutation path (PUT/PATCH swaps), not the read path; unauthenticated read-IDOR is 0 because it can't be told from public data without auth — real IDOR needs the authenticated cross-user pass.
 
 **It is off by default, and should stay off for anything you do not own.**
 The scan *writes to the target*: it creates records, and an endpoint that
@@ -732,7 +734,7 @@ isitsecure scan http://localhost:4000 --repo ./test-app --mode full
 
 isitsecure ships a repeatable benchmark harness that scores **recall** (of the vulnerability classes an app is known to have, how many we catch) and **false positives** (findings that must not appear against a hardened build) on public, deliberately-vulnerable apps.
 
-**Measured coverage — be realistic about what a scanner catches.** On [OWASP Juice Shop](https://owasp.org/www-project-juice-shop/) `v20.1.1` — a deliberately hard benchmark of 113 challenges — isitsecure detects **58% of the 45 DAST-detectable challenge classes** in a url-only scan, scored automatically against the app's own `/api/Challenges` list. `--probe-writes` takes that to **73%** and an authenticated two-user pass to **64%** (they find different things: writes buy the stored-XSS, CSRF and SSTI challenges, authentication buys cross-user object access). All three are **deterministic and reproducible in one command** (`python benchmarks/run_benchmarks.py juiceshop`, ~27 min — identical on repeat runs). It's perfect on SQL injection (7/7, including login/authentication-bypass SQLi — a tautology that logs in where a real credential is rejected), file upload (4/4) and XXE (2/2), and strong on exposed data/secrets, open redirects and misconfiguration. The **remaining gaps are SSRF (0/2), the captcha-gated half of mass assignment (1/2), rate limiting, and the stored/header XSS variants**, plus challenges needing multi-step business-logic exploitation. **NoSQL injection is a known weak class:** the detector finds common operator-injection leaks but is noisy — it can false-positive on endpoints with naturally variable responses, so treat NoSQL findings as leads to confirm, not confirmed bugs. In other words: a solid automated first pass that catches whole classes of real bugs in one command — **not** a substitute for a manual pentest. Full per-class breakdown, gaps, and methodology are in [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
+**Measured coverage — be realistic about what a scanner catches.** On [OWASP Juice Shop](https://owasp.org/www-project-juice-shop/) `v20.1.1` — a deliberately hard benchmark of 113 challenges — isitsecure detects **53% of the 45 DAST-detectable challenge classes** in a url-only scan, scored automatically against the app's own `/api/Challenges` list. `--probe-writes` takes that to **71%** and an authenticated two-user pass to **67%** (they find different things: writes buy the stored-XSS, CSRF and SSTI challenges, authentication buys cross-user object access — the only sound source of IDOR, since an unauthenticated scan can't tell a leaked record from public data). All three are **deterministic and reproducible in one command** (`python benchmarks/run_benchmarks.py juiceshop`, ~27 min — identical on repeat runs). It's perfect on SQL injection (7/7, including login/authentication-bypass SQLi — a tautology that logs in where a real credential is rejected), file upload (4/4) and XXE (2/2), and strong on exposed data/secrets, open redirects and misconfiguration. The **remaining gaps are SSRF (0/2), the captcha-gated half of mass assignment (1/2), rate limiting, and the stored/header XSS variants**, plus challenges needing multi-step business-logic exploitation. **NoSQL injection is a known weak class:** the detector finds common operator-injection leaks but is noisy — it can false-positive on endpoints with naturally variable responses, so treat NoSQL findings as leads to confirm, not confirmed bugs. In other words: a solid automated first pass that catches whole classes of real bugs in one command — **not** a substitute for a manual pentest. Full per-class breakdown, gaps, and methodology are in [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
 
 ```bash
 python benchmarks/run_benchmarks.py juiceshop   # OWASP Juice Shop — the headline recall number
