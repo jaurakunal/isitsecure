@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.25.7](https://github.com/jaurakunal/isitsecure/compare/v0.25.6...v0.25.7) (2026-09-11)
+
+
+### Bug Fixes
+
+* **idor:** an empty JSON envelope is not leaked data ([#212](https://github.com/jaurakunal/isitsecure/issues/212)) ([26bd397](https://github.com/jaurakunal/isitsecure/commit/26bd3973e588cfa24a4a7832ab441c243995160e))
+
 ## [0.25.6](https://github.com/jaurakunal/isitsecure/compare/v0.25.5...v0.25.6) (2026-09-11)
 
 
