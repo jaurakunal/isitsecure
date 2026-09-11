@@ -180,6 +180,38 @@ isitsecure scan https://your-app.com --depth deep --llm none
 
 The scan narrates each phase and every scanner as it runs (with elapsed time), so a longer `deep` scan shows continuous progress rather than appearing to hang.
 
+## Testing the Mutation Surface (`--probe-writes`)
+
+A path in a JavaScript bundle carries no HTTP method, so every endpoint is
+discovered as a `GET`. Any scanner that tests `POST`/`PUT` then finds nothing
+to work on — which leaves **stored XSS, mass assignment, CSRF and SSTI
+untested**, because all of them live behind a state-changing request.
+
+`--probe-writes` derives those endpoints from REST shape: `POST` to a
+collection, `PUT` to an item.
+
+```bash
+isitsecure scan https://your-app.com --probe-writes
+```
+
+Measured on OWASP Juice Shop v20.1.1, url-only:
+
+| | without | with `--probe-writes` |
+|---|---|---|
+| **recall** | 26/45 (58%) | **32/45 (71%)** |
+| CSRF | 0/1 | 1/1 |
+| SSTI | 0/1 | 1/1 |
+| XSS | 1/7 | 4/7 |
+| IDOR | 2/5 | 3/5 |
+
+**It is off by default, and should stay off for anything you do not own.**
+The scan *writes to the target*: it creates records, and an endpoint that
+sends email or charges a card will do so. It also takes roughly 48 minutes
+against 27 on that app, since the inventory doubles.
+
+`DELETE` is derived and deliberately never sent — a scanner that destroys a
+record to prove it could is not worth the finding.
+
 ## What It Scans
 
 ### DAST Scanners — Tests Your Live App
@@ -549,6 +581,9 @@ Options:
   -b, --branch TEXT      Git branch [default: the repo's own default branch]
   -m, --mode TEXT        Scan mode: auto|url-only|code-only|authenticated|full
   --depth TEXT           Scan depth: quick|deep [default: quick]
+  --probe-writes         Test the mutation surface (stored XSS, mass
+                         assignment, CSRF). WRITES to the target — only for
+                         an app you own or are authorized to test.
   --llm TEXT             LLM provider: anthropic|google|none [default: anthropic]
   -o, --output TEXT      Output format: table|json|html|sarif|fixes [default: table]
   -f, --output-file TEXT Write report to file
