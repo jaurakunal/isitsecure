@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.25.4](https://github.com/jaurakunal/isitsecure/compare/v0.25.3...v0.25.4) (2026-09-11)
+
+
+### Documentation
+
+* --probe-writes measures 26/45 to 32/45, so say so ([#206](https://github.com/jaurakunal/isitsecure/issues/206)) ([c61da3b](https://github.com/jaurakunal/isitsecure/commit/c61da3bd6e7300aa6b97abffbea18c67d20b3079))
+
 ## [0.25.3](https://github.com/jaurakunal/isitsecure/compare/v0.25.2...v0.25.3) (2026-09-11)
 
 
