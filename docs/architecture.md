@@ -363,6 +363,18 @@ It is off by default: it makes a scan write to whatever it is pointed at.
 DELETE is derived and deliberately never emitted — a scanner that destroys a
 record to prove it could is not worth the finding.
 
+Measured on Juice Shop, url-only: **26/45 → 32/45**, gaining CSRF, SSTI,
+three of the five XSS challenges and one IDOR, losing nothing. The scan takes
+about 48 minutes against 27, since the inventory doubles.
+
+That number was not always what it looked like. The first measurement read
+neutral — six gained, six lost — and the six "lost" were `exposed_data` and
+`info_disclosure`, both of which score off `http_probe_scanner`. It was
+running one second past its timeout and having every finding discarded by the
+hard cancel; the doubled inventory pushed it over. One bug wearing the
+costume of a trade-off, and worth remembering when a measurement shows a
+suspiciously tidy wash.
+
 ### Remediation scope
 
 Findings arrive one per affected location, which is right for detection and
