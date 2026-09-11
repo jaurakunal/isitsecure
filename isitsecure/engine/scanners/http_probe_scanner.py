@@ -25,6 +25,7 @@ from isitsecure.engine.models import (
 )
 from isitsecure.engine.shared.endpoint_prioritizer import PriorityDimension, rank
 from isitsecure.engine.shared.progress import emit
+from isitsecure.engine.shared.time_budget import TimeBudget
 from isitsecure.engine.shared.rate_limited_client import (
     RateLimitedClient,
 )
@@ -77,30 +78,42 @@ class HTTPProbeScanner(AuthAwareScanner):
             user_agent=DeepScanConfig.USER_AGENT,
             extra_headers=self.auth_headers,
         ) as client:
-            emit("http-probe: method tampering (OPTIONS/TRACE)")
-            findings.extend(
-                await self._check_method_tampering(test_endpoints, client)
+            # Fixed-cost checks first, per-endpoint checks after. The first
+            # two probe a handful of known paths on the base URL and cost the
+            # same whatever the inventory holds; the rest walk every endpoint
+            # and grow with it. Run the other way round — as this did — and a
+            # large app spends its whole budget on method tampering and never
+            # reaches the check that finds an exposed .env.
+            checks = (
+                ("verbose error pages",
+                 lambda: self._check_verbose_errors(base_url, client)),
+                ("directory listing & sensitive files (.git/.env)",
+                 lambda: self._check_directory_listing(base_url, client)),
+                ("method tampering (OPTIONS/TRACE)",
+                 lambda: self._check_method_tampering(test_endpoints, client)),
+                ("host header injection",
+                 lambda: self._check_host_header_injection(
+                     base_url, test_endpoints, client)),
+                ("CRLF header injection",
+                 lambda: self._check_crlf_injection(test_endpoints, client)),
             )
-            emit("http-probe: host header injection")
-            findings.extend(
-                await self._check_host_header_injection(
-                    base_url, test_endpoints, client,
-                )
-            )
-            emit("http-probe: verbose error pages")
-            findings.extend(
-                await self._check_verbose_errors(base_url, client)
-            )
-            emit("http-probe: directory listing & sensitive files (.git/.env)")
-            findings.extend(
-                await self._check_directory_listing(base_url, client)
-            )
-            emit("http-probe: CRLF header injection")
-            findings.extend(
-                await self._check_crlf_injection(
-                    test_endpoints, client,
-                )
-            )
+
+            # Stop between checks rather than be cancelled mid-way. This
+            # scanner ran 901s against a 900s timeout holding four findings —
+            # an exposed .env among them — and the hard cancel discarded all
+            # four. Returning three of five checks' worth beats returning
+            # nothing.
+            budget = TimeBudget()
+            for label, run_check in checks:
+                if budget.expired():
+                    logger.info(
+                        "HTTPProbeScanner: budget spent, skipping '%s' and "
+                        "any checks after it", label,
+                    )
+                    emit(f"http-probe: out of time before {label}")
+                    break
+                emit(f"http-probe: {label}")
+                findings.extend(await run_check())
 
         logger.info(
             "HTTPProbeScanner: %d findings from %d endpoints",
@@ -122,7 +135,13 @@ class HTTPProbeScanner(AuthAwareScanner):
         findings: list[DeepFinding] = []
         tested: set[str] = set()
 
+        budget = TimeBudget()
         for ep in rank(endpoints, PriorityDimension.CSRF)[: HTTPProbeConfig.MAX_METHOD_TEST_ENDPOINTS]:
+            # Per endpoint, not per check: one of these walks the whole
+            # inventory, so checking only between checks let it run 800s
+            # past the deadline and be cancelled with everything in it.
+            if budget.expired():
+                break
             if ep.url in tested:
                 continue
             tested.add(ep.url)
@@ -365,7 +384,10 @@ class HTTPProbeScanner(AuthAwareScanner):
         """
         findings: list[DeepFinding] = []
 
+        budget = TimeBudget()
         for ep in rank(endpoints, PriorityDimension.CSRF)[:HTTPProbeConfig.MAX_METHOD_TEST_ENDPOINTS]:
+            if budget.expired():
+                break
             for param in HTTPProbeConfig.CRLF_PARAM_NAMES:
                 for payload in HTTPProbeConfig.CRLF_PAYLOADS:
                     try:
