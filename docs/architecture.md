@@ -72,17 +72,17 @@ ones — rate-limit, auth-bypass, password-reset), each with per-scanner timeout
 │                  DAST Scanners (parallel)             │
 ├──────────┬──────────┬──────────┬──────────┬──────────┤
 │ XSS      │ SQLi     │ CSRF     │ CORS     │ SSRF     │
-│ (600s)   │ (900s)   │ (60s)    │ (60s)    │ (60s)    │
+│ (3600s)  │ (5400s)  │ (600s)   │ (600s)   │ (600s)   │
 ├──────────┼──────────┼──────────┼──────────┼──────────┤
 │ Headers  │ GraphQL  │ Upload   │ Redirect │ Session  │
-│ (60s)    │ (60s)    │ (60s)    │ (60s)    │ (60s)    │
+│ (600s)   │ (600s)   │ (600s)   │ (600s)   │ (600s)   │
 ├──────────┼──────────┼──────────┼──────────┼──────────┤
 │ AuthByp  │ MassAsgn │ RateLimit│ PwdReset │ HTTPProbe│
-│ (300s)   │ (60s)    │ (300s)   │ (60s)    │ (180s)   │
+│ (1800s)  │ (600s)   │ (900s)   │ (600s)   │ (900s)   │
 └──────────┴──────────┴──────────┴──────────┴──────────┘
 ```
 
-**Timeout isolation**: If one scanner hangs or crashes, the rest continue. `run_scanner_safe()` wraps every scanner with timeout + exception handling.
+**Timeout isolation**: If one scanner hangs or crashes, the rest continue. `run_scanner_safe()` wraps every scanner with timeout + exception handling, and publishes its deadline so a scanner short of time returns what it found rather than being cancelled holding it.
 
 **Rate limiting**: All HTTP requests go through `RateLimitedClient` with configurable concurrency and per-request delays. This prevents getting blocked by the target's WAF.
 
@@ -442,16 +442,26 @@ Every scanner runs inside `run_scanner_safe()`:
 ```python
 async def run_scanner_safe(scanner_name, scan_coro, timeout_seconds):
     try:
-        return await asyncio.wait_for(scan_coro, timeout=timeout_seconds)
+        # Publishes the deadline so the scanner can stop itself and RETURN
+        # what it found — a cancel here discards everything.
+        with scanner_deadline(timeout_seconds):
+            return await asyncio.wait_for(scan_coro, timeout=timeout_seconds)
     except asyncio.TimeoutError:
-        logger.warning(f"{scanner_name} timed out after {timeout_seconds}s")
+        logger.warning(f"{scanner_name} timed out — findings discarded")
         return []
     except Exception as e:
         logger.error(f"{scanner_name} failed: {e}")
         return []
 ```
 
-A single scanner failure never kills the scan. Timeouts are per-scanner-type (XSS gets a 600s outer timeout, headers get 60s). XSS also self-limits with an internal time budget that is tighter at quick depth (120s) than deep (600s), since quick skips the static DOM pass (#118).
+A single scanner failure never kills the scan. Timeouts are per-scanner-type
+and generous, because the endpoint caps are gone and time is the only bound
+left: the default is 600s, injection gets 5400s, XSS 3600s.
+
+Reaching the `asyncio.TimeoutError` branch is now a **failure signal**, not
+the ordinary way a scanner ends — it means the scanner did not stop on the
+cooperative deadline, so it either has no `TimeBudget` or blocked between
+checks. See [When a scanner runs out of time](#when-a-scanner-runs-out-of-time).
 
 ### Event-Driven Progress
 
