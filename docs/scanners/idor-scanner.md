@@ -8,7 +8,7 @@ Tests for Insecure Direct Object References by swapping resource identifiers in 
 
 Four test types:
 
-1. **Unauthenticated Access** — Sends requests without any auth headers. If the endpoint returns data, it's publicly accessible when it shouldn't be.
+1. **Unauthenticated Access** — Sends requests without any auth headers. If the endpoint returns data, it's publicly accessible when it shouldn't be. "Returns data" means the JSON body actually carries a value: an endpoint that answers an anonymous request with an empty envelope like `{"user":{}}` is telling you *nobody*, not leaking a record, and is not flagged. The check is structural (any non-empty scalar, anywhere) so it doesn't depend on recognising `data`/`result`/`user` envelope keys.
 
 2. **Path Parameter Swapping** — Changes `/api/tasks/USER-A-TASK-ID` to `/api/tasks/USER-B-TASK-ID`. If data is returned, there's no ownership check.
 

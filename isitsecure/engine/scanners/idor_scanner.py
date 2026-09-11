@@ -387,11 +387,19 @@ class IDORScanner:
 
         content_type = response.headers.get("content-type", "").lower()
 
-        if "application/json" in content_type:
-            return True
-
-        if body.startswith(("{", "[")):
-            return True
+        looks_json = "application/json" in content_type or body.startswith(
+            ("{", "[")
+        )
+        if looks_json:
+            # A 200 with a JSON body is not proof of leaked data. An endpoint
+            # can answer an unauthenticated request with an empty envelope --
+            # Juice Shop's /rest/user/whoami returns {"user":{}} -- which
+            # clears the byte-length gate but carries nothing, and was scored
+            # as an IDOR. Require the decoded body to hold at least one
+            # substantive value, judged by structure alone (any scalar counts;
+            # empty containers, null and blank strings do not) so no envelope
+            # key name has to be guessed.
+            return _json_has_substantive_content(body)
 
         # HTML responses are likely error/redirect pages, not data
         if "text/html" in content_type:
@@ -1260,3 +1268,34 @@ class IDORScanner:
             if target_id in body_preview:
                 return True
         return False
+
+
+def _json_has_substantive_content(body: str) -> bool:
+    """Whether a JSON body carries any real value rather than an empty shell.
+
+    Key names are irrelevant -- only whether some leaf holds data -- so this
+    does not depend on recognising ``data``/``result``/``user`` envelopes.
+    A body that is JSON-shaped but does not decode is treated as content
+    rather than silently dropped.
+    """
+    try:
+        return _has_substantive_value(json.loads(body))
+    except (json.JSONDecodeError, ValueError):
+        return True
+
+
+def _has_substantive_value(value: object) -> bool:
+    """True if ``value`` contains at least one non-empty scalar, recursively.
+
+    Empty containers, ``null`` and blank strings are not substantive; numbers
+    and booleans are -- including ``0`` and ``False``, which are real data.
+    """
+    if isinstance(value, dict):
+        return any(_has_substantive_value(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_has_substantive_value(v) for v in value)
+    if isinstance(value, str):
+        return value.strip() != ""
+    if value is None:
+        return False
+    return True
