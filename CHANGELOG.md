@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.25.8](https://github.com/jaurakunal/isitsecure/compare/v0.25.7...v0.25.8) (2026-09-11)
+
+
+### Bug Fixes
+
+* **idor:** an unauthenticated swap cannot confirm IDOR ([#214](https://github.com/jaurakunal/isitsecure/issues/214)) ([5c0f92e](https://github.com/jaurakunal/isitsecure/commit/5c0f92e93fe88b33ec7700870e9e47419cb476f8))
+
 ## [0.25.7](https://github.com/jaurakunal/isitsecure/compare/v0.25.6...v0.25.7) (2026-09-11)
 
 
