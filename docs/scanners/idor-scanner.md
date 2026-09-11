@@ -10,7 +10,7 @@ Four test types:
 
 1. **Unauthenticated Access** — Sends requests without any auth headers. If the endpoint returns data, it's publicly accessible when it shouldn't be. "Returns data" means the JSON body actually carries a value: an endpoint that answers an anonymous request with an empty envelope like `{"user":{}}` is telling you *nobody*, not leaking a record, and is not flagged. The check is structural (any non-empty scalar, anywhere) so it doesn't depend on recognising `data`/`result`/`user` envelope keys.
 
-2. **Path Parameter Swapping** — Changes `/api/tasks/USER-A-TASK-ID` to `/api/tasks/USER-B-TASK-ID`. If data is returned, there's no ownership check.
+2. **Path Parameter Swapping** — Changes `/api/tasks/USER-A-TASK-ID` to `/api/tasks/USER-B-TASK-ID` and compares the response to the original id's. Different data means the id is a real object reference; identical means it's ignored. Unauthenticated this is only a lead (see risk levels) — confirming an ownership violation needs the cross-user pass.
 
 3. **Query Parameter Swapping** — Changes `?user_id=USER-A` to `?user_id=USER-B`. Targets ID-bearing query parameters.
 
@@ -24,7 +24,7 @@ In **authenticated mode** with two sets of credentials, the scanner performs **c
 - **Content-match guard**: a hit is only reported when User B's response actually contains User A's data, not an empty or generic body
 - Test if User B can do a full-table `SELECT *` via Supabase REST API
 
-Risk levels: **CONFIRMED** (data returned), **LIKELY** (200 status but different response), **POSSIBLE** (suspicious behavior), **SAFE**.
+Risk levels: **CONFIRMED** is reserved for the **cross-user** path (below) — it proves user B can read user A's object. An **unauthenticated** probe cannot reach CONFIRMED or LIKELY: a public catalogue (`/api/Products/{id}`) and a private record (`/api/Recycles/{id}`) both return a different object per id with no auth, and only ownership intent — invisible without credentials — separates them. So an unauthenticated swap that returns *different* data per id is at most **POSSIBLE** (a lead to verify), and an id that returns the *same* response however you change it is **SAFE** (the id is not a real object reference). Real read-IDOR comes from the authenticated cross-user pass.
 
 ## Why It Matters
 

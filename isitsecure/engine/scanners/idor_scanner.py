@@ -159,23 +159,33 @@ class IDORScanner:
         """Run all applicable IDOR tests on a single endpoint."""
         probes: list[IDORProbeResult] = []
 
-        # Test 1: Unauthenticated access
+        # Test 1: Unauthenticated access. Its response to the endpoint's own
+        # URL is the baseline every swap is compared against -- a swapped id
+        # only tells us anything if it returns data that DIFFERS from this.
         unauthed_probe = await self._test_unauthed_access(client, endpoint)
+        original_body = ""
         if unauthed_probe:
             probes.append(unauthed_probe)
+            original_body = unauthed_probe.probed_body_preview
 
         # Test 2: Path parameter swapping
         if endpoint.has_path_params:
-            path_probes = await self._test_path_param_swap(client, endpoint)
+            path_probes = await self._test_path_param_swap(
+                client, endpoint, original_body
+            )
             probes.extend(path_probes)
 
         # Test 3: Query parameter swapping
         if endpoint.query_param_names:
-            query_probes = await self._test_query_param_swap(client, endpoint)
+            query_probes = await self._test_query_param_swap(
+                client, endpoint, original_body
+            )
             probes.extend(query_probes)
 
         # Test 4: Sequential ID enumeration
-        seq_probes = await self._test_sequential_ids(client, endpoint)
+        seq_probes = await self._test_sequential_ids(
+            client, endpoint, original_body
+        )
         probes.extend(seq_probes)
 
         risk_level, confidence = self._assess_risk(probes)
@@ -216,7 +226,10 @@ class IDORScanner:
         )
 
     async def _test_path_param_swap(
-        self, client: RateLimitedClient, endpoint: DiscoveredEndpoint
+        self,
+        client: RateLimitedClient,
+        endpoint: DiscoveredEndpoint,
+        original_body: str = "",
     ) -> list[IDORProbeResult]:
         """Swap path parameter IDs with test values."""
         probes: list[IDORProbeResult] = []
@@ -244,6 +257,7 @@ class IDORScanner:
                     endpoint,
                     modified_url,
                     IDORTestType.PATH_PARAM_SWAP,
+                    original_body,
                 )
                 if probe:
                     probes.append(probe)
@@ -252,7 +266,10 @@ class IDORScanner:
         return probes
 
     async def _test_query_param_swap(
-        self, client: RateLimitedClient, endpoint: DiscoveredEndpoint
+        self,
+        client: RateLimitedClient,
+        endpoint: DiscoveredEndpoint,
+        original_body: str = "",
     ) -> list[IDORProbeResult]:
         """Swap query parameter IDs with test values."""
         probes: list[IDORProbeResult] = []
@@ -280,6 +297,7 @@ class IDORScanner:
                     endpoint,
                     modified_url,
                     IDORTestType.QUERY_PARAM_SWAP,
+                    original_body,
                 )
                 if probe:
                     probes.append(probe)
@@ -288,7 +306,10 @@ class IDORScanner:
         return probes
 
     async def _test_sequential_ids(
-        self, client: RateLimitedClient, endpoint: DiscoveredEndpoint
+        self,
+        client: RateLimitedClient,
+        endpoint: DiscoveredEndpoint,
+        original_body: str = "",
     ) -> list[IDORProbeResult]:
         """Try sequential numeric IDs on endpoints with numeric path segments."""
         probes: list[IDORProbeResult] = []
@@ -322,6 +343,7 @@ class IDORScanner:
                     endpoint,
                     modified_url,
                     IDORTestType.SEQUENTIAL_ID_ENUM,
+                    original_body,
                 )
                 if probe:
                     probes.append(probe)
@@ -335,8 +357,17 @@ class IDORScanner:
         endpoint: DiscoveredEndpoint,
         modified_url: str,
         test_type: IDORTestType,
+        original_body: str = "",
     ) -> IDORProbeResult | None:
-        """Make a request to modified URL and compare with expectations."""
+        """Request the swapped-id URL and compare it to the original response.
+
+        ``response_differs`` used to be set to ``data_returned`` -- the method
+        never actually compared anything, so an endpoint that ignores the id
+        and returns the same payload for every value counted as a swap that
+        "differs". It now means what it says: the swapped id returned data AND
+        that data is genuinely different from the original id's response. An
+        identical response means the id is not a real object reference.
+        """
         try:
             response = await client.request(
                 endpoint.method.value, modified_url
@@ -350,15 +381,18 @@ class IDORScanner:
             )
 
         data_returned = self._response_has_data(response)
+        swapped_body = response.text[: IDORConfig.MAX_RESPONSE_BODY_LOG]
+        differs = data_returned and _bodies_differ(original_body, swapped_body)
 
         return IDORProbeResult(
             original_url=endpoint.url,
             probed_url=modified_url,
             test_type=test_type,
             probed_status=response.status_code,
-            probed_body_preview=response.text[: IDORConfig.MAX_RESPONSE_BODY_LOG],
+            original_body_preview=original_body,
+            probed_body_preview=swapped_body,
             data_returned=data_returned,
-            response_differs=data_returned,
+            response_differs=differs,
         )
 
     # --- Helpers ---
@@ -419,35 +453,36 @@ class IDORScanner:
         if not data_probes:
             return IDORRiskLevel.SAFE, 0.0
 
-        # Check for data returned on swapped IDs
-        swap_probes = [
+        # An UNAUTHENTICATED probe cannot tell a genuine IDOR from data that is
+        # public by design. Juice Shop's /api/Products/{id} (public catalogue)
+        # and /api/Recycles/{id} (a user's private orders) both return a
+        # different record per id with no auth, and only ownership intent --
+        # invisible from here -- separates them. So no unauthenticated read is
+        # CONFIRMED or LIKELY: that verdict belongs to the cross-user path
+        # (scan_cross_user*), which proves user B can read user A's object.
+        #
+        # The strongest thing this path can say is that the endpoint serves
+        # enumerable, id-keyed data (swapping the id returns *different* real
+        # data, so the id is a genuine object reference) -- a lead worth a
+        # manual look, POSSIBLE, not an emitted finding. Everything else,
+        # including an id that is ignored (swaps do not differ) or a plain
+        # public read, is SAFE for IDOR purposes.
+        enumerable = [
             p for p in data_probes
-            if p.test_type in (
+            if p.response_differs and p.test_type in (
                 IDORTestType.PATH_PARAM_SWAP,
                 IDORTestType.QUERY_PARAM_SWAP,
                 IDORTestType.SEQUENTIAL_ID_ENUM,
             )
         ]
 
-        if swap_probes:
+        if enumerable:
             return (
-                IDORRiskLevel.CONFIRMED,
-                IDORConfig.CONFIDENCE_CONFIRMED_IDOR,
+                IDORRiskLevel.POSSIBLE,
+                IDORConfig.CONFIDENCE_POSSIBLE_IDOR,
             )
 
-        # Unauthed access returning data
-        unauthed_probes = [
-            p for p in data_probes
-            if p.test_type == IDORTestType.UNAUTHED_ACCESS
-        ]
-
-        if unauthed_probes:
-            return (
-                IDORRiskLevel.LIKELY,
-                IDORConfig.CONFIDENCE_LIKELY_IDOR,
-            )
-
-        return IDORRiskLevel.POSSIBLE, IDORConfig.CONFIDENCE_POSSIBLE_IDOR
+        return IDORRiskLevel.SAFE, 0.0
 
     def _build_summary(
         self,
@@ -1299,3 +1334,16 @@ def _has_substantive_value(value: object) -> bool:
     if value is None:
         return False
     return True
+
+
+def _bodies_differ(original: str, swapped: str) -> bool:
+    """Whether two response bodies carry different content.
+
+    Compared with all whitespace removed, so a formatting-only change (a
+    trailing newline, indentation) is not read as different content. With no
+    original captured we cannot claim a difference, so we do not -- the swap
+    then contributes no "differs" signal rather than a false one.
+    """
+    if not original:
+        return False
+    return "".join(original.split()) != "".join(swapped.split())
