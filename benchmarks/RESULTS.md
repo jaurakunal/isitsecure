@@ -142,13 +142,19 @@ claims, hand-verified against the live app:
 |---|---|---|
 | `/api/Recycles/1` | `{"UserId":2,"AddressId":4,…}` | **real** — another user's record, unauthenticated |
 | `/rest/memories` | `{"UserId":13,…,"email":…}` | **real** — leaks users and emails |
-| `/rest/user/whoami` | `{"user":{}}` | **false positive** |
+| `/rest/user/whoami` | `{"user":{}}` | ~~false positive~~ **fixed** — empty envelopes no longer count as data |
 | `/api/Deliverys/1` | `{"name":"One Day Delivery","price":0.99}` | **false positive** — public catalogue |
 | `/api/Products/1` | public product | **false positive** — public catalogue |
 
-The `whoami` case has a specific cause worth recording: `_response_has_data` is
-a *length* test standing in for a *content* test — any JSON body of at least 10
-bytes counts as data, and `{"user":{}}` is 11. The remaining three unmatched are
+The `whoami` case had a specific cause: `_response_has_data` was a *length* test
+standing in for a *content* test — any JSON body of at least 10 bytes counted as
+data, and `{"user":{}}` is 11. **Fixed** — it now requires the decoded body to
+hold a substantive value (any scalar; empty containers, null and blank strings
+do not count), judged by structure so no envelope key name is guessed. The
+`Deliverys`/`Products` pair is a *different* bug — a swapped id returns the same
+public-catalogue record, and the swap probe reports "differs" whenever data
+comes back rather than comparing it to the original; that needs response
+discrimination and is still open. The remaining three unmatched are
 real-but-unscored (localStorage token, missing HSTS/CSP, wildcard CORS).
 
 > **`--probe-writes` takes ~72 minutes** (measured: injection 39 min, IDOR 14,
