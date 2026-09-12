@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.25.9](https://github.com/jaurakunal/isitsecure/compare/v0.25.8...v0.25.9) (2026-09-12)
+
+
+### Bug Fixes
+
+* **idor:** the mutation probe must not mistake the SPA shell for a write ([#216](https://github.com/jaurakunal/isitsecure/issues/216)) ([33dcfc9](https://github.com/jaurakunal/isitsecure/commit/33dcfc9c097751c4e40da107d6d30cf8bcb66119))
+
 ## [0.25.8](https://github.com/jaurakunal/isitsecure/compare/v0.25.7...v0.25.8) (2026-09-11)
 
 
