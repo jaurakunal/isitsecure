@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.26.0](https://github.com/jaurakunal/isitsecure/compare/v0.25.9...v0.26.0) (2026-09-12)
+
+
+### Features
+
+* **idor:** read-back verification for mutation-IDOR findings ([#218](https://github.com/jaurakunal/isitsecure/issues/218)) ([2c1eae0](https://github.com/jaurakunal/isitsecure/commit/2c1eae02a5c2fa84fba95e6c4db682130c978e89))
+
 ## [0.25.9](https://github.com/jaurakunal/isitsecure/compare/v0.25.8...v0.25.9) (2026-09-12)
 
 
