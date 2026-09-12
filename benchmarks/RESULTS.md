@@ -16,7 +16,7 @@ _Runs: 2026-09 · `--llm none` (pure DAST detection, no LLM) · Juice Shop pinne
 |---|---|--:|--:|--:|
 | `juiceshop` | url-only | **24/45 (53%)** — per-challenge, deterministic | idor read-FPs removed (see below) | 28 |
 | `juiceshop-writes` | url-only + `--probe-writes` | **30/45 (67%)** | mutation-IDOR shell-FPs fixed; idor over-credit removed | 73 |
-| `juiceshop-auth` | authenticated, two-user | **29/45 (64%)** | not yet measured | 35 |
+| `juiceshop-auth` | authenticated, two-user | **32/45 (71%)** | not yet measured | 37 |
 | `vampi-vulnerable` | url-only | **2/3** (SQLi, headers; IDOR needs auth) | — | 8–10 |
 | `vampi-secure` | url-only | — | **0** (was 2 IDOR — fixed) | 7–9 |
 | `nodegoat-auth` | authenticated | **3/3** (headers + injection + XSS) | unmeasured | 19 |
@@ -85,10 +85,10 @@ registered users.
 | csrf | 0/1 | **1/1** | 0/1 |
 | ssti | 0/1 | **1/1** | 0/1 |
 | mass_assignment | 0/2 | **1/2** | 0/2 |
-| ssrf | 0/2 | 0/2 | 0/2 |
+| ssrf | 0/2 | 0/2 | **2/2**◊ |
 | auth | 0/1 | 0/1 | 0/1 |
 | rate_limit | 0/1 | 0/1 | 0/1 |
-| **total** | **24/45** | **30/45** | **29/45** |
+| **total** | **24/45** | **30/45** | **32/45** |
 
 † `--probe-writes` idor comes from the **mutation** path (PUT/PATCH with a swapped id). It had the same `2xx = confirmed` bug the read path did, made worse by not rejecting the SPA shell: an Angular catch-all serves index.html (200 text/html) for any unmatched route, so a PATCH to `/search/1`, `/basket/1`, `/orders/1` … read as a CRITICAL unauthorized write. **Fixed** — the mutation probes now reject the shell, taking mutation-IDOR findings from 15 to 2 (13 were index.html). The 2 that remain are **read-back verified**: the probe writes a canary into an existing non-sensitive field, re-reads it, and restores the original value. Both are confirmed **persisted** (CRITICAL, 0.95) and restored: `PUT /api/Products/1` (canary in `name` — the changeProduct exploit) and `PUT /api/Hints/1` (canary in `text`). Hints has an auth-gated READ (401) but an open WRITE, so read-back confirms it from the write's own echoed response rather than a follow-up GET — a write-open, read-gated endpoint is verified, not downgraded. Each endpoint yields exactly one finding: the probe skips self-swaps (id→same id is not a cross-object test) and stops after the first accepted swap, so it no longer emits duplicate "swapped ID" findings or repeats the destructive read-back. Non-idor wobble between runs (±1–2 in xss/ssti) is canary/run variance, not this change.
 
@@ -105,6 +105,20 @@ cross-user; basketAccess has no finding on the real `/rest/basket/:id` route).
 A regression test (`tests/benchmarks/test_juiceshop_ground_truth.py`) now fails
 if any single endpoint credits two idor challenges.
 
+◊ **SSRF (both challenges) needs authentication.** Both live on `POST
+/profile/image/url` (`imageUrl`): `ssrfChallenge` fetches an internal resource,
+`svgInjectionChallenge`/Cross-Site-Imaging fetches an external one — the same
+blind sink, in a server-rendered form field. Detection needs three things the
+url-only path lacks: the sink is a **POST body** param (the query injector never
+reaches it), it is **blind** (the response 302s with no echo, so it is confirmed
+out-of-band via an OOB callback the server fetches), and the route is
+**auth-gated by cookie** (a bearer header alone gets 500). The REST-login session
+now carries the token as a cookie, the OOB SSRF injector POSTs the callback into
+URL-shaped body params, and it self-discovers the `/profile` form over HTTP when
+the browser crawler cannot log in. One OOB finding on the real endpoint credits
+both challenges. Live-proven: the server fetched the callback (an outbound hit),
+confirming the blind SSRF.
+
 **Biggest gaps (the recall levers):**
 
 - **XSS is 1/7 url-only, 4/7 with `--probe-writes`** — the reflected/DOM
@@ -119,7 +133,7 @@ if any single endpoint credits two idor challenges.
   authenticates (returns a session token) where a benign credential is rejected —
   reaching the login POST that url-only discovery can't recover from the SPA
   bundle ([#2](https://github.com/jaurakunal/isitsecure/issues/2)). The remaining
-  recall levers are SSRF (0/2), mass assignment (0/2) and the remaining XSS
+  recall levers are mass assignment (1/2), rate limiting, and the remaining XSS
   variants.
 
 - **file_upload 0/4 and XXE 0/2 are fixed.** Neither was a detection gap: the
@@ -197,9 +211,10 @@ and 3/5 until the `basketAccess` over-credit (‡) was removed: there is no
 finding on the real `/rest/basket/:id` route, so that challenge is honestly a
 gap.
 
-It is now harness-scored at **29/45 (64%)** rather than measured by hand, and
-runs in one command like the others. Note it scores near
-`--probe-writes` (30/45) while finding different things — authentication buys
+It is now harness-scored at **32/45 (71%)** rather than measured by hand, and
+runs in one command like the others. Note it scores above
+`--probe-writes` (30/45) — it adds the two profile-image SSRF challenges and the
+cross-user object-access findings while finding different things — authentication buys
 the object-access challenges, writes buy the stored/CSRF/SSTI ones. Nothing
 stops both being used together; that combination has not been measured.
 

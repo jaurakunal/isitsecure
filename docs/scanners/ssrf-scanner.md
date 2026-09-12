@@ -13,6 +13,19 @@ Tests for Server-Side Request Forgery by injecting internal/cloud IP addresses i
 
 The scanner also integrates with **OOB callbacks** for blind SSRF — where the server fetches the URL but doesn't return the response content. OOB detection proves the fetch happened via DNS/HTTP interaction with the callback server.
 
+### URL sinks in POST bodies (not just query strings)
+
+Many real SSRF sinks are a **form field**, not a query parameter — e.g. an
+`imageUrl` a profile page POSTs so the server fetches a remote avatar. The
+scanner recognises URL-shaped param names by substring (`imageUrl`, `avatarUrl`,
+`callbackUri`, …), and the OOB path POSTs the callback URL into those body
+fields, form-encoded, using the authenticated session (including its **cookie** —
+server-rendered routes often authenticate by cookie, not a bearer header). When
+the crawler can't reach an auth-gated page, the OOB SSRF step fetches the common
+authenticated pages over HTTP and reads their `<form>` targets directly, so the
+sink is found regardless of the crawl. A single OOB callback from the server
+confirms the blind SSRF.
+
 ## Why It Matters
 
 SSRF lets attackers use your server as a proxy to reach internal resources:
