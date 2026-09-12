@@ -48,14 +48,14 @@ DETECTABLE: dict[str, tuple[str, str | None, bool]] = {
     "httpHeaderXssChallenge": ("xss", None, False),
     "usernameXssChallenge": ("xss", None, True),
     # --- Broken Access Control ---
-    "basketAccessChallenge": ("idor", "basket", True),
+    "basketAccessChallenge": ("idor", "rest/basket/", True),
     "basketManipulateChallenge": ("idor", "BasketItem", True),
     "csrfChallenge": ("csrf", None, True),
     "ssrfChallenge": ("ssrf", None, True),
     "forgedFeedbackChallenge": ("idor", "Feedback", True),
-    "forgedReviewChallenge": ("idor", "products", True),
+    "forgedReviewChallenge": ("idor", "products/reviews", True),
     "feedbackChallenge": ("mass_assignment", "Feedback", False),
-    "changeProductChallenge": ("idor", "Product", True),
+    "changeProductChallenge": ("idor", "api/Products/", True),
     # --- Security Misconfiguration ---
     "errorHandlingChallenge": ("info_disclosure", None, False),
     "deprecatedInterfaceChallenge": ("file_upload", "file-upload", False),
