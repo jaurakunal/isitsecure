@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.0](https://github.com/jaurakunal/isitsecure/compare/v0.26.2...v0.27.0) (2026-09-12)
+
+
+### Features
+
+* **ssrf:** detect blind SSRF in POST-body URL params (Juice Shop 0/2 -&gt; 2/2) ([#224](https://github.com/jaurakunal/isitsecure/issues/224)) ([2d19c99](https://github.com/jaurakunal/isitsecure/commit/2d19c99e03304756fafcdfd034ea71ffac91b820))
+
 ## [0.26.2](https://github.com/jaurakunal/isitsecure/compare/v0.26.1...v0.26.2) (2026-09-12)
 
 
