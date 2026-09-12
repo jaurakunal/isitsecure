@@ -50,7 +50,7 @@ llm = [
 # Pinned <2: mcp 2.0.0 removed `mcp.server.fastmcp` (breaking); we use the 1.x
 # FastMCP API. Revisit for a 2.x migration separately.
 mcp = [
-    "mcp>=1.28.1,<2",
+    "mcp>=1.28.1,<3",
 ]
 # Deterministic taint/injection SAST via Semgrep (#4). Kept SEPARATE from [all]:
 # semgrep pins a heavy, tightly-constrained dependency tree (rich/click/boltons/
