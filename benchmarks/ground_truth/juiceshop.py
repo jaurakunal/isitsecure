@@ -59,7 +59,7 @@ DETECTABLE: dict[str, tuple[str, str | None, bool]] = {
     # --- Security Misconfiguration ---
     "errorHandlingChallenge": ("info_disclosure", None, False),
     "deprecatedInterfaceChallenge": ("file_upload", "file-upload", False),
-    "svgInjectionChallenge": ("ssrf", "file-upload", True),
+    "svgInjectionChallenge": ("ssrf", "image/url", True),
     # --- Unvalidated Redirects ---
     "redirectChallenge": ("open_redirect", "redirect", False),
     "redirectCryptoCurrencyChallenge": ("open_redirect", "redirect", False),

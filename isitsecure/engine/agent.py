@@ -12,7 +12,7 @@ import logging
 import re
 import time
 from typing import TYPE_CHECKING, AsyncGenerator
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlencode
 
 from isitsecure.engine.code_analysis.models import CodeFinding
 from isitsecure.engine.scan_context import ScanContext
@@ -629,7 +629,14 @@ class DeepSecurityScanAgent:
                 ctx.oob_service = None
 
             if ctx.oob_service and ctx.oob_service.is_registered:
-                await self._inject_oob_payloads(ctx.oob_service, ctx.endpoints)
+                auth_headers = None
+                if ctx.session_a and ctx.session_a.headers:
+                    auth_headers = dict(ctx.session_a.headers)
+                elif ctx.crawl_result and ctx.crawl_result.auth_headers:
+                    auth_headers = dict(ctx.crawl_result.auth_headers)
+                await self._inject_oob_payloads(
+                    ctx.oob_service, ctx.endpoints, auth_headers, ctx.target_url,
+                )
 
     async def _phase_dast_scanners(
         self, ctx: ScanContext
@@ -2120,17 +2127,25 @@ class DeepSecurityScanAgent:
     async def _inject_oob_payloads(
         oob_service: OOBCallbackService,
         endpoints: list[DiscoveredEndpoint],
+        auth_headers: dict[str, str] | None = None,
+        base_url: str | None = None,
     ) -> None:
         """Inject OOB callback URLs for blind SSRF, injection, XXE, and XSS.
 
-        Delegates to three strategy methods (SRP):
-        1. ``_oob_ssrf_endpoints`` — URL param injection for SSRF scanner
-        2. ``_oob_post_payloads`` — injection/XXE/XSS via POST bodies
+        Delegates to strategy methods (SRP):
+        1. ``_oob_ssrf_endpoints`` — URL param injection (query string) for SSRF
+        2. ``_oob_ssrf_post_bodies`` — URL param injection into POST/PUT bodies
+           (e.g. Juice Shop's ``imageUrl`` on ``POST /profile/image/url``), the
+           blind-SSRF sink that lives in a form field, not a query string
+        3. ``_oob_post_payloads`` — injection/XXE/XSS via POST bodies
         """
         from isitsecure.engine.constants import OOBConfig
 
         oob_count = DeepSecurityScanAgent._oob_ssrf_endpoints(
             oob_service, endpoints,
+        )
+        oob_count += await DeepSecurityScanAgent._oob_ssrf_post_bodies(
+            oob_service, endpoints, auth_headers, base_url,
         )
         oob_count += await DeepSecurityScanAgent._oob_post_payloads(
             oob_service, endpoints,
@@ -2191,6 +2206,160 @@ class DeepSecurityScanAgent:
                         ))
                         count += 1
 
+        return count
+
+    @staticmethod
+    def _is_url_param(name: str) -> bool:
+        """Whether a parameter name plausibly carries a URL the server fetches.
+
+        Substring match against the known URL param names, so ``imageUrl``,
+        ``avatarUrl``, ``callbackUri`` etc. are caught -- an exact-match list
+        misses every camelCase compound, which is where the real sinks are
+        (Juice Shop's SSRF is ``imageUrl``, not ``url``).
+        """
+        from isitsecure.engine.constants import SSRFConfig
+
+        low = name.lower()
+        return any(tok in low for tok in SSRFConfig.URL_PARAM_NAMES)
+
+    @staticmethod
+    async def _discover_authed_forms(
+        base_url: str,
+        auth_headers: dict[str, str],
+    ) -> list[DiscoveredEndpoint]:
+        """Fetch the common authenticated pages and read their HTML forms.
+
+        A safety net for server-rendered form sinks the browser crawler does
+        not reach (e.g. when its login flow does not fit an SPA login). Pulls
+        each page over HTTP with the session and extracts <form action> targets.
+        """
+        from isitsecure.engine.constants import (
+            AuthenticatedCrawlerConfig,
+            DeepScanConfig,
+            OOBConfig,
+            SharedPatterns,
+        )
+        from isitsecure.engine.shared.html_endpoint_extractor import (
+            extract_html_endpoints,
+        )
+        from isitsecure.engine.shared.rate_limited_client import (
+            RateLimitedClient,
+        )
+
+        found: list[DiscoveredEndpoint] = []
+        base = base_url.rstrip("/")
+        try:
+            async with RateLimitedClient(
+                max_concurrent=SharedPatterns.DEFAULT_MAX_CONCURRENT,
+                delay_seconds=SharedPatterns.DEFAULT_PROBE_DELAY,
+                timeout_seconds=OOBConfig.HTTP_TIMEOUT_SECONDS,
+                user_agent=DeepScanConfig.USER_AGENT,
+                extra_headers=auth_headers,
+            ) as client:
+                for route in AuthenticatedCrawlerConfig.COMMON_AUTH_PATHS:
+                    url = f"{base}{route}"
+                    try:
+                        resp = await client.get(url)
+                    except Exception:
+                        continue
+                    ctype = resp.headers.get("content-type", "").lower()
+                    if resp.status_code >= 400 or "html" not in ctype:
+                        continue
+                    found.extend(extract_html_endpoints(resp.text, url))
+        except Exception:
+            return found
+        return found
+
+    @staticmethod
+    async def _oob_ssrf_post_bodies(
+        oob_service: OOBCallbackService,
+        endpoints: list[DiscoveredEndpoint],
+        auth_headers: dict[str, str] | None = None,
+        base_url: str | None = None,
+    ) -> int:
+        """Blind SSRF where the URL sink is a form field, not a query param.
+
+        A server-rendered form like Juice Shop's ``POST /profile/image/url``
+        takes the fetched URL in a body field (``imageUrl``); the query-string
+        injector never reaches it. For each write endpoint with a URL-ish body
+        param, POST the OOB callback URL (form-encoded, with auth) so the poll
+        confirms the server fetched it. Only fires when the param is URL-shaped,
+        so it does not blast every form field.
+
+        Returns the number of payloads sent.
+        """
+        from isitsecure.engine.constants import (
+            DeepScanConfig,
+            OOBConfig,
+            SharedPatterns,
+        )
+        from isitsecure.engine.shared.rate_limited_client import (
+            RateLimitedClient,
+        )
+
+        candidates = list(endpoints)
+        # The URL-fetch sink often lives on an auth-gated, server-rendered form
+        # (Juice Shop's /profile/image/url), which the browser crawler misses
+        # when its login flow does not fit the app. When authenticated, pull
+        # the common auth pages over HTTP with the session and read their forms
+        # directly, so the sink is found regardless of the crawler.
+        if auth_headers and base_url:
+            candidates += await DeepSecurityScanAgent._discover_authed_forms(
+                base_url, auth_headers,
+            )
+
+        targets: list[tuple[DiscoveredEndpoint, str]] = []
+        seen: set[str] = set()
+        for ep in candidates:
+            if ep.method.value not in OOBConfig.WRITE_METHODS:
+                continue
+            if ep.source_pattern == OOBConfig.SOURCE_PATTERN_SSRF:
+                continue
+            for param in ep.query_param_names:
+                key = f"{ep.method.value}:{ep.url}:{param}"
+                if DeepSecurityScanAgent._is_url_param(param) and key not in seen:
+                    seen.add(key)
+                    targets.append((ep, param))
+        if not targets:
+            return 0
+
+        headers = {
+            SharedPatterns.HEADER_CONTENT_TYPE:
+                "application/x-www-form-urlencoded",
+        }
+        if auth_headers:
+            headers.update(auth_headers)
+
+        count = 0
+        try:
+            async with RateLimitedClient(
+                max_concurrent=SharedPatterns.DEFAULT_MAX_CONCURRENT,
+                delay_seconds=SharedPatterns.DEFAULT_PROBE_DELAY,
+                timeout_seconds=OOBConfig.HTTP_TIMEOUT_SECONDS,
+                user_agent=DeepScanConfig.USER_AGENT,
+            ) as client:
+                for ep, param in targets[: OOBConfig.MAX_OOB_POST_ENDPOINTS]:
+                    path = urlparse(ep.url).path
+                    callback = oob_service.generate_url(
+                        scanner_name="ssrf",
+                        payload_id=f"{param}-{path}",
+                        endpoint_url=ep.url,
+                        param_name=param,
+                        description=OOBConfig.SSRF_OOB_LABEL,
+                    )
+                    if not callback:
+                        continue
+                    try:
+                        await client.request(
+                            ep.method.value, ep.url,
+                            content=urlencode({param: callback}),
+                            headers=headers,
+                        )
+                        count += 1
+                    except Exception:
+                        pass
+        except Exception:
+            return count
         return count
 
     @staticmethod

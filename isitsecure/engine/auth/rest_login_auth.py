@@ -102,7 +102,16 @@ class RestLoginAuthProvider:
         return AuthSession(
             user_id=str(user_id),
             access_token=token,
-            headers={"Authorization": f"Bearer {token}"},
+            # Server-rendered endpoints (profile forms, upload handlers) often
+            # authenticate by cookie, not the Authorization header -- Juice
+            # Shop's /profile/image/url returns 500 to a bearer-only request but
+            # accepts the same JWT as a `token` cookie. Mirror the token into the
+            # common JWT-cookie names alongside the header so downstream probes
+            # can reach those routes; unknown cookies are harmlessly ignored.
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Cookie": f"token={token}; access_token={token}",
+            },
             user_email=identifier if "@" in identifier else None,
             provider=AuthProvider.TOKEN,
         )
