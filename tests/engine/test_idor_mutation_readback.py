@@ -116,3 +116,38 @@ class TestVerifyMutationPersists:
             client, "http://t/api/x/1", "PUT"
         )
         assert verdict == "no_effect"
+
+
+class TestReadGatedWriteOpen:
+    """A resource whose READ is auth-gated but whose WRITE is open (the PUT
+    returns the object) must still be confirmed, from the write response —
+    not downgraded for lack of a readable GET. This is Juice Shop /api/Hints/1.
+    """
+
+    async def test_confirmed_from_write_response_when_get_is_401(self) -> None:
+        state = {"text": "original hint"}
+        async def fake_request(m, url, **kw):
+            if m == "GET":
+                return _resp(status=401, ctype="text/html", body="Unauthorized")
+            sent = json.loads(kw["content"])
+            state.update(sent)
+            # write echoes the current object (Prefer: return=representation)
+            return _resp(body=json.dumps({"data": {"id": 1, **state}}))
+        client = AsyncMock()
+        client.request = AsyncMock(side_effect=fake_request)
+        verdict, detail = await IDORScanner()._verify_mutation_persists(
+            client, "http://t/api/Hints/1", "PUT",
+            initial_body='{"data":{"id":1,"text":"original hint"}}',
+        )
+        assert verdict == "persisted"
+        assert detail == "text"
+        # restored to the original learned from the initial write body
+        assert state["text"] == "original hint"
+
+    async def test_unknown_when_read_gated_and_no_initial_body(self) -> None:
+        client = AsyncMock()
+        client.request = AsyncMock(return_value=_resp(status=401, ctype="text/html", body="no"))
+        verdict, _ = await IDORScanner()._verify_mutation_persists(
+            client, "http://t/api/Hints/1", "PUT", initial_body=""
+        )
+        assert verdict == "unknown"

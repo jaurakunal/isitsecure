@@ -557,6 +557,12 @@ class IDORScanner:
                 continue
 
             for test_id in test_ids[: IDORConfig.MAX_MUTATION_PROBES_PER_ENDPOINT]:
+                # Swapping the id to its own value is not a cross-object test --
+                # it writes back to the same resource and would report a
+                # "swapped ID" finding where no swap happened. Skip it.
+                if test_id == segment:
+                    continue
+
                 modified_segments = list(segments)
                 modified_segments[i] = test_id
                 modified_path = "/".join(modified_segments)
@@ -564,20 +570,26 @@ class IDORScanner:
                     parsed._replace(path=modified_path)
                 )
 
-                # Test PUT/PATCH mutation IDOR
+                # One finding per (endpoint, kind) is enough: once a swapped id
+                # is accepted, testing more ids just re-proves it and multiplies
+                # the destructive read-back writes against the target.
+                write_finding = None
                 for method in IDORConfig.MUTATION_WRITE_METHODS:
-                    finding = await self._probe_mutation_write(
+                    write_finding = await self._probe_mutation_write(
                         client, endpoint, modified_url, method
                     )
-                    if finding:
-                        findings.append(finding)
+                    if write_finding:
+                        findings.append(write_finding)
+                        break
 
-                # Test DELETE mutation IDOR
                 delete_finding = await self._probe_mutation_delete(
                     client, endpoint, modified_url
                 )
                 if delete_finding:
                     findings.append(delete_finding)
+
+                if write_finding or delete_finding:
+                    break  # endpoint demonstrated; stop cycling test ids
 
         return findings
 
@@ -619,7 +631,7 @@ class IDORScanner:
         # write a canary into an existing field and confirm it sticks, then
         # restore. Confirmed => CRITICAL; merely accepted => a downgraded lead.
         verdict, detail = await self._verify_mutation_persists(
-            client, modified_url, method
+            client, modified_url, method, response.text
         )
 
         if verdict == "persisted":
@@ -665,54 +677,69 @@ class IDORScanner:
         client: RateLimitedClient,
         url: str,
         method: str,
+        initial_body: str = "",
     ) -> tuple[str, str]:
         """Confirm whether an accepted write actually changed the resource.
 
         Returns (verdict, detail) where verdict is:
-          "persisted" — a canary written into an existing field was read back
-                        unchanged (then restored). The vuln is confirmed.
+          "persisted" — a canary written into an existing field was echoed back
+                        (by the write response or a re-read), then restored.
           "no_effect" — a write demonstrably left the resource unchanged.
           "unknown"   — could not verify (no JSON, no safe field, request error).
 
-        The confirming path mutates one non-sensitive field transiently and
-        restores it. The fallback path (no safe field) only sends the original
-        no-op body and compares before/after, mutating nothing.
+        The object's fields come from a GET when it is readable, and otherwise
+        from the initial write's own response body -- so an endpoint whose READ
+        is auth-gated but whose WRITE is open (the resource is returned by the
+        PUT itself) is still verified, rather than downgraded for lack of a GET.
+        Persistence is confirmed by the canary being echoed in the write
+        response OR a follow-up read; the original value is always restored.
         """
         headers = {
             "Content-Type": IDORConfig.MUTATION_CONTENT_TYPE,
             "Prefer": IDORConfig.MUTATION_PREFER_HEADER,
         }
+        # Learn the object from a GET if we can read it, else from the write
+        # response we already have (a write-open, read-gated endpoint).
+        obj = None
         try:
             base = await client.request("GET", url)
-        except httpx.HTTPError as e:
-            return "unknown", f"baseline GET failed: {e}"
-        if base.status_code >= 400 or _is_spa_shell(base):
-            return "unknown", f"baseline GET {base.status_code}"
-
-        obj = _mutation_data_object(base.text)
+            if base.status_code < 400 and not _is_spa_shell(base):
+                obj = _mutation_data_object(base.text)
+        except httpx.HTTPError:
+            obj = None
+        readable = obj is not None
         if obj is None:
-            return "unknown", "baseline response is not a JSON object"
+            obj = _mutation_data_object(initial_body)
+        if obj is None:
+            return "unknown", "no readable resource object to verify against"
 
         field, original = _pick_writable_field(obj)
         if field is None:
-            return await self._verify_by_noop(client, url, method, base.text, headers)
+            if readable:
+                return await self._verify_by_noop(
+                    client, url, method, json.dumps({"data": obj}), headers
+                )
+            return "unknown", "no safe field to canary, read auth-gated"
 
         canary = IDORConfig.MUTATION_CANARY_PREFIX + uuid4().hex[:8]
         persisted = False
         try:
-            await client.request(
+            write = await client.request(
                 method, url, content=json.dumps({field: canary}), headers=headers
             )
-            after = await client.request("GET", url)
-            after_obj = _mutation_data_object(after.text)
-            persisted = (
-                after_obj is not None
-                and str(after_obj.get(field)) == canary
-            )
+            # The write's own response echoing the canary is proof enough; only
+            # re-read when it does not (some servers return minimal responses).
+            write_obj = _mutation_data_object(write.text)
+            persisted = write_obj is not None and str(write_obj.get(field)) == canary
+            if not persisted and readable:
+                after = await client.request("GET", url)
+                after_obj = _mutation_data_object(after.text)
+                persisted = (
+                    after_obj is not None and str(after_obj.get(field)) == canary
+                )
         except httpx.HTTPError as e:
             return "unknown", f"canary write failed: {e}"
         finally:
-            # Best-effort restore of the original value.
             try:
                 await client.request(
                     method, url,
