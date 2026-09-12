@@ -15,8 +15,8 @@ _Runs: 2026-09 · `--llm none` (pure DAST detection, no LLM) · Juice Shop pinne
 | Target | Mode | Recall | False positives | Findings |
 |---|---|--:|--:|--:|
 | `juiceshop` | url-only | **24/45 (53%)** — per-challenge, deterministic | idor read-FPs removed (see below) | 28 |
-| `juiceshop-writes` | url-only + `--probe-writes` | **31/45 (69%)** | mutation-IDOR shell-FPs fixed (see below) | 73 |
-| `juiceshop-auth` | authenticated, two-user | **30/45 (67%)** | not yet measured | 35 |
+| `juiceshop-writes` | url-only + `--probe-writes` | **30/45 (67%)** | mutation-IDOR shell-FPs fixed; idor over-credit removed | 73 |
+| `juiceshop-auth` | authenticated, two-user | **29/45 (64%)** | not yet measured | 35 |
 | `vampi-vulnerable` | url-only | **2/3** (SQLi, headers; IDOR needs auth) | — | 8–10 |
 | `vampi-secure` | url-only | — | **0** (was 2 IDOR — fixed) | 7–9 |
 | `nodegoat-auth` | authenticated | **3/3** (headers + injection + XSS) | unmeasured | 19 |
@@ -80,7 +80,7 @@ registered users.
 | open_redirect | 2/2 | 2/2 | 2/2 |
 | info_disclosure | 2/2 | 2/2 | 2/2 |
 | nosql | 2/3 | 2/3 | 2/3 |
-| idor | **0/5** | 2/5† | 3/5 |
+| idor | **0/5** | 1/5† | 2/5 |
 | xss | 1/7 | **4/7** | 2/7 |
 | csrf | 0/1 | **1/1** | 0/1 |
 | ssti | 0/1 | **1/1** | 0/1 |
@@ -88,9 +88,22 @@ registered users.
 | ssrf | 0/2 | 0/2 | 0/2 |
 | auth | 0/1 | 0/1 | 0/1 |
 | rate_limit | 0/1 | 0/1 | 0/1 |
-| **total** | **24/45** | **32/45** | **30/45** |
+| **total** | **24/45** | **30/45** | **29/45** |
 
 † `--probe-writes` idor comes from the **mutation** path (PUT/PATCH with a swapped id). It had the same `2xx = confirmed` bug the read path did, made worse by not rejecting the SPA shell: an Angular catch-all serves index.html (200 text/html) for any unmatched route, so a PATCH to `/search/1`, `/basket/1`, `/orders/1` … read as a CRITICAL unauthorized write. **Fixed** — the mutation probes now reject the shell, taking mutation-IDOR findings from 15 to 2 (13 were index.html). The 2 that remain are **read-back verified**: the probe writes a canary into an existing non-sensitive field, re-reads it, and restores the original value. `PUT /api/Products/1` is confirmed **persisted** (CRITICAL, 0.95 — the canary stuck in `name`, then was restored — this is the changeProduct exploit); `PUT /api/Hints/1` can't be confirmed because its read is auth-gated (401), so it is downgraded to a HIGH lead (0.5) rather than claimed CRITICAL. Non-idor wobble between runs (±1–2 in xss/ssti) is canary/run variance, not this change.
+
+‡ **IDOR over-crediting in the ground truth (fixed).** The scorer credits a
+challenge when a class-matching finding's URL *contains* the challenge's token.
+That substring match is load-bearing but was too loose for three idor tokens, so
+one finding credited challenges on unrelated routes: `changeProduct` ("Product")
+and `forgedReview` ("products") both matched `/api/Products/1`, and `basketAccess`
+("basket") matched `/api/BasketItems/1` (basketManipulate's route). Tightened to
+the real endpoints (`api/Products/`, `products/reviews`, `rest/basket/`). Effect:
+`--probe-writes` idor 2/5 → 1/5 (only the verified changeProduct write remains),
+authenticated idor 3/5 → 2/5 (basketManipulate + forgedFeedback, both real
+cross-user; basketAccess has no finding on the real `/rest/basket/:id` route).
+A regression test (`tests/benchmarks/test_juiceshop_ground_truth.py`) now fails
+if any single endpoint credits two idor challenges.
 
 **Biggest gaps (the recall levers):**
 
@@ -176,14 +189,17 @@ was fixed separately in v0.25.7.
 A **two-user** authenticated run (`juiceshop-auth`: register users A + B, token
 login, `--auth-email-b`) exercises cross-user object access — it harvests owned
 resource ids as user A and confirms user B (a different identity) can reach them
-while an anonymous request cannot. This surfaces Juice Shop's **basket BOLA**
-challenges. With the url-only read credits gone, authenticated `idor` is **3/5**
-(the cross-user basket findings plus one product credit; it was reported 4/5
-when the coincidental read credits still counted).
+while an anonymous request cannot. This surfaces Juice Shop's cross-user
+findings. Authenticated `idor` is **2/5** — `basketManipulate` (via a real
+cross-user finding on `/api/BasketItems/1`) and `forgedFeedback` (via
+`/api/Feedbacks/1`). It read 4/5 when coincidental read credits still counted,
+and 3/5 until the `basketAccess` over-credit (‡) was removed: there is no
+finding on the real `/rest/basket/:id` route, so that challenge is honestly a
+gap.
 
-It is now harness-scored at **30/45 (67%)** rather than measured by hand, and
+It is now harness-scored at **29/45 (64%)** rather than measured by hand, and
 runs in one command like the others. Note it scores near
-`--probe-writes` (32/45) while finding different things — authentication buys
+`--probe-writes` (30/45) while finding different things — authentication buys
 the object-access challenges, writes buy the stored/CSRF/SSTI ones. Nothing
 stops both being used together; that combination has not been measured.
 

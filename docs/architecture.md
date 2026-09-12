@@ -368,7 +368,7 @@ It is off by default: it makes a scan write to whatever it is pointed at.
 DELETE is derived and deliberately never emitted — a scanner that destroys a
 record to prove it could is not worth the finding.
 
-Measured on Juice Shop, url-only: **24/45 → 31/45**, gaining CSRF, SSTI,
+Measured on Juice Shop, url-only: **24/45 → 30/45**, gaining CSRF, SSTI,
 three of the five XSS challenges and one IDOR, losing nothing. The scan takes
 about 48 minutes against 27, since the inventory doubles.
 
