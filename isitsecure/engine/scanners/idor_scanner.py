@@ -607,6 +607,11 @@ class IDORScanner:
 
         if response.status_code not in (200, 201, 204):
             return None
+        if _is_spa_shell(response):
+            # A code-split front end serves index.html (200 text/html) for
+            # every unmatched path, so a PUT/PATCH to a route that does not
+            # exist reads as a successful write. That is not a mutation.
+            return None
 
         return DeepFinding(
             source=FindingSource.DAST_URL,
@@ -670,6 +675,10 @@ class IDORScanner:
             return None
 
         if response.status_code not in (200, 202, 204):
+            return None
+        if _is_spa_shell(response):
+            # Same SPA-catch-all trap as the write probe: an index.html 200
+            # for a route with no DELETE handler is not a deletion.
             return None
 
         return DeepFinding(
@@ -1347,3 +1356,19 @@ def _bodies_differ(original: str, swapped: str) -> bool:
     if not original:
         return False
     return "".join(original.split()) != "".join(swapped.split())
+
+
+def _is_spa_shell(response: httpx.Response) -> bool:
+    """Whether a 2xx response is the single-page-app shell, not an API write.
+
+    A code-split front end (Angular, React, Vue) serves its index.html with a
+    200 for every path its router does not recognise. A PUT/PATCH/DELETE to a
+    route with no server handler therefore comes back 200 text/html -- which
+    the mutation probes counted as a CRITICAL unauthorized change. A genuine
+    API write returns JSON, or an empty body (204); HTML is the shell.
+    """
+    ctype = response.headers.get("content-type", "").lower()
+    if "text/html" in ctype:
+        return True
+    body = response.text.lstrip()[:64].lower()
+    return body.startswith(("<!doctype", "<html", "<!--"))

@@ -15,7 +15,7 @@ _Runs: 2026-09 · `--llm none` (pure DAST detection, no LLM) · Juice Shop pinne
 | Target | Mode | Recall | False positives | Findings |
 |---|---|--:|--:|--:|
 | `juiceshop` | url-only | **24/45 (53%)** — per-challenge, deterministic | idor read-FPs removed (see below) | 28 |
-| `juiceshop-writes` | url-only + `--probe-writes` | **32/45 (71%)** | mutation-IDOR still noisy (see below) | 86 |
+| `juiceshop-writes` | url-only + `--probe-writes` | **31/45 (69%)** | mutation-IDOR shell-FPs fixed (see below) | 73 |
 | `juiceshop-auth` | authenticated, two-user | **30/45 (67%)** | not yet measured | 35 |
 | `vampi-vulnerable` | url-only | **2/3** (SQLi, headers; IDOR needs auth) | — | 8–10 |
 | `vampi-secure` | url-only | — | **0** (was 2 IDOR — fixed) | 7–9 |
@@ -80,7 +80,7 @@ registered users.
 | open_redirect | 2/2 | 2/2 | 2/2 |
 | info_disclosure | 2/2 | 2/2 | 2/2 |
 | nosql | 2/3 | 2/3 | 2/3 |
-| idor | **0/5** | 3/5† | 3/5 |
+| idor | **0/5** | 2/5† | 3/5 |
 | xss | 1/7 | **4/7** | 2/7 |
 | csrf | 0/1 | **1/1** | 0/1 |
 | ssti | 0/1 | **1/1** | 0/1 |
@@ -90,7 +90,7 @@ registered users.
 | rate_limit | 0/1 | 0/1 | 0/1 |
 | **total** | **24/45** | **32/45** | **30/45** |
 
-† `--probe-writes` idor comes from the **mutation** path (PUT/PATCH with a swapped id), which is separate from the read path this change corrected and still has the same over-crediting bug — several of its findings (`/search/1`, `/nftUnlocked/1`, `/application-configuration/1`) are false. That path is the next IDOR fix. Non-idor wobble between runs (±1–2 in xss/ssti) is canary/run variance, not this change.
+† `--probe-writes` idor comes from the **mutation** path (PUT/PATCH with a swapped id). It had the same `2xx = confirmed` bug the read path did, made worse by not rejecting the SPA shell: an Angular catch-all serves index.html (200 text/html) for any unmatched route, so a PATCH to `/search/1`, `/basket/1`, `/orders/1` … read as a CRITICAL unauthorized write. **Fixed** — the mutation probes now reject the shell, taking mutation-IDOR findings from 15 to 2 (13 were index.html). The 2 that remain (`PUT /api/Products/1`, `PUT /api/Hints/1`) are genuine unauthenticated-write surface. Non-idor wobble between runs (±1–2 in xss/ssti) is canary/run variance, not this change.
 
 **Biggest gaps (the recall levers):**
 
