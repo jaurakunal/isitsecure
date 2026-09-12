@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import re
+from uuid import uuid4
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import httpx
@@ -613,30 +614,140 @@ class IDORScanner:
             # exist reads as a successful write. That is not a mutation.
             return None
 
+        # A 2xx proves the write was ACCEPTED, not that the resource changed
+        # (the safe probe body is an unknown field the ORM drops). Read back:
+        # write a canary into an existing field and confirm it sticks, then
+        # restore. Confirmed => CRITICAL; merely accepted => a downgraded lead.
+        verdict, detail = await self._verify_mutation_persists(
+            client, modified_url, method
+        )
+
+        if verdict == "persisted":
+            severity = SeverityLevel.CRITICAL
+            confidence = IDORConfig.CONFIDENCE_MUTATION_WRITE_VERIFIED
+            title = IDORConfig.TITLE_MUTATION_WRITE_VERIFIED
+            description = IDORConfig.DESC_MUTATION_WRITE_VERIFIED.format(
+                method=method, url=modified_url, field=detail,
+            )
+        else:
+            severity = SeverityLevel.HIGH
+            confidence = IDORConfig.CONFIDENCE_MUTATION_WRITE_UNVERIFIED
+            title = IDORConfig.TITLE_MUTATION_WRITE_UNVERIFIED
+            description = IDORConfig.DESC_MUTATION_WRITE_UNVERIFIED.format(
+                method=method, url=modified_url,
+                status=response.status_code, reason=detail,
+            )
+
         return DeepFinding(
             source=FindingSource.DAST_URL,
             category=FindingCategory.IDOR,
-            severity=SeverityLevel.CRITICAL,
-            title=IDORConfig.TITLE_MUTATION_WRITE_IDOR,
-            description=IDORConfig.DESC_MUTATION_WRITE_IDOR.format(
-                method=method,
-                url=modified_url,
-                status=response.status_code,
-            ),
+            severity=severity,
+            title=title,
+            description=description,
             technical_detail=(
                 f"Original endpoint: {endpoint.url} | "
                 f"Swapped URL: {modified_url} | "
                 f"Method: {method} | "
-                f"Status: {response.status_code}"
+                f"Status: {response.status_code} | "
+                f"Read-back: {verdict} ({detail})"
             ),
             evidence=response.text[: IDORConfig.MAX_EVIDENCE_LENGTH],
-            confidence=IDORConfig.CONFIDENCE_MUTATION_WRITE_IDOR,
+            confidence=confidence,
             scanner_name="idor_scanner",
             endpoint_url=endpoint.url,
             http_method=method,
             request_payload=IDORConfig.MUTATION_SAFE_BODY,
             response_preview=response.text[: IDORConfig.MAX_RESPONSE_BODY_LOG],
         )
+
+    async def _verify_mutation_persists(
+        self,
+        client: RateLimitedClient,
+        url: str,
+        method: str,
+    ) -> tuple[str, str]:
+        """Confirm whether an accepted write actually changed the resource.
+
+        Returns (verdict, detail) where verdict is:
+          "persisted" — a canary written into an existing field was read back
+                        unchanged (then restored). The vuln is confirmed.
+          "no_effect" — a write demonstrably left the resource unchanged.
+          "unknown"   — could not verify (no JSON, no safe field, request error).
+
+        The confirming path mutates one non-sensitive field transiently and
+        restores it. The fallback path (no safe field) only sends the original
+        no-op body and compares before/after, mutating nothing.
+        """
+        headers = {
+            "Content-Type": IDORConfig.MUTATION_CONTENT_TYPE,
+            "Prefer": IDORConfig.MUTATION_PREFER_HEADER,
+        }
+        try:
+            base = await client.request("GET", url)
+        except httpx.HTTPError as e:
+            return "unknown", f"baseline GET failed: {e}"
+        if base.status_code >= 400 or _is_spa_shell(base):
+            return "unknown", f"baseline GET {base.status_code}"
+
+        obj = _mutation_data_object(base.text)
+        if obj is None:
+            return "unknown", "baseline response is not a JSON object"
+
+        field, original = _pick_writable_field(obj)
+        if field is None:
+            return await self._verify_by_noop(client, url, method, base.text, headers)
+
+        canary = IDORConfig.MUTATION_CANARY_PREFIX + uuid4().hex[:8]
+        persisted = False
+        try:
+            await client.request(
+                method, url, content=json.dumps({field: canary}), headers=headers
+            )
+            after = await client.request("GET", url)
+            after_obj = _mutation_data_object(after.text)
+            persisted = (
+                after_obj is not None
+                and str(after_obj.get(field)) == canary
+            )
+        except httpx.HTTPError as e:
+            return "unknown", f"canary write failed: {e}"
+        finally:
+            # Best-effort restore of the original value.
+            try:
+                await client.request(
+                    method, url,
+                    content=json.dumps({field: original}), headers=headers,
+                )
+            except httpx.HTTPError:
+                logger.warning(
+                    "IDOR read-back: could not restore '%s' at %s", field, url
+                )
+
+        if persisted:
+            return "persisted", field
+        return "no_effect", f"canary write to '{field}' did not persist"
+
+    async def _verify_by_noop(
+        self,
+        client: RateLimitedClient,
+        url: str,
+        method: str,
+        before_text: str,
+        headers: dict[str, str],
+    ) -> tuple[str, str]:
+        """Non-destructive fallback: no writable field, so only re-send the
+        no-op body and see whether the resource changed at all."""
+        try:
+            await client.request(
+                method, url,
+                content=IDORConfig.MUTATION_SAFE_BODY, headers=headers,
+            )
+            after = await client.request("GET", url)
+        except httpx.HTTPError as e:
+            return "unknown", f"no-op verify failed: {e}"
+        if _mutation_bodies_differ(before_text, after.text):
+            return "unknown", "response changed but no safe field to confirm"
+        return "no_effect", "no-op write produced no observable change"
 
     async def _probe_mutation_delete(
         self,
@@ -1372,3 +1483,45 @@ def _is_spa_shell(response: httpx.Response) -> bool:
         return True
     body = response.text.lstrip()[:64].lower()
     return body.startswith(("<!doctype", "<html", "<!--"))
+
+
+_MUTATION_IGNORE_KEYS = {"updatedat", "createdat", "deletedat"}
+
+
+def _mutation_data_object(body: str) -> dict | None:
+    """The resource object from a write/read response, unwrapping a
+    {"data": {...}} envelope. Returns None if the body is not a JSON object
+    (or is a list/scalar we cannot field-compare)."""
+    try:
+        parsed = json.loads(body)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if isinstance(parsed, dict):
+        data = parsed.get("data", parsed)
+        return data if isinstance(data, dict) else None
+    return None
+
+
+def _pick_writable_field(obj: dict) -> tuple[str | None, str | None]:
+    """Choose one existing, non-empty string field safe to canary-write.
+
+    Skips identifiers, timestamps, and money/auth/PII fields (harm-avoidance,
+    not a security verdict). Returns (field, original_value) or (None, None)."""
+    for key, value in obj.items():
+        if not isinstance(value, str) or value.strip() == "":
+            continue
+        lowered = key.lower()
+        if any(sub in lowered for sub in IDORConfig.MUTATION_READBACK_SKIP_SUBSTRINGS):
+            continue
+        return key, value
+    return None, None
+
+
+def _mutation_bodies_differ(a: str, b: str) -> bool:
+    """Compare two resource bodies ignoring server-managed timestamp fields."""
+    oa, ob = _mutation_data_object(a), _mutation_data_object(b)
+    if oa is None or ob is None:
+        return "".join(a.split()) != "".join(b.split())
+    strip = lambda d: {k: v for k, v in d.items()
+                       if k.lower() not in _MUTATION_IGNORE_KEYS}
+    return strip(oa) != strip(ob)

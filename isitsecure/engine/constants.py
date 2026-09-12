@@ -398,11 +398,46 @@ class IDORConfig:
 
     # Confidence for mutation IDOR findings
     CONFIDENCE_MUTATION_WRITE_IDOR = 0.95
+    # Read-back verification: a 2xx to an unauthenticated write proves the
+    # request was accepted, not that the resource changed. When we can write a
+    # canary into an existing field and read it back, the finding is confirmed
+    # (persisted); otherwise it is a lower-confidence lead.
+    CONFIDENCE_MUTATION_WRITE_VERIFIED = 0.95
+    CONFIDENCE_MUTATION_WRITE_UNVERIFIED = 0.5
+    MUTATION_CANARY_PREFIX = "isitsecure_rb_"
+    # Fields never chosen for the canary write -- harm-avoidance, not a security
+    # verdict: skip identifiers/timestamps (writing them is pointless) and
+    # money/auth/PII fields (writing them could do real damage even transiently).
+    MUTATION_READBACK_SKIP_SUBSTRINGS = (
+        "id", "createdat", "updatedat", "deletedat",
+        "password", "passwd", "token", "secret", "hash", "salt", "apikey",
+        "email", "phone", "ssn", "iban", "card",
+        "price", "cost", "amount", "balance", "credit", "wallet",
+        "role", "admin", "permission", "isdeluxe",
+    )
     CONFIDENCE_MUTATION_DELETE_IDOR = 0.98
 
     # Finding titles / descriptions for mutation IDOR
     TITLE_MUTATION_WRITE_IDOR = (
         "Mutation IDOR — unauthorized resource update via swapped ID"
+    )
+    TITLE_MUTATION_WRITE_VERIFIED = (
+        "Mutation IDOR — unauthorized resource update (verified: change persisted)"
+    )
+    TITLE_MUTATION_WRITE_UNVERIFIED = (
+        "Mutation IDOR — unauthenticated write accepted (persistence unconfirmed)"
+    )
+    DESC_MUTATION_WRITE_VERIFIED = (
+        "A {method} request to {url} with a swapped resource ID wrote a canary "
+        "value into the field '{field}' and it was read back unchanged, then "
+        "restored. An unauthenticated caller can modify another resource — a "
+        "confirmed object-level authorization failure."
+    )
+    DESC_MUTATION_WRITE_UNVERIFIED = (
+        "A {method} request to {url} with a swapped resource ID returned "
+        "status {status}, but read-back could not confirm the change persisted "
+        "({reason}). The endpoint accepts unauthenticated writes; treat as a "
+        "lead to verify by hand."
     )
     TITLE_MUTATION_DELETE_IDOR = (
         "Mutation IDOR — unauthorized resource deletion via swapped ID"
