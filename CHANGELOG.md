@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.1](https://github.com/jaurakunal/isitsecure/compare/v0.27.0...v0.27.1) (2026-09-13)
+
+
+### Bug Fixes
+
+* **auth:** prefer the app's real login cookie over synthesized names ([#226](https://github.com/jaurakunal/isitsecure/issues/226)) ([eacdfa0](https://github.com/jaurakunal/isitsecure/commit/eacdfa0ef6260369f41d4d9636d92ca95b83e6b9))
+
 ## [0.27.0](https://github.com/jaurakunal/isitsecure/compare/v0.26.2...v0.27.0) (2026-09-12)
 
 
