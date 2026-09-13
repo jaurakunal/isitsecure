@@ -57,7 +57,12 @@ class RestLoginAuthProvider:
                         continue
                     token = self._extract_token(resp)
                     if token:
-                        return self._build_session(token, identifier)
+                        # Prefer the cookies the app actually set on login
+                        # (the real session cookie, correct name and value).
+                        real_cookie = "; ".join(
+                            f"{c.name}={c.value}" for c in client.cookies.jar
+                        )
+                        return self._build_session(token, identifier, real_cookie)
                     last_error = f"{url} -> no token in response"
 
         raise ValueError(RestLoginConfig.ERROR_LOGIN_FAILED.format(
@@ -97,21 +102,26 @@ class RestLoginAuthProvider:
                     return found
         return None
 
-    def _build_session(self, token: str, identifier: str) -> AuthSession:
+    def _build_session(
+        self, token: str, identifier: str, real_cookie: str = "",
+    ) -> AuthSession:
         user_id = self._jwt_subject(token) or identifier or "user"
+        headers = {"Authorization": f"Bearer {token}"}
+        # Server-rendered endpoints (profile forms, upload handlers) often
+        # authenticate by cookie, not the Authorization header. Prefer the real
+        # cookie the app set on login -- correct name and value, general to any
+        # app. Only when the login response sets no cookie (e.g. an SPA whose
+        # login API returns the JWT in the body and sets the auth cookie
+        # client-side, like Juice Shop) fall back to mirroring the token into
+        # the common JWT-cookie names. Unknown cookies are harmlessly ignored.
+        if real_cookie:
+            headers["Cookie"] = real_cookie
+        else:
+            headers["Cookie"] = f"token={token}; access_token={token}"
         return AuthSession(
             user_id=str(user_id),
             access_token=token,
-            # Server-rendered endpoints (profile forms, upload handlers) often
-            # authenticate by cookie, not the Authorization header -- Juice
-            # Shop's /profile/image/url returns 500 to a bearer-only request but
-            # accepts the same JWT as a `token` cookie. Mirror the token into the
-            # common JWT-cookie names alongside the header so downstream probes
-            # can reach those routes; unknown cookies are harmlessly ignored.
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Cookie": f"token={token}; access_token={token}",
-            },
+            headers=headers,
             user_email=identifier if "@" in identifier else None,
             provider=AuthProvider.TOKEN,
         )
