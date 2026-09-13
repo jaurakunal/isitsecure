@@ -23,6 +23,12 @@ _Runs: 2026-09 · `--llm none` (pure DAST detection, no LLM) · Juice Shop pinne
 | `nodegoat-auth` | authenticated | **3/3** (headers + injection + XSS) | unmeasured | 19 |
 | `sast-injection` | code-only | **46/46 (100%)** — taint, per-class, deterministic | **0** | 46 |
 
+> The two **authenticated** rows vary a little run-to-run: the cross-user IDOR
+> harvest depends on a freshly-registered user having objects to find, so `idor`
+> swings ±1–2 and the totals with it (`juiceshop-auth` has been seen at 29–32,
+> `juiceshop-auth-writes` at 34–36). The url-only and `--probe-writes` rows are
+> deterministic. Treat the authenticated numbers as a band.
+
 > **VAmPI numbers before 2026-09 were not measurements.** The app ships an empty
 > database and seeds it from `/createdb`, which nothing called — so whether IDOR
 > had any data to find depended on whether some scanner happened to reach that
