@@ -588,14 +588,18 @@ class RestLoginConfig:
     """
 
     # Common login endpoints to try when no explicit login_url is given.
+    # Generic login-endpoint conventions only. App-specific routes (e.g. Juice
+    # Shop's /rest/user/login, VAmPI's /users/v1/login) must NOT live here —
+    # a caller that knows its app's login endpoint passes --login-url, which
+    # takes precedence over this list. Keeping app routes here would tune the
+    # shipped tool to specific targets (an overfit) for no general benefit.
     LOGIN_PROBE_PATHS = (
         "/login",
         "/auth/login",
         "/api/login",
         "/api/auth/login",
         "/users/login",
-        "/users/v1/login",
-        "/rest/user/login",
+        "/user/login",
         "/signin",
         "/session",
         "/token",
@@ -1561,15 +1565,27 @@ class InjectionConfig:
     SQLI_BASELINE_VALUE = "1"
 
     # --- Authentication-bypass (boolean) SQLi ---
-    # Login POST endpoints are rarely recoverable from a minified SPA bundle, so
-    # the oracle probes a conventional set of login paths relative to the target
-    # (standard DAST forced-browsing), then runs a differential: a benign invalid
-    # credential must be REJECTED and a SQL tautology must AUTHENTICATE.
+    # The oracle probes login POST endpoints and runs a differential: a benign
+    # invalid credential must be REJECTED and a SQL tautology must AUTHENTICATE.
+    # It sources login endpoints two ways: (1) any login-shaped endpoint that
+    # crawling actually discovered (matched by AUTH_LOGIN_PATH_PATTERN — this is
+    # how an app's real route, e.g. one buried in a minified SPA bundle, gets
+    # tested app-agnostically), and (2) a conventional set of login paths tried
+    # relative to the target (standard DAST forced-browsing) for the common case
+    # where discovery misses the login POST. These are generic conventions only —
+    # an app's specific login route belongs in --login-url, not here.
     AUTH_LOGIN_PATHS = (
-        "/rest/user/login", "/login", "/api/login", "/auth/login",
+        "/login", "/api/login", "/auth/login",
         "/api/auth/login", "/users/login", "/user/login", "/signin",
         "/api/signin", "/session", "/sessions", "/api/session",
         "/account/login", "/auth",
+    )
+    # A discovered endpoint is treated as a login POST when its path matches this.
+    # Deliberately narrow — a login/authenticate/signin/session/token verb in a
+    # path segment — so ordinary reads are not probed with tautology payloads.
+    AUTH_LOGIN_PATH_PATTERN = (
+        r"(?i)(?:^|/)(?:log[-_]?in|sign[-_]?in|authenticate|auth|"
+        r"session|sessions|token|oauth)(?:$|/|\b)"
     )
     AUTH_IDENTITY_FIELDS = ("email", "username", "user", "login")
     AUTH_PASSWORD_FIELD = "password"
