@@ -1520,6 +1520,20 @@ class InjectionConfig:
         "[$ne]=null",
     )
 
+    # Differential oracle (ported from the pentest NoSQL exploiter): a control
+    # sets the param to an exact value that should NOT exist (empty/denied
+    # baseline); each operator, if the backend applies it, BROADENS the query.
+    # (operator, injected value) — the first that broadens proves injection.
+    NOSQL_SENTINEL = "nosqli_zzz9_no_such_value"
+    NOSQL_OPERATORS = (
+        ("$ne", "nosqli_zzz9_no_such_value"),
+        ("$regex", ".*"),
+        ("$gt", ""),
+    )
+    # The attack body must be materially larger than a non-empty control before
+    # size alone counts as broadening (guards against naturally-variable pages).
+    NOSQL_BROADEN_MARGIN = 20
+
     # NoSQL indicators in response that suggest injection worked
     NOSQL_INDICATORS = (
         r'"_id"\s*:',          # MongoDB document ID field
@@ -1527,11 +1541,16 @@ class InjectionConfig:
         r"MongoError",         # MongoDB error leak
         r"CastError",          # Mongoose cast error
     )
+    # Only ERROR leaks are a standalone trigger. Document markers like "_id"
+    # appear in every normal Mongo response, so they can't prove injection on
+    # their own — the differential oracle (operator broadens vs a sentinel
+    # control) carries the data-return case instead.
+    NOSQL_ERROR_INDICATORS = (
+        r"MongoError",
+        r"CastError",
+        r"MongoServerError",
+    )
 
-    # Response size ratio: if injected response is > this * baseline, likely leak
-    NOSQL_RESPONSE_SIZE_RATIO = 2.0
-    # Minimum baseline response size to compare against
-    NOSQL_MIN_BASELINE_SIZE = 20
     # Chars of the injected AND baseline responses stored on the finding, so the
     # LLM injection adjudicator can compare the two response bodies (#5, #125).
     INJECTION_EVIDENCE_CHARS = 1500
@@ -6909,13 +6928,17 @@ class HTTPProbeConfig:
 class TemplateInjectionConfig:
     """Configuration for server-side template injection (SSTI) checks."""
 
-    # (payload, expected_output, engine_hint)
+    # (payload, expected_output, engine_hint). The operands are deliberately
+    # large and coprime so the product (699937) is astronomically unlikely to
+    # appear on a page by chance — a `{{7*7}}`→`49` oracle false-positives on any
+    # page that happens to contain "49". Ported from the pentest SSTI exploiter.
     SSTI_PAYLOADS = (
-        ("{{7*7}}", "49", "Jinja2/Twig/Nunjucks"),
-        ("${7*7}", "49", "Freemarker/Velocity/Groovy"),
-        ("<%= 7*7 %>", "49", "ERB/EJS"),
-        ("#{7*7}", "49", "Pug/Jade"),
-        ("{{7*'7'}}", "7777777", "Jinja2 string multiplication"),
+        ("{{99991*7}}", "699937", "Jinja2/Twig/Nunjucks"),
+        ("${99991*7}", "699937", "Freemarker/Velocity/Groovy/Thymeleaf"),
+        ("{99991*7}", "699937", "Smarty"),
+        ("<%= 99991*7 %>", "699937", "ERB/EJS"),
+        ("#{99991*7}", "699937", "Pug/Jade"),
+        ("#set($x=99991*7)$x", "699937", "Velocity"),
     )
 
     MAX_ENDPOINTS_TO_TEST = SharedPatterns.UNBOUNDED_ENDPOINTS
