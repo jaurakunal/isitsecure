@@ -100,13 +100,13 @@ class ActiveInjectionScanner(AuthAwareScanner):
             user_agent=DeepScanConfig.USER_AGENT,
             extra_headers=self.auth_headers,
         ) as client:
-            # Target-level probe: auth-bypass SQLi on conventional login paths.
-            # A login POST is rarely recoverable from a minified SPA bundle, so
-            # discovery usually misses it — probe the standard paths directly.
+            # Target-level probe: auth-bypass SQLi on login endpoints. Prefer the
+            # app's real login route when crawling discovered one (e.g. buried in
+            # a minified SPA bundle); fall back to conventional paths otherwise.
             base_url = self._derive_base_url(endpoints)
             if base_url and not budget.expired():
                 try:
-                    ab = await self._test_auth_bypass(client, base_url)
+                    ab = await self._test_auth_bypass(client, base_url, endpoints)
                     if ab:
                         findings.append(ab)
                 except Exception:
@@ -204,21 +204,53 @@ class ActiveInjectionScanner(AuthAwareScanner):
                 return f"{parsed.scheme}://{parsed.netloc}"
         return None
 
+    def _login_urls(
+        self,
+        base_url: str,
+        endpoints: list[DiscoveredEndpoint] | None,
+    ) -> list[str]:
+        """Login URLs to probe: discovered login-shaped routes first, then the
+        conventional forced-browse paths, deduplicated in order.
+
+        Sourcing the app's real login route from discovery (matched by a narrow
+        login-verb pattern) is what makes this app-agnostic — an SPA's own login
+        POST, e.g. ``/rest/user/login``, gets tested without hardcoding it.
+        """
+        pattern = re.compile(InjectionConfig.AUTH_LOGIN_PATH_PATTERN)
+        urls: list[str] = []
+        seen: set[str] = set()
+
+        def _add(url: str) -> None:
+            if url not in seen:
+                seen.add(url)
+                urls.append(url)
+
+        for ep in endpoints or []:
+            path = urlparse(ep.url).path or ""
+            if pattern.search(path):
+                _add(ep.url.split("?", 1)[0])
+        for path in InjectionConfig.AUTH_LOGIN_PATHS:
+            _add(base_url.rstrip("/") + path)
+        return urls
+
     async def _test_auth_bypass(
         self,
         client: RateLimitedClient,
         base_url: str,
+        endpoints: list[DiscoveredEndpoint] | None = None,
     ) -> DeepFinding | None:
-        """Probe conventional login paths for authentication-bypass SQLi.
+        """Probe login endpoints for authentication-bypass SQLi.
 
         Differential oracle: a benign invalid credential must be REJECTED, and a
         SQL tautology in the identity field must AUTHENTICATE (return a session
         token). That state change is near-unambiguous, so it is false-positive
         safe — a hardened login rejects the tautology exactly like the benign
         credential. The hit is reproduced once before it is reported.
+
+        Login URLs come from discovery (the app's real route) plus conventional
+        forced-browse paths — see ``_login_urls``.
         """
-        for path in InjectionConfig.AUTH_LOGIN_PATHS:
-            url = base_url.rstrip("/") + path
+        for url in self._login_urls(base_url, endpoints):
             for field in InjectionConfig.AUTH_IDENTITY_FIELDS:
                 control = await self._auth_post(
                     client, url, field, "isitsecure_no_such_user", "wrong_pw_x1y2",

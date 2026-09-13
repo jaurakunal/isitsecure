@@ -290,7 +290,11 @@ TARGETS: list[Target] = [
         auth_password="Passw0rd!23",
         auth_email_b="benchb@isitsecure.test",
         auth_password_b="Passw0rd!23",
-        auth_provider="token",   # plain REST login (/rest/user/login)
+        auth_provider="token",
+        # App-specific login route lives HERE (benchmark config), not in the
+        # shipped LOGIN_PROBE_PATHS — the tool auto-discovers generic paths and
+        # takes an explicit endpoint via --login-url.
+        extra_args=["--login-url", "http://localhost:3000/rest/user/login"],
         ground_truth="juiceshop",
         notes="OWASP Juice Shop AUTHENTICATED, two-user cross-user BOLA — adds the "
               "basket object-access challenges (the '~40% authenticated' number).",
@@ -308,7 +312,8 @@ TARGETS: list[Target] = [
         down_cmd=["docker", "rm", "-f", "bench_juiceshop"],
         ready_timeout=300,
         scan_mode="authenticated",
-        extra_args=["--probe-writes"],
+        extra_args=["--probe-writes",
+                    "--login-url", "http://localhost:3000/rest/user/login"],
         scan_timeout=10800,
         pre_scan=["bash", "-c",
                   "for u in bencha benchb; do "

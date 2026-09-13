@@ -696,17 +696,48 @@ class TestAuthBypassSQLi:
 
     @pytest.mark.asyncio
     async def test_login_bypass_detected(self) -> None:
-        """Benign creds rejected, tautology returns a JWT -> CRITICAL finding."""
+        """Benign creds rejected, tautology returns a JWT -> CRITICAL finding.
+
+        The app's real login route (``/rest/user/login``) is not a hardcoded
+        conventional path — it is sourced from discovery, so the probe finds it
+        app-agnostically. First URL tried, field 'email':
+        control(reject), payload(auth), reproduce(auth).
+        """
         scanner = ActiveInjectionScanner()
         client = AsyncMock()
-        # first path is /rest/user/login, field 'email':
-        #   control(reject), payload(auth), reproduce(auth)
         client.request = AsyncMock(side_effect=[_REJECTED, _AUTHED, _AUTHED])
-        finding = await scanner._test_auth_bypass(client, "http://localhost:3000")
+        eps = [_make_endpoint(url="http://localhost:3000/rest/user/login")]
+        finding = await scanner._test_auth_bypass(
+            client, "http://localhost:3000", eps
+        )
         assert finding is not None
         assert "SQL injection" in finding.title
         assert "user/login" in finding.endpoint_url
         assert finding.severity == SeverityLevel.CRITICAL
+
+    @pytest.mark.asyncio
+    async def test_login_bypass_on_conventional_path_without_discovery(self) -> None:
+        """With no discovered login route, the conventional forced-browse paths
+        still find an unhardened login (first path /login, field 'email')."""
+        scanner = ActiveInjectionScanner()
+        client = AsyncMock()
+        client.request = AsyncMock(side_effect=[_REJECTED, _AUTHED, _AUTHED])
+        finding = await scanner._test_auth_bypass(client, "http://localhost:3000")
+        assert finding is not None
+        assert finding.severity == SeverityLevel.CRITICAL
+
+    def test_login_urls_prefers_discovered_route(self) -> None:
+        """A discovered login-shaped endpoint is probed before the conventions,
+        and non-login endpoints are never treated as login routes."""
+        scanner = ActiveInjectionScanner()
+        eps = [
+            _make_endpoint(url="http://localhost:3000/rest/products/search"),
+            _make_endpoint(url="http://localhost:3000/rest/user/login"),
+        ]
+        urls = scanner._login_urls("http://localhost:3000", eps)
+        assert urls[0] == "http://localhost:3000/rest/user/login"
+        assert "http://localhost:3000/rest/products/search" not in urls
+        assert "http://localhost:3000/login" in urls  # conventions still appended
 
     @pytest.mark.asyncio
     async def test_no_fp_on_hardened_login(self) -> None:
