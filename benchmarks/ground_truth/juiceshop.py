@@ -18,6 +18,8 @@ from __future__ import annotations
 import json
 import pathlib
 
+from dataclasses import replace
+
 from .schema import SIGNATURES, GroundTruthItem
 
 _HERE = pathlib.Path(__file__).parent
@@ -52,9 +54,11 @@ DETECTABLE: dict[str, tuple[str, str | None, bool]] = {
     "basketManipulateChallenge": ("idor", "BasketItem", True),
     "csrfChallenge": ("csrf", None, True),
     "ssrfChallenge": ("ssrf", None, True),
-    "forgedFeedbackChallenge": ("idor", "Feedback", True),
+    "forgedFeedbackChallenge": ("idor", "Feedback", True, "Cross-user"),
     "forgedReviewChallenge": ("idor", "products/reviews", True),
-    "feedbackChallenge": ("mass_assignment", "Feedback", False),
+    # "Five-Star Feedback" = delete feedback you do not own (BOLA delete),
+    # not mass assignment. Auth-required; detected by the mutation-DELETE probe.
+    "feedbackChallenge": ("idor", "Feedback", True, "deletion"),
     "changeProductChallenge": ("idor", "api/Products/", True),
     # --- Security Misconfiguration ---
     "errorHandlingChallenge": ("info_disclosure", None, False),
@@ -113,11 +117,20 @@ def build_ground_truth() -> list[GroundTruthItem]:
     for c in challenges:
         key = c["key"]
         if key in DETECTABLE:
-            vuln_class, endpoint, auth = DETECTABLE[key]
+            spec = DETECTABLE[key]
+            vuln_class, endpoint, auth = spec[0], spec[1], spec[2]
+            # Optional 4th element: a title discriminator, for when two
+            # challenges of the same class live on the same endpoint and must
+            # be told apart by their finding (e.g. the two /api/Feedbacks idor
+            # challenges — a forged POST vs an unauthorized DELETE).
+            title = spec[3] if len(spec) > 3 else None
+            sig = SIGNATURES.get(vuln_class)
+            if title and sig is not None:
+                sig = replace(sig, title_contains=title)
             items.append(GroundTruthItem(
                 id=key, name=c["name"], category=c["category"],
                 vuln_class=vuln_class, dast_detectable=True,
-                signature=SIGNATURES.get(vuln_class),
+                signature=sig,
                 endpoint_contains=endpoint, auth_required=auth,
                 regression_critical=key in MUST_DETECT,
             ))

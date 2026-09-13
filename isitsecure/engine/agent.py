@@ -688,9 +688,15 @@ class DeepSecurityScanAgent:
             ctx.all_findings.extend(anon_rls_findings)
             ctx.scanners_run.append("rls_deep")
 
-        # IDOR (unauthenticated — returns IDORTestResult + mutation DeepFindings)
+        # IDOR — read/swap probes run anonymous; the mutation probes use the
+        # session (an auth-gated write/delete BOLA like Juice Shop's feedback
+        # deletion is 401 anonymous), so hand the scanner the session auth.
         ctx.idor_results = []
         if self._idor_scanner and ctx.endpoints:
+            if ctx.session_a and ctx.session_a.headers and hasattr(
+                self._idor_scanner, "_auth_headers"
+            ):
+                self._idor_scanner._auth_headers = dict(ctx.session_a.headers)
             try:
                 ctx.idor_results, mutation_findings = await self._idor_scanner.scan(
                     ctx.endpoints

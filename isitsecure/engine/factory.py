@@ -345,7 +345,7 @@ def create_deep_security_scan_agent(
         dast_scanners=dast_scanners,
         sast_scanners=sast_scanners,
         # Special scanners with non-standard scan() signatures
-        idor_scanner=IDORScanner(),
+        idor_scanner=IDORScanner(probe_writes=probe_writes),
         jwt_scanner=JWTScanner(),
         rls_deep_scanner=RLSDeepScanner(),
         privilege_escalation_scanner=PrivilegeEscalationScanner(),

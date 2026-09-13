@@ -295,6 +295,39 @@ TARGETS: list[Target] = [
         notes="OWASP Juice Shop AUTHENTICATED, two-user cross-user BOLA — adds the "
               "basket object-access challenges (the '~40% authenticated' number).",
     ),
+    # --- Authenticated AND --probe-writes together: the only mode that reaches
+    #     auth-gated mutation vulns like feedbackChallenge (Five-Star Feedback),
+    #     a BOLA delete of another user's feedback — auth-required (401 anon)
+    #     yet needing DELETE endpoints derived, which only --probe-writes does.
+    Target(
+        name="juiceshop-auth-writes",
+        up_cmd=["docker", "run", "-d", "--name", "bench_juiceshop",
+                "-p", "3000:3000", "bkimminich/juice-shop:v20.1.1"],
+        url="http://localhost:3000",
+        ready_url="http://localhost:3000/",
+        down_cmd=["docker", "rm", "-f", "bench_juiceshop"],
+        ready_timeout=300,
+        scan_mode="authenticated",
+        extra_args=["--probe-writes"],
+        scan_timeout=10800,
+        pre_scan=["bash", "-c",
+                  "for u in bencha benchb; do "
+                  "curl -s -X POST http://localhost:3000/api/Users "
+                  "-H 'Content-Type: application/json' "
+                  "-d \"{\\\"email\\\":\\\"$u@isitsecure.test\\\","
+                  "\\\"password\\\":\\\"Passw0rd!23\\\","
+                  "\\\"passwordRepeat\\\":\\\"Passw0rd!23\\\"}\" "
+                  "-o /dev/null; done || true"],
+        auth_email="bencha@isitsecure.test",
+        auth_password="Passw0rd!23",
+        auth_email_b="benchb@isitsecure.test",
+        auth_password_b="Passw0rd!23",
+        auth_provider="token",
+        ground_truth="juiceshop",
+        notes="OWASP Juice Shop AUTHENTICATED + --probe-writes — the combined "
+              "mode that reaches auth-gated mutation vulns (feedbackChallenge "
+              "BOLA delete). Writes to the target; slow.",
+    ),
 ]
 
 

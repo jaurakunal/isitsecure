@@ -17,6 +17,7 @@ _Runs: 2026-09 · `--llm none` (pure DAST detection, no LLM) · Juice Shop pinne
 | `juiceshop` | url-only | **24/45 (53%)** — per-challenge, deterministic | idor read-FPs removed (see below) | 28 |
 | `juiceshop-writes` | url-only + `--probe-writes` | **30/45 (67%)** | mutation-IDOR shell-FPs fixed; idor over-credit removed | 73 |
 | `juiceshop-auth` | authenticated, two-user | **32/45 (71%)** | not yet measured | 37 |
+| `juiceshop-auth-writes` | authenticated + `--probe-writes` | **36/45 (80%)** — the strongest mode | not yet measured | 71 |
 | `vampi-vulnerable` | url-only | **2/3** (SQLi, headers; IDOR needs auth) | — | 8–10 |
 | `vampi-secure` | url-only | — | **0** (was 2 IDOR — fixed) | 7–9 |
 | `nodegoat-auth` | authenticated | **3/3** (headers + injection + XSS) | unmeasured | 19 |
@@ -71,24 +72,24 @@ Three columns, because two of them cost something: `--probe-writes` writes to
 the target and doubles the runtime, and the authenticated pass needs two
 registered users.
 
-| Class | url-only | `--probe-writes` | authenticated |
-|---|--:|--:|--:|
-| sqli | **7/7** | **7/7** | **7/7** |
-| file_upload | **4/4** | **4/4** | **4/4** |
-| exposed_data | 4/5 | 4/5 | 4/5 |
-| xxe | **2/2** | **2/2** | **2/2** |
-| open_redirect | 2/2 | 2/2 | 2/2 |
-| info_disclosure | 2/2 | 2/2 | 2/2 |
-| nosql | 2/3 | 2/3 | 2/3 |
-| idor | **0/5** | 1/5† | 2/5 |
-| xss | 1/7 | **4/7** | 2/7 |
-| csrf | 0/1 | **1/1** | 0/1 |
-| ssti | 0/1 | **1/1** | 0/1 |
-| mass_assignment | 0/2 | **1/2** | 0/2 |
-| ssrf | 0/2 | 0/2 | **2/2**◊ |
-| auth | 0/1 | 0/1 | 0/1 |
-| rate_limit | 0/1 | 0/1 | 0/1 |
-| **total** | **24/45** | **30/45** | **32/45** |
+| Class | url-only | `--probe-writes` | authenticated | auth+writes |
+|---|--:|--:|--:|--:|
+| sqli | **7/7** | **7/7** | **7/7** | **7/7** |
+| file_upload | **4/4** | **4/4** | **4/4** | **4/4** |
+| exposed_data | 4/5 | 4/5 | 4/5 | 4/5 |
+| xxe | **2/2** | **2/2** | **2/2** | **2/2** |
+| open_redirect | 2/2 | 2/2 | 2/2 | 2/2 |
+| info_disclosure | 2/2 | 2/2 | 2/2 | 2/2 |
+| nosql | 2/3 | 2/3 | 2/3 | 2/3 |
+| idor | **0/6** | 1/6† | 2/6 | **4/6**✦ |
+| xss | 1/7 | **4/7** | 2/7 | **5/7** |
+| csrf | 0/1 | **1/1** | 0/1 | **1/1** |
+| ssti | 0/1 | **1/1** | 0/1 | 0/1 |
+| mass_assignment | 0/1 | **1/1** | 0/1 | **1/1** |
+| ssrf | 0/2 | 0/2 | **2/2**◊ | **2/2**◊ |
+| auth | 0/1 | 0/1 | 0/1 | 0/1 |
+| rate_limit | 0/1 | 0/1 | 0/1 | 0/1 |
+| **total** | **24/45** | **30/45** | **32/45** | **36/45** |
 
 † `--probe-writes` idor comes from the **mutation** path (PUT/PATCH with a swapped id). It had the same `2xx = confirmed` bug the read path did, made worse by not rejecting the SPA shell: an Angular catch-all serves index.html (200 text/html) for any unmatched route, so a PATCH to `/search/1`, `/basket/1`, `/orders/1` … read as a CRITICAL unauthorized write. **Fixed** — the mutation probes now reject the shell, taking mutation-IDOR findings from 15 to 2 (13 were index.html). The 2 that remain are **read-back verified**: the probe writes a canary into an existing non-sensitive field, re-reads it, and restores the original value. Both are confirmed **persisted** (CRITICAL, 0.95) and restored: `PUT /api/Products/1` (canary in `name` — the changeProduct exploit) and `PUT /api/Hints/1` (canary in `text`). Hints has an auth-gated READ (401) but an open WRITE, so read-back confirms it from the write's own echoed response rather than a follow-up GET — a write-open, read-gated endpoint is verified, not downgraded. Each endpoint yields exactly one finding: the probe skips self-swaps (id→same id is not a cross-object test) and stops after the first accepted swap, so it no longer emits duplicate "swapped ID" findings or repeats the destructive read-back. Non-idor wobble between runs (±1–2 in xss/ssti) is canary/run variance, not this change.
 
@@ -104,6 +105,22 @@ authenticated idor 3/5 → 2/5 (basketManipulate + forgedFeedback, both real
 cross-user; basketAccess has no finding on the real `/rest/basket/:id` route).
 A regression test (`tests/benchmarks/test_juiceshop_ground_truth.py`) now fails
 if any single endpoint credits two idor challenges.
+
+✦ **idor peaks at 4/6 only in `auth+writes`** — the combined mode is the sole
+one that reaches auth-gated mutation vulns. `feedbackChallenge` ("Five-Star
+Feedback") is a **BOLA delete**: an authenticated user deletes feedback they do
+not own (`DELETE /api/Feedbacks/{id}` — 401 anonymous, 200 authenticated). It
+was mislabeled `mass_assignment` in the ground truth and is corrected to `idor`;
+the mutation-DELETE probe detects it, but only when the probe runs authenticated
+AND `--probe-writes` derives DELETE endpoints. Since two idor challenges now live
+on `/api/Feedbacks` (forged POST vs unauthorized DELETE), they are told apart by
+the finding title, not the endpoint. The two idor gaps in this mode are
+`basketAccess` (no finding on `/rest/basket/:id`) and `forgedReview`
+(`/rest/products/reviews`, auth-gated, not reached).
+
+The mutation probes WRITE to and DELETE from the target, so they run **only**
+under `--probe-writes` — never as a side effect of an ordinary authenticated
+read scan against a live app.
 
 ◊ **SSRF (both challenges) needs authentication.** Both live on `POST
 /profile/image/url` (`imageUrl`): `ssrfChallenge` fetches an internal resource,
@@ -133,7 +150,7 @@ confirming the blind SSRF.
   authenticates (returns a session token) where a benign credential is rejected —
   reaching the login POST that url-only discovery can't recover from the SPA
   bundle ([#2](https://github.com/jaurakunal/isitsecure/issues/2)). The remaining
-  recall levers are mass assignment (1/2), rate limiting, and the remaining XSS
+  recall levers are rate limiting, the remaining XSS
   variants.
 
 - **file_upload 0/4 and XXE 0/2 are fixed.** Neither was a detection gap: the
@@ -144,21 +161,19 @@ confirming the blind SSRF.
   posted a raw XML body, where that endpoint takes XML as an uploaded file.
   Three separate fixes, none of them to a scanner's detection logic.
 
-- **mass_assignment is 1/2**, and getting there took two fixes in different
-  layers. `POST /api/Users` was never in the inventory: Juice Shop ships 10 of
-  its 13 JavaScript files as `<link rel="modulepreload">` chunks, and ingestion
-  only collected `<script src>`. Once discovered, the probe *was* accepted —
-  201, `role: admin` echoed back — but the reflection check only inspected the
-  top level of the response, and the object came wrapped in
-  `{"status":"success","data":{…}}`. A live, challenge-solving mass assignment
-  read as clean. Fixing discovery alone, or the envelope alone, yields nothing.
+- **mass_assignment is 1/1** — a single genuine challenge, fully detected.
+  `registerAdminChallenge` (`POST /api/Users` with `role: admin`) took two fixes
+  in different layers: the endpoint was never in the inventory (Juice Shop ships
+  10 of its 13 JS files as `<link rel="modulepreload">` chunks and ingestion
+  only collected `<script src>`), and once discovered the reflection check only
+  inspected the top level of the response, missing the `role` echoed inside a
+  `{"status":"success","data":{…}}` envelope. A live, challenge-solving mass
+  assignment read as clean until both were fixed.
 
-  The other half, `feedbackChallenge`, stays open for a different reason: the
-  probe sends the escalation field with **no valid base payload**, and
-  `POST /api/Feedbacks` also demands a captcha. That is app-specific
-  anti-automation rather than a generic gap, so it is documented in
-  [the scanner's doc](../docs/scanners/mass-assignment-scanner.md) rather than
-  special-cased.
+  It used to read **1/2**: the second "mass_assignment" challenge,
+  `feedbackChallenge` ("Five-Star Feedback"), was **mislabeled** — it is a BOLA
+  *delete* (get rid of feedback you do not own), not a mass assignment. It is now
+  scored as `idor` (see the ✦ note), which makes this class an honest 1/1.
 
 ### url-only IDOR: why it is now 0/5
 

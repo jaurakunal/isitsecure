@@ -63,3 +63,35 @@ def test_no_single_endpoint_credits_two_idor_challenges(url: str) -> None:
     discovered endpoint must not satisfy more than one of them."""
     crediting = [g.id for g in _idor_items() if _credits(g, url)]
     assert len(crediting) <= 1, f"{url} credits {crediting}"
+
+
+def _credits_titled(item, url: str, title: str) -> bool:
+    finding = {"category": "idor", "scanner_name": "idor_scanner",
+               "endpoint_url": url, "title": title}
+    return item.detected_by([finding]) is not None
+
+
+def test_two_feedback_idor_challenges_are_told_apart_by_finding():
+    """feedbackChallenge (BOLA delete) and forgedFeedbackChallenge (forged POST)
+    both live on /api/Feedbacks, so they must be distinguished by the finding's
+    title, not the endpoint — else one finding double-credits both."""
+    gt = {g.id: g for g in juiceshop.build_ground_truth()}
+    fb, fg = gt["feedbackChallenge"], gt["forgedFeedbackChallenge"]
+    url = "http://localhost:3000/api/Feedbacks/1"
+    delete_title = "Mutation IDOR — unauthorized resource deletion via swapped ID"
+    forged_title = "Cross-user IDOR on http://localhost:3000/api/Feedbacks/1"
+
+    assert _credits_titled(fb, url, delete_title)
+    assert not _credits_titled(fg, url, delete_title)
+    assert _credits_titled(fg, url, forged_title)
+    assert not _credits_titled(fb, url, forged_title)
+
+
+def test_feedback_challenge_is_idor_not_mass_assignment():
+    gt = {g.id: g for g in juiceshop.build_ground_truth()}
+    assert gt["feedbackChallenge"].vuln_class == "idor"
+    assert gt["feedbackChallenge"].auth_required is True
+    # mass_assignment now has only the genuine one
+    ma = [g.id for g in juiceshop.build_ground_truth()
+          if g.vuln_class == "mass_assignment" and g.dast_detectable]
+    assert ma == ["registerAdminChallenge"]
