@@ -549,100 +549,126 @@ class ActiveInjectionScanner(AuthAwareScanner):
         endpoint: DiscoveredEndpoint,
         param_name: str,
     ) -> DeepFinding | None:
-        """Inject NoSQL operator payloads and compare response to baseline.
+        """Prove NoSQL operator injection with a DIFFERENTIAL oracle.
 
-        Tests both query-string format ([$ne]=null appended to param name)
-        and JSON body payloads via POST. Detection relies on response size
-        inflation or NoSQL error/document indicators in the response.
+        Ported from the pentest NoSQL exploiter: a control sets the param to an
+        exact sentinel that should not exist (an empty / not-found / denied
+        baseline); each Mongo operator (``$ne``/``$regex``/``$gt``), if the
+        backend applies the client-supplied operator, BROADENS the query to
+        return real records. Injection is proven only when the operator response
+        is authorized, non-empty, and distinct from — and broader than — the
+        control. A backend that treats ``param[$ne]`` as a literal returns the
+        control body and is not flagged, so a param that merely echoes input
+        cannot false-positive (the old size-ratio heuristic could). Read-only.
         """
-        # 1. Get baseline response for comparison
-        baseline_url = inject_query_param(endpoint.url, param_name, "baseline_safe_value")
+        # 1. Control: exact sentinel via query string (empty/denied baseline).
+        control_url = inject_query_param(
+            endpoint.url, param_name, InjectionConfig.NOSQL_SENTINEL,
+        )
         try:
-            baseline_response = await client.get(baseline_url)
-            baseline_body = baseline_response.text
-            baseline_size = len(baseline_body)
+            control = await client.get(control_url)
+            control_body = control.text
+            control_ok = 200 <= control.status_code < 300
         except (httpx.HTTPError, Exception):
             return None
 
-        # 2. Test query-string NoSQL payloads ([$ne]=null style)
-        for qs_payload in InjectionConfig.NOSQL_QUERY_PAYLOADS:
+        # 2. Query-string operator injection: param[$op]=value.
+        for operator, value in InjectionConfig.NOSQL_OPERATORS:
             injected_url = inject_query_param(
-                endpoint.url, f"{param_name}{qs_payload}", ""
+                endpoint.url, f"{param_name}[{operator}]", value,
             )
             try:
-                response = await client.get(injected_url)
-                body = response.text
+                resp = await client.get(injected_url)
+                body = resp.text
             except (httpx.HTTPError, Exception):
                 continue
-
-            finding = self._check_nosql_response(
-                body, baseline_size, endpoint, param_name, qs_payload, baseline_body
+            label = f"{param_name}[{operator}]={value}"
+            finding = self._nosql_finding_if_proven(
+                resp.status_code, body, control_ok, control_body,
+                endpoint, param_name, label,
             )
             if finding:
                 return finding
 
-        # 3. Test JSON body NoSQL payloads (POST endpoints)
+        # 3. JSON body operator injection (POST endpoints), same oracle.
         if endpoint.method.value == "POST":
+            try:
+                cresp = await client.request(
+                    "POST", endpoint.url,
+                    content=json.dumps({param_name: InjectionConfig.NOSQL_SENTINEL}),
+                    headers={"Content-Type": "application/json"},
+                )
+                body_control, body_control_ok = cresp.text, 200 <= cresp.status_code < 300
+            except (httpx.HTTPError, Exception):
+                body_control, body_control_ok = control_body, control_ok
             for payload in InjectionConfig.NOSQL_PAYLOADS:
-                # Build a body with the param name wrapping the NoSQL operator
                 nosql_body = '{{"{}": {}}}'.format(param_name, payload)
                 try:
-                    response = await client.request(
-                        "POST",
-                        endpoint.url,
-                        content=nosql_body,
+                    resp = await client.request(
+                        "POST", endpoint.url, content=nosql_body,
                         headers={"Content-Type": "application/json"},
                     )
-                    body = response.text
+                    body = resp.text
                 except (httpx.HTTPError, Exception):
                     continue
-
-                finding = self._check_nosql_response(
-                    body, baseline_size, endpoint, param_name, payload, baseline_body
+                finding = self._nosql_finding_if_proven(
+                    resp.status_code, body, body_control_ok, body_control,
+                    endpoint, param_name, payload,
                 )
                 if finding:
                     return finding
 
         return None
 
-    def _check_nosql_response(
+    def _nosql_finding_if_proven(
         self,
+        status: int,
         body: str,
-        baseline_size: int,
+        control_ok: bool,
+        control_body: str,
         endpoint: DiscoveredEndpoint,
         param_name: str,
         payload: str,
-        baseline_body: str = "",
     ) -> DeepFinding | None:
-        """Analyze a response for NoSQL injection indicators.
-
-        Returns a DeepFinding if the response contains MongoDB indicators
-        or is significantly larger than the baseline (data leak).
-        """
-        # Check for NoSQL error/document indicators
-        for pattern in InjectionConfig.NOSQL_INDICATORS:
-            match = re.search(pattern, body, re.IGNORECASE)
-            if match:
+        """A NoSQL finding when either a genuine error leaks, or the operator
+        broadened the query versus the exact-match control."""
+        # Genuine backend error leak (not a document marker — those are normal).
+        for pattern in InjectionConfig.NOSQL_ERROR_INDICATORS:
+            m = re.search(pattern, body, re.IGNORECASE)
+            if m:
                 return self._build_nosql_finding(
                     endpoint, param_name, payload, body,
-                    f"Matched NoSQL indicator: {match.group(0)}",
-                    baseline_body,
+                    f"NoSQL backend error leaked: {m.group(0)}", control_body,
                 )
-
-        # Check for response size inflation (data leak)
-        if (
-            baseline_size >= InjectionConfig.NOSQL_MIN_BASELINE_SIZE
-            and len(body) > baseline_size * InjectionConfig.NOSQL_RESPONSE_SIZE_RATIO
-        ):
+        # Differential broadening oracle.
+        if self._operator_broadened(status, body, control_ok, control_body):
+            c = (control_body or "").strip()
+            bounded = (not control_ok) or len(c) < 2
+            why = ("empty/denied" if bounded
+                   else f"{len(c)}b) < attack ({len(body.strip())}b")
             return self._build_nosql_finding(
                 endpoint, param_name, payload, body,
-                f"Response size inflated: baseline={baseline_size}, "
-                f"injected={len(body)} "
-                f"(ratio={len(body) / baseline_size:.1f}x)",
-                baseline_body,
+                f"Operator broadened the query vs an exact-match control "
+                f"(control {why} — the backend applied a client-supplied "
+                f"Mongo operator).",
+                control_body,
             )
-
         return None
+
+    @staticmethod
+    def _operator_broadened(
+        status: int, body: str, control_ok: bool, control_body: str,
+    ) -> bool:
+        """The operator returned authorized, non-empty data that is distinct
+        from and broader than the control. Ported from the pentest exploiter."""
+        if not (200 <= status < 300):
+            return False
+        a = (body or "").strip()
+        c = (control_body or "").strip()
+        if not a or a == c:
+            return False
+        control_bounded = (not control_ok) or len(c) < 2
+        return control_bounded or len(a) > len(c) + InjectionConfig.NOSQL_BROADEN_MARGIN
 
     def _build_nosql_finding(
         self,
@@ -926,15 +952,17 @@ class ActiveInjectionScanner(AuthAwareScanner):
                     continue
 
                 body = resp.text
-                if expected in body:
-                    # Verify: the expected output should NOT appear when we
-                    # send a non-template value (avoid false positives from
-                    # pages that naturally contain "49")
+                # The product must be EVALUATED, not merely reflected: the
+                # literal payload appearing verbatim (a page echoing
+                # `{{99991*7}}`) is not SSTI, even if "699937" is elsewhere.
+                if expected in body and payload not in body:
+                    # And the product must not appear for a benign value — a
+                    # page that naturally contains it is not SSTI either.
                     safe_resp = await self._probe(
                         client, endpoint, param_name, "harmless_test_value",
                     )
                     if safe_resp is None or expected in safe_resp.text:
-                        continue  # "49" appears naturally — not SSTI
+                        continue
 
                     capture = build_probe_capture(
                         method="GET",

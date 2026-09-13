@@ -14,10 +14,10 @@ _Runs: 2026-09 · `--llm none` (pure DAST detection, no LLM) · Juice Shop pinne
 
 | Target | Mode | Recall | False positives | Findings |
 |---|---|--:|--:|--:|
-| `juiceshop` | url-only | **24/45 (53%)** — per-challenge, deterministic | idor read-FPs removed (see below) | 28 |
-| `juiceshop-writes` | url-only + `--probe-writes` | **30/45 (67%)** | mutation-IDOR shell-FPs fixed; idor over-credit removed | 73 |
-| `juiceshop-auth` | authenticated, two-user | **32/45 (71%)** | not yet measured | 37 |
-| `juiceshop-auth-writes` | authenticated + `--probe-writes` | **36/45 (80%)** — the strongest mode | not yet measured | 71 |
+| `juiceshop` | url-only | **22/45 (49%)** — per-challenge, deterministic | idor + ~18 NoSQL FPs removed (see below) | 26 |
+| `juiceshop-writes` | url-only + `--probe-writes` | **28/45 (62%)** | + ~18 NoSQL/SSTI FPs removed | 55 |
+| `juiceshop-auth` | authenticated, two-user | **~30/45 (67%)** — a band | not yet measured | 35 |
+| `juiceshop-auth-writes` | authenticated + `--probe-writes` | **~34/45 (76%)** — strongest mode, a band | not yet measured | 53 |
 | `vampi-vulnerable` | url-only | **2/3** (SQLi, headers; IDOR needs auth) | — | 8–10 |
 | `vampi-secure` | url-only | — | **0** (was 2 IDOR — fixed) | 7–9 |
 | `nodegoat-auth` | authenticated | **3/3** (headers + injection + XSS) | unmeasured | 19 |
@@ -74,9 +74,9 @@ Recall **24/45 (53%)** url-only, deterministic across runs. Of 113 challenges,
 68 are out of scope for DAST (crypto, CTF mechanics, deep business logic,
 SAST-only).
 
-Three columns, because two of them cost something: `--probe-writes` writes to
-the target and doubles the runtime, and the authenticated pass needs two
-registered users.
+Four columns, because the modes cost different things: `--probe-writes` writes
+to the target and doubles the runtime, the authenticated pass needs two
+registered users, and the combined mode needs both.
 
 | Class | url-only | `--probe-writes` | authenticated | auth+writes |
 |---|--:|--:|--:|--:|
@@ -86,16 +86,16 @@ registered users.
 | xxe | **2/2** | **2/2** | **2/2** | **2/2** |
 | open_redirect | 2/2 | 2/2 | 2/2 | 2/2 |
 | info_disclosure | 2/2 | 2/2 | 2/2 | 2/2 |
-| nosql | 2/3 | 2/3 | 2/3 | 2/3 |
+| nosql | 0/3‖ | 0/3‖ | 0/3‖ | 0/3‖ |
 | idor | **0/6** | 1/6† | 2/6 | **4/6**✦ |
 | xss | 1/7 | **4/7** | 2/7 | **5/7** |
 | csrf | 0/1 | **1/1** | 0/1 | **1/1** |
-| ssti | 0/1 | **1/1** | 0/1 | 0/1 |
+| ssti | 0/1‖ | 0/1‖ | 0/1‖ | 0/1‖ |
 | mass_assignment | 0/1 | **1/1** | 0/1 | **1/1** |
 | ssrf | 0/2 | 0/2 | **2/2**◊ | **2/2**◊ |
 | auth | 0/1 | 0/1 | 0/1 | 0/1 |
 | rate_limit | 0/1 | 0/1 | 0/1 | 0/1 |
-| **total** | **24/45** | **30/45** | **32/45** | **36/45** |
+| **total** | **22/45** | **28/45** | **~30/45** | **~34/45** |
 
 † `--probe-writes` idor comes from the **mutation** path (PUT/PATCH with a swapped id). It had the same `2xx = confirmed` bug the read path did, made worse by not rejecting the SPA shell: an Angular catch-all serves index.html (200 text/html) for any unmatched route, so a PATCH to `/search/1`, `/basket/1`, `/orders/1` … read as a CRITICAL unauthorized write. **Fixed** — the mutation probes now reject the shell, taking mutation-IDOR findings from 15 to 2 (13 were index.html). The 2 that remain are **read-back verified**: the probe writes a canary into an existing non-sensitive field, re-reads it, and restores the original value. Both are confirmed **persisted** (CRITICAL, 0.95) and restored: `PUT /api/Products/1` (canary in `name` — the changeProduct exploit) and `PUT /api/Hints/1` (canary in `text`). Hints has an auth-gated READ (401) but an open WRITE, so read-back confirms it from the write's own echoed response rather than a follow-up GET — a write-open, read-gated endpoint is verified, not downgraded. Each endpoint yields exactly one finding: the probe skips self-swaps (id→same id is not a cross-object test) and stops after the first accepted swap, so it no longer emits duplicate "swapped ID" findings or repeats the destructive read-back. Non-idor wobble between runs (±1–2 in xss/ssti) is canary/run variance, not this change.
 
@@ -111,6 +111,21 @@ authenticated idor 3/5 → 2/5 (basketManipulate + forgedFeedback, both real
 cross-user; basketAccess has no finding on the real `/rest/basket/:id` route).
 A regression test (`tests/benchmarks/test_juiceshop_ground_truth.py`) now fails
 if any single endpoint credits two idor challenges.
+
+‖ **SSTI and NoSQL are 0 on the deterministic scanner — and the old numbers
+were false positives.** Both detectors were ported to the pentest engine's
+differential oracles: SSTI now requires the distinctive product `99991*7=699937`
+to be **evaluated, not reflected** (the old `{{7*7}}`→`49` matched any page with
+"49"); NoSQL now requires a Mongo operator to **broaden** the query versus an
+exact-match sentinel control (the old size-ratio heuristic sprayed ~18 findings
+per `--probe-writes` scan — `/profile`, `/redirect`, `/rest/captcha`, … — whose
+control and attack responses are byte-identical). The old `ssti 1/1` (a FP on
+`/api/SecurityAnswers`) and `nosql 2/3` (2 of ~18 FPs matching challenge tokens)
+were coincidental credits, the same pattern as the IDOR over-credit. Removing
+them drops recall by 2 in every mode but eliminates ~18 false positives per
+scan. Genuinely detecting Juice Shop's SSTI/NoSQL (path-param `$where`, PUT-body
+operator injection) needs the agent-grounded targeting the pentest engine
+supplies — the deterministic scanner honestly does not.
 
 ✦ **idor peaks at 4/6 only in `auth+writes`** — the combined mode is the sole
 one that reaches auth-gated mutation vulns. `feedbackChallenge` ("Five-Star
@@ -156,7 +171,7 @@ confirming the blind SSRF.
   authenticates (returns a session token) where a benign credential is rejected —
   reaching the login POST that url-only discovery can't recover from the SPA
   bundle ([#2](https://github.com/jaurakunal/isitsecure/issues/2)). The remaining
-  recall levers are rate limiting, the remaining XSS
+  recall levers are rate limiting, SSTI, NoSQL, the remaining XSS
   variants.
 
 - **file_upload 0/4 and XXE 0/2 are fixed.** Neither was a detection gap: the
@@ -306,13 +321,17 @@ unescaped reflection of a unique probe, which a hardened app doesn't produce).
   the per-challenge scorer to them is tracked work.
 - **Precision is only measured on `vampi-secure`** (a false-positive allow-list).
   On vulnerable builds, the findings count is undifferentiated.
-- **NoSQL injection is a known false-positive-prone class**
-  ([#5](https://github.com/jaurakunal/isitsecure/issues/5)). The oracle keys on
-  response-size / document deltas and can fire on endpoints with naturally
-  variable responses (e.g. `/redirect`). A tightening attempt over-corrected and
-  killed the real detections (2/3 → 0/3), so it was reverted — the honest trade
-  is to keep the 2/3 detections and flag the class as noisy. Treat NoSQL findings
-  as leads to confirm, not confirmed bugs.
+- **NoSQL was a false-positive-prone class — now fixed by a differential
+  oracle** ([#5](https://github.com/jaurakunal/isitsecure/issues/5)). The old
+  detector keyed on response-size / document deltas and sprayed ~18 findings per
+  `--probe-writes` scan on endpoints with naturally variable responses
+  (`/redirect`, `/profile`, `/rest/captcha`, …). It now requires a Mongo operator
+  to **broaden** the query versus an exact-match sentinel control (ported from
+  the pentest engine): control and attack must differ, with the control
+  empty/denied or the attack materially larger. That takes NoSQL findings on
+  Juice Shop from ~18 (mostly false) to **0** — the honest number, because the
+  scanner never soundly detected Juice Shop's actual NoSQL points (path-param
+  `$where`, PUT-body operator injection), which need the agentic pentest path.
 - **Known variance:** time-based checks are load-sensitive; VAmPI's `/createdb`
   resets its DB mid-scan. Juice Shop url-only was deterministic across runs.
 
