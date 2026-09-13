@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.28.0](https://github.com/jaurakunal/isitsecure/compare/v0.27.1...v0.28.0) (2026-09-13)
+
+
+### Features
+
+* **idor:** authenticate the mutation probes; detect the feedback BOLA delete ([#229](https://github.com/jaurakunal/isitsecure/issues/229)) ([dfe03b6](https://github.com/jaurakunal/isitsecure/commit/dfe03b6bf0da697b135d6f1711a3c48e37ca6331))
+
 ## [0.27.1](https://github.com/jaurakunal/isitsecure/compare/v0.27.0...v0.27.1) (2026-09-13)
 
 
