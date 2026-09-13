@@ -413,7 +413,7 @@ class IDORConfig:
         "password", "passwd", "token", "secret", "hash", "salt", "apikey",
         "email", "phone", "ssn", "iban", "card",
         "price", "cost", "amount", "balance", "credit", "wallet",
-        "role", "admin", "permission", "isdeluxe",
+        "role", "admin", "permission",
     )
     CONFIDENCE_MUTATION_DELETE_IDOR = 0.98
 
