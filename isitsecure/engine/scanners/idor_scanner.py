@@ -59,6 +59,18 @@ class IDORScanner:
     5. Also test unauthenticated access to endpoints that should require auth
     """
 
+    def __init__(self, probe_writes: bool = False) -> None:
+        # Set by the orchestrator in authenticated mode (AuthAware-style duck
+        # typing: the agent calls setattr on any scanner exposing this). Used
+        # ONLY for the mutation probes -- the read/swap probes stay anonymous
+        # on purpose (an unauthenticated read cannot confirm IDOR; #214).
+        self._auth_headers: dict[str, str] = {}
+        # The mutation probes (PUT/PATCH/DELETE with swapped ids) WRITE to and
+        # DELETE from the target, so they run only when the operator opts into
+        # writes with --probe-writes -- never as a side effect of an ordinary
+        # authenticated read scan against a live app.
+        self._probe_writes = probe_writes
+
     async def scan(
         self, endpoints: list[DiscoveredEndpoint]
     ) -> tuple[list[IDORTestResult], list[DeepFinding]]:
@@ -83,6 +95,11 @@ class IDORScanner:
         results: list[IDORTestResult] = []
         mutation_findings: list[DeepFinding] = []
 
+        # Read/swap probes run ANONYMOUS on purpose: an unauthenticated read
+        # cannot confirm IDOR (#214), so authing them would change what they
+        # test. Mutation probes are different -- the vulnerable write/delete is
+        # usually auth-gated (Juice Shop's feedback BOLA delete is 401 anon), so
+        # they run with the session when one is available.
         async with RateLimitedClient(
             max_concurrent=IDORConfig.MAX_CONCURRENT_PROBES,
             delay_seconds=IDORConfig.PROBE_DELAY_SECONDS,
@@ -97,17 +114,26 @@ class IDORScanner:
                 result = await self._test_endpoint(client, endpoint)
                 results.append(result)
 
-            # Mutation IDOR: test PUT/PATCH/DELETE with swapped IDs
-            mutation_testable = self._filter_mutation_endpoints(endpoints)
-            for endpoint in mutation_testable[: IDORConfig.MAX_ENDPOINTS_TO_TEST]:
-                if budget.expired():
-                    emit("IDOR: out of time during mutation tests")
-                    break
-                emit(f"IDOR: mutation test {endpoint.method.value} {endpoint.url}")
-                findings = await self._test_mutation_idor(
-                    client, endpoint
-                )
-                mutation_findings.extend(findings)
+        # Mutation IDOR: test PUT/PATCH/DELETE with swapped IDs, authenticated
+        # when a session is available (falls back to anonymous otherwise).
+        mutation_testable = self._filter_mutation_endpoints(endpoints)
+        if self._probe_writes and mutation_testable and not budget.expired():
+            async with RateLimitedClient(
+                max_concurrent=IDORConfig.MAX_CONCURRENT_PROBES,
+                delay_seconds=IDORConfig.PROBE_DELAY_SECONDS,
+                timeout_seconds=IDORConfig.HTTP_TIMEOUT_SECONDS,
+                user_agent=DeepScanConfig.USER_AGENT,
+                extra_headers=self._auth_headers or None,
+            ) as mclient:
+                for endpoint in mutation_testable[: IDORConfig.MAX_ENDPOINTS_TO_TEST]:
+                    if budget.expired():
+                        emit("IDOR: out of time during mutation tests")
+                        break
+                    emit(f"IDOR: mutation test {endpoint.method.value} {endpoint.url}")
+                    findings = await self._test_mutation_idor(
+                        mclient, endpoint
+                    )
+                    mutation_findings.extend(findings)
 
         confirmed = sum(1 for r in results if r.risk_level == IDORRiskLevel.CONFIRMED)
         likely = sum(1 for r in results if r.risk_level == IDORRiskLevel.LIKELY)
