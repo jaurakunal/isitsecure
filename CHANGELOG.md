@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.31.0](https://github.com/jaurakunal/isitsecure/compare/v0.30.0...v0.31.0) (2026-09-14)
+
+
+### Features
+
+* **go:** OSV dependency scanning for go.mod ([#244](https://github.com/jaurakunal/isitsecure/issues/244)) ([d95e32d](https://github.com/jaurakunal/isitsecure/commit/d95e32d8fb425ce02f3fd7bfc0bacbcbcc1ac117))
+
 ## [0.30.0](https://github.com/jaurakunal/isitsecure/compare/v0.29.0...v0.30.0) (2026-09-14)
 
 
