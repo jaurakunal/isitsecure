@@ -150,10 +150,10 @@ class TestRepoIngestionFactory:
         svc = create_repo_ingestion_service()
         assert svc._workspace_detector is not None
 
-    def test_has_seven_route_mappers(self):
-        """Should have NextJS + Express + tRPC + GraphQL + Django + FastAPI + Spring route mappers."""
+    def test_has_eight_route_mappers(self):
+        """NextJS + Express + tRPC + GraphQL + Django + FastAPI + Spring + Go."""
         svc = create_repo_ingestion_service()
-        assert len(svc._route_mappers) == 7
+        assert len(svc._route_mappers) == 8
 
     def test_route_mapper_types(self):
         """Route mappers should be the expected types."""
@@ -166,8 +166,12 @@ class TestRepoIngestionFactory:
         from isitsecure.engine.code_analysis.trpc_route_mapper import (
             TRPCRouteMapper,
         )
+        from isitsecure.engine.code_analysis.go_route_mapper import (
+            GoRouteMapper,
+        )
         svc = create_repo_ingestion_service()
         types = [type(m) for m in svc._route_mappers]
         assert NextJSRouteMapper in types
         assert ExpressRouteMapper in types
         assert TRPCRouteMapper in types
+        assert GoRouteMapper in types

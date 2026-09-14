@@ -189,6 +189,9 @@ def create_repo_ingestion_service():
     from isitsecure.engine.code_analysis.spring_route_mapper import (
         SpringRouteMapper,
     )
+    from isitsecure.engine.code_analysis.go_route_mapper import (
+        GoRouteMapper,
+    )
     from isitsecure.engine.code_analysis.workspace_detector import (
         WorkspaceDetector,
     )
@@ -204,6 +207,7 @@ def create_repo_ingestion_service():
         DjangoRouteMapper(),
         FastAPIRouteMapper(),
         SpringRouteMapper(),
+        GoRouteMapper(),
     ]
 
     workspace_detector = WorkspaceDetector(

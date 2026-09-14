@@ -28,6 +28,7 @@ Route file: app/api/tasks/[id]/route.ts
 | **Python** | pyright / basedpyright (preferred), pylsp (fallback) | `pip install pyright` (preferred) or `pip install python-lsp-server` | Traces Depends(), decorators |
 | **Java** | jdtls | `isitsecure setup --lsp` (`brew install jdtls`) or the [jdtls install guide](https://github.com/eclipse-jdtls/eclipse.jdt.ls#installation) | Traces @PreAuthorize, SecurityConfig |
 | **Kotlin** | kotlin-language-server | `isitsecure setup --lsp` (`brew install kotlin-language-server`) or [releases](https://github.com/fwcd/kotlin-language-server/releases) | Traces @PreAuthorize, SecurityConfig |
+| **Go** | gopls (needs the `go` toolchain) | `isitsecure setup --lsp` (`brew install gopls`) or `go install golang.org/x/tools/gopls@latest` | Traces middleware chains, context ownership |
 
 isitsecure picks the server that matches the language your project is written in, and uses regex-based auth detection when there isn't one (still effective, slightly higher false positive rate). For Python it prefers pyright over pylsp — pyright's cross-file definition/reference resolution traces auth through call chains more reliably. For a Kotlin-dominant project it prefers kotlin-language-server over jdtls, which resolves Kotlin poorly.
 
@@ -420,6 +421,47 @@ public SecurityFilterChain filterChain(HttpSecurity http) {
 - **Java 17+** — required for jdtls
 - **Maven or Gradle** — jdtls needs a build tool to resolve dependencies
 
+## Go LSP Setup
+
+gopls is the official Go language server. It is self-contained EXCEPT that it
+shells out to the `go` toolchain to load and type-check packages — **without
+`go` on PATH, gopls starts but resolves nothing**, so isitsecure treats the Go
+toolchain as a runtime requirement and falls back to regex auth detection when
+it is missing (rather than trusting a server that answers nothing).
+
+### Install gopls (and Go)
+
+```bash
+# macOS (Homebrew) — installs gopls; install Go too if you don't have it
+brew install gopls
+brew install go            # or from https://go.dev/dl/
+
+# Any platform, if you already have Go:
+go install golang.org/x/tools/gopls@latest
+
+# Verify
+go version
+gopls version
+```
+
+### What Gets Traced
+
+gopls spawns during a Go scan and traces the mapped routes, but the auth-flow
+tracer's per-route auth **verification** currently recognizes JS/TS, Python, and
+Java idioms — not yet Go's middleware/handler patterns. So on Go projects the
+LSP is initialized and runs, but does not yet refine (suppress/boost) auth
+findings. The working Go SAST today is the injection taint floor (SQLi, command
+injection, SSRF, path traversal) plus route mapping. Deeper Go auth tracing —
+
+```go
+// (planned) Does the AuthMiddleware actually run before this handler?
+api := r.Group("/api/v1")
+api.Use(AuthMiddleware())
+api.GET("/users/:id", getUser)
+```
+
+— is a tracked follow-up.
+
 ## How the Server Is Chosen
 
 The choice is made **per scan, from your code** — not from what happens to be
@@ -431,6 +473,7 @@ files and picks the server for whichever language most of it is written in:
 | TypeScript / JavaScript | `.ts` `.tsx` `.js` `.jsx` `.mjs` `.cjs` | typescript-language-server |
 | Python | `.py` `.pyi` | pyright-langserver / basedpyright (preferred), pylsp (fallback) |
 | Java / Kotlin | `.java` `.kt` `.kts` | jdtls, or kotlin-language-server when Kotlin source dominates |
+| Go | `.go` | gopls (only when the `go` toolchain is also on PATH) |
 
 Vendored and generated directories (`node_modules`, `.venv`, `dist`, `target`,
 and hidden directories) don't count toward the total, so a Python service with

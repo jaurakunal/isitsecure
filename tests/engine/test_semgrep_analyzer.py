@@ -80,7 +80,7 @@ class TestGracefulNoOp:
 
     @pytest.mark.asyncio
     async def test_no_supported_files_skips_run(self, monkeypatch, tmp_path):
-        """A repo with no rule-pack-covered files (no JS/TS/Python) skips semgrep."""
+        """A repo with no rule-pack-covered files (no JS/TS/Python/Java/Kotlin/Go) skips semgrep."""
         monkeypatch.setattr(SemgrepAnalyzer, "_find_semgrep", staticmethod(lambda: "/bin/semgrep"))
 
         async def _boom(*a, **k):  # pragma: no cover - must not be called
@@ -88,7 +88,7 @@ class TestGracefulNoOp:
 
         monkeypatch.setattr(SemgrepAnalyzer, "_run_semgrep", _boom)
         analyzer = SemgrepAnalyzer()
-        findings = await analyzer.scan(_disk_snapshot(tmp_path, ["main.go", "README.md"]))
+        findings = await analyzer.scan(_disk_snapshot(tmp_path, ["main.rb", "README.md"]))
         assert findings == []
 
     @pytest.mark.asyncio
@@ -141,6 +141,10 @@ class TestPackSelection:
         packs = SemgrepAnalyzer()._select_packs(_disk_snapshot(tmp_path, ["src/App.kt"]))
         assert [p.name for p in packs] == ["injection-kotlin.yaml"]
 
+    def test_go_only(self, tmp_path):
+        packs = SemgrepAnalyzer()._select_packs(_disk_snapshot(tmp_path, ["cmd/main.go"]))
+        assert [p.name for p in packs] == ["injection-go.yaml"]
+
     def test_mixed_repo_gets_all_present(self, tmp_path):
         packs = SemgrepAnalyzer()._select_packs(
             _disk_snapshot(tmp_path, ["a.ts", "b.py", "C.java", "D.kt"]))
@@ -149,7 +153,7 @@ class TestPackSelection:
             "injection-java.yaml", "injection-kotlin.yaml"}
 
     def test_unsupported_language_gets_nothing(self, tmp_path):
-        packs = SemgrepAnalyzer()._select_packs(_disk_snapshot(tmp_path, ["main.go", "README.md"]))
+        packs = SemgrepAnalyzer()._select_packs(_disk_snapshot(tmp_path, ["main.rb", "README.md"]))
         assert packs == []
 
     def test_selects_lang_in_dir_dropped_from_file_index(self, tmp_path):
