@@ -495,25 +495,34 @@ def print_scorecard(results: list[dict]) -> None:
 # code-only scan of a local fixture tree (see sast_injection.py). It's exposed
 # here as a pseudo-target so it runs from the same entrypoint (and by default).
 SAST_INJECTION = "sast-injection"
+# Go SAST recall against the real govwa app. Opt-in only (named or --all): it
+# clones an external repo and wants the go/gopls toolchain, so it must not run
+# in the default no-arg set (which stays offline-friendly).
+GO_SAST = "go-sast"
+_PSEUDO = {SAST_INJECTION, GO_SAST}
 
 
-def resolve_selection(targets: list[str], all_flag: bool) -> tuple[list[str], bool, list[str]]:
+def resolve_selection(
+    targets: list[str], all_flag: bool
+) -> tuple[list[str], bool, bool, list[str]]:
     """Plan a run from the CLI args (pure — no Docker, no side effects).
 
-    Returns (docker target names to run, whether to run sast-injection, unknown names).
-    The SAST pseudo-target runs when named, with --all, or in the default (no-arg) set.
+    Returns (docker names, run sast-injection?, run go-sast?, unknown names).
+    sast-injection runs when named, with --all, or in the default (no-arg) set.
+    go-sast runs only when named or with --all (never in the default set).
     """
     valid = {t.name for t in TARGETS}
     want_sast = SAST_INJECTION in targets or all_flag or not targets
-    docker_names = [n for n in targets if n != SAST_INJECTION]
+    want_go_sast = GO_SAST in targets or all_flag
+    docker_names = [n for n in targets if n not in _PSEUDO]
     if docker_names:
         unknown = [n for n in docker_names if n not in valid]
-        return [n for n in docker_names if n in valid], want_sast, unknown
+        return [n for n in docker_names if n in valid], want_sast, want_go_sast, unknown
     if all_flag:
-        return [t.name for t in TARGETS], want_sast, []
-    if targets:  # only sast-injection was requested
-        return [], want_sast, []
-    return ["vampi-vulnerable", "vampi-secure"], want_sast, []
+        return [t.name for t in TARGETS], want_sast, want_go_sast, []
+    if targets:  # only pseudo-targets were requested
+        return [], want_sast, want_go_sast, []
+    return ["vampi-vulnerable", "vampi-secure"], want_sast, want_go_sast, []
 
 
 def run_sast_injection() -> int:
@@ -539,6 +548,32 @@ def run_sast_injection() -> int:
     return 0 if si.passed(r) else 1
 
 
+def run_go_sast() -> int:
+    """Run the Go SAST benchmark (govwa); 0 on full class recall, else 1.
+
+    Skips (returns 0) when its tools or the network are unavailable — like the
+    Docker targets skip without Docker.
+    """
+    import go_sast as gs
+
+    print(f"\n=== {GO_SAST} ===\n    code-only recall against the real govwa "
+          f"app (clones a pinned commit; needs semgrep, and go/gopls for auth)")
+    if not gs._have("isitsecure", "semgrep"):
+        print("    SKIPPED — need isitsecure + semgrep on PATH.")
+        return 0
+    if not gs.ensure_clone():
+        print("    SKIPPED — could not obtain govwa (git/network unavailable).")
+        return 0
+    try:
+        findings = gs.run_scan()
+    except Exception as e:  # noqa: BLE001 - surface, don't crash the whole suite
+        print(f"    Go SAST scan failed: {e}")
+        return 1
+    r = gs.score(findings)
+    gs.print_report(r)
+    return 0 if gs.passed(r) else 1
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("targets", nargs="*", help="target names (default: vampi + sast-injection)")
@@ -554,9 +589,12 @@ def main() -> int:
         REPORT_DIR = args.report_dir
 
     by_name = {t.name: t for t in TARGETS}
-    docker_names, want_sast, unknown = resolve_selection(args.targets, args.all)
+    docker_names, want_sast, want_go_sast, unknown = resolve_selection(
+        args.targets, args.all
+    )
     if unknown:
-        print(f"Unknown targets: {unknown}. Available: {list(by_name) + [SAST_INJECTION]}")
+        print(f"Unknown targets: {unknown}. "
+              f"Available: {list(by_name) + [SAST_INJECTION, GO_SAST]}")
         return 2
     selected = [by_name[n] for n in docker_names]
 
@@ -569,12 +607,16 @@ def main() -> int:
         for r in results
     )
     sast_rc = run_sast_injection() if want_sast else 0
+    go_sast_rc = run_go_sast() if want_go_sast else 0
     if regressions:
         print(f"\n✗ {regressions} regression failure(s) — a finding the scanner "
               f"reliably catches was dropped by the full scan. See ⚠ REGRESSION above.")
         return 1
     if sast_rc:
         print("\n✗ SAST injection benchmark failed (recall < 100% or FP > 0).")
+        return 1
+    if go_sast_rc:
+        print("\n✗ Go SAST benchmark failed (class recall < 100%).")
         return 1
     return 0
 

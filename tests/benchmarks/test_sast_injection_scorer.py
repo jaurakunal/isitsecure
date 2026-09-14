@@ -207,28 +207,80 @@ class TestRunBenchmarksWiring:
         self.rb = rb
 
     def test_default_runs_vampi_plus_sast(self):
-        docker, want_sast, unknown = self.rb.resolve_selection([], all_flag=False)
+        docker, want_sast, want_go, unknown = self.rb.resolve_selection([], all_flag=False)
         assert want_sast is True
+        assert want_go is False  # go-sast is opt-in, not in the default set
         assert set(docker) == {"vampi-vulnerable", "vampi-secure"}
         assert unknown == []
 
     def test_sast_only(self):
-        docker, want_sast, unknown = self.rb.resolve_selection(["sast-injection"], all_flag=False)
+        docker, want_sast, want_go, unknown = self.rb.resolve_selection(["sast-injection"], all_flag=False)
         assert docker == [] and want_sast is True and unknown == []
 
     def test_docker_target_only_skips_sast(self):
-        docker, want_sast, unknown = self.rb.resolve_selection(["juiceshop"], all_flag=False)
+        docker, want_sast, want_go, unknown = self.rb.resolve_selection(["juiceshop"], all_flag=False)
         assert docker == ["juiceshop"] and want_sast is False
 
     def test_mixed_docker_and_sast(self):
-        docker, want_sast, unknown = self.rb.resolve_selection(
+        docker, want_sast, want_go, unknown = self.rb.resolve_selection(
             ["juiceshop", "sast-injection"], all_flag=False)
         assert docker == ["juiceshop"] and want_sast is True
 
     def test_all_flag_includes_sast(self):
-        docker, want_sast, unknown = self.rb.resolve_selection([], all_flag=True)
+        docker, want_sast, want_go, unknown = self.rb.resolve_selection([], all_flag=True)
         assert want_sast is True and len(docker) == len(self.rb.TARGETS)
+        assert want_go is True
 
     def test_unknown_target_reported(self):
-        docker, want_sast, unknown = self.rb.resolve_selection(["nope"], all_flag=False)
+        docker, want_sast, want_go, unknown = self.rb.resolve_selection(["nope"], all_flag=False)
         assert unknown == ["nope"] and docker == []
+
+
+class TestGoSastWiring:
+    """go-sast pseudo-target dispatch + scorer (benchmarks/go_sast.py)."""
+
+    @pytest.fixture(autouse=True)
+    def _import(self):
+        import run_benchmarks as rb  # noqa: E402
+        import go_sast as gs  # noqa: E402
+        self.rb, self.gs = rb, gs
+
+    def test_go_sast_named_runs_only_it(self):
+        docker, want_sast, want_go, unknown = self.rb.resolve_selection(
+            ["go-sast"], all_flag=False)
+        assert want_go is True and docker == [] and unknown == []
+
+    def test_go_sast_not_in_default_set(self):
+        _, _, want_go, _ = self.rb.resolve_selection([], all_flag=False)
+        assert want_go is False
+
+    def test_all_flag_includes_go_sast(self):
+        _, _, want_go, _ = self.rb.resolve_selection([], all_flag=True)
+        assert want_go is True
+
+    def test_score_full_recall(self):
+        findings = [
+            {"category": "injection_risk", "title": "User input flows into a raw SQL query"},
+            {"category": "injection_risk", "title": "Unescaped data cast to template.HTML — XSS"},
+            {"category": "dependency_vuln", "title": "Vulnerable dependency: gin@1.6.3"},
+            {"category": "auth_weakness", "title": "API route missing authentication check"},
+        ]
+        r = self.gs.score(findings)
+        assert r["recall"] == {"found": 4, "total": 4}
+        assert self.gs.passed(r)
+
+    def test_score_missing_xss_is_a_gap(self):
+        findings = [
+            {"category": "injection_risk", "title": "raw SQL query"},
+            {"category": "dependency_vuln", "title": "Vulnerable dependency"},
+            {"category": "auth_weakness", "title": "missing authentication"},
+        ]
+        r = self.gs.score(findings)
+        assert r["by_class"]["xss"]["detected"] is False
+        assert not self.gs.passed(r)
+
+    def test_category_dict_shape_is_handled(self):
+        """Findings may carry category as an enum-dict {'value': ...}."""
+        findings = [{"category": {"value": "injection_risk"}, "title": "sql injection"}]
+        r = self.gs.score(findings)
+        assert r["by_class"]["sqli"]["detected"] is True

@@ -14,12 +14,16 @@ python benchmarks/run_benchmarks.py juiceshop-writes  # + --probe-writes (mutate
 python benchmarks/run_benchmarks.py --all      # + NodeGoat + crAPI + Juice Shop (heavy)
 python benchmarks/run_benchmarks.py crapi      # a single target
 python benchmarks/run_benchmarks.py sast-injection            # taint recall/FP, no Docker
+python benchmarks/run_benchmarks.py go-sast                   # Go recall vs real govwa (clones a pinned commit)
 python benchmarks/run_benchmarks.py --keep vampi-vulnerable   # leave it running
 python benchmarks/run_benchmarks.py juiceshop --report-dir /tmp/r  # keep the raw JSON reports
 ```
 
-Docker is required for every target **except** `sast-injection`, which instead
-needs the `semgrep` binary (`pipx install semgrep` or `pip install semgrep`).
+Docker is required for every target **except** `sast-injection` and `go-sast`,
+which instead need the `semgrep` binary (`pipx install semgrep` or
+`pip install semgrep`). `go-sast` also clones the real `govwa` app at a pinned
+commit (needs `git`; `go`+`gopls` add the route/auth half) and is opt-in — named
+explicitly or via `--all`, never in the default run.
 
 `--report-dir DIR` keeps each target's raw JSON report instead of discarding
 it. The scorecard says *how many* findings went unmatched but not *which*, and
@@ -54,7 +58,8 @@ For each target the scorecard reports two things — both matter:
 | `crapi` | microservices | upstream compose (auto-cloned) | OWASP API Top 10; IDOR/BAC/auth depth |
 | `juiceshop` | Angular/Express SPA | single image | **headline recall** — scored per-challenge vs the app's own `/api/Challenges` |
 | `juiceshop-auth` | same, authenticated | single image | adds the login-gated challenges (the `~40%` number) |
-| `sast-injection` | JS/TS fixtures | **none** (code-only) | **taint layer recall/FP** — deterministic SAST injection floor (#4) |
+| `sast-injection` | JS/TS/Python/Java/Kotlin/Go fixtures | **none** (code-only) | **taint layer recall/FP** — deterministic SAST injection floor (#4) |
+| `go-sast` | real govwa app (pinned clone) | **none** (code-only) | **Go recall** — SQLi/XSS/dep/missing-auth class recall across the whole Go SAST path (opt-in; needs `git`, and `go`/`gopls` for the auth half) |
 
 VAmPI is a single container and runs in the default set. NodeGoat and crAPI are
 heavier (compose, mongo, several GB for crAPI) — run them individually. They are
