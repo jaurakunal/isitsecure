@@ -1,0 +1,135 @@
+# isitsecure taint/sink rules for Go injection.
+# Rules target STANDARD-LIBRARY and popular-framework APIs (net/http, Gin, Echo,
+# chi request objects as sources; database/sql, os/exec, net/http client, os
+# file open, html/template as sinks) — they apply to any app on these stacks,
+# not to a specific app.
+rules:
+  # ---- SQL injection: dangerous query construction (pattern) ----
+  # Pattern-based (not taint) so parameterized queries — Query(sql, args...) —
+  # are never flagged; only string-built queries match. database/sql methods
+  # (Query, QueryRow, Exec, and their *Context variants) take the SQL as the
+  # first (or second, for *Context) argument; a Sprintf/concatenated first arg
+  # is the tell.
+  - id: isitsecure-go-sqli
+    languages: [go]
+    severity: ERROR
+    metadata: {category: injection_risk, isitsecure-severity: critical}
+    message: "Raw SQL built from fmt.Sprintf/concatenation — SQL injection. Use a parameterized query with placeholders."
+    patterns:
+      - pattern-either:
+          - pattern: $DB.Query(fmt.Sprintf(...), ...)
+          - pattern: $DB.QueryRow(fmt.Sprintf(...), ...)
+          - pattern: $DB.Exec(fmt.Sprintf(...), ...)
+          - pattern: $DB.QueryContext($CTX, fmt.Sprintf(...), ...)
+          - pattern: $DB.QueryRowContext($CTX, fmt.Sprintf(...), ...)
+          - pattern: $DB.ExecContext($CTX, fmt.Sprintf(...), ...)
+          - pattern: $DB.Query("..." + $X, ...)
+          - pattern: $DB.QueryRow("..." + $X, ...)
+          - pattern: $DB.Exec("..." + $X, ...)
+
+  # ---- SQL injection: user input → query STRING (intra-file taint) ----
+  # Catches the assign-then-execute shape the inline pattern above misses. The
+  # sink focuses on the query-string argument, so a parameterized call —
+  # Query(sql, args...) with taint in an arg — is NOT flagged.
+  - id: isitsecure-go-sqli-taint
+    mode: taint
+    languages: [go]
+    severity: ERROR
+    metadata: {category: injection_risk, isitsecure-severity: critical}
+    message: "User input flows into a raw SQL query — SQL injection."
+    pattern-sources: &go_sources
+      # net/http
+      - pattern: $R.URL.Query().Get(...)
+      - pattern: $R.FormValue(...)
+      - pattern: $R.PostFormValue(...)
+      - pattern: $R.Header.Get(...)
+      # gorilla/mux
+      - pattern: mux.Vars($R)[...]
+      # Gin
+      - pattern: $C.Query(...)
+      - pattern: $C.DefaultQuery(...)
+      - pattern: $C.Param(...)
+      - pattern: $C.PostForm(...)
+      - pattern: $C.GetHeader(...)
+      # Echo / Fiber
+      - pattern: $C.QueryParam(...)
+      - pattern: $C.FormValue(...)
+      - pattern: $C.Params(...)
+    # Single-argument calls only: a placeholder query passes its user data as
+    # extra args — Query(sql, id) — so a tainted value in a *multi-arg* call is
+    # the parameter, not the SQL, and must NOT flag. A tainted single-arg call
+    # is a string-built query. (The fmt.Sprintf/concat forms are caught by the
+    # pattern rule above regardless of arg count.)
+    pattern-sinks:
+      - pattern-either:
+          - pattern: $DB.Query($Q)
+          - pattern: $DB.QueryRow($Q)
+          - pattern: $DB.Exec($Q)
+          - pattern: $DB.QueryContext($CTX, $Q)
+          - pattern: $DB.QueryRowContext($CTX, $Q)
+          - pattern: $DB.ExecContext($CTX, $Q)
+
+  # ---- Command injection: user input → shell (intra-file taint) ----
+  # os/exec runs the program directly (no shell) UNLESS invoked as sh -c, so a
+  # tainted arg is only injection when the command is a shell. Sink focuses on
+  # exec.Command with a shell interpreter.
+  - id: isitsecure-go-command-injection
+    mode: taint
+    languages: [go]
+    severity: ERROR
+    metadata: {category: injection_risk, isitsecure-severity: critical}
+    message: "User input flows into a shell command (sh -c / bash -c) — command injection."
+    pattern-sources: *go_sources
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: exec.Command("sh", "-c", ...)
+              - pattern: exec.Command("bash", "-c", ...)
+              - pattern: exec.CommandContext($CTX, "sh", "-c", ...)
+              - pattern: exec.CommandContext($CTX, "bash", "-c", ...)
+
+  # ---- SSRF: user-controlled URL → outbound request ----
+  - id: isitsecure-go-ssrf
+    mode: taint
+    languages: [go]
+    severity: ERROR
+    metadata: {category: injection_risk, isitsecure-severity: high}
+    message: "User-controlled URL flows into an outbound HTTP request — SSRF."
+    pattern-sources: *go_sources
+    pattern-sinks:
+      - pattern: http.Get(...)
+      - pattern: http.Post(...)
+      - pattern: http.Head(...)
+      - pattern: http.NewRequest(..., $URL, ...)
+      - pattern: http.NewRequestWithContext($CTX, ..., $URL, ...)
+
+  # ---- Path traversal: request-derived path → file open ----
+  - id: isitsecure-go-path-traversal
+    mode: taint
+    languages: [go]
+    severity: WARNING
+    metadata: {category: injection_risk, isitsecure-severity: high}
+    message: "File opened with a request-derived path — path traversal."
+    pattern-sources: *go_sources
+    # filepath.Base/Clean strip traversal sequences — data through them is safe.
+    pattern-sanitizers:
+      - pattern: filepath.Base(...)
+      - pattern: filepath.Clean(...)
+    pattern-sinks:
+      - pattern: os.Open(...)
+      - pattern: os.OpenFile(...)
+      - pattern: os.ReadFile(...)
+      - pattern: ioutil.ReadFile(...)
+
+  # ---- Open redirect: user input → redirect target ----
+  - id: isitsecure-go-open-redirect
+    mode: taint
+    languages: [go]
+    severity: WARNING
+    metadata: {category: injection_risk, isitsecure-severity: medium}
+    message: "User input flows into an HTTP redirect target — open redirect."
+    pattern-sources: *go_sources
+    pattern-sinks:
+      - pattern: http.Redirect($W, $R, $URL, ...)
+      - patterns:
+          - pattern: $C.Redirect(...)

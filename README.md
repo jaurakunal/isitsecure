@@ -10,7 +10,7 @@ AI-powered security scanner for modern web apps. SAST + DAST + LLM code review i
 
 Built for developers and **vibe coders** shipping web apps who need to know if their code is secure — without becoming security experts.
 
-**Supports:** TypeScript/JavaScript (Next.js, Express, tRPC), Python (Django, FastAPI, Flask), Java/Kotlin (Spring Boot) — and any HTTP API for DAST.
+**Supports:** TypeScript/JavaScript (Next.js, Express, tRPC), Python (Django, FastAPI, Flask), Java/Kotlin (Spring Boot), Go (net/http, Gin, Echo, chi) — and any HTTP API for DAST.
 
 ---
 
@@ -311,9 +311,12 @@ record to prove it could is not worth the finding.
 | **TypeScript/JavaScript** (Next.js, Express, tRPC, GraphQL) | Yes | Yes | Yes (npm) | Yes |
 | **Python** (Django, FastAPI, Flask) | Yes | Yes | Yes (pip) | Yes |
 | **Java/Kotlin** (Spring Boot) | Yes | Yes | Yes (Maven, Gradle) | Yes |
-| **Go, Ruby, Rust, etc.** | No | No | No | Yes (DAST works against any HTTP API) |
+| **Go** (net/http, Gin, Echo, chi, gorilla) | Yes | Basic¹ | No | Yes |
+| **Ruby, Rust, PHP, etc.** | No | No | No | Yes (DAST works against any HTTP API) |
 
 DAST scanners test live HTTP endpoints regardless of backend language. SAST route mapping, auth detection, and dependency scanning are language-specific.
+
+¹ Go SAST covers the full injection taint floor (SQLi, command injection, SSRF, path traversal) and route mapping, and the Go LSP (gopls) is wired into the scan. Auth detection is currently coarse (file-level) — the LSP auth-flow tracer's per-route verification recognizes JS/TS, Python, and Java idioms but not yet Go's, so it does not refine Go auth findings. Deeper Go auth tracing is a tracked follow-up.
 
 ## Output Formats
 
@@ -473,7 +476,7 @@ isitsecure is not a replacement for enterprise security platforms. It's designed
 
 | Need | Best specialized tool | How isitsecure compares |
 |---|---|---|
-| Deep SAST (30+ languages) | [Semgrep](https://semgrep.dev) | We embed Semgrep for deterministic JS/TS, Python, Java, and Kotlin injection taint (opt-in `[taint]`) and add LLM review on top; Semgrep's own registry covers far more languages and rules |
+| Deep SAST (30+ languages) | [Semgrep](https://semgrep.dev) | We embed Semgrep for deterministic JS/TS, Python, Java, Kotlin, and Go injection taint (opt-in `[taint]`) and add LLM review on top; Semgrep's own registry covers far more languages and rules |
 | DAST with advanced exploitation | [OWASP ZAP](https://zaproxy.org) / [Burp Suite](https://portswigger.net) | Our DAST is simpler — fewer payloads, no WAF evasion |
 | Secret scanning (800+ patterns) | [TruffleHog](https://github.com/trufflesecurity/trufflehog) / [Gitleaks](https://github.com/gitleaks/gitleaks) | Our git scanner covers common patterns, not exhaustive |
 | Container + IaC scanning | [Trivy](https://github.com/aquasecurity/trivy) / [Checkov](https://github.com/bridgecrewio/checkov) | Our IaC/Docker scanners are basic — use Trivy for depth |

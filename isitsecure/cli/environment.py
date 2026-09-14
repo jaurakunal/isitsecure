@@ -71,6 +71,20 @@ _LSP_SPECS = [
             "linux": "install a JDK + kotlin-language-server — https://github.com/fwcd/kotlin-language-server/releases",
         },
     },
+    {
+        # gopls is self-contained (no separate Go toolchain needed at runtime);
+        # `go install` is the canonical fetch, brew a prebuilt alternative.
+        "lang": "Go",
+        "bins": ("gopls",),
+        "runtime": ("go",),  # gopls resolves nothing without the go toolchain
+        "needs": "brew",
+        "cmd": ["brew", "install", "gopls"],
+        "hint": {
+            "macos": "`brew install gopls` or `go install golang.org/x/tools/gopls@latest`",
+            "windows": "`go install golang.org/x/tools/gopls@latest` (needs Go — https://go.dev/dl/)",
+            "linux": "`go install golang.org/x/tools/gopls@latest` (needs Go — https://go.dev/dl/)",
+        },
+    },
 ]
 
 

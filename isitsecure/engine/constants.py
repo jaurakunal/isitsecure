@@ -5120,6 +5120,7 @@ class LSPConfig:
         "typescript": (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"),
         "python": (".py", ".pyi"),
         "java": (".java", ".kt", ".kts"),
+        "go": (".go",),
     }
 
     # Directories that say nothing about what a project is written in, and can

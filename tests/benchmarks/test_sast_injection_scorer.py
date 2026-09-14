@@ -53,6 +53,7 @@ class TestGroundTruth:
         assert any(f.endswith(".py") for f in files)     # Python (#93)
         assert any(f.endswith(".java") for f in files)   # Java (#102)
         assert any(f.endswith(".kt") for f in files)     # Kotlin (#104)
+        assert any(f.endswith(".go") for f in files)     # Go
 
     def test_marker_regex_accepts_both_comment_styles(self):
         assert si.EXPECT_RE.search("foo()  // EXPECT sqli").group(1) == "sqli"

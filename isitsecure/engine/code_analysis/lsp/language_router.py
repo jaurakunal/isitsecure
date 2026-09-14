@@ -84,6 +84,7 @@ def default_language_support() -> Mapping[str, LanguageSupport]:
     """The languages we can serve, and how to tell whether we can serve them."""
     import shutil
 
+    from isitsecure.engine.code_analysis.lsp.go_client import GoLSPClient
     from isitsecure.engine.code_analysis.lsp.java_client import JavaLSPClient
     from isitsecure.engine.code_analysis.lsp.python_client import PythonLSPClient
     from isitsecure.engine.code_analysis.lsp.tsserver_client import (
@@ -103,6 +104,11 @@ def default_language_support() -> Mapping[str, LanguageSupport]:
             lambda: JavaLSPClient.is_runtime_available()
             and JavaLSPClient.is_server_available(),
             JavaLSPClient,
+        ),
+        "go": (
+            lambda: GoLSPClient.is_runtime_available()
+            and GoLSPClient.is_server_available(),
+            GoLSPClient,
         ),
     }
 

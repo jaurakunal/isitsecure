@@ -55,6 +55,7 @@ _RULE_PACKS: tuple[_RulePack, ...] = (
     _RulePack("python", "injection-python.yaml", (".py",)),
     _RulePack("java", "injection-java.yaml", (".java",)),
     _RulePack("kotlin", "injection-kotlin.yaml", (".kt",)),
+    _RulePack("go", "injection-go.yaml", (".go",)),
 )
 
 # Dirs semgrep ignores by default; skipping them bounds the language-detection
