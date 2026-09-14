@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.30.0](https://github.com/jaurakunal/isitsecure/compare/v0.29.0...v0.30.0) (2026-09-14)
+
+
+### Features
+
+* **go:** per-route auth detection + gopls auth-flow refinement ([#242](https://github.com/jaurakunal/isitsecure/issues/242)) ([d2c2033](https://github.com/jaurakunal/isitsecure/commit/d2c2033581af2be5268d8a7ff6cbf220b46cd37b))
+
 ## [0.29.0](https://github.com/jaurakunal/isitsecure/compare/v0.28.4...v0.29.0) (2026-09-14)
 
 
