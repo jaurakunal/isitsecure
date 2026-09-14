@@ -20,6 +20,7 @@ from isitsecure.engine.constants import (
     DeepScanConfig,
     RaceConditionConfig,
 )
+from isitsecure.engine.enums import FindingCategory, SeverityLevel
 from isitsecure.engine.models import (
     DeepFinding,
     FindingSource,
@@ -27,7 +28,7 @@ from isitsecure.engine.models import (
 )
 from isitsecure.engine.shared.auth_headers import build_replay_headers
 from isitsecure.engine.shared.progress import emit
-from isitsecure.engine.enums import FindingCategory, SeverityLevel
+from isitsecure.engine.shared.time_budget import TimeBudget
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +64,13 @@ class RaceConditionScanner:
                 seen_paths.add(path)
                 unique_mutations.append(req)
 
+        # Stop cooperatively before the runner's hard timeout cancels us
+        # (which discards every finding so far).
+        budget = TimeBudget()
         for req in unique_mutations[: RaceConditionConfig.MAX_MUTATIONS_TO_TEST]:
+            if budget.expired():
+                logger.info("RaceConditionScanner: time budget reached, stopping early")
+                break
             finding = await self._test_race(req, session)
             if finding:
                 findings.append(finding)

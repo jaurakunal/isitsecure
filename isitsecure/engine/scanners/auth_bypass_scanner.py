@@ -23,6 +23,8 @@ from isitsecure.engine.constants import (
     AuthBypassConfig,
     DeepScanConfig,
 )
+from isitsecure.engine.enums import FindingCategory, SeverityLevel
+from isitsecure.engine.ingestion.snapshot import CodebaseSnapshot
 from isitsecure.engine.models import (
     DeepFinding,
     DiscoveredEndpoint,
@@ -31,8 +33,7 @@ from isitsecure.engine.models import (
 from isitsecure.engine.shared.endpoint_prioritizer import PriorityDimension, rank
 from isitsecure.engine.shared.probe_capture import build_probe_capture
 from isitsecure.engine.shared.progress import emit
-from isitsecure.engine.enums import FindingCategory, SeverityLevel
-from isitsecure.engine.ingestion.snapshot import CodebaseSnapshot
+from isitsecure.engine.shared.time_budget import TimeBudget
 
 logger = logging.getLogger(__name__)
 
@@ -104,10 +105,18 @@ class AuthBypassScanner:
             follow_redirects=True,
             headers={"User-Agent": DeepScanConfig.USER_AGENT},
         ) as client:
+            # Stop cooperatively before the runner's hard timeout cancels us
+            # (which discards every finding so far). One budget spans all five
+            # phases: when it expires the current phase's loop breaks and each
+            # later phase breaks on its first iteration.
+            budget = TimeBudget()
+
             # Phase 1: Username enumeration
             if login_endpoints:
                 emit("auth-bypass: username enumeration")
             for ep in login_endpoints:
+                if budget.expired():
+                    break
                 enum_findings = await self._test_username_enumeration(client, ep)
                 findings.extend(enum_findings)
                 await asyncio.sleep(AuthBypassConfig.PROBE_DELAY_SECONDS)
@@ -116,6 +125,8 @@ class AuthBypassScanner:
             if reset_endpoints:
                 emit("auth-bypass: reset token leak check")
             for ep in reset_endpoints:
+                if budget.expired():
+                    break
                 leak_finding = await self._test_reset_token_leak(client, ep)
                 if leak_finding:
                     findings.append(leak_finding)
@@ -125,6 +136,8 @@ class AuthBypassScanner:
             if login_endpoints:
                 emit("auth-bypass: account lockout check")
             for ep in login_endpoints:
+                if budget.expired():
+                    break
                 lockout_finding = await self._test_account_lockout(client, ep)
                 if lockout_finding:
                     findings.append(lockout_finding)
@@ -134,6 +147,8 @@ class AuthBypassScanner:
             if login_endpoints:
                 emit("auth-bypass: default credentials")
             for ep in login_endpoints:
+                if budget.expired():
+                    break
                 cred_findings = await self._test_default_credentials(client, ep)
                 findings.extend(cred_findings)
                 await asyncio.sleep(AuthBypassConfig.PROBE_DELAY_SECONDS)
@@ -142,9 +157,14 @@ class AuthBypassScanner:
             if auth_required_endpoints:
                 emit("auth-bypass: auth header bypass")
             for ep in rank(auth_required_endpoints, PriorityDimension.AUTH)[:AuthBypassConfig.MAX_AUTH_BYPASS_ENDPOINTS]:
+                if budget.expired():
+                    break
                 bypass_findings = await self._test_auth_header_bypass(client, ep)
                 findings.extend(bypass_findings)
                 await asyncio.sleep(AuthBypassConfig.PROBE_DELAY_SECONDS)
+
+            if budget.expired():
+                logger.info("AuthBypassScanner: time budget reached, stopping early")
 
         logger.info("AuthBypassScanner: %d findings", len(findings))
         return findings

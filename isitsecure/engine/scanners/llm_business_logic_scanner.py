@@ -30,13 +30,14 @@ from isitsecure.engine.constants import (
     LLMBusinessLogicConfig,
     SharedPatterns,
 )
+from isitsecure.engine.enums import FindingCategory, SeverityLevel
 from isitsecure.engine.models import (
     CodeLocation,
     DeepFinding,
     DiscoveredEndpoint,
     FindingSource,
 )
-from isitsecure.engine.enums import FindingCategory, SeverityLevel
+from isitsecure.engine.shared.time_budget import TimeBudget
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +123,16 @@ class LLMBusinessLogicScanner:
             "regular_user": regular_session,
         }
 
+        # Stop cooperatively before the runner's hard timeout cancels us (which
+        # discards every finding so far). Each plan is an LLM call plus HTTP
+        # steps, so a full plan set can easily outrun the budget.
+        budget = TimeBudget()
         for plan in attack_plans[: LLMBusinessLogicConfig.MAX_ATTACK_PLANS]:
+            if budget.expired():
+                logger.info(
+                    "LLMBusinessLogicScanner: time budget reached, stopping early"
+                )
+                break
             finding = await self._execute_and_analyze_plan(
                 plan, sessions, target_url,
             )

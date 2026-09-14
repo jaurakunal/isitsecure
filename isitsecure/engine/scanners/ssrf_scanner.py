@@ -11,16 +11,17 @@ import logging
 from urllib.parse import parse_qs, urlparse
 
 from isitsecure.engine.constants import DeepScanConfig, SSRFConfig
+from isitsecure.engine.enums import FindingCategory, SeverityLevel
+from isitsecure.engine.ingestion.snapshot import CodebaseSnapshot
 from isitsecure.engine.models import (
     DeepFinding,
     DiscoveredEndpoint,
     FindingSource,
 )
-from isitsecure.engine.shared.rate_limited_client import RateLimitedClient
-from isitsecure.engine.shared.url_utils import inject_query_param
-from isitsecure.engine.enums import FindingCategory, SeverityLevel
-from isitsecure.engine.ingestion.snapshot import CodebaseSnapshot
 from isitsecure.engine.shared.auth_aware import AuthAwareScanner
+from isitsecure.engine.shared.rate_limited_client import RateLimitedClient
+from isitsecure.engine.shared.time_budget import TimeBudget
+from isitsecure.engine.shared.url_utils import inject_query_param
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +74,13 @@ class SSRFScanner(AuthAwareScanner):
             user_agent=DeepScanConfig.USER_AGENT,
             extra_headers=self.auth_headers,
         ) as client:
+            # Stop cooperatively before the runner's hard timeout cancels us
+            # (which discards every finding so far); endpoints are already ranked.
+            budget = TimeBudget()
             for endpoint, param_name in testable:
+                if budget.expired():
+                    logger.info("SSRFScanner: time budget reached, stopping early")
+                    break
                 ep_findings = await self._test_endpoint_param(
                     client, endpoint, param_name
                 )

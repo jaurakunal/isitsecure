@@ -21,17 +21,18 @@ from isitsecure.engine.constants import (
     DeepScanConfig,
     SecurityHeadersScannerConfig,
 )
+from isitsecure.engine.enums import FindingCategory, SeverityLevel
+from isitsecure.engine.ingestion.snapshot import CodebaseSnapshot
 from isitsecure.engine.models import (
     DeepFinding,
     DiscoveredEndpoint,
     FindingSource,
 )
+from isitsecure.engine.shared.auth_aware import AuthAwareScanner
 from isitsecure.engine.shared.rate_limited_client import (
     RateLimitedClient,
 )
-from isitsecure.engine.enums import FindingCategory, SeverityLevel
-from isitsecure.engine.ingestion.snapshot import CodebaseSnapshot
-from isitsecure.engine.shared.auth_aware import AuthAwareScanner
+from isitsecure.engine.shared.time_budget import TimeBudget
 
 logger = logging.getLogger(__name__)
 
@@ -194,7 +195,15 @@ class SecurityHeadersScanner(AuthAwareScanner):
             user_agent=DeepScanConfig.USER_AGENT,
             extra_headers=self.auth_headers,
         ) as client:
+            # Stop cooperatively before the runner's hard timeout cancels us
+            # (which discards every finding so far).
+            budget = TimeBudget()
             for url in urls:
+                if budget.expired():
+                    logger.info(
+                        "SecurityHeadersScanner: time budget reached, stopping early"
+                    )
+                    break
                 url_findings = await self._check_single_endpoint(client, url)
                 findings.extend(url_findings)
 
