@@ -19,6 +19,7 @@ from isitsecure.engine.constants import (
     DeepScanConfig,
     RLSDeepScanConfig,
 )
+from isitsecure.engine.enums import FindingCategory, SeverityLevel
 from isitsecure.engine.models import (
     DeepFinding,
     FindingSource,
@@ -27,7 +28,7 @@ from isitsecure.engine.shared.progress import emit
 from isitsecure.engine.shared.rate_limited_client import (
     RateLimitedClient,
 )
-from isitsecure.engine.enums import FindingCategory, SeverityLevel
+from isitsecure.engine.shared.time_budget import TimeBudget
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +78,13 @@ class RLSDeepScanner:
             user_agent=DeepScanConfig.USER_AGENT,
             extra_headers={"apikey": anon_key},
         ) as client:
+            # Stop cooperatively before the runner's hard timeout cancels us
+            # (which discards every finding so far).
+            budget = TimeBudget()
             for table in tables[: RLSDeepScanConfig.MAX_TABLES_TO_TEST]:
+                if budget.expired():
+                    logger.info("RLSDeepScanner: time budget reached, stopping early")
+                    break
                 emit(f"RLS: checking table '{table}'")
                 # Tier 1: Anon access
                 anon_findings = await self._test_anon_access(
@@ -98,8 +105,10 @@ class RLSDeepScanner:
                     findings.extend(cross_findings)
 
             # Test RPC functions
-            if rpc_functions:
+            if rpc_functions and not budget.expired():
                 for func in rpc_functions:
+                    if budget.expired():
+                        break
                     rpc_finding = await self._test_rpc_access(
                         client, supabase_url, func
                     )

@@ -13,16 +13,16 @@ import logging
 from typing import Any
 
 from isitsecure.engine.constants import DeepScanConfig, MassAssignmentConfig
-from isitsecure.engine.enums import EndpointMethod
+from isitsecure.engine.enums import EndpointMethod, FindingCategory, SeverityLevel
+from isitsecure.engine.ingestion.snapshot import CodebaseSnapshot
 from isitsecure.engine.models import (
     DeepFinding,
     DiscoveredEndpoint,
     FindingSource,
 )
-from isitsecure.engine.shared.rate_limited_client import RateLimitedClient
-from isitsecure.engine.enums import FindingCategory, SeverityLevel
-from isitsecure.engine.ingestion.snapshot import CodebaseSnapshot
 from isitsecure.engine.shared.auth_aware import AuthAwareScanner
+from isitsecure.engine.shared.rate_limited_client import RateLimitedClient
+from isitsecure.engine.shared.time_budget import TimeBudget
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +78,15 @@ class MassAssignmentScanner(AuthAwareScanner):
             user_agent=DeepScanConfig.USER_AGENT,
             extra_headers=self.auth_headers,
         ) as client:
+            # Stop cooperatively before the runner's hard timeout cancels us
+            # (which discards every finding so far).
+            budget = TimeBudget()
             for endpoint in state_changing_endpoints:
+                if budget.expired():
+                    logger.info(
+                        "MassAssignmentScanner: time budget reached, stopping early"
+                    )
+                    break
                 ep_findings = await self._test_endpoint(client, endpoint)
                 findings.extend(ep_findings)
 

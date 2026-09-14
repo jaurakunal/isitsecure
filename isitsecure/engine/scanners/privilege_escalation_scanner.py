@@ -28,6 +28,7 @@ from isitsecure.engine.constants import (
     RLSDeepScanConfig,
     SharedPatterns,
 )
+from isitsecure.engine.enums import FindingCategory, SeverityLevel
 from isitsecure.engine.models import (
     DeepFinding,
     DiscoveredEndpoint,
@@ -38,7 +39,7 @@ from isitsecure.engine.shared.progress import emit
 from isitsecure.engine.shared.rate_limited_client import (
     RateLimitedClient,
 )
-from isitsecure.engine.enums import FindingCategory, SeverityLevel
+from isitsecure.engine.shared.time_budget import TimeBudget
 
 logger = logging.getLogger(__name__)
 
@@ -107,9 +108,16 @@ class PrivilegeEscalationScanner:
             timeout_seconds=PrivilegeEscalationConfig.HTTP_TIMEOUT_SECONDS,
             user_agent=DeepScanConfig.USER_AGENT,
         ) as client:
+            # Stop cooperatively before the runner's hard timeout cancels us
+            # (which discards every finding so far). One budget guards every
+            # test phase below.
+            budget = TimeBudget()
+
             # Test 1 + 2: Supabase table tests
             if supabase_url and anon_key and tables:
                 for t in tables:
+                    if budget.expired():
+                        break
                     emit(f"priv-esc: probing table {t}")
                     if self._is_admin_table(t):
                         f = await self._test_admin_table_access(
@@ -131,6 +139,8 @@ class PrivilegeEscalationScanner:
                 e for e in (endpoints or []) if self._is_admin_endpoint(e)
             ]
             for ep in admin_eps:
+                if budget.expired():
+                    break
                 emit(f"priv-esc: admin route {ep.url}")
                 f = await self._test_admin_route_access(
                     client, ep, regular_user_session
@@ -146,6 +156,8 @@ class PrivilegeEscalationScanner:
             for ep in auth_eps[
                 : PrivilegeEscalationConfig.MAX_AUTH_ENDPOINTS_TO_TEST
             ]:
+                if budget.expired():
+                    break
                 emit(f"priv-esc: {ep.url}")
                 f = await self._test_authenticated_endpoint_access(
                     client, ep, regular_user_session
@@ -154,7 +166,7 @@ class PrivilegeEscalationScanner:
                     findings.append(f)
 
             # Test 5: Differential response
-            if admin_session and endpoints:
+            if admin_session and endpoints and not budget.expired():
                 findings.extend(
                     await self._test_differential_responses(
                         client, endpoints, admin_session,
@@ -163,7 +175,7 @@ class PrivilegeEscalationScanner:
                 )
 
             # Test 6: Mutation replay
-            if intercepted_requests:
+            if intercepted_requests and not budget.expired():
                 findings.extend(
                     await self._test_mutation_replay(
                         client, intercepted_requests,
@@ -172,7 +184,7 @@ class PrivilegeEscalationScanner:
                 )
 
             # Test 7: Object-level write
-            if supabase_url and anon_key and owned_resource_ids:
+            if supabase_url and anon_key and owned_resource_ids and not budget.expired():
                 findings.extend(
                     await self._test_object_level_write(
                         client, supabase_url, anon_key,
@@ -181,7 +193,7 @@ class PrivilegeEscalationScanner:
                 )
 
             # Test 8: RPC function access
-            if supabase_url and anon_key and rpc_functions:
+            if supabase_url and anon_key and rpc_functions and not budget.expired():
                 findings.extend(
                     await self._test_rpc_function_access(
                         client, supabase_url, anon_key,

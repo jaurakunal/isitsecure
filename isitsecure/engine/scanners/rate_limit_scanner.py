@@ -16,15 +16,16 @@ from urllib.parse import urlparse
 import httpx
 
 from isitsecure.engine.constants import DeepScanConfig, RateLimitConfig
+from isitsecure.engine.enums import FindingCategory, SeverityLevel
+from isitsecure.engine.ingestion.snapshot import CodebaseSnapshot
 from isitsecure.engine.models import (
     DeepFinding,
     DiscoveredEndpoint,
     FindingSource,
 )
-from isitsecure.engine.enums import FindingCategory, SeverityLevel
-from isitsecure.engine.ingestion.snapshot import CodebaseSnapshot
 from isitsecure.engine.shared.auth_aware import AuthAwareScanner
 from isitsecure.engine.shared.progress import emit
+from isitsecure.engine.shared.time_budget import TimeBudget
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +86,14 @@ class RateLimitScanner(AuthAwareScanner):
             follow_redirects=True,
             headers={"User-Agent": DeepScanConfig.USER_AGENT, **(self.auth_headers or {})},
         ) as client:
+            # Stop cooperatively before the runner's hard timeout cancels us
+            # (which discards every finding so far). Rate-limit tests are
+            # burst-heavy, so a large endpoint set can outrun the budget.
+            budget = TimeBudget()
             for endpoint in critical_endpoints:
+                if budget.expired():
+                    logger.info("RateLimitScanner: time budget reached, stopping early")
+                    break
                 endpoint_findings = await self._test_endpoint_rate_limit(
                     client, endpoint
                 )

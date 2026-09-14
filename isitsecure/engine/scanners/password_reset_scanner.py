@@ -19,15 +19,16 @@ from isitsecure.engine.constants import (
     DeepScanConfig,
     PasswordResetConfig,
 )
+from isitsecure.engine.enums import FindingCategory, SeverityLevel
+from isitsecure.engine.ingestion.snapshot import CodebaseSnapshot
 from isitsecure.engine.models import (
     DeepFinding,
     DiscoveredEndpoint,
     FindingSource,
 )
-from isitsecure.engine.enums import FindingCategory, SeverityLevel
-from isitsecure.engine.ingestion.snapshot import CodebaseSnapshot
 from isitsecure.engine.shared.auth_aware import AuthAwareScanner
 from isitsecure.engine.shared.progress import emit
+from isitsecure.engine.shared.time_budget import TimeBudget
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +77,15 @@ class PasswordResetScanner(AuthAwareScanner):
             follow_redirects=True,
             headers={"User-Agent": DeepScanConfig.USER_AGENT, **(self.auth_headers or {})},
         ) as client:
+            # Stop cooperatively before the runner's hard timeout cancels us
+            # (which discards every finding so far).
+            budget = TimeBudget()
             for ep in reset_endpoints:
+                if budget.expired():
+                    logger.info(
+                        "PasswordResetScanner: time budget reached, stopping early"
+                    )
+                    break
                 path = urlparse(ep.url).path
                 # Test 1: Email enumeration
                 emit(f"password-reset: email enumeration on {path}")

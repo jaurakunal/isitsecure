@@ -49,7 +49,7 @@ The scanner first understands your application's attack surface using **four com
 
 This matters because SPAs hide their API surface in JavaScript bundles, server-rendered apps expose it only in HTML forms, and REST APIs may expose nothing but an OpenAPI spec. Traditional crawlers miss most of it.
 
-**Endpoint prioritization + time budget** — before the DAST scanners run, a shared prioritizer (`endpoint_prioritizer.rank()`) scores endpoints per attack dimension (INJECTION, IDOR, XSS, CSRF, AUTH) so the most likely-vulnerable endpoints are tested first. Each scanner then works within a per-scanner `TimeBudget`, checking `budget.expired()` between endpoints so high-risk paths get covered before the external hard timeout cancels the scanner. The injection, XSS, IDOR, CSRF, auth-bypass, and HTTP-probe scanners all use this shared prioritizer.
+**Endpoint prioritization + time budget** — before the DAST scanners run, a shared prioritizer (`endpoint_prioritizer.rank()`) scores endpoints per attack dimension (INJECTION, IDOR, XSS, CSRF, AUTH) so the most likely-vulnerable endpoints are tested first. The injection, XSS, IDOR, CSRF, auth-bypass, and HTTP-probe scanners use this shared prioritizer. Separately, every DAST scanner that loops over endpoints, pages, or requests works within a cooperative `TimeBudget`, checking `budget.expired()` at the top of that loop so high-risk paths get covered — and the findings gathered so far are returned — before the external hard timeout cancels the scanner (which would discard them). See [When a scanner runs out of time](#when-a-scanner-runs-out-of-time).
 
 Ranking has to account for injection that arrives somewhere other than a parameter. A file upload takes no query string, no path parameter and no body field — its payload *is* the file — so every parameter-shaped signal scores it zero and a cap of 30 never reaches it. `EndpointCategory.FILE_ACCESS` therefore counts toward the INJECTION dimension: on Juice Shop that moved `/file-upload` from 73rd of 77 to 6th, and with it the two XXE vulnerabilities behind it.
 
@@ -465,8 +465,10 @@ left: the default is 600s, injection gets 5400s, XSS 3600s.
 
 Reaching the `asyncio.TimeoutError` branch is now a **failure signal**, not
 the ordinary way a scanner ends — it means the scanner did not stop on the
-cooperative deadline, so it either has no `TimeBudget` or blocked between
-checks. See [When a scanner runs out of time](#when-a-scanner-runs-out-of-time).
+cooperative deadline, so it blocked between `budget.expired()` checks (or is
+one of the passive, no-loop scanners that do no per-endpoint network work and
+so carry no budget). Every DAST scanner that loops over endpoints, pages, or
+requests checks the budget at the top of that loop.
 
 ### Event-Driven Progress
 

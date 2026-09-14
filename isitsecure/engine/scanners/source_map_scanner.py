@@ -24,15 +24,16 @@ import logging
 from urllib.parse import urlparse
 
 from isitsecure.engine.constants import DeepScanConfig
+from isitsecure.engine.enums import FindingCategory, SeverityLevel
+from isitsecure.engine.ingestion.snapshot import CodebaseSnapshot
 from isitsecure.engine.models import (
     DeepFinding,
     DiscoveredEndpoint,
     FindingSource,
 )
-from isitsecure.engine.shared.rate_limited_client import RateLimitedClient
-from isitsecure.engine.enums import FindingCategory, SeverityLevel
-from isitsecure.engine.ingestion.snapshot import CodebaseSnapshot
 from isitsecure.engine.shared.auth_aware import AuthAwareScanner
+from isitsecure.engine.shared.rate_limited_client import RateLimitedClient
+from isitsecure.engine.shared.time_budget import TimeBudget
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +101,11 @@ class SourceMapScanner(AuthAwareScanner):
             user_agent=DeepScanConfig.USER_AGENT,
             extra_headers=self.auth_headers,
         ) as client:
+            budget = TimeBudget()
             for map_url in candidates:
+                if budget.expired():
+                    logger.info("SourceMapScanner: time budget reached, stopping early")
+                    break
                 if map_url in seen:
                     continue
                 seen.add(map_url)
