@@ -1112,6 +1112,19 @@ class RouteAuthAnalyzerConfig:
         r'requireAuth\s*\(',
         r'withAuth\s*\(',
         r'isAuthenticated',
+        # --- Go idioms ---
+        r'\.Header\.Get\s*\(\s*["\']Authorization["\']',   # r.Header.Get("Authorization")
+        r'\.GetHeader\s*\(\s*["\']Authorization["\']',      # Gin c.GetHeader("Authorization")
+        r'\bRequireAuth\s*\(',
+        r'\bRequireLogin\s*\(',
+        r'\bAuthenticate\s*\(',
+        r'\bIsAuthenticated\s*\(',
+        r'\bVerifyToken\s*\(',
+        r'\bValidateToken\s*\(',
+        r'\bParseToken\s*\(',
+        r'\.Context\s*\(\s*\)\s*\.Value\s*\(',              # r.Context().Value(userKey)
+        r'\bsession\.Get\s*\(',
+        r'\bc\.Get\s*\(\s*["\']user',                        # Gin/Echo c.Get("user")
     ) + SharedPatterns.SIGNATURE_VERIFICATION_PATTERNS
 
     # Patterns indicating authorization/ownership check
@@ -5009,6 +5022,15 @@ class LSPConfig:
         r'createServerClient\s*\(',
         # Passport
         r'passport\.authenticate\s*\(',
+        # --- Go token/session verification ---
+        r'\.Header\.Get\s*\(\s*["\']Authorization["\']',
+        r'\.GetHeader\s*\(\s*["\']Authorization["\']',
+        r'\bVerifyToken\s*\(',
+        r'\bValidateToken\s*\(',
+        r'\bParseToken\s*\(',
+        r'jwt\.Parse\w*\s*\(',       # jwt.Parse / jwt.ParseWithClaims
+        r'\bsession\.Get\s*\(',
+        r'\bc\.Get\s*\(\s*["\']user',
         # Express auth middleware that verifies for you. The terminal is then
         # inside the package, which tracing deliberately will not enter, so
         # the middleware itself has to count as the terminal.
@@ -5052,6 +5074,14 @@ class LSPConfig:
         # Generic error text patterns
         r'["\']UNAUTHORIZED["\']',
         r'["\']Unauthorized["\']',
+        # --- Go idioms ---
+        r'http\.StatusUnauthorized',                     # net/http 401 constant
+        r'http\.StatusForbidden',                        # net/http 403 constant
+        r'\.WriteHeader\s*\(\s*401',
+        r'\.WriteHeader\s*\(\s*403',
+        r'\.AbortWithStatus\w*\s*\(\s*(?:401|403|http\.Status(?:Unauthorized|Forbidden))',  # Gin
+        r'echo\.NewHTTPError\s*\(\s*(?:401|403|http\.Status(?:Unauthorized|Forbidden))',    # Echo
+        r'fiber\.Status(?:Unauthorized|Forbidden)',      # Fiber
     )
 
     # --- Ownership terminal patterns ---

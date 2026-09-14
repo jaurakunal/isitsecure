@@ -156,11 +156,19 @@ class AuthFlowTracer:
         3. Auth decorators: @UseGuards, @login_required, @PreAuthorize
         4. Inline auth calls, following project-local helpers one hop.
         """
+        abs_path = self._resolve_path(file_path)
+
+        # Go has its own idioms (router/group .Use middleware, in-handler and
+        # cross-function auth helpers) that the Express mount model doesn't fit.
+        # Dispatched before the file_index lookup below: each Go RouteEntry
+        # already carries its file `content` and `handler_source` from the
+        # mapper, so Go does not depend on file_index resolving this path.
+        if file_path.endswith(".go"):
+            return await self._trace_go_file(routes, abs_path)
+
         content = self._get_file_content(file_path)
         if not content:
             return {}
-
-        abs_path = self._resolve_path(file_path)
 
         # Middleware applied without a path guards every route on the router,
         # so it settles the whole file regardless of what the mounts say.
@@ -187,6 +195,95 @@ class AuthFlowTracer:
 
         result = await self._trace_whole_file(content, abs_path)
         return self._for_every_method(routes, result)
+
+    # ------------------------------------------------------------------
+    # Go strategy: per-route, from the handler the mapper recorded
+    # ------------------------------------------------------------------
+
+    async def _trace_go_file(
+        self, routes: list[RouteEntry], abs_path: str
+    ) -> dict[tuple[str, str], AuthFlowResult]:
+        """Per-route auth verdict for a Go file.
+
+        Each Go route carries its own ``handler_source`` AND its file
+        ``content`` (from GoRouteMapper), so the verdict is per handler — one
+        guarded handler never vouches for an unguarded neighbour in the same
+        file — and Go does not depend on the file_index. Verification, in order:
+        1. router/group ``.Use(authMiddleware)`` — the mapper already set
+           ``has_auth_check`` True for those;
+        2. the handler itself identifies a caller AND refuses (inline);
+        3. the handler calls an auth-naming helper that go-to-definition
+           resolves to a body with an auth terminal — the cross-file case
+           gopls exists for.
+        """
+        results: dict[tuple[str, str], AuthFlowResult] = {}
+        for route in routes:
+            result = await self._verify_go_route(route, route.content, abs_path)
+            for method in route.http_methods:
+                results[(method, route.route_pattern)] = result
+        return results
+
+    async def _verify_go_route(
+        self, route: RouteEntry, content: str, abs_path: str
+    ) -> AuthFlowResult:
+        # 1. Router/group middleware guard (definite, set by the mapper).
+        if route.has_auth_check is True:
+            return AuthFlowResult(
+                has_verified_auth=True,
+                auth_method="router-middleware",
+                middleware_chain=["Use"],
+                confidence=LSPConfig.CONFIDENCE_LSP_CONFIRMED,
+                trace_depth=0,
+            )
+
+        body = route.handler_source or ""
+
+        # 2. Handler identifies AND refuses inline.
+        terminal = self._find_auth_terminal(body)
+        if terminal and self._has_enforcement(body):
+            return AuthFlowResult(
+                has_verified_auth=True,
+                auth_method=terminal,
+                middleware_chain=["inline"],
+                confidence=LSPConfig.CONFIDENCE_LSP_CONFIRMED,
+                trace_depth=0,
+            )
+
+        # 3. Follow an auth-naming helper the handler calls to its definition.
+        for name in self._go_auth_helper_calls(body):
+            match = re.search(rf"\b{re.escape(name)}\s*\(", content)
+            if not match:
+                continue
+            line, char = self._offset_to_position(content, match.start())
+            definition = await self._trace_definition_body(abs_path, line, char)
+            if definition and self._find_auth_terminal(definition):
+                return AuthFlowResult(
+                    has_verified_auth=True,
+                    auth_method=name,
+                    middleware_chain=[name],
+                    confidence=LSPConfig.CONFIDENCE_LSP_CONFIRMED,
+                    trace_depth=1,
+                )
+
+        return AuthFlowResult(confidence=0.5)
+
+    @staticmethod
+    def _go_auth_helper_calls(body: str) -> list[str]:
+        """Auth-naming functions the handler calls (``requireAuth(r)`` etc.).
+
+        Deliberately auth-specific so an ordinary helper is not chased, and
+        deduplicated in call order. The resolved body still has to contain an
+        auth terminal before the route is credited, so a mis-named function
+        cannot vouch for auth on its own.
+        """
+        names: list[str] = []
+        for match in re.finditer(
+            r"\b(\w*(?:[Aa]uth|[Ll]ogin|[Tt]oken|[Ss]ession)\w*)\s*\(", body
+        ):
+            name = match.group(1)
+            if name not in names:
+                names.append(name)
+        return names[: LSPConfig.MAX_MOUNT_MIDDLEWARE]
 
     async def _verify_route_mount(
         self,

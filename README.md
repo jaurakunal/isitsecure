@@ -311,12 +311,10 @@ record to prove it could is not worth the finding.
 | **TypeScript/JavaScript** (Next.js, Express, tRPC, GraphQL) | Yes | Yes | Yes (npm) | Yes |
 | **Python** (Django, FastAPI, Flask) | Yes | Yes | Yes (pip) | Yes |
 | **Java/Kotlin** (Spring Boot) | Yes | Yes | Yes (Maven, Gradle) | Yes |
-| **Go** (net/http, Gin, Echo, chi, gorilla) | Yes | Basic¹ | No | Yes |
+| **Go** (net/http, Gin, Echo, chi, gorilla) | Yes | Yes | No | Yes |
 | **Ruby, Rust, PHP, etc.** | No | No | No | Yes (DAST works against any HTTP API) |
 
-DAST scanners test live HTTP endpoints regardless of backend language. SAST route mapping, auth detection, and dependency scanning are language-specific.
-
-¹ Go SAST covers the full injection taint floor (SQLi, command injection, SSRF, path traversal) and route mapping, and the Go LSP (gopls) is wired into the scan. Auth detection is currently coarse (file-level) — the LSP auth-flow tracer's per-route verification recognizes JS/TS, Python, and Java idioms but not yet Go's, so it does not refine Go auth findings. Deeper Go auth tracing is a tracked follow-up.
+DAST scanners test live HTTP endpoints regardless of backend language. SAST route mapping, auth detection, and dependency scanning are language-specific. Go auth detection is per-route (router/group middleware, in-handler checks) and the gopls LSP refines it — following a cross-file auth helper via go-to-definition to confirm a guard or suppress a false "missing auth". Dependency (go.mod) scanning is the one Go gap.
 
 ## Output Formats
 
