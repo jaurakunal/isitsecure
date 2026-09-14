@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.32.0](https://github.com/jaurakunal/isitsecure/compare/v0.31.0...v0.32.0) (2026-09-14)
+
+
+### Features
+
+* **go:** wrapped-handler routes, XSS rule, and govwa SAST benchmark ([#246](https://github.com/jaurakunal/isitsecure/issues/246)) ([2398691](https://github.com/jaurakunal/isitsecure/commit/2398691b0978ec6d1701cfe7d65a980c1307bff9))
+
 ## [0.31.0](https://github.com/jaurakunal/isitsecure/compare/v0.30.0...v0.31.0) (2026-09-14)
 
 
