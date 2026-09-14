@@ -42,7 +42,8 @@ CLASSES = ("sqli", "reflected-xss", "dom-xss", "ssrf", "path-traversal",
 # they don't collide (e.g. "dom" would match "domain"/"random"). First hit wins.
 _TITLE_CUES = [
     ("dom-xss", ("into the dom", "innerhtml", "document.write", "dom xss")),
-    ("reflected-xss", ("reflected", "html response")),
+    ("reflected-xss", ("reflected", "html response", "cross-site scripting",
+                       "auto-escaping")),
     ("ssti", ("template injection", "ssti", "server-side template")),
     ("ssrf", ("outbound request", "ssrf")),
     ("path-traversal", ("filesystem write", "path traversal", "request-derived")),

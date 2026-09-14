@@ -143,6 +143,54 @@ func routes(mux *http.ServeMux) {
     assert set(routes) == {"/real"}
 
 
+def test_wrapped_middleware_handler_is_mapped(tmp_path):
+    """`router.GET(p, Log(AuthCheck(h)))` — a wrapped handler — is a route, and
+    the auth-naming wrapper marks it authed (idiomatic Go middleware chaining)."""
+    _write(tmp_path, "app.go", """
+package main
+func setup(router *httprouter.Router) {
+    router.GET("/dash", mw.LoggingMiddleware(mw.AuthCheck(dashHandler)))
+    router.GET("/setup", mw.LoggingMiddleware(setupHandler))
+}
+""")
+    routes = _by_pattern(GoRouteMapper().map_routes(str(tmp_path)))
+    assert "/dash" in routes and "/setup" in routes
+    assert routes["/dash"].has_auth_check is True     # AuthCheck wrapper
+    assert routes["/setup"].has_auth_check is False   # only logging
+
+
+def test_handler_named_with_auth_word_is_not_auto_authed(tmp_path):
+    """A handler merely NAMED with an auth-ish word (loginViewHandler,
+    getSessionData) must NOT be treated as guarded — that would suppress a real
+    missing-auth. Auth is credited only from a wrapping middleware CALL."""
+    _write(tmp_path, "app.go", """
+package main
+func setup(router *httprouter.Router) {
+    router.GET("/login", mw.LoggingMiddleware(loginViewHandler))
+    router.GET("/session", mw.LoggingMiddleware(getSessionData))
+}
+""")
+    routes = _by_pattern(GoRouteMapper().map_routes(str(tmp_path)))
+    assert routes["/login"].has_auth_check is False
+    assert routes["/session"].has_auth_check is False
+
+
+def test_wrapped_handler_body_resolves_to_innermost(tmp_path):
+    """handler_source is the innermost real handler's body, not a wrapper."""
+    _write(tmp_path, "app.go", """
+package main
+import "net/http"
+func dashHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+    w.Write([]byte("dash"))
+}
+func setup(router *httprouter.Router) {
+    router.GET("/dash", mw.Logging(mw.AuthCheck(dashHandler)))
+}
+""")
+    routes = _by_pattern(GoRouteMapper().map_routes(str(tmp_path)))
+    assert "func dashHandler" in routes["/dash"].handler_source
+
+
 def test_inline_handler_is_a_route(tmp_path):
     """An inline func literal handler still counts as a route."""
     _write(tmp_path, "inline.go", """

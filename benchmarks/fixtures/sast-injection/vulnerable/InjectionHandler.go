@@ -6,6 +6,7 @@ package vulnerable
 import (
 	"database/sql"
 	"fmt"
+	"html/template"
 	"net/http"
 	"os"
 	"os/exec"
@@ -50,4 +51,11 @@ func Download(w http.ResponseWriter, r *http.Request) {
 	name := r.URL.Query().Get("file")
 	f, _ := os.Open("/data/" + name) // EXPECT path-traversal
 	_ = f
+}
+
+// --- XSS: casting user input to template.HTML bypasses auto-escaping ---
+func Greet(w http.ResponseWriter, r *http.Request) {
+	name := r.URL.Query().Get("name")
+	data := map[string]interface{}{"name": template.HTML(name)} // EXPECT reflected-xss
+	_ = data
 }

@@ -65,11 +65,20 @@ class GoRouteMapper:
     # `recv.Use(Middleware())` — router/group-wide middleware application.
     USE_PATTERN = re.compile(r"""(\w+)\.Use\s*\(([^)]*)\)""", re.MULTILINE)
 
-    # A middleware/handler name that names authentication. Deliberately
-    # auth-specific — a bare `.Use(` is also logging/CORS/recovery, which must
-    # not credit a route with auth.
+    # A middleware name that names authentication. Deliberately auth-specific —
+    # a bare `.Use(` is also logging/CORS/recovery, which must not credit auth.
     _AUTH_NAME = re.compile(
         r"(?i)(auth|login|jwt|token|session|protected|require[-_]?(?:auth|login))"
+    )
+    # An auth-naming middleware *applied as a call* — the name is immediately
+    # followed by `(`, so it matches a wrapper like `RequireAuth(h)` but NOT a
+    # handler merely *named* with an auth-ish word (`loginViewHandler`,
+    # `getSessionData`). Marking a route authed off a handler name would be the
+    # dangerous direction: it suppresses a genuine missing-auth finding.
+    _AUTH_MIDDLEWARE_CALL = re.compile(
+        r"(?i)\b\w*"
+        r"(?:auth|login|jwt|token|session|protected|require[-_]?(?:auth|login))"
+        r"\w*\s*\("
     )
     # A handler is credited with auth only when its body both looks up an
     # identity AND refuses — checked by the route analyzer via handler_source;
@@ -109,19 +118,20 @@ class GoRouteMapper:
         groups = self._group_prefixes(content)
         auth_receivers = self._auth_receivers(content)
 
-        def _entry(recv: str, methods: list[str], path: str, body: str):
+        def _entry(recv, methods, path, body, wrapper_auth):
             full = normalize_route_pattern(self._prefix(groups, recv) + path)
-            # A router/group with auth middleware guards every route on it —
-            # that is definite. Otherwise leave the per-route verdict to the
-            # route analyzer, which re-examines handler_source for an
-            # identity-check-AND-refusal (and the LSP tracer follows helpers
-            # across files). None of `content`'s other handlers can vouch here.
+            # A route is authed when a router/group applies auth middleware, OR
+            # an auth-naming middleware wraps the handler on the mount line
+            # (idiomatic Go: `r.GET(p, RequireAuth(h))`). Both are definite.
+            # Otherwise leave the per-route verdict to the route analyzer, which
+            # re-examines handler_source for an identity-check-AND-refusal (and
+            # the LSP tracer follows helpers across files).
             group_auth = recv in auth_receivers
             return RouteEntry(
                 file_path=file_path,
                 http_methods=methods,
                 route_pattern=full,
-                has_auth_check=True if group_auth else False,
+                has_auth_check=True if (group_auth or wrapper_auth) else False,
                 content=content,
                 handler_source=body,
             )
@@ -131,20 +141,20 @@ class GoRouteMapper:
             path = match.group(3) or match.group(4)
             # A real route registration passes a handler after the path — this
             # separates `r.GET("/p", h)` from `r.Header.Get("X")` / `c.Get("u")`.
-            is_route, body = self._resolve_handler(content, match.end())
+            is_route, body, wrapper_auth = self._resolve_handler(content, match.end())
             if not is_route:
                 continue
-            routes.append(_entry(recv, [verb.upper()], path, body))
+            routes.append(_entry(recv, [verb.upper()], path, body, wrapper_auth))
 
         for match in self.HANDLE_PATTERN.finditer(content):
             recv = match.group(1)
             path = match.group(2) or match.group(3)
-            is_route, body = self._resolve_handler(content, match.end())
+            is_route, body, wrapper_auth = self._resolve_handler(content, match.end())
             if not is_route:
                 continue
             # net/http muxes accept any method — wildcard so every verb reads
             # as reachable.
-            routes.append(_entry(recv, ["ANY"], path, body))
+            routes.append(_entry(recv, ["ANY"], path, body, wrapper_auth))
 
         return routes
 
@@ -158,25 +168,68 @@ class GoRouteMapper:
                 receivers.add(recv)
         return receivers
 
-    def _resolve_handler(self, content: str, after: int) -> tuple[bool, str]:
+    def _resolve_handler(self, content: str, after: int) -> tuple[bool, str, bool]:
         """Resolve the handler following a route registration's path arg.
 
-        Returns ``(is_route, handler_source)``:
-        - named handler ``, getUser)`` → (True, body of ``func getUser``) — or
-          (True, "") when it is package-qualified/defined elsewhere (the LSP
-          tracer resolves those cross-file);
-        - inline ``, func(...) {...}`` → (True, the literal's body);
-        - no handler (``r.Header.Get("X")``, ``c.Get("user")``) → (False, "").
+        Returns ``(is_route, handler_source, wrapper_auth)``:
+        - named handler ``, getUser)`` → body of ``func getUser`` (or "" when it
+          is package-qualified/defined elsewhere; the LSP tracer resolves those);
+        - inline ``, func(...) {...}`` → the literal's body;
+        - wrapped ``, Logging(RequireAuth(getUser))`` → the innermost resolvable
+          handler's body, and ``wrapper_auth`` True when an auth-naming
+          middleware appears anywhere in the wrapper chain (idiomatic Go);
+        - no handler (``r.Header.Get("X")``, ``c.Get("user")``) → (False, "", False).
+
+        The registration arguments are captured by balancing parentheses from
+        the path to the enclosing call's close, so nested wrappers are handled
+        without hard-coding any framework's middleware names.
         """
-        tail = content[after:after + 160]
-        m = re.match(r"\s*,\s*([A-Za-z_]\w*(?:\.\w+)?)\s*[),]", tail)
-        if m:
-            return True, self._func_body(content, m.group(1))
-        inline = re.match(r"\s*,\s*func\s*\(", tail)
+        args = self._call_args_tail(content, after)
+        arg = args.lstrip().lstrip(",").strip()
+        if not arg:
+            return False, "", False
+
+        # Auth only from a middleware *call* wrapping the handler, never from a
+        # handler merely named with an auth-ish word.
+        wrapper_auth = bool(self._AUTH_MIDDLEWARE_CALL.search(args))
+
+        inline = re.match(r"\s*,\s*func\s*\(", args)
         if inline:
             brace = content.find("{", after + inline.end())
-            return True, self._brace_block(content, brace) if brace != -1 else ""
-        return False, ""
+            body = self._brace_block(content, brace) if brace != -1 else ""
+            return True, body, wrapper_auth
+
+        # Named or wrapped: the innermost identifier that resolves to a
+        # `func <name>` in this file is the real handler; wrappers resolve to ""
+        # and are skipped. Package-qualified names (pkg.H) resolve to "" too.
+        body = ""
+        for name in reversed(re.findall(r"[A-Za-z_]\w*", arg)):
+            resolved = self._func_body(content, name)
+            if resolved:
+                body = resolved
+                break
+        return True, body, wrapper_auth
+
+    @staticmethod
+    def _call_args_tail(content: str, after: int) -> str:
+        """Text of the registration's remaining args, from just after the path
+        to the enclosing call's matching ``)`` (exclusive).
+
+        ``after`` sits inside the verb/HandleFunc call (one paren already open),
+        so balancing from depth 1 yields ``, handlerExpr`` however deeply the
+        handler is wrapped. Bounded so a malformed file can't run away.
+        """
+        depth = 1
+        end = min(len(content), after + 2000)
+        for i in range(after, end):
+            ch = content[i]
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    return content[after:i]
+        return content[after:end]
 
     @classmethod
     def _func_body(cls, content: str, handler: str) -> str:

@@ -69,6 +69,25 @@ rules:
           - pattern: $DB.QueryRowContext($CTX, $Q)
           - pattern: $DB.ExecContext($CTX, $Q)
 
+  # ---- XSS: unescaped data cast to a template safe-string type ----
+  # html/template auto-escapes by default; casting a value to template.HTML/JS/
+  # HTMLAttr/CSS/URL explicitly BYPASSES that escaping, so a non-literal cast is
+  # the canonical Go XSS sink (gosec G203). A string-literal argument is the
+  # intentional, safe case and is excluded, so this does not false-positive on
+  # static markup.
+    # Regex, not an AST pattern, on purpose: `template.HTML(x)` is a Go type
+    # CONVERSION whose AST match needs type resolution, which fails on a cloned
+    # repo whose modules aren't downloaded. The regex requires a non-quote,
+    # non-close-paren first argument char, so a string-literal cast
+    # (`template.HTML("...")`) — the intentional, safe case — is excluded and
+    # this does not false-positive on static markup.
+  - id: isitsecure-go-xss-template-safestring
+    languages: [go]
+    severity: ERROR
+    metadata: {category: injection_risk, isitsecure-severity: high}
+    message: "Unescaped data cast to a template safe-string type (template.HTML/JS/HTMLAttr/CSS/URL) bypasses Go's auto-escaping — cross-site scripting (XSS)."
+    pattern-regex: 'template\.(?:HTML|JS|HTMLAttr|CSS|URL)\s*\(\s*[^")\s]'
+
   # ---- Command injection: user input → shell (intra-file taint) ----
   # os/exec runs the program directly (no shell) UNLESS invoked as sh -c, so a
   # tainted arg is only injection when the command is a shell. Sink focuses on
