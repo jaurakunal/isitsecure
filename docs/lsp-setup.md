@@ -446,21 +446,29 @@ gopls version
 
 ### What Gets Traced
 
-gopls spawns during a Go scan and traces the mapped routes, but the auth-flow
-tracer's per-route auth **verification** currently recognizes JS/TS, Python, and
-Java idioms — not yet Go's middleware/handler patterns. So on Go projects the
-LSP is initialized and runs, but does not yet refine (suppress/boost) auth
-findings. The working Go SAST today is the injection taint floor (SQLi, command
-injection, SSRF, path traversal) plus route mapping. Deeper Go auth tracing —
+The auth-flow tracer verifies Go routes per handler, in three ways:
 
 ```go
-// (planned) Does the AuthMiddleware actually run before this handler?
+// 1. Router/group middleware guards every route on it.
 api := r.Group("/api/v1")
 api.Use(AuthMiddleware())
 api.GET("/users/:id", getUser)
-```
 
-— is a tracked follow-up.
+// 2. The handler identifies a caller AND refuses, inline.
+func getUser(w http.ResponseWriter, r *http.Request) {
+    if r.Header.Get("Authorization") == "" {
+        http.Error(w, "no", http.StatusUnauthorized); return
+    }
+}
+
+// 3. The handler's auth is a helper defined in ANOTHER file — gopls
+//    go-to-definition follows it and reads its auth terminal. This is what
+//    lets the LSP suppress a false "missing auth" that a per-file regex,
+//    seeing only the call, would raise.
+func secret(w http.ResponseWriter, r *http.Request) {
+    if !mustAuth(w, r) { return }   // mustAuth lives in mw.go
+}
+```
 
 ## How the Server Is Chosen
 

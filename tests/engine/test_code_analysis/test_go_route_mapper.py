@@ -63,16 +63,32 @@ func routes(r chi.Router) {
     assert routes["/items/:id"].http_methods == ["DELETE"]
 
 
-def test_auth_detected_at_file_level(tmp_path):
+def test_group_middleware_marks_routes_authed(tmp_path):
+    """A router/group with an auth-naming .Use middleware guards its routes."""
     _write(tmp_path, "auth.go", """
 package main
 func routes(r *gin.Engine) {
-    r.Use(AuthMiddleware())
-    r.GET("/me", currentUser)
+    api := r.Group("/api")
+    api.Use(AuthMiddleware())
+    api.GET("/me", currentUser)
 }
 """)
-    routes = GoRouteMapper().map_routes(str(tmp_path))
-    assert routes and routes[0].has_auth_check is True
+    routes = _by_pattern(GoRouteMapper().map_routes(str(tmp_path)))
+    assert routes["/api/me"].has_auth_check is True
+
+
+def test_non_auth_middleware_does_not_credit_auth(tmp_path):
+    """A .Use of logging/CORS/recovery must NOT mark routes as authed."""
+    _write(tmp_path, "log.go", """
+package main
+func routes(r *gin.Engine) {
+    r.Use(Logger())
+    r.Use(gin.Recovery())
+    r.GET("/open", openHandler)
+}
+""")
+    routes = _by_pattern(GoRouteMapper().map_routes(str(tmp_path)))
+    assert routes["/open"].has_auth_check is False
 
 
 def test_no_auth_signal_means_false(tmp_path):
@@ -84,6 +100,62 @@ func routes(r *gin.Engine) {
 """)
     routes = GoRouteMapper().map_routes(str(tmp_path))
     assert routes and routes[0].has_auth_check is False
+
+
+def test_handler_source_captured_for_named_handler(tmp_path):
+    """The route carries its handler's body so per-route auth can be judged."""
+    _write(tmp_path, "h.go", """
+package main
+import "net/http"
+func getThing(w http.ResponseWriter, r *http.Request) {
+    if r.Header.Get("Authorization") == "" {
+        http.Error(w, "no", http.StatusUnauthorized)
+        return
+    }
+    w.Write([]byte("thing"))
+}
+func routes(mux *http.ServeMux) {
+    mux.HandleFunc("/thing", getThing)
+}
+""")
+    routes = _by_pattern(GoRouteMapper().map_routes(str(tmp_path)))
+    body = routes["/thing"].handler_source
+    assert "func getThing" in body
+    assert "StatusUnauthorized" in body  # brace-matched to the full body
+
+
+def test_non_route_method_calls_are_not_routes(tmp_path):
+    """`r.Header.Get("Authorization")` / `c.Get("user")` have no handler arg,
+    so they must not be mapped as routes (a real regression that produced a
+    bogus `/Authorization` route)."""
+    _write(tmp_path, "h.go", """
+package main
+import "net/http"
+func h(w http.ResponseWriter, r *http.Request) {
+    _ = r.Header.Get("Authorization")
+    _ = r.URL.Query().Get("id")
+}
+func routes(mux *http.ServeMux) {
+    mux.HandleFunc("/real", h)
+}
+""")
+    routes = _by_pattern(GoRouteMapper().map_routes(str(tmp_path)))
+    assert set(routes) == {"/real"}
+
+
+def test_inline_handler_is_a_route(tmp_path):
+    """An inline func literal handler still counts as a route."""
+    _write(tmp_path, "inline.go", """
+package main
+import "net/http"
+func routes(mux *http.ServeMux) {
+    mux.HandleFunc("/inline", func(w http.ResponseWriter, r *http.Request) {
+        w.Write([]byte("hi"))
+    })
+}
+""")
+    routes = _by_pattern(GoRouteMapper().map_routes(str(tmp_path)))
+    assert "/inline" in routes
 
 
 def test_test_files_are_skipped(tmp_path):
