@@ -466,6 +466,8 @@ isitsecure is not a replacement for enterprise security platforms. It's designed
 - One command scans + generates + applies AI fixes (`isitsecure fix`)
 - Cross-references DAST + SAST findings for confirmed vulnerabilities
 - LSP traces auth flows through call chains (TypeScript, Python, Java)
+- **Sound app-logic exploitation** — cross-tenant BOLA proven by response-body discrimination (not status codes), JWT `alg=none` / RS→HS confusion forging, and differential injection oracles (SSTI arithmetic evaluation, NoSQL operator-broadening, OOB SSRF) — so a finding is a *demonstrated* exploit, not a pattern match
+- **Honest, published benchmarking** — per-challenge recall against OWASP Juice Shop is measured and reported (see [`benchmarks/RESULTS.md`](benchmarks/RESULTS.md)), with an explicit anti-overfitting discipline (no app names or app-specific routes in the shipped engine). Most OSS scanners publish no recall numbers at all.
 
 ### Where specialized tools go deeper
 
@@ -477,6 +479,7 @@ isitsecure is not a replacement for enterprise security platforms. It's designed
 | Container + IaC scanning | [Trivy](https://github.com/aquasecurity/trivy) / [Checkov](https://github.com/bridgecrewio/checkov) | Our IaC/Docker scanners are basic — use Trivy for depth |
 | Enterprise compliance (SOC2, PCI) | [Snyk](https://snyk.io) / [Checkmarx](https://checkmarx.com) | No compliance mapping (yet) |
 | Template-based vuln scanning | [Nuclei](https://github.com/projectdiscovery/nuclei) (28K+ stars) | Not template-based — different approach |
+| AI-agent / LLM pentesting | [PentestGPT](https://github.com/GreyDGL/PentestGPT) / [Vulnhuntr](https://github.com/protectai/vulnhuntr) / [cai](https://github.com/aliasrobotics/cai) | Those are research-grade or single-class demos; isitsecure is a maintained, tested (~2,500 tests) and benchmarked product with the same LLM/agentic ideas wired into a deterministic scanner pipeline |
 
 ### Who should use what
 
