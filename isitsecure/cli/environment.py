@@ -45,7 +45,7 @@ _LSP_SPECS = [
         },
     },
     {
-        "lang": "Java / Kotlin",
+        "lang": "Java",
         "bins": ("jdtls", "jdt-language-server"),
         "runtime": ("java",),
         "needs": "brew",
@@ -54,6 +54,21 @@ _LSP_SPECS = [
             "macos": "install a JDK (`brew install openjdk`) + jdtls — https://github.com/eclipse-jdtls/eclipse.jdt.ls#installation",
             "windows": "install a JDK (`winget install Microsoft.OpenJDK`) + jdtls — https://github.com/eclipse-jdtls/eclipse.jdt.ls#installation",
             "linux": "install a JDK + jdtls — https://github.com/eclipse-jdtls/eclipse.jdt.ls#installation",
+        },
+    },
+    {
+        # jdtls resolves Kotlin poorly, so Kotlin projects need their own
+        # server; the Java/Kotlin LSP client prefers it for Kotlin-dominant
+        # repos (see java_client._find_server_command).
+        "lang": "Kotlin",
+        "bins": ("kotlin-language-server",),
+        "runtime": ("java",),
+        "needs": "brew",
+        "cmd": ["brew", "install", "kotlin-language-server"],
+        "hint": {
+            "macos": "install a JDK (`brew install openjdk`) + `brew install kotlin-language-server`",
+            "windows": "install a JDK (`winget install Microsoft.OpenJDK`) + kotlin-language-server — https://github.com/fwcd/kotlin-language-server/releases",
+            "linux": "install a JDK + kotlin-language-server — https://github.com/fwcd/kotlin-language-server/releases",
         },
     },
 ]

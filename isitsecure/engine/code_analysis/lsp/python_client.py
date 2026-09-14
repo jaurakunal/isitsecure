@@ -5,9 +5,13 @@ SRP: Language-specific details for Python LSP — command discovery,
 
 DIP: Implements LSPClientProtocol via BaseLSPClient.
 
-Supports two servers (tried in order):
-1. pylsp (python-lsp-server) — more common, pip installable
-2. pyright (pyright-langserver) — faster, better type checking
+Supports three servers (tried in order):
+1. pyright (pyright-langserver) — best cross-file definition/reference
+   resolution, which is what auth-flow tracing depends on
+2. basedpyright (basedpyright-langserver) — permissively-licensed pyright
+   fork with the same resolution engine
+3. pylsp (python-lsp-server) — always pip-installable fallback; its
+   rope-based def/ref is weaker, so it comes last
 """
 
 from __future__ import annotations
@@ -30,12 +34,14 @@ class PythonLSPClient(BaseLSPClient):
     - Flask: @login_required -> flask_login -> session check
     """
 
-    # Server configurations: (binary_name, full_command_tuple)
-    # Only tried if binary_name is found via shutil.which
+    # Server configurations: (binary_name, full_command_tuple).
+    # Only tried if binary_name is found via shutil.which. pyright first —
+    # its cross-file def/ref resolution is materially better than pylsp's for
+    # tracing an auth check through a call chain; pylsp stays as the fallback.
     SERVER_OPTIONS = (
-        ("pylsp", ("pylsp",)),
         ("pyright-langserver", ("pyright-langserver", "--stdio")),
         ("basedpyright-langserver", ("basedpyright-langserver", "--stdio")),
+        ("pylsp", ("pylsp",)),
     )
 
     @staticmethod
@@ -60,7 +66,7 @@ class PythonLSPClient(BaseLSPClient):
 
         logger.warning(
             "No Python LSP server found. Install with: "
-            "pip install python-lsp-server (or) pip install pyright"
+            "pip install pyright (preferred) or pip install python-lsp-server"
         )
         return None
 

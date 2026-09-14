@@ -25,10 +25,11 @@ Route file: app/api/tasks/[id]/route.ts
 | Language | LSP Server | Install Command | Auth Tracing |
 |---|---|---|---|
 | **TypeScript/JavaScript** | typescript-language-server | `isitsecure setup --lsp` (server + a private TypeScript 5.x runtime) | Full trace via go-to-definition |
-| **Python** | pylsp or pyright | `pip install python-lsp-server` or `pip install pyright` | Traces Depends(), decorators |
-| **Java/Kotlin** | jdtls | See [jdtls install guide](https://github.com/eclipse-jdtls/eclipse.jdt.ls#installation) | Traces @PreAuthorize, SecurityConfig |
+| **Python** | pyright / basedpyright (preferred), pylsp (fallback) | `pip install pyright` (preferred) or `pip install python-lsp-server` | Traces Depends(), decorators |
+| **Java** | jdtls | `isitsecure setup --lsp` (`brew install jdtls`) or the [jdtls install guide](https://github.com/eclipse-jdtls/eclipse.jdt.ls#installation) | Traces @PreAuthorize, SecurityConfig |
+| **Kotlin** | kotlin-language-server | `isitsecure setup --lsp` (`brew install kotlin-language-server`) or [releases](https://github.com/fwcd/kotlin-language-server/releases) | Traces @PreAuthorize, SecurityConfig |
 
-isitsecure picks the server that matches the language your project is written in, and uses regex-based auth detection when there isn't one (still effective, slightly higher false positive rate).
+isitsecure picks the server that matches the language your project is written in, and uses regex-based auth detection when there isn't one (still effective, slightly higher false positive rate). For Python it prefers pyright over pylsp — pyright's cross-file definition/reference resolution traces auth through call chains more reliably. For a Kotlin-dominant project it prefers kotlin-language-server over jdtls, which resolves Kotlin poorly.
 
 ## TypeScript LSP Setup
 
@@ -311,24 +312,29 @@ The route may use a pattern the tracer doesn't recognize yet. The scan falls bac
 
 ## Python LSP Setup
 
-### Install pylsp (recommended)
+### Install pyright (recommended)
+
+pyright's cross-file definition/reference resolution traces auth through call
+chains more reliably than pylsp's, so isitsecure tries it first.
+
+```bash
+pip install pyright
+# or the permissively-licensed fork:
+pip install basedpyright
+# or via npm:
+npm install -g pyright
+
+# Verify
+pyright-langserver --version
+```
+
+### Or install pylsp (fallback)
 
 ```bash
 pip install python-lsp-server
 
 # Verify
 pylsp --help
-```
-
-### Or install pyright
-
-```bash
-pip install pyright
-# or
-npm install -g pyright
-
-# Verify
-pyright-langserver --version
 ```
 
 ### What Gets Traced
@@ -351,9 +357,14 @@ def profile(request):
 
 The Python LSP client auto-detects virtual environments at `.venv/`, `venv/`, or `env/` in your project root for proper import resolution.
 
-## Java LSP Setup
+## Java / Kotlin LSP Setup
 
-### Install jdtls
+`isitsecure setup --lsp` installs both servers via Homebrew where available.
+For a **Java-dominant** project isitsecure uses jdtls; for a **Kotlin-dominant**
+project it prefers kotlin-language-server (jdtls resolves Kotlin poorly) and
+falls back to jdtls only if the Kotlin server isn't installed.
+
+### Install jdtls (Java)
 
 The Eclipse JDT Language Server is the standard Java LSP:
 
@@ -369,12 +380,17 @@ brew install jdtls
 jdtls --version
 ```
 
-### Or install kotlin-language-server (for Kotlin projects)
+### Install kotlin-language-server (Kotlin)
 
 ```bash
-# https://github.com/fwcd/kotlin-language-server/releases
-# Download, extract, add to PATH
+# macOS (Homebrew)
+brew install kotlin-language-server
 
+# Linux / Windows — download from GitHub releases:
+# https://github.com/fwcd/kotlin-language-server/releases
+# Extract and add to PATH
+
+# Verify
 kotlin-language-server --version
 ```
 
@@ -413,14 +429,19 @@ files and picks the server for whichever language most of it is written in:
 | Language | Counted extensions | Server |
 |---|---|---|
 | TypeScript / JavaScript | `.ts` `.tsx` `.js` `.jsx` `.mjs` `.cjs` | typescript-language-server |
-| Python | `.py` `.pyi` | pylsp or pyright-langserver |
-| Java / Kotlin | `.java` `.kt` `.kts` | jdtls |
+| Python | `.py` `.pyi` | pyright-langserver / basedpyright (preferred), pylsp (fallback) |
+| Java / Kotlin | `.java` `.kt` `.kts` | jdtls, or kotlin-language-server when Kotlin source dominates |
 
 Vendored and generated directories (`node_modules`, `.venv`, `dist`, `target`,
 and hidden directories) don't count toward the total, so a Python service with
 a bundled JavaScript dependency is still scanned as Python. If two languages
 tie, the order in the table wins, so repeated scans of the same repo always
 choose the same server.
+
+Within the Java/Kotlin family there's a second, finer choice: the client counts
+`.kt`/`.kts` against `.java` and, when Kotlin dominates, prefers
+kotlin-language-server (jdtls's Kotlin resolution is weak). A Java-dominant or
+tied project uses jdtls. Each falls back to the other if only one is installed.
 
 **If the matching server isn't installed, no server is used** — isitsecure says
 which one it wanted and falls back to regex-only auth detection. It will not
