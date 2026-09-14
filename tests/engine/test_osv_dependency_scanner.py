@@ -105,10 +105,44 @@ class TestDependencyExtraction:
             "package.json": '{"dependencies":{"next":"13.4.0"}}',
             "requirements.txt": "django==3.2.0\n",
             "pom.xml": "<project><dependencies><dependency><groupId>g</groupId><artifactId>a</artifactId><version>1.0</version></dependency></dependencies></project>",
+            "go.mod": "module x\nrequire github.com/gin-gonic/gin v1.9.1\n",
         })
         deps = scanner._extract_all_dependencies(snapshot)
         ecosystems = {d.ecosystem for d in deps}
-        assert ecosystems == {"npm", "PyPI", "Maven"}
+        assert ecosystems == {"npm", "PyPI", "Maven", "Go"}
+
+    def test_extracts_go_block_and_singleline(self, scanner):
+        snapshot = _make_snapshot({
+            "go.mod": (
+                "module example.com/app\n\ngo 1.21\n\n"
+                "require (\n"
+                "\tgithub.com/gin-gonic/gin v1.9.1\n"
+                "\tgolang.org/x/crypto v0.14.0 // indirect\n"
+                ")\n\n"
+                "require github.com/dgrijalva/jwt-go v3.2.0+incompatible\n\n"
+                "replace github.com/foo/bar => github.com/foo/bar v1.0.1\n"
+            )
+        })
+        deps = {d.name: d for d in scanner._extract_all_dependencies(snapshot)}
+        assert set(deps) == {
+            "github.com/gin-gonic/gin",
+            "golang.org/x/crypto",
+            "github.com/dgrijalva/jwt-go",
+        }
+        assert all(d.ecosystem == "Go" for d in deps.values())
+        # leading v stripped; +incompatible preserved; indirect included
+        assert deps["github.com/gin-gonic/gin"].version == "1.9.1"
+        assert deps["github.com/dgrijalva/jwt-go"].version == "3.2.0+incompatible"
+
+    def test_go_skips_directives(self, scanner):
+        """module/go/toolchain/replace/exclude are not dependencies."""
+        snapshot = _make_snapshot({
+            "go.mod": (
+                "module example.com/app\ngo 1.21\ntoolchain go1.21.5\n"
+                "exclude github.com/bad/pkg v1.0.0\n"
+            )
+        })
+        assert scanner._extract_all_dependencies(snapshot) == []
 
 
 class TestSeverityExtraction:

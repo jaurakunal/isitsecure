@@ -311,10 +311,10 @@ record to prove it could is not worth the finding.
 | **TypeScript/JavaScript** (Next.js, Express, tRPC, GraphQL) | Yes | Yes | Yes (npm) | Yes |
 | **Python** (Django, FastAPI, Flask) | Yes | Yes | Yes (pip) | Yes |
 | **Java/Kotlin** (Spring Boot) | Yes | Yes | Yes (Maven, Gradle) | Yes |
-| **Go** (net/http, Gin, Echo, chi, gorilla) | Yes | Yes | No | Yes |
+| **Go** (net/http, Gin, Echo, chi, gorilla) | Yes | Yes | Yes (go.mod) | Yes |
 | **Ruby, Rust, PHP, etc.** | No | No | No | Yes (DAST works against any HTTP API) |
 
-DAST scanners test live HTTP endpoints regardless of backend language. SAST route mapping, auth detection, and dependency scanning are language-specific. Go auth detection is per-route (router/group middleware, in-handler checks) and the gopls LSP refines it — following a cross-file auth helper via go-to-definition to confirm a guard or suppress a false "missing auth". Dependency (go.mod) scanning is the one Go gap.
+DAST scanners test live HTTP endpoints regardless of backend language. SAST route mapping, auth detection, and dependency scanning are language-specific. Go auth detection is per-route (router/group middleware, in-handler checks) and the gopls LSP refines it — following a cross-file auth helper via go-to-definition to confirm a guard or suppress a false "missing auth". Go module dependencies (`go.mod`, direct and indirect) are checked against the OSV.dev vulnerability database, like npm/PyPI/Maven.
 
 ## Output Formats
 

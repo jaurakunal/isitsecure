@@ -53,7 +53,7 @@ class OSVDependencyScanner:
     """Scans all dependency files against the OSV.dev vulnerability database.
 
     Unified scanner for npm (package.json), PyPI (requirements.txt,
-    pyproject.toml), and Maven/Gradle (pom.xml, build.gradle).
+    pyproject.toml), Maven/Gradle (pom.xml, build.gradle), and Go (go.mod).
     """
 
     SCANNER_NAME = "osv_dependency_scanner"
@@ -117,7 +117,52 @@ class OSVDependencyScanner:
                 deps.extend(self._extract_maven(file_path, content))
             elif name in ("build.gradle", "build.gradle.kts"):
                 deps.extend(self._extract_gradle(file_path, content))
+            elif name == "go.mod":
+                deps.extend(self._extract_go(file_path, content))
 
+        return deps
+
+    def _extract_go(self, file_path: str, content: str) -> list[ParsedDependency]:
+        """Extract Go modules from go.mod (direct and indirect ``require``s).
+
+        Handles both the block form::
+
+            require (
+                github.com/gin-gonic/gin v1.9.1
+                golang.org/x/crypto v0.14.0 // indirect
+            )
+
+        and the single-line form ``require github.com/x/y v1.2.3``. The
+        ``module``/``go``/``toolchain``/``replace``/``exclude``/``retract``
+        directives are ignored — only versioned requires reach OSV. The leading
+        ``v`` is stripped to the semver OSV's Go ecosystem compares against
+        (``+incompatible`` and pseudo-versions are preserved).
+        """
+        deps: list[ParsedDependency] = []
+        in_require = False
+        for line_num, raw in enumerate(content.splitlines(), 1):
+            code = raw.split("//", 1)[0].strip()  # drop `// indirect` etc.
+            if not code:
+                continue
+            if code.startswith("require (") or code == "require(":
+                in_require = True
+                continue
+            if in_require:
+                if code == ")":
+                    in_require = False
+                    continue
+                match = re.match(r"^(\S+)\s+(v\S+)$", code)
+            elif code.startswith("require "):
+                match = re.match(r"^require\s+(\S+)\s+(v\S+)$", code)
+            else:
+                match = None
+            if match:
+                deps.append(ParsedDependency(
+                    name=match.group(1),
+                    version=re.sub(r"^v", "", match.group(2)),
+                    ecosystem="Go",
+                    file_path=file_path, line_number=line_num, raw_line=raw.strip(),
+                ))
         return deps
 
     def _extract_npm(self, file_path: str, content: str) -> list[ParsedDependency]:

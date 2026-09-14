@@ -674,6 +674,8 @@ class RepoIngestionConfig:
         "build.gradle.kts",
         "application.properties",
         "application.yml",
+        # Go projects — go.mod feeds OSV dependency scanning
+        "go.mod",
     )
 
     # Directories to skip during indexing
