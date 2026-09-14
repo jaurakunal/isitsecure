@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.28.4](https://github.com/jaurakunal/isitsecure/compare/v0.28.3...v0.28.4) (2026-09-14)
+
+
+### Bug Fixes
+
+* **lsp:** prefer pyright, and use the Kotlin server for Kotlin repos ([#238](https://github.com/jaurakunal/isitsecure/issues/238)) ([0571312](https://github.com/jaurakunal/isitsecure/commit/057131295dd68de6813dd7307ead3973ec124307))
+
 ## [0.28.3](https://github.com/jaurakunal/isitsecure/compare/v0.28.2...v0.28.3) (2026-09-14)
 
 
