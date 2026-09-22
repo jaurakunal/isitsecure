@@ -27,39 +27,28 @@ rules:
           - pattern: $DB.QueryRow("..." + $X, ...)
           - pattern: $DB.Exec("..." + $X, ...)
 
-  # ---- SQL injection: user input → query STRING (intra-file taint) ----
-  # Catches the assign-then-execute shape the inline pattern above misses. The
-  # sink focuses on the query-string argument, so a parameterized call —
-  # Query(sql, args...) with taint in an arg — is NOT flagged.
+  # ---- SQL injection: dynamically-built query STRING (intra-file taint) ----
+  # Catches the assign-then-execute shape the inline pattern above misses:
+  #   q := fmt.Sprintf("... %s", x); db.Query(q)
+  # The SOURCE is the string-building itself (Sprintf / concatenation), NOT the
+  # request object — a single-arg query is SQLi-risky precisely when its string
+  # was built dynamically (gosec G201). Keying on the build, not on a request
+  # read, means a constant query (`db.Query("SELECT ...")`) has no source and is
+  # never flagged, and a parameterized call (multi-arg, excluded by the sink) is
+  # never flagged either.
   - id: isitsecure-go-sqli-taint
     mode: taint
     languages: [go]
     severity: ERROR
     metadata: {category: injection_risk, isitsecure-severity: critical}
-    message: "User input flows into a raw SQL query — SQL injection."
-    pattern-sources: &go_sources
-      # net/http
-      - pattern: $R.URL.Query().Get(...)
-      - pattern: $R.FormValue(...)
-      - pattern: $R.PostFormValue(...)
-      - pattern: $R.Header.Get(...)
-      # gorilla/mux
-      - pattern: mux.Vars($R)[...]
-      # Gin
-      - pattern: $C.Query(...)
-      - pattern: $C.DefaultQuery(...)
-      - pattern: $C.Param(...)
-      - pattern: $C.PostForm(...)
-      - pattern: $C.GetHeader(...)
-      # Echo / Fiber
-      - pattern: $C.QueryParam(...)
-      - pattern: $C.FormValue(...)
-      - pattern: $C.Params(...)
+    message: "A dynamically-built string (fmt.Sprintf/concatenation) flows into a raw SQL query — SQL injection. Use a parameterized query."
+    pattern-sources:
+      - pattern: fmt.Sprintf(...)
+      - pattern: '"..." + $X'
+      - pattern: '$X + "..."'
     # Single-argument calls only: a placeholder query passes its user data as
     # extra args — Query(sql, id) — so a tainted value in a *multi-arg* call is
-    # the parameter, not the SQL, and must NOT flag. A tainted single-arg call
-    # is a string-built query. (The fmt.Sprintf/concat forms are caught by the
-    # pattern rule above regardless of arg count.)
+    # the parameter, not the SQL, and must NOT flag.
     pattern-sinks:
       - pattern-either:
           - pattern: $DB.Query($Q)
@@ -98,7 +87,26 @@ rules:
     severity: ERROR
     metadata: {category: injection_risk, isitsecure-severity: critical}
     message: "User input flows into a shell command (sh -c / bash -c) — command injection."
-    pattern-sources: *go_sources
+    # Shared request-derived taint sources for the taint rules below. NOT
+    # `$C.Query(...)`: it collides with database/sql's `db.Query(...)`, so a bare
+    # `.Query()` on any receiver would read as a source (see the SQLi rule).
+    pattern-sources:
+      # net/http
+      - pattern: $R.URL.Query().Get(...)
+      - pattern: $R.FormValue(...)
+      - pattern: $R.PostFormValue(...)
+      - pattern: $R.Header.Get(...)
+      # gorilla/mux
+      - pattern: mux.Vars($R)[...]
+      # Gin (DefaultQuery is Gin-specific; plain c.Query is omitted — collision)
+      - pattern: $C.DefaultQuery(...)
+      - pattern: $C.Param(...)
+      - pattern: $C.PostForm(...)
+      - pattern: $C.GetHeader(...)
+      # Echo / Fiber
+      - pattern: $C.QueryParam(...)
+      - pattern: $C.FormValue(...)
+      - pattern: $C.Params(...)
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -114,7 +122,24 @@ rules:
     severity: ERROR
     metadata: {category: injection_risk, isitsecure-severity: high}
     message: "User-controlled URL flows into an outbound HTTP request — SSRF."
-    pattern-sources: *go_sources
+    pattern-sources:
+      # net/http
+      - pattern: $R.URL.Query().Get(...)
+      - pattern: $R.FormValue(...)
+      - pattern: $R.PostFormValue(...)
+      - pattern: $R.Header.Get(...)
+      # gorilla/mux
+      - pattern: mux.Vars($R)[...]
+      # Gin (DefaultQuery is Gin-specific; plain c.Query is omitted — it
+      # collides with database/sql's db.Query, see the SQLi rule)
+      - pattern: $C.DefaultQuery(...)
+      - pattern: $C.Param(...)
+      - pattern: $C.PostForm(...)
+      - pattern: $C.GetHeader(...)
+      # Echo / Fiber
+      - pattern: $C.QueryParam(...)
+      - pattern: $C.FormValue(...)
+      - pattern: $C.Params(...)
     pattern-sinks:
       - pattern: http.Get(...)
       - pattern: http.Post(...)
@@ -129,7 +154,24 @@ rules:
     severity: WARNING
     metadata: {category: injection_risk, isitsecure-severity: high}
     message: "File opened with a request-derived path — path traversal."
-    pattern-sources: *go_sources
+    pattern-sources:
+      # net/http
+      - pattern: $R.URL.Query().Get(...)
+      - pattern: $R.FormValue(...)
+      - pattern: $R.PostFormValue(...)
+      - pattern: $R.Header.Get(...)
+      # gorilla/mux
+      - pattern: mux.Vars($R)[...]
+      # Gin (DefaultQuery is Gin-specific; plain c.Query is omitted — it
+      # collides with database/sql's db.Query, see the SQLi rule)
+      - pattern: $C.DefaultQuery(...)
+      - pattern: $C.Param(...)
+      - pattern: $C.PostForm(...)
+      - pattern: $C.GetHeader(...)
+      # Echo / Fiber
+      - pattern: $C.QueryParam(...)
+      - pattern: $C.FormValue(...)
+      - pattern: $C.Params(...)
     # filepath.Base/Clean strip traversal sequences — data through them is safe.
     pattern-sanitizers:
       - pattern: filepath.Base(...)
@@ -147,7 +189,24 @@ rules:
     severity: WARNING
     metadata: {category: injection_risk, isitsecure-severity: medium}
     message: "User input flows into an HTTP redirect target — open redirect."
-    pattern-sources: *go_sources
+    pattern-sources:
+      # net/http
+      - pattern: $R.URL.Query().Get(...)
+      - pattern: $R.FormValue(...)
+      - pattern: $R.PostFormValue(...)
+      - pattern: $R.Header.Get(...)
+      # gorilla/mux
+      - pattern: mux.Vars($R)[...]
+      # Gin (DefaultQuery is Gin-specific; plain c.Query is omitted — it
+      # collides with database/sql's db.Query, see the SQLi rule)
+      - pattern: $C.DefaultQuery(...)
+      - pattern: $C.Param(...)
+      - pattern: $C.PostForm(...)
+      - pattern: $C.GetHeader(...)
+      # Echo / Fiber
+      - pattern: $C.QueryParam(...)
+      - pattern: $C.FormValue(...)
+      - pattern: $C.Params(...)
     pattern-sinks:
       - pattern: http.Redirect($W, $R, $URL, ...)
       - patterns:
