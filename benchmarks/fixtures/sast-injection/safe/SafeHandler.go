@@ -20,6 +20,15 @@ func GetUser(w http.ResponseWriter, r *http.Request) {
 	_ = rows
 }
 
+// Constant query — no user input at all. A taint rule must NOT flag this. (An
+// earlier Gin `c.Query(...)` source pattern collided with database/sql's own
+// `db.Query(...)`, making every constant query self-flow into a false positive;
+// this pins that fix — surfaced by the AWS deception-bench precision pass.)
+func ListUsers(w http.ResponseWriter, r *http.Request) {
+	rows, _ := db.Query("SELECT id, username, email FROM users LIMIT 50")
+	_ = rows
+}
+
 // exec without a shell — argv form, user input is a bare argument.
 func Ping(w http.ResponseWriter, r *http.Request) {
 	host := r.URL.Query().Get("host")
