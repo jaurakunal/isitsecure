@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.32.1](https://github.com/jaurakunal/isitsecure/compare/v0.32.0...v0.32.1) (2026-09-22)
+
+
+### Bug Fixes
+
+* **go:** stop SQLi false positives on constant/parameterized queries ([#248](https://github.com/jaurakunal/isitsecure/issues/248)) ([180d2e1](https://github.com/jaurakunal/isitsecure/commit/180d2e1cbc89132d6aeeb443395e37d2c13eb1a0))
+
 ## [0.32.0](https://github.com/jaurakunal/isitsecure/compare/v0.31.0...v0.32.0) (2026-09-14)
 
 
