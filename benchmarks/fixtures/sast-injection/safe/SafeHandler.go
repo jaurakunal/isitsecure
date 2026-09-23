@@ -4,11 +4,13 @@ package safe
 
 import (
 	"database/sql"
+	"fmt"
 	"html/template"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 )
 
 var db *sql.DB
@@ -46,4 +48,15 @@ func Download(w http.ResponseWriter, r *http.Request) {
 // literal, not user input, so it must NOT be flagged as XSS.
 func Banner() template.HTML {
 	return template.HTML("<b>Welcome</b>")
+}
+
+// A user param converted to an int cannot carry a traversal payload, so a path
+// built from it is safe — the taint must be cleared by the strconv sanitizer.
+func GetByID(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.URL.Query().Get("id"))
+	if err != nil {
+		return
+	}
+	f, _ := os.Open(fmt.Sprintf("/data/%d.txt", id))
+	_ = f
 }
