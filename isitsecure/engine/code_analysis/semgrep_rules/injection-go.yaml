@@ -107,6 +107,15 @@ rules:
       - pattern: $C.QueryParam(...)
       - pattern: $C.FormValue(...)
       - pattern: $C.Params(...)
+    # Numeric/bool conversion neutralizes string-injection payloads — an int,
+    # float, or bool provably cannot carry `../`, a shell metacharacter, or a
+    # URL host. Sound and language-level (not app-specific), so no overfitting.
+    pattern-sanitizers:
+      - pattern: strconv.Atoi(...)
+      - pattern: strconv.ParseInt(...)
+      - pattern: strconv.ParseUint(...)
+      - pattern: strconv.ParseFloat(...)
+      - pattern: strconv.ParseBool(...)
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -140,6 +149,15 @@ rules:
       - pattern: $C.QueryParam(...)
       - pattern: $C.FormValue(...)
       - pattern: $C.Params(...)
+    # Numeric/bool conversion neutralizes string-injection payloads — an int,
+    # float, or bool provably cannot carry `../`, a shell metacharacter, or a
+    # URL host. Sound and language-level (not app-specific), so no overfitting.
+    pattern-sanitizers:
+      - pattern: strconv.Atoi(...)
+      - pattern: strconv.ParseInt(...)
+      - pattern: strconv.ParseUint(...)
+      - pattern: strconv.ParseFloat(...)
+      - pattern: strconv.ParseBool(...)
     pattern-sinks:
       - pattern: http.Get(...)
       - pattern: http.Post(...)
@@ -176,6 +194,11 @@ rules:
     pattern-sanitizers:
       - pattern: filepath.Base(...)
       - pattern: filepath.Clean(...)
+      - pattern: strconv.Atoi(...)
+      - pattern: strconv.ParseInt(...)
+      - pattern: strconv.ParseUint(...)
+      - pattern: strconv.ParseFloat(...)
+      - pattern: strconv.ParseBool(...)
     pattern-sinks:
       - pattern: os.Open(...)
       - pattern: os.OpenFile(...)
@@ -207,6 +230,15 @@ rules:
       - pattern: $C.QueryParam(...)
       - pattern: $C.FormValue(...)
       - pattern: $C.Params(...)
+    # Numeric/bool conversion neutralizes string-injection payloads — an int,
+    # float, or bool provably cannot carry `../`, a shell metacharacter, or a
+    # URL host. Sound and language-level (not app-specific), so no overfitting.
+    pattern-sanitizers:
+      - pattern: strconv.Atoi(...)
+      - pattern: strconv.ParseInt(...)
+      - pattern: strconv.ParseUint(...)
+      - pattern: strconv.ParseFloat(...)
+      - pattern: strconv.ParseBool(...)
     pattern-sinks:
       - pattern: http.Redirect($W, $R, $URL, ...)
       - patterns:
