@@ -672,6 +672,8 @@ The UI provides:
 
 The web server resolves your LLM API key the same way the CLI does (`ANTHROPIC_API_KEY`, a `.env` file, or `isitsecure setup`), so scans and fixes work without pasting a key into the browser. You can still enter one in the scan form to override it.
 
+**Security model.** The web server has no authentication, so it is meant for loopback only (the default `--host 127.0.0.1`). To block DNS-rebinding attacks it answers `421` to any request whose `Host` header is not `localhost`, `127.0.0.1`, `[::1]` (any port) or the host you passed to `--host`, and rejects state-changing requests (`POST`/`PUT`/`PATCH`/`DELETE`) carrying a foreign `Origin` with `403`. If you deliberately expose it (for example behind a reverse proxy), add the public names with `ISITSECURE_ALLOWED_HOSTS=name1,name2` (comma separated). `isitsecure launch` prints a warning when you bind to a non-loopback address.
+
 ## Use Inside Your AI Coding Tool (MCP)
 
 `isitsecure` ships a local [MCP](https://modelcontextprotocol.io) server so your

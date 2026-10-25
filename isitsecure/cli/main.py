@@ -641,6 +641,21 @@ def launch(
 
     _lsp_offer()
 
+    import os
+
+    os.environ["ISITSECURE_BIND_HOST"] = host
+    if host.strip().lower() not in ("127.0.0.1", "localhost", "::1", "[::1]"):
+        console.print(Panel(
+            "[bold yellow]Warning:[/bold yellow] the web UI server has NO "
+            f"authentication and you are binding to {host!r}. Anyone who can "
+            "reach this port can start scans, read reports and use your LLM "
+            "key. Requests are only accepted for Host names on an allow-list "
+            "(loopback plus the bind host); extend it deliberately with "
+            "ISITSECURE_ALLOWED_HOSTS=name1,name2. Prefer 127.0.0.1.",
+            title="Not loopback",
+            border_style="yellow",
+        ))
+
     console.print(Panel(
         f"[bold]isitsecure v{__version__}[/bold]\n"
         f"Starting web UI at http://{host}:{port}",

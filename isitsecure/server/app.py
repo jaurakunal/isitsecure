@@ -12,7 +12,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import uuid
+from urllib.parse import urlsplit
 from pathlib import Path
 from typing import Optional
 
@@ -44,6 +46,84 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ---------------------------------------------------------------------------
+# Host / Origin allow-list (DNS-rebinding and cross-origin protection)
+# ---------------------------------------------------------------------------
+# The server has no authentication. Without a Host check, a web page the user
+# visits can DNS-rebind a hostname to 127.0.0.1 and drive this API same-origin.
+# Only loopback names (plus the host the server was told to bind to, plus
+# anything listed in ISITSECURE_ALLOWED_HOSTS) are accepted; everything else
+# gets 421. State-changing requests carrying a foreign Origin get 403.
+
+ALLOWED_HOSTS_ENV = "ISITSECURE_ALLOWED_HOSTS"
+BIND_HOST_ENV = "ISITSECURE_BIND_HOST"
+LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+_WILDCARD_HOSTS = frozenset({"", "0.0.0.0", "::", "*"})
+_STATE_CHANGING = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+def _normalize_host(value: str) -> str:
+    """Return the lower-cased hostname of a Host header value (no port/brackets)."""
+    value = (value or "").strip().lower()
+    if not value:
+        return ""
+    try:
+        return (urlsplit("//" + value).hostname or "").rstrip(".")
+    except ValueError:
+        return ""
+
+
+def allowed_hosts() -> frozenset[str]:
+    """Hostnames the server accepts. ``app.state.allowed_hosts`` overrides the
+    computed default (loopback + bind host + ISITSECURE_ALLOWED_HOSTS)."""
+    override = getattr(app.state, "allowed_hosts", None)
+    if override is not None:
+        return frozenset(_normalize_host(h) for h in override)
+    hosts = set(LOOPBACK_HOSTS)
+    bind = _normalize_host(os.environ.get(BIND_HOST_ENV, ""))
+    if bind and bind not in _WILDCARD_HOSTS:
+        hosts.add(bind)
+    for h in os.environ.get(ALLOWED_HOSTS_ENV, "").split(","):
+        h = _normalize_host(h)
+        if h:
+            hosts.add(h)
+    return frozenset(hosts)
+
+
+class HostOriginGuard:
+    """Pure-ASGI middleware enforcing the Host and Origin allow-lists."""
+
+    def __init__(self, asgi_app):
+        self.app = asgi_app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] not in ("http", "websocket"):
+            return await self.app(scope, receive, send)
+        headers = {k.decode("latin-1").lower(): v.decode("latin-1")
+                   for k, v in scope.get("headers", [])}
+        allowed = allowed_hosts()
+        if _normalize_host(headers.get("host", "")) not in allowed:
+            return await self._reject(scope, receive, send, 421,
+                                      "Host not allowed (see ISITSECURE_ALLOWED_HOSTS)")
+        origin = headers.get("origin")
+        if (origin is not None
+                and (scope["type"] == "websocket" or scope.get("method") in _STATE_CHANGING)
+                and _normalize_host(urlsplit(origin).netloc) not in allowed):
+            return await self._reject(scope, receive, send, 403, "Origin not allowed")
+        return await self.app(scope, receive, send)
+
+    @staticmethod
+    async def _reject(scope, receive, send, status, detail):
+        if scope["type"] == "websocket":
+            await send({"type": "websocket.close", "code": 1008})
+            return
+        from fastapi.responses import JSONResponse
+        await JSONResponse({"detail": detail}, status_code=status)(scope, receive, send)
+
+
+# Added last so it is the outermost middleware: rejects before CORS/routing.
+app.add_middleware(HostOriginGuard)
 
 # In-memory scan storage (per-process, not persistent yet)
 _scans: dict[str, dict] = {}
@@ -85,6 +165,9 @@ async def start_scan(request: ScanRequest):
         "report": None,
         "events": [],
         "llm_provider": request.llm_provider,
+        # Kept server-side only so fix-all can reuse the key the scan used.
+        "api_key": request.api_key,
+        "error": None,
     }
 
     # Launch scan in background
@@ -219,14 +302,25 @@ def _glossary_for_finding(finding: dict, plain_english) -> dict[str, str]:
     return found
 
 
+def _raise_unless_ready(scan: dict) -> None:
+    """202 while running, a failed-status error once the scan failed."""
+    if scan["report"]:
+        return
+    if scan["status"] == "failed":
+        raise HTTPException(
+            status_code=500,
+            detail=f"Scan failed: {scan.get('error') or 'unknown error'}",
+        )
+    raise HTTPException(status_code=202, detail="Scan still in progress")
+
+
 @app.get("/api/scan/{scan_id}/report")
 async def get_report(scan_id: str):
     """Get the completed scan report (raw shape + plain-English superset)."""
     scan = _scans.get(scan_id)
     if not scan:
         raise HTTPException(status_code=404, detail="Scan not found")
-    if not scan["report"]:
-        raise HTTPException(status_code=202, detail="Scan still in progress")
+    _raise_unless_ready(scan)
     return _enrich_report(scan["report"])
 
 
@@ -236,8 +330,7 @@ async def get_report_html(scan_id: str):
     scan = _scans.get(scan_id)
     if not scan:
         raise HTTPException(status_code=404, detail="Scan not found")
-    if not scan["report"]:
-        raise HTTPException(status_code=202, detail="Scan still in progress")
+    _raise_unless_ready(scan)
 
     from isitsecure.engine.models import DeepScanReport
     from isitsecure.engine.reporting.report_generator import ReportGenerator
@@ -355,6 +448,7 @@ async def start_fix_all(request: FixAllRequest):
             github_token=request.github_token,
             pr_strategy=request.pr_strategy or DEFAULT_STRATEGY,
             max_prs=request.max_prs or DEFAULT_MAX_PRS,
+            api_key=scan.get("api_key"),
         )
     )
     return {"job_id": job_id}
@@ -400,6 +494,7 @@ async def _run_fix_all_job(
     github_token=None,
     pr_strategy="per-category",
     max_prs=8,
+    api_key=None,
 ):
     """Run the batch fix service, streaming progress into the job store."""
     from isitsecure.server.fix_service import run_fix_all
@@ -416,6 +511,7 @@ async def _run_fix_all_job(
             github_token=github_token,
             pr_strategy=pr_strategy,
             max_prs=max_prs,
+            api_key=api_key,
         )
         _fix_jobs[job_id]["result"] = result
         _fix_jobs[job_id]["status"] = "complete"
@@ -559,11 +655,17 @@ async def _run_scan_background(scan_id: str, request: ScanRequest) -> None:
 
         if report_json:
             _scans[scan_id]["report"] = report_json
-        _scans[scan_id]["status"] = "complete"
+            _scans[scan_id]["status"] = "complete"
+        else:
+            msg = "Scan finished without producing a report."
+            _scans[scan_id]["status"] = "failed"
+            _scans[scan_id]["error"] = msg
+            _scans[scan_id]["events"].append({"type": "error", "message": msg})
 
     except Exception as e:
         logger.exception(f"Scan {scan_id} failed")
         _scans[scan_id]["status"] = "failed"
+        _scans[scan_id]["error"] = str(e)
         _scans[scan_id]["events"].append({
             "type": "error",
             "message": str(e),

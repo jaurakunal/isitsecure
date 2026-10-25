@@ -131,6 +131,7 @@ async def run_fix_all(
     github_token: str | None = None,
     pr_strategy: str = DEFAULT_STRATEGY,
     max_prs: int = DEFAULT_MAX_PRS,
+    api_key: str | None = None,
 ) -> dict:
     """Generate and (when possible) apply fixes for a scan's findings.
 
@@ -142,7 +143,8 @@ async def run_fix_all(
     GitHub (delegated to :class:`PRFlow`). Local-path targets keep the existing
     in-place apply behavior.
     """
-    api_key = load_api_key(llm_provider)
+    # A key supplied in the original scan request wins over server config.
+    api_key = api_key or load_api_key(llm_provider)
     if not api_key:
         raise RuntimeError(
             f"No API key found for {llm_provider}. "
