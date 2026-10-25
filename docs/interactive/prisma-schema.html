@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Prisma Schema Analyzer · isitsecure</title>
+<meta name="description" content="How isitsecure reads schema.prisma: secrets, PII, tenant scope and payment IDs, walked field by field, with the naming rules that decide what it sees. Animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  #walk .code text { white-space: pre; }
+  #walk .panel > rect, #clear .panel > rect, #names .panel > rect { fill: var(--surface); }
+  #clear .strk { transition: opacity .35s; }
+  #clear.s2 .fB .tt, #clear.s3 .fC .tt { text-decoration: line-through; opacity: .45; }
+  #clear .code text, #names .code text { white-space: pre; }
+  .topbar-inner .crumb a { color: inherit; text-decoration: none; }
+  .topbar-inner .crumb a:hover { color: var(--accent); }
+  footer.foot span { min-width: 0; overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› <a href="group-schema-middleware.html">Schemas and middleware</a> › Prisma schema</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/prisma-schema-analyzer.md" title="The markdown source for this page">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">SAST scanner · reads schema.prisma</div>
+  <h1>Prisma Schema Analyzer</h1>
+  <p class="lede">A database schema is a statement about what the application stores. This analyzer reads every <code>model</code> block in the repository, goes through the fields one by one, and reports the ones that hold a secret, personal data or a payment ID without a protected twin, and the models that hold tenant data without a tenant column.</p>
+  <div class="meta">
+    <span class="pill sast">SAST</span><span class="pill high">up to High</span><span class="pill">4 checks</span><span class="pill">no network</span><span class="pill">repository only</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#walk"><span class="n">01</span>Field by field</a>
+  <a href="#clear"><span class="n">02</span>What clears a finding</a>
+  <a href="#names"><span class="n">03</span>Naming rules</a>
+  <a href="#why"><span class="n">04</span>Why it matters</a>
+  <a href="#code"><span class="n">05</span>Flagged vs clean schema</a>
+  <a href="#limits"><span class="n">06</span>Limits and scope</a>
+</nav>
+<section id="walk">
+  <h2>Field by field</h2>
+  <p class="prose">The actor is the scanner alone. It parses the schema into models and fields, then runs four checks on each model. Watch which field lights up and which rule it satisfies.</p>
+  <div class="scene" id="walk" data-scene data-interval="3600">
+    <figure class="stage">
+      <svg viewBox="0 0 960 340" role="img" aria-label="A Prisma model on the left with fields highlighted one at a time, and four check cards on the right each producing a finding with a severity.">
+        <defs><marker id="arr-pw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+
+        <g class="node panel" transform="translate(0 0)"><rect x="20" y="14" width="480" height="312" rx="10"/></g>
+        <line class="wire" x1="34" x2="486" y1="214" y2="214"/>
+        <rect class="only-1 soft-info" x="26" y="74" width="468" height="20" rx="4"/><rect class="only-1 soft-info" x="26" y="96" width="468" height="20" rx="4"/><rect class="only-1 soft-info" x="26" y="118" width="468" height="20" rx="4"/><rect class="only-1 soft-info" x="26" y="140" width="468" height="20" rx="4"/>
+        <rect class="only-2 soft-accent" x="26" y="118" width="468" height="20" rx="4"/><rect class="only-3 soft-accent" x="26" y="96" width="468" height="20" rx="4"/><rect class="only-4 soft-accent" x="26" y="30" width="468" height="20" rx="4"/><rect class="only-4 soft-accent" x="26" y="52" width="468" height="20" rx="4"/><rect class="only-5 soft-accent" x="26" y="140" width="468" height="20" rx="4"/>
+        <g class="mono code" style="white-space:pre">
+          <text x="36" y="44">model Organization { id String @id }</text>
+          <text x="36" y="66">model UserSettings {</text>
+          <text x="36" y="88">  id                 String @id</text>
+          <text x="36" y="110">  email              String @unique</text>
+          <text x="36" y="132">  access_token       String</text>
+          <text x="36" y="154">  stripe_customer_id String</text>
+          <text x="36" y="176">  user               User @relation(...)</text>
+          <text x="36" y="198">}</text>
+        </g>
+        <text class="lbl only-1" x="400" y="176">skipped</text>
+        <g class="only-1">
+          <text class="lbl" x="36" y="236">kept 4 scalar fields: id, email, access_token, stripe_customer_id</text>
+          <text class="lbl" x="36" y="256">skipped: user (a line with @relation is a virtual field, not a column)</text>
+          <text class="lbl" x="36" y="276">also skipped: comments, @@map / @@index lines, the _prisma_migrations model</text>
+        </g>
+        <g class="only-2">
+          <text class="lbl" x="36" y="236">access_token contains the indicator access_token</text>
+          <text class="lbl" x="36" y="256">looked for access_token_encrypted, _hash, _hashed: none exist</text>
+          <text class="t-attacker" x="36" y="282">Secret stored in plaintext: 'access_token' in model 'UserSettings'</text>
+        </g>
+        <g class="only-3">
+          <text class="lbl" x="36" y="236">email equals the indicator email exactly</text>
+          <text class="lbl" x="36" y="256">looked for email_encrypted, email_hash, email_hashed: none exist</text>
+          <text class="t-accent" x="36" y="282">PII field without encryption: 'email' in model 'UserSettings'</text>
+        </g>
+        <g class="only-4">
+          <text class="lbl" x="36" y="236">Organization is on the multi-tenant list, so this check is on</text>
+          <text class="lbl" x="36" y="256">UserSettings contains "settings" and has no tenant_id field</text>
+          <text class="t-accent" x="36" y="282">Model 'UserSettings' missing tenantId in multi-tenant app</text>
+        </g>
+        <g class="only-5">
+          <text class="lbl" x="36" y="236">stripe_ is a provider prefix and _customer_id is an ID suffix</text>
+          <text class="lbl" x="36" y="256">stripe_secret_key would not land here: check 1 owns secrets</text>
+          <text class="t-info" x="36" y="282">Payment provider ID stored in plaintext: 'stripe_customer_id'</text>
+        </g>
+
+        <path class="wire accent only-2" d="M492 132 L 506 132 L 506 48 L 518 48" marker-end="url(#arr-pw)"/>
+        <path class="wire accent only-3" d="M492 110 L 510 110 L 510 128 L 518 128" marker-end="url(#arr-pw)"/>
+        <path class="wire accent only-4" d="M492 66 L 506 66 L 506 208 L 518 208" marker-end="url(#arr-pw)"/>
+        <path class="wire accent only-5" d="M492 154 L 502 154 L 502 288 L 518 288" marker-end="url(#arr-pw)"/>
+        <g class="node lit-2" transform="translate(520 14)"><rect width="420" height="68" rx="8"/>
+          <text class="ttl" x="14" y="24">1  Secret in plaintext</text>
+          <text class="lbl" x="14" y="42">name holds secret, api_key, password, access_token ...</text>
+          <text class="lbl" x="14" y="58">and no &lt;name&gt;_encrypted / _hash / _hashed field</text>
+          <text class="at-2 t-attacker" x="406" y="24" text-anchor="end" style="font-weight:600">High · 0.90</text>
+        </g>
+        <g class="node lit-3" transform="translate(520 94)"><rect width="420" height="68" rx="8"/>
+          <text class="ttl" x="14" y="24">2  PII without encryption</text>
+          <text class="lbl" x="14" y="42">name is, or ends or starts with, email, phone, ssn, address ...</text>
+          <text class="lbl" x="14" y="58">skipped when the field is itself _encrypted / _hash / _hashed</text>
+          <text class="at-3 t-accent" x="406" y="24" text-anchor="end" style="font-weight:600">Medium · 0.80</text>
+        </g>
+        <g class="node lit-4" transform="translate(520 174)"><rect width="420" height="68" rx="8"/>
+          <text class="ttl" x="14" y="24">3  Missing tenant_id</text>
+          <text class="lbl" x="14" y="42">runs only if a Tenant / Organization / Workspace model exists</text>
+          <text class="lbl" x="14" y="58">and the model name contains users, orders, settings ...</text>
+          <text class="at-4 t-accent" x="406" y="24" text-anchor="end" style="font-weight:600">Medium · 0.75</text>
+        </g>
+        <g class="node lit-5" transform="translate(520 254)"><rect width="420" height="68" rx="8"/>
+          <text class="ttl" x="14" y="24">4  Payment provider ID</text>
+          <text class="lbl" x="14" y="42">prefix stripe_ paypal_ square_ adyen_ braintree_ ...</text>
+          <text class="lbl" x="14" y="58">plus an ID suffix: _customer_id, _price_id, _invoice_id ...</text>
+          <text class="at-5 t-info" x="406" y="24" text-anchor="end" style="font-weight:600">Low · 0.70</text>
+        </g>
+
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The scanner reads every file that contains <code>model Name {</code>, cuts the body with balanced braces and keeps only lines whose type is a Prisma scalar. <b>A line with <code>@relation</code> is a virtual field and is skipped</b>, so <code>user</code> never becomes a column.</p>
+      <p class="step"><span class="n">2</span>Check 1, secrets. The name contains an indicator such as <code>access_token</code>, and no field called <code>&lt;name&gt;_encrypted</code>, <code>_hash</code> or <code>_hashed</code> sits beside it. <b>No twin, so High with confidence 0.90.</b></p>
+      <p class="step"><span class="n">3</span>Check 2, PII. <code>email</code> equals an indicator and has no encrypted twin. <b>Medium, 0.80.</b> A field that already ends in <code>_encrypted</code>, <code>_hash</code> or <code>_hashed</code> is skipped, so the twin is never flagged as PII.</p>
+      <p class="step"><span class="n">4</span>Check 3, tenant scope. It only runs when the schema has a model named like <code>Tenant</code> or <code>Organization</code>. <code>UserSettings</code> matches the scoped list and has no <code>tenant_id</code>. <b>Medium, 0.75.</b></p>
+      <p class="step"><span class="n">5</span>Check 4, payment IDs. A provider prefix plus an ID suffix. <b>Low, 0.70.</b> Every finding carries the model, the field and the file, but no line number.</p>
+    </div>
+  </div>
+</section>
+
+<section id="clear">
+  <h2>What clears a finding</h2>
+  <p class="prose">Each finding names a missing twin or a missing column. Add it and the finding goes away, with one exception that the secret check makes visible.</p>
+  <div class="scene" id="clear" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 340" role="img" aria-label="A Prisma model gaining email_hash, tenant_id and access_token_encrypted fields while the findings list loses entries.">
+
+
+        <g class="node panel"><rect x="20" y="14" width="400" height="312" rx="10"/></g>
+        <text class="ttl" x="36" y="40">model UserSettings</text>
+        <g class="node" transform="translate(36 56)"><rect width="368" height="28" rx="5"/><text class="mono" x="12" y="19">id String @id</text></g>
+        <g class="until-3" transform="translate(36 90)"><rect x="0" y="0" width="368" height="28" rx="5" fill="none" stroke="var(--line)" stroke-dasharray="4 4"/><text class="lbl" x="12" y="18">+ add tenant_id</text></g>
+        <g class="node at-3 lit-3" transform="translate(36 90)"><rect width="368" height="28" rx="5"/><text class="mono" x="12" y="19">tenant_id String</text></g>
+        <g class="node" transform="translate(36 124)"><rect width="368" height="28" rx="5"/><text class="mono" x="12" y="19">email String @unique</text></g>
+        <g class="until-2" transform="translate(36 158)"><rect x="0" y="0" width="368" height="28" rx="5" fill="none" stroke="var(--line)" stroke-dasharray="4 4"/><text class="lbl" x="12" y="18">+ add email_hash</text></g>
+        <g class="node at-2 lit-2" transform="translate(36 158)"><rect width="368" height="28" rx="5"/><text class="mono" x="12" y="19">email_hash String</text></g>
+        <g class="node" transform="translate(36 192)"><rect width="368" height="28" rx="5"/><text class="mono" x="12" y="19">access_token String</text></g>
+        <g class="until-4" transform="translate(36 226)"><rect x="0" y="0" width="368" height="28" rx="5" fill="none" stroke="var(--line)" stroke-dasharray="4 4"/><text class="lbl" x="12" y="18">+ add access_token_encrypted</text></g>
+        <g class="node at-4 lit-4" transform="translate(36 226)"><rect width="368" height="28" rx="5"/><text class="mono" x="12" y="19">access_token_encrypted String</text></g>
+        <g class="node" transform="translate(36 260)"><rect width="368" height="28" rx="5"/><text class="mono" x="12" y="19">stripe_customer_id String</text></g>
+
+        <g class="node panel"><rect x="440" y="14" width="500" height="312" rx="10"/></g>
+        <text class="ttl" x="458" y="40">Findings</text>
+        <g class="node fA" transform="translate(458 56)"><rect width="466" height="38" rx="6"/><text class="tt until-4" x="14" y="24">Secret in plaintext: access_token</text><text class="tt at-4" x="14" y="24">Secret in plaintext: access_token_encrypted</text><text class="t-attacker" x="452" y="24" text-anchor="end">High · 0.90</text></g>
+        <g class="node fB" transform="translate(458 104)"><rect width="466" height="38" rx="6"/><text class="tt" x="14" y="24">PII without encryption: email</text><text class="until-2 t-accent" x="452" y="24" text-anchor="end">Medium · 0.80</text><text class="at-2 t-safe" x="452" y="24" text-anchor="end">cleared</text></g>
+        <g class="node fC" transform="translate(458 152)"><rect width="466" height="38" rx="6"/><text class="tt" x="14" y="24">Missing tenant_id: UserSettings</text><text class="until-3 t-accent" x="452" y="24" text-anchor="end">Medium · 0.75</text><text class="at-3 t-safe" x="452" y="24" text-anchor="end">cleared</text></g>
+        <g class="node fD" transform="translate(458 200)"><rect width="466" height="38" rx="6"/><text class="tt" x="14" y="24">Payment ID in plaintext: stripe_customer_id</text><text class="t-info" x="452" y="24" text-anchor="end">Low · 0.70</text></g>
+
+        <text class="ttl until-2" x="458" y="268">4 findings</text>
+        <text class="ttl only-2" x="458" y="268">3 findings</text>
+        <text class="ttl at-3" x="458" y="268">2 findings</text>
+        <g class="lbl">
+          <text class="lbl only-1" x="458" y="296">adding a twin field or the scope field is what clears a finding</text>
+          <text class="lbl only-2" x="458" y="296">email now has email_hash; email_hash itself is skipped (it ends in _hash)</text>
+          <text class="lbl only-3" x="458" y="296">tenant_id is present, so the tenant check returns early</text>
+          <text class="lbl only-4" x="458" y="296">the new name still contains access_token, so it is flagged itself</text>
+          <text class="lbl only-5" x="458" y="296">no rule clears a payment ID; it stays Low as a prompt to decide</text>
+        </g>
+
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Start from the four findings of the walk. The left side is the model, the right side is what the analyzer reports for it.</p>
+      <p class="step"><span class="n">2</span>Add <code>email_hash</code>. The PII check looks for <code>email</code> plus a suffix in the same model, finds it, and <b>the finding is cleared</b>. The new field is not itself flagged.</p>
+      <p class="step"><span class="n">3</span>Add <code>tenant_id</code>. <b>The tenant check returns early</b> for a model that already has the column.</p>
+      <p class="step"><span class="n">4</span>Add <code>access_token_encrypted</code>. The secret check has no skip for names that are already encrypted, so <b>the new field matches the same <code>access_token</code> indicator and is flagged in its place</b>. The finding text recommends application-level encryption or a KMS.</p>
+      <p class="step"><span class="n">5</span>The payment ID has no twin rule. <b>It stays at Low</b> as a prompt to decide whether the identifier belongs in the threat model. Two findings are left.</p>
+    </div>
+  </div>
+</section>
+
+<section id="names">
+  <h2>Naming rules</h2>
+  <p class="prose">The analyzer shares its word lists with the Drizzle analyzer. Drizzle checks the database column name, which is snake_case by habit. Prisma checks the field name as written, which is camelCase by habit.</p>
+  <div class="scene" id="names" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 340" role="img" aria-label="Four Prisma field names compared against snake_case indicator lists, showing two false positives and two misses.">
+
+
+        <g class="node panel"><rect x="20" y="14" width="920" height="312" rx="10"/></g>
+        <text class="lbl" x="34" y="40">field in schema.prisma</text>
+        <text class="lbl" x="250" y="40">what the check compares</text>
+        <text class="lbl" x="580" y="40">outcome</text>
+        <g class="node lit-2" transform="translate(34 54)"><rect width="892" height="54" rx="7"/>
+          <text class="mono" x="14" y="32">tenantId String</text>
+          <text x="216" y="24">needs the exact name tenant_id</text>
+          <text class="lbl" x="216" y="42">has_tenant_id = name in (&quot;tenant_id&quot;,)</text>
+          <g class="at-2"><text class="t-attacker" x="546" y="24" style="font-weight:600">flagged although tenant scope exists</text>
+          <text class="lbl" x="546" y="42">Medium · Model 'UserSettings' missing tenantId</text></g>
+        </g>
+        <g class="node lit-3" transform="translate(34 118)"><rect width="892" height="54" rx="7"/>
+          <text class="mono" x="14" y="32">apiKey String</text>
+          <text x="216" y="24">lowered name is apikey</text>
+          <text class="lbl" x="216" y="42">the indicator is api_key, with the underscore</text>
+          <g class="at-3"><text class="" x="546" y="24" style="font-weight:600">silent: the secret is not reported</text>
+          <text class="lbl" x="546" y="42">no finding for apiKey</text></g>
+        </g>
+        <g class="node lit-4" transform="translate(34 182)"><rect width="892" height="54" rx="7"/>
+          <text class="mono" x="14" y="32">emailAddress String</text>
+          <text x="216" y="24">lowered name is emailaddress</text>
+          <text class="lbl" x="216" y="42">needs == email or a _email suffix</text>
+          <g class="at-4"><text class="" x="546" y="24" style="font-weight:600">silent: the PII field is not reported</text>
+          <text class="lbl" x="546" y="42">no finding for emailAddress</text></g>
+        </g>
+        <g class="node lit-5" transform="translate(34 246)"><rect width="892" height="54" rx="7"/>
+          <text class="mono" x="14" y="32">password_hash String</text>
+          <text x="216" y="24">lowered name contains password</text>
+          <text class="lbl" x="216" y="42">password_hash is itself the protected form</text>
+          <g class="at-5"><text class="t-attacker" x="546" y="24" style="font-weight:600">flagged although it is the hashed form</text>
+          <text class="lbl" x="546" y="42">High · the secret check has no skip for hashed names</text></g>
+        </g>
+        <text class="lbl" x="34" y="316">The parser takes the name written in the schema, so @map("tenant_id") does not change what is compared.</text>
+
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The four checks compare field names against lowercase snake_case lists. Prisma schemas are usually camelCase, so <b>what is found depends on how a field is spelled</b>. Four spellings, one rule each.</p>
+      <p class="step"><span class="n">2</span><code>tenantId</code> is not <code>tenant_id</code>. A model that has the column under its camelCase name is still reported as missing it. <b>This is a false positive.</b></p>
+      <p class="step"><span class="n">3</span><code>apiKey</code> lowers to <code>apikey</code>, which does not contain <code>api_key</code>. <b>A real secret field goes unreported.</b></p>
+      <p class="step"><span class="n">4</span><code>emailAddress</code> lowers to <code>emailaddress</code>. The PII rule wants <code>email</code> exactly or an underscore boundary, so <b>it is missed</b>. <code>email_address</code> would be caught.</p>
+      <p class="step"><span class="n">5</span><code>password_hash</code> contains <code>password</code>. The PII check skips hashed names, the secret check does not, so <b>the hashed column is reported as a plaintext secret</b>.</p>
+    </div>
+  </div>
+</section>
+
+<section id="why">
+  <h2>Why it matters</h2>
+  <div class="grid-2">
+    <div class="callout why"><div class="label">Why it matters</div><p>Schema design decides how bad a breach is. <b>PII stored in plaintext becomes a liability when, not if, the database leaks</b>, and a secret column means one leaked row is a working credential. A model without a tenant column has nothing to filter on, so a cross-tenant read is one forgotten <code>where</code> clause away.</p></div>
+    <div class="callout breach"><div class="label">Real-world context</div><p><b>GitHub (2012).</b> A mass assignment bug let an attacker add his SSH key to the Rails core repository through a field that sat directly on the model. The markdown cites schema design as the enabler. That specific pattern, an <code>isAdmin</code> or <code>role</code> field, is not one of the four checks the analyzer runs today.</p></div>
+  </div>
+</section>
+
+<section id="code">
+  <h2>Flagged vs clean schema</h2>
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true" type="button">BAD · flagged</button>
+      <button class="tab good" role="tab" aria-selected="false" type="button">GOOD · clean</button>
+    </div>
+    <div role="tabpanel"><pre><code><span class="c">// BAD: four findings</span>
+model Organization { id String @id }
+
+model UserSettings {
+  id                 String @id
+  <span class="hl bad">email              String @unique</span>      <span class="c">// PII, no email_hash</span>
+  <span class="hl bad">access_token       String</span>              <span class="c">// secret in plaintext</span>
+  <span class="hl bad">stripe_customer_id String</span>              <span class="c">// payment ID (Low)</span>
+}                                                   <span class="c">// no tenant_id</span></code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c">// GOOD: twin and scope fields present</span>
+model Organization { id String @id }
+
+model UserSettings {
+  id                 String @id
+  <span class="hl good">tenant_id          String</span>
+  email              String @unique
+  <span class="hl good">email_hash         String</span>
+  <span class="c">// access_token: keep it in a KMS or secrets store, not in this table</span>
+  stripe_customer_id String   <span class="c">// still Low: a judgement call</span>
+}</code></pre></div>
+  </div>
+  <div class="callout note"><div class="label">Scope note</div><p>The markdown for this analyzer lists four other checks: <code>isAdmin</code> or <code>role</code> fields as mass assignment targets, missing <code>createdAt</code> and <code>updatedAt</code>, and a missing <code>deletedAt</code>. The current analyzer code does not run them. This page shows what the code does. Its recommended fix, a separate <code>Role</code> model instead of an <code>isAdmin</code> column, is still sound schema design.</p></div>
+</section>
+
+<section id="limits">
+  <h2>Limits and scope</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Behaviour</th><th>Detail</th></tr></thead>
+    <tbody>
+      <tr><td>Input</td><td>Any indexed file that contains <code>model Name {</code>. No network, no credentials, no depth setting.</td></tr>
+      <tr><td>Fields it sees</td><td>Only scalar types: String, Int, BigInt, Float, Decimal, Boolean, DateTime, Json, Bytes. Enum-typed fields and relation lines are skipped.</td></tr>
+      <tr><td>Severity and confidence</td><td>Secret High 0.90, PII Medium 0.80, tenant scope Medium 0.75, payment ID Low 0.70.</td></tr>
+      <tr><td>Tenant check</td><td>Runs only when a model named Tenant, Organization, Org, Workspace or Company (or a lowercase plural) exists. It flags models whose lowercase name contains users, apps, subscriptions, purchases, orders, invoices, settings or profiles, so a singular <code>Order</code> is not examined.</td></tr>
+      <tr><td>Secret check</td><td>No skip for names that are already encrypted or hashed, so <code>password_hash</code> and <code>access_token_encrypted</code> are reported.</td></tr>
+      <tr><td>Name matching</td><td>Indicators are lowercase snake_case. camelCase spellings such as <code>apiKey</code>, <code>emailAddress</code> and <code>tenantId</code> do not match.</td></tr>
+      <tr><td>Not implemented</td><td>The markdown's <code>isAdmin</code> and <code>role</code>, audit timestamp and soft delete checks.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<footer class="foot">
+  <span>Source: <a href="../scanners/prisma-schema-analyzer.md">docs/scanners/prisma-schema-analyzer.md</a> · <a href="https://github.com/jaurakunal/isitsecure/blob/main/isitsecure/engine/code_analysis/prisma_schema_analyzer.py">isitsecure/engine/code_analysis/prisma_schema_analyzer.py</a></span>
+  <span>Group: <a href="group-schema-middleware.html">Schemas and middleware</a> · Related: <a href="drizzle-schema.html">Drizzle schema</a> · <a href="rls-supabase.html">Row Level Security</a> · <a href="mass-assignment.html">Mass assignment</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+</body>
+</html>

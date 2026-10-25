@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Drizzle Schema Analyzer · isitsecure</title>
+<meta name="description" content="How isitsecure reads Drizzle ORM table definitions: which column name it checks, how secrets, PII and payment IDs are matched, and how the tenant check decides. Animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  .code text { white-space: pre; }
+  #parse .panel > rect, #checks .panel > rect, #tenant .panel > rect { fill: var(--surface); }
+  .topbar-inner .crumb a { color: inherit; text-decoration: none; }
+  .topbar-inner .crumb a:hover { color: var(--accent); }
+  footer.foot span { min-width: 0; overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› <a href="group-schema-middleware.html">Schemas and middleware</a> › Drizzle schema</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/drizzle-schema-analyzer.md" title="The markdown source for this page">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">SAST scanner · reads Drizzle table definitions</div>
+  <h1>Drizzle Schema Analyzer</h1>
+  <p class="lede">Drizzle schemas are TypeScript, so the analyzer does not run them. It finds <code>pgTable("name", {...})</code> calls in the source text, pulls out each column's database name, and applies the same four checks as the Prisma analyzer: plaintext secrets, PII without a twin, tenant scope and payment IDs.</p>
+  <div class="meta">
+    <span class="pill sast">SAST</span><span class="pill high">up to High</span><span class="pill">4 checks</span><span class="pill">no network</span><span class="pill">repository only</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#parse"><span class="n">01</span>Parsing a table</a>
+  <a href="#checks"><span class="n">02</span>Column checks</a>
+  <a href="#tenant"><span class="n">03</span>Tenant scope</a>
+  <a href="#why"><span class="n">04</span>Why it matters</a>
+  <a href="#code"><span class="n">05</span>Flagged vs clean schema</a>
+  <a href="#limits"><span class="n">06</span>Limits and scope</a>
+</nav>
+<section id="parse">
+  <h2>Parsing a table</h2>
+  <p class="prose">There is no TypeScript compiler involved. A regular expression finds the table call and another finds the columns. What it extracts decides what every later check can see.</p>
+  <div class="scene" id="parse" data-scene data-interval="3600">
+    <figure class="stage">
+      <svg viewBox="0 0 960 290" role="img" aria-label="Drizzle table source on the left, with the parsed property, type and database name of each column on the right; one unnamed column is skipped.">
+
+
+        <g class="node panel"><rect x="20" y="14" width="500" height="262" rx="10"/></g>
+        <line class="wire" x1="34" x2="506" y1="190" y2="190"/>
+        <rect class="only-1 soft-accent" x="26" y="30" width="488" height="20" rx="4"/><rect class="only-2 soft-info" x="26" y="54" width="488" height="20" rx="4"/><rect class="only-2 soft-info" x="26" y="76" width="488" height="20" rx="4"/><rect class="only-2 soft-info" x="26" y="98" width="488" height="20" rx="4"/><rect class="only-2 soft-info" x="26" y="120" width="488" height="20" rx="4"/><rect class="only-3 soft-accent" x="26" y="98" width="488" height="20" rx="4"/><rect class="only-4 soft-attacker" x="26" y="142" width="488" height="20" rx="4"/>
+        <g class="mono code" style="white-space:pre">
+          <text x="36" y="44">export const users = pgTable("users", {</text>
+          <text x="36" y="68">  id:           uuid("id"),</text>
+          <text x="36" y="90">  email:        text("email"),</text>
+          <text x="36" y="112">  apiKey:       text("api_key"),</text>
+          <text x="36" y="134">  stripeId:     text("stripe_customer_id"),</text>
+          <text x="36" y="156">  refreshToken: text(),</text>
+          <text x="36" y="178">})</text>
+        </g>
+        <g class="only-1">
+          <text class="lbl" x="36" y="212">table name is the first string argument: "users"</text>
+          <text class="lbl" x="36" y="232">pgTable, mysqlTable and sqliteTable are all recognised</text>
+          <text class="lbl" x="36" y="252">the body is cut with balanced braces, then scanned for columns</text>
+        </g>
+        <g class="only-2">
+          <text class="lbl" x="36" y="212">pattern: name: type("db_name"), type from the Drizzle column types</text>
+          <text class="lbl" x="36" y="232">uuid, text, integer, boolean, timestamp, jsonb, varchar, serial ...</text>
+          <text class="lbl" x="36" y="252">4 columns parsed, each keeps its property name and its db_name</text>
+        </g>
+        <g class="only-3">
+          <text class="lbl" x="36" y="212">apiKey is the JS property, api_key is the column</text>
+          <text class="lbl" x="36" y="232">every check reads db_name, so api_key meets the secret indicator</text>
+          <text class="lbl" x="36" y="252">(the Prisma analyzer reads the field name as written)</text>
+        </g>
+        <g class="only-4">
+          <text class="lbl" x="36" y="212">refreshToken: text() has no quoted db name, so the pattern skips it</text>
+          <text class="lbl" x="36" y="232">a secret declared without a name string is never examined</text>
+          <text class="t-attacker" x="36" y="258">no finding is produced for refreshToken</text>
+        </g>
+
+        <g class="node panel"><rect x="540" y="14" width="400" height="262" rx="10"/></g>
+        <text class="ttl" x="558" y="40">ParsedColumn list for "users"</text>
+        <text class="lbl" x="558" y="62">property</text><text class="lbl" x="660" y="62">type</text><text class="lbl" x="730" y="62">db_name (checked)</text>
+        <g class="node at-2" transform="translate(556 72)"><rect width="368" height="30" rx="5"/><text class="mono" x="10" y="20">id</text><text class="mono" x="104" y="20">uuid</text><text class="mono" x="174" y="20">id</text></g>
+        <g class="node at-2" transform="translate(556 110)"><rect width="368" height="30" rx="5"/><text class="mono" x="10" y="20">email</text><text class="mono" x="104" y="20">text</text><text class="mono" x="174" y="20">email</text></g>
+        <g class="node at-2 lit-3" transform="translate(556 148)"><rect width="368" height="30" rx="5"/><text class="mono" x="10" y="20">apiKey</text><text class="mono" x="104" y="20">text</text><text class="mono" x="174" y="20">api_key</text></g>
+        <g class="node at-2" transform="translate(556 186)"><rect width="368" height="30" rx="5"/><text class="mono" x="10" y="20">stripeId</text><text class="mono" x="104" y="20">text</text><text class="mono" x="174" y="20">stripe_customer_id</text></g>
+        <g class="only-1"><text class="lbl" x="558" y="86">appears at the next step</text></g>
+        <g class="at-4"><text class="lbl" x="558" y="240">refreshToken: not in the list</text></g>
+
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The scanner reads every file that calls <code>pgTable</code>, <code>mysqlTable</code> or <code>sqliteTable</code> with a quoted name. <b>The table name is that string</b>, and the braces after it hold the columns.</p>
+      <p class="step"><span class="n">2</span>Each <code>property: type("db_name")</code> becomes a column. The type has to be one of the known Drizzle column types, and the quoted name is what gets stored next to the JS property.</p>
+      <p class="step"><span class="n">3</span>The checks compare <b>the db_name, never the JS property</b>. <code>apiKey</code> is judged as <code>api_key</code> and meets the secret indicator, so a camelCase property over a snake_case column works as intended.</p>
+      <p class="step"><span class="n">4</span>A column written without a name string, such as <code>refreshToken: text()</code>, does not match the pattern. <b>It is never parsed, so a secret declared that way produces no finding.</b></p>
+    </div>
+  </div>
+</section>
+
+<section id="checks">
+  <h2>Column checks</h2>
+  <p class="prose">Every column name is tested against three indicator lists. Each test also looks for a protected twin in the same table, so adding a twin column is how a finding is cleared.</p>
+  <div class="scene" id="checks" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 340" role="img" aria-label="Five database column names of a users table, each with the check that applies, the twin it looks for, and the resulting finding.">
+
+
+        <g class="node panel"><rect x="20" y="14" width="920" height="312" rx="10"/></g>
+        <text class="lbl" x="34" y="40">db_name in "users"</text>
+        <text class="lbl" x="250" y="40">check that applies</text>
+        <text class="lbl" x="580" y="40">outcome</text>
+        <g class="node lit-1" transform="translate(34 52)"><rect width="892" height="48" rx="6"/>
+          <text class="mono" x="12" y="29">id</text>
+          <text x="216" y="21">no indicator in the name</text><text class="lbl" x="216" y="38">nothing to look for</text>
+          <g class="at-1"><text class="" x="546" y="21" style="font-weight:600">no finding</text><text class="lbl" x="546" y="38"></text></g>
+        </g>
+        <g class="node lit-2" transform="translate(34 106)"><rect width="892" height="48" rx="6"/>
+          <text class="mono" x="12" y="29">email</text>
+          <text x="216" y="21">PII: equals email</text><text class="lbl" x="216" y="38">twin: email_encrypted, email_hash, email_hashed</text>
+          <g class="at-2"><text class="t-accent" x="546" y="21" style="font-weight:600">Medium · 0.80</text><text class="lbl" x="546" y="38">PII column without encryption: 'email'</text></g>
+        </g>
+        <g class="node lit-3" transform="translate(34 160)"><rect width="892" height="48" rx="6"/>
+          <text class="mono" x="12" y="29">api_key</text>
+          <text x="216" y="21">secret: contains api_key</text><text class="lbl" x="216" y="38">twin: api_key_encrypted, _hash, _hashed</text>
+          <g class="at-3"><text class="t-attacker" x="546" y="21" style="font-weight:600">High · 0.90</text><text class="lbl" x="546" y="38">Secret stored in plaintext: 'api_key'</text></g>
+        </g>
+        <g class="node lit-4" transform="translate(34 214)"><rect width="892" height="48" rx="6"/>
+          <text class="mono" x="12" y="29">stripe_customer_id</text>
+          <text x="216" y="21">payment: stripe_ prefix, _customer_id suffix</text><text class="lbl" x="216" y="38">an ID, not a secret</text>
+          <g class="at-4"><text class="t-info" x="546" y="21" style="font-weight:600">Low · 0.70</text><text class="lbl" x="546" y="38">Payment provider ID stored in plaintext</text></g>
+        </g>
+        <g class="node lit-5" transform="translate(34 268)"><rect width="892" height="48" rx="6"/>
+          <text class="mono" x="12" y="29">password_hash</text>
+          <text x="216" y="21">secret: contains password</text><text class="lbl" x="216" y="38">twin: password_hash_hash (does not exist)</text>
+          <g class="at-5"><text class="t-attacker" x="546" y="21" style="font-weight:600">High · 0.90</text><text class="lbl" x="546" y="38">the hashed column itself is flagged</text></g>
+        </g>
+
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>A <code>users</code> table with five columns. For each one the scanner asks whether the name carries a secret, PII or payment indicator, and whether a protected twin sits beside it. The twin lookup is in the same table only.</p>
+      <p class="step"><span class="n">2</span><code>email</code> equals a PII indicator and no <code>email_encrypted</code>, <code>_hash</code> or <code>_hashed</code> column exists. <b>Medium, 0.80.</b> A column that already ends in one of those suffixes is skipped by this check.</p>
+      <p class="step"><span class="n">3</span><code>api_key</code> contains a secret indicator and has no twin. <b>High, 0.90.</b> The recommendation in the finding is application-level encryption or a KMS.</p>
+      <p class="step"><span class="n">4</span><code>stripe_customer_id</code> has a provider prefix and an ID suffix. It is an identifier, not a credential, so <b>Low, 0.70</b>. A <code>stripe_webhook_secret</code> column would be a secret finding instead.</p>
+      <p class="step"><span class="n">5</span><code>password_hash</code> contains <code>password</code>, and the secret check has no skip for hashed names, so <b>the hashed column is reported as a plaintext secret</b>. The PII check does skip hashed names.</p>
+    </div>
+  </div>
+</section>
+
+<section id="tenant">
+  <h2>Tenant scope</h2>
+  <p class="prose">This check works across tables, not columns. It first decides whether the schema is multi-tenant, then asks which tables should have carried a <code>tenant_id</code>.</p>
+  <div class="scene" id="tenant" data-scene data-interval="3600">
+    <figure class="stage">
+      <svg viewBox="0 0 960 340" role="img" aria-label="Six tables evaluated by the tenant check: tenants switches it on, global tables are skipped, orders passes, users and invoices are flagged, posts is not examined.">
+
+
+        <g class="node panel"><rect x="8" y="8" width="944" height="324" rx="10"/></g>
+        <g class="node lit-1 lit-2" transform="translate(20 20)"><rect width="290" height="130" rx="8"/>
+          <text class="ttl" x="14" y="26">tenants</text>
+          <text class="mono" x="14" y="48" style="font-size:11px">id, name, slug</text>
+          <text class="lbl" x="14" y="68">tenant_id: no</text>
+          <text class="t-info only-1" x="14" y="96">multi-tenant signal: the check is on</text><text class="lbl only-1" x="14" y="114">a table named like tenants, organizations, orgs ...</text><text class="t-muted at-2" x="14" y="96" style="fill:var(--muted)">skipped: on the global list</text><text class="lbl at-2" x="14" y="114">tenants is the root, it needs no tenant_id</text>
+        </g>
+        <g class="node lit-4" transform="translate(335 20)"><rect width="290" height="130" rx="8"/>
+          <text class="ttl" x="14" y="26">users</text>
+          <text class="mono" x="14" y="48" style="font-size:11px">id, email, role</text>
+          <text class="lbl" x="14" y="68">tenant_id: no</text>
+          <text class="t-accent at-4" x="14" y="96" style="font-weight:600">Medium · 0.75 missing tenant_id</text><text class="lbl at-4" x="14" y="114">name contains "users", no tenant_id column</text>
+        </g>
+        <g class="node lit-3" transform="translate(650 20)"><rect width="290" height="130" rx="8"/>
+          <text class="ttl" x="14" y="26">orders</text>
+          <text class="mono" x="14" y="48" style="font-size:11px">id, user_id, tenant_id</text>
+          <text class="lbl" x="14" y="68">tenant_id: yes</text>
+          <text class="t-safe at-3" x="14" y="96">ok: has a tenant_id column</text><text class="lbl at-3" x="14" y="114">has_tenant_id is true, the check returns early</text>
+        </g>
+        <g class="node lit-4" transform="translate(20 166)"><rect width="290" height="130" rx="8"/>
+          <text class="ttl" x="14" y="26">invoices</text>
+          <text class="mono" x="14" y="48" style="font-size:11px">id, order_id, amount</text>
+          <text class="lbl" x="14" y="68">tenant_id: no</text>
+          <text class="t-accent at-4" x="14" y="96" style="font-weight:600">Medium · 0.75 missing tenant_id</text><text class="lbl at-4" x="14" y="114">name contains "invoices", no tenant_id column</text>
+        </g>
+        <g class="node lit-2" transform="translate(335 166)"><rect width="290" height="130" rx="8"/>
+          <text class="ttl" x="14" y="26">audit_logs</text>
+          <text class="mono" x="14" y="48" style="font-size:11px">id, actor_id, action</text>
+          <text class="lbl" x="14" y="68">tenant_id: no</text>
+          <text class="at-2" x="14" y="96" style="fill:var(--muted)">skipped: on the global list</text><text class="lbl at-2" x="14" y="114">also global: webhook_logs, migrations ...</text>
+        </g>
+        <g class="node lit-5" transform="translate(650 166)"><rect width="290" height="130" rx="8"/>
+          <text class="ttl" x="14" y="26">posts</text>
+          <text class="mono" x="14" y="48" style="font-size:11px">id, title, body</text>
+          <text class="lbl" x="14" y="68">tenant_id: no</text>
+          <text class="at-5" x="14" y="96" style="fill:var(--muted)">not examined: name not on the list</text><text class="lbl at-5" x="14" y="114">users, apps, orders, invoices, settings ...</text>
+        </g>
+        <text class="lbl only-1" x="24" y="318">step 1: is this schema multi-tenant at all? One exact table name decides.</text>
+        <text class="lbl only-2" x="24" y="318">global tables are exempt, they cannot carry a tenant_id of their own.</text>
+        <text class="lbl only-3" x="24" y="318">a table that already has tenant_id passes.</text>
+        <text class="t-attacker only-4" x="24" y="318" style="font-weight:600">2 findings so far</text>
+        <text class="lbl only-5" x="24" y="318">tables outside the scoped-name list are never judged: posts has no tenant_id either, and no finding.</text>
+
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The tenant check is switched on only if a table is named exactly <code>tenants</code>, <code>organizations</code>, <code>orgs</code>, <code>workspaces</code> or <code>companies</code> (or a singular form). <b>Without such a table it never runs.</b></p>
+      <p class="step"><span class="n">2</span>Global tables are skipped by name: <code>tenants</code>, <code>platform_settings</code>, <code>webhook_logs</code>, <code>audit_logs</code>, <code>admin_edit_logs</code>, <code>migrations</code>. <b>They cannot carry a tenant column.</b></p>
+      <p class="step"><span class="n">3</span><code>orders</code> has a <code>tenant_id</code> column. The check returns early for it, so it is judged safe.</p>
+      <p class="step"><span class="n">4</span><code>users</code> and <code>invoices</code> carry no <code>tenant_id</code>, and their names contain a scoped word. <b>Each is a Medium finding, 0.75</b>, and the description says to add a tenant_id column with a foreign key to tenants.</p>
+      <p class="step"><span class="n">5</span><code>posts</code> also has no <code>tenant_id</code>, but its name is not on the scoped list (<code>users</code>, <code>apps</code>, <code>subscriptions</code>, <code>purchases</code>, <code>orders</code>, <code>invoices</code>, <code>settings</code>, <code>profiles</code>). <b>The check is a name heuristic, so it stays quiet.</b></p>
+    </div>
+  </div>
+</section>
+
+<section id="why">
+  <h2>Why it matters</h2>
+  <div class="grid-2">
+    <div class="callout why"><div class="label">Why it matters</div><p>Schema decisions have security consequences. <b>PII stored in plaintext is a breach liability: if the database leaks, all personal data is immediately readable.</b> A secret column turns one leaked row into a working credential, and a table without <code>tenant_id</code> gives the query layer nothing to isolate tenants with.</p></div>
+    <div class="callout breach"><div class="label">Real-world breach</div><p><b>GitHub (2012).</b> A mass assignment vulnerability in Rails let an attacker add his SSH key to the Rails core repository by exploiting a <code>user_id</code> field that sat directly on the model rather than in a separate association table. The markdown names schema design as the enabler. The <code>isAdmin</code> and <code>role</code> column check it describes is not one of the four checks in the current code.</p></div>
+  </div>
+</section>
+
+<section id="code">
+  <h2>Flagged vs clean schema</h2>
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true" type="button">BAD · flagged</button>
+      <button class="tab good" role="tab" aria-selected="false" type="button">GOOD · clean</button>
+    </div>
+    <div role="tabpanel"><pre><code><span class="c">// BAD: tenant mode is on, four findings</span>
+export const tenants = pgTable(<span class="s">"tenants"</span>, { id: uuid(<span class="s">"id"</span>) })
+
+export const users = pgTable(<span class="s">"users"</span>, {
+  id: uuid(<span class="s">"id"</span>),
+  <span class="hl bad">email: text(<span class="s">"email"</span>),</span>                         <span class="c">// PII, no twin</span>
+  <span class="hl bad">apiKey: text(<span class="s">"api_key"</span>),</span>                      <span class="c">// secret in plaintext</span>
+  <span class="hl bad">stripeId: text(<span class="s">"stripe_customer_id"</span>),</span>        <span class="c">// payment ID (Low)</span>
+})                                                   <span class="c">// no tenant_id column</span></code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c">// GOOD: scope column and PII twin present</span>
+export const tenants = pgTable(<span class="s">"tenants"</span>, { id: uuid(<span class="s">"id"</span>) })
+
+export const users = pgTable(<span class="s">"users"</span>, {
+  id: uuid(<span class="s">"id"</span>),
+  <span class="hl good">tenantId: uuid(<span class="s">"tenant_id"</span>).references(() =&gt; tenants.id),</span>
+  email: text(<span class="s">"email"</span>),
+  <span class="hl good">emailHash: text(<span class="s">"email_hash"</span>),</span>
+  <span class="c">// api_key: keep it in a KMS or secrets store, not in this table</span>
+  stripeId: text(<span class="s">"stripe_customer_id"</span>),   <span class="c">// still Low: a judgement call</span>
+})</code></pre></div>
+  </div>
+  <div class="callout note"><div class="label">Scope note</div><p>The markdown lists <code>isAdmin</code> and <code>role</code> columns, a missing <code>deleted_at</code> and missing <code>created_at</code> or <code>updated_at</code>. The code defines audit column constants but no check uses them, and none of the four checks above look for those columns. The markdown's own fix, moving roles into a separate <code>user_roles</code> table, is still good practice.</p></div>
+</section>
+
+<section id="limits">
+  <h2>Limits and scope</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Behaviour</th><th>Detail</th></tr></thead>
+    <tbody>
+      <tr><td>Input</td><td>Any indexed file that calls <code>pgTable</code>, <code>mysqlTable</code> or <code>sqliteTable</code> with a quoted table name. No network, no credentials.</td></tr>
+      <tr><td>What is compared</td><td>The quoted db_name of each column, never the JS property. A column declared as <code>text()</code> with no name string is not parsed.</td></tr>
+      <tr><td>Severity and confidence</td><td>Secret High 0.90, PII Medium 0.80, tenant scope Medium 0.75, payment ID Low 0.70.</td></tr>
+      <tr><td>Tenant check</td><td>On only if a table is named exactly tenants, organizations, orgs, workspaces or companies (or a singular form). Flags tables whose lowercase name contains users, apps, subscriptions, purchases, orders, invoices, settings or profiles.</td></tr>
+      <tr><td>Secret check</td><td>No skip for names that are already encrypted or hashed, so <code>password_hash</code> is reported.</td></tr>
+      <tr><td>Not implemented</td><td>The markdown's <code>isAdmin</code> and <code>role</code>, soft delete and audit timestamp checks.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<footer class="foot">
+  <span>Source: <a href="../scanners/drizzle-schema-analyzer.md">docs/scanners/drizzle-schema-analyzer.md</a> · <a href="https://github.com/jaurakunal/isitsecure/blob/main/isitsecure/engine/code_analysis/drizzle_schema_analyzer.py">isitsecure/engine/code_analysis/drizzle_schema_analyzer.py</a></span>
+  <span>Group: <a href="group-schema-middleware.html">Schemas and middleware</a> · Related: <a href="prisma-schema.html">Prisma schema</a> · <a href="rls-supabase.html">Row Level Security</a> · <a href="mass-assignment.html">Mass assignment</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+</body>
+</html>

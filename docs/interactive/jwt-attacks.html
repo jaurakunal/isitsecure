@@ -1,0 +1,505 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>JWT Attacks · isitsecure</title>
+<meta name="description" content="How isitsecure tests a JSON Web Token implementation: missing claims, alg:none forgery, weak secrets, RS256 to HS256 key confusion and tokens in URLs, animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  /* page-specific: the three token segments keep their own tint */
+  #anatomy .seg > rect { stroke: var(--line); }
+  #anatomy .seg.hdr > rect { fill: var(--info-soft); }
+  #anatomy .seg.pay > rect { fill: var(--accent-soft); }
+  #anatomy .seg.sig > rect { fill: var(--safe-soft); }
+  /* decoded parts are faint until their step, so the stage is never empty */
+  #anatomy .dec { opacity: .22; transition: opacity .45s ease; }
+  #anatomy.s2 .d2, #anatomy.s3 .d3, #anatomy.s4 .d4, #anatomy.s5 .d5 { opacity: 1; }
+
+  /* forge scene: the response area of the target swaps per step */
+  #forge .resp text { transition: opacity .35s; }
+
+  /* passive scene: absent claims turn red when found */
+  #passive .claim { transition: fill .35s; }
+
+  /* fix scene: the config line that rejects the current token turns green */
+  #fixed .cfg text { transition: fill .3s; }
+  #fixed[data-step="2"] .g1 text, #fixed[data-step="3"] .g2 text, #fixed[data-step="4"] .g3 text { fill: var(--safe); }
+  #fixed .tok > rect { transition: stroke .3s, opacity .4s; }
+  #fixed[data-step="2"] .t1 > rect, #fixed[data-step="3"] .t2 > rect, #fixed[data-step="4"] .t3 > rect { stroke: var(--attacker); stroke-width: 2.5; }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› JWT Attacks</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/jwt-scanner.md" title="The markdown source for this page">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">DAST scanner · authenticated</div>
+  <h1>JWT Attacks</h1>
+  <p class="lede">A JSON Web Token is trusted because its signature checks out. The JWT scanner takes the real token from the login session, builds forged variants that should fail that check, and sends each one. A forged token the server accepts is a finding.</p>
+  <div class="meta">
+    <span class="pill dast">DAST (special)</span><span class="pill crit">Critical</span><span class="pill">Auth Weakness</span><span class="pill">5 tests</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#anatomy"><span class="n">01</span>Anatomy of a JWT</a>
+  <a href="#forge"><span class="n">02</span>Forging tokens</a>
+  <a href="#passive"><span class="n">03</span>Passive checks</a>
+  <a href="#fix"><span class="n">04</span>The fixed verify</a>
+  <a href="#why"><span class="n">05</span>Why it matters</a>
+  <a href="#breach"><span class="n">06</span>Real-world breaches</a>
+  <a href="#code"><span class="n">07</span>Vulnerable vs fixed code</a>
+  <a href="#limits"><span class="n">08</span>Limits</a>
+</nav>
+
+<section id="anatomy">
+  <h2>Anatomy of a JWT</h2>
+  <p class="prose">Three base64url strings joined by dots. The first two are plain data anyone can decode; only the third proves who made the token. Every attack on this page is a way of getting past that third part.</p>
+
+  <div class="scene" id="anatomy" data-scene data-interval="3200">
+    <figure class="stage">
+      <svg viewBox="0 0 960 330" role="img" aria-label="A JWT split into header, payload and signature segments; each decodes into its contents, and the server's verify step recomputes the signature and checks expiry.">
+        <defs><marker id="arrJ1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <!-- segment labels -->
+        <text class="lbl" x="20" y="22">1 · header</text>
+        <text class="lbl" x="290" y="22">2 · payload</text>
+        <text class="lbl" x="560" y="22">3 · signature</text>
+        <!-- the token -->
+        <g class="node seg hdr lit-1 lit-2" transform="translate(20 30)"><rect width="250" height="40" rx="8"/><text class="mono" x="12" y="25">eyJhbGciOiJIUzI1NiIsInR5…</text></g>
+        <text class="mono" x="275" y="56" style="font-size:18px">.</text>
+        <g class="node seg pay lit-1 lit-3" transform="translate(290 30)"><rect width="250" height="40" rx="8"/><text class="mono" x="12" y="25">eyJzdWIiOiI0MiIsInJvbGUi…</text></g>
+        <text class="mono" x="545" y="56" style="font-size:18px">.</text>
+        <g class="node seg sig lit-1 lit-4" transform="translate(560 30)"><rect width="250" height="40" rx="8"/><text class="mono" x="12" y="25">SflKxwRJSMeKKF2QT4fwpM…</text></g>
+        <g transform="translate(830 30)">
+          <text class="lbl" y="14">base64url, no padding</text>
+          <text class="lbl" y="30">readable by anyone,</text>
+          <text class="lbl" y="46">nothing is encrypted</text>
+        </g>
+        <!-- wires down -->
+        <path class="wire at-2" d="M145 70 V 92" marker-end="url(#arrJ1)"/>
+        <path class="wire at-3" d="M415 70 V 92" marker-end="url(#arrJ1)"/>
+        <path class="wire at-4" d="M685 70 V 92" marker-end="url(#arrJ1)"/>
+        <!-- decoded header -->
+        <g class="node dec d2 lit-2" transform="translate(20 95)">
+          <rect width="250" height="66" rx="8"/>
+          <text class="ttl" x="12" y="22">Header</text>
+          <g class="mono"><text x="12" y="42">{"alg": "HS256",</text><text x="12" y="56">"typ": "JWT"}</text></g>
+        </g>
+        <g class="at-2" transform="translate(20 180)">
+          <text class="lbl" y="0">alg: HS256 = HMAC with a shared secret</text>
+          <text class="lbl" y="16">RS256 = RSA with a private key</text>
+        </g>
+        <!-- decoded payload -->
+        <g class="node dec d3 lit-3" transform="translate(290 95)">
+          <rect width="250" height="120" rx="8"/>
+          <text class="ttl" x="12" y="22">Payload (claims)</text>
+          <g class="mono">
+            <text x="12" y="42">"sub": "42"</text><text class="lbl" x="150" y="42">who</text>
+            <text x="12" y="57">"role": "user"</text><text class="lbl" x="150" y="57">permissions</text>
+            <text x="12" y="72">"iat": 1718000000</text><text class="lbl" x="150" y="72">issued at</text>
+            <text x="12" y="87">"exp": 1718003600</text><text class="lbl" x="150" y="87">expires</text>
+            <text x="12" y="102">"iss": "app.example"</text><text class="lbl" x="165" y="102">issuer</text>
+          </g>
+        </g>
+        <!-- signature -->
+        <g class="node dec d4 lit-4" transform="translate(560 95)">
+          <rect width="250" height="100" rx="8"/>
+          <text class="ttl" x="12" y="22">Signature</text>
+          <g class="mono"><text x="12" y="42">HMAC-SHA256(</text><text x="12" y="57">  header + "." + payload,</text><text x="12" y="72">  secret )</text></g>
+          <text class="lbl" x="12" y="90">or RSA-SHA256 with a private key</text>
+        </g>
+        <g class="at-4" transform="translate(830 110)">
+          <text class="lbl" y="0">only the key holder</text>
+          <text class="lbl" y="16">can produce part 3</text>
+        </g>
+        <!-- verify -->
+        <path class="wire at-5 accent" d="M415 215 V 232" marker-end="url(#arrJ1)"/>
+        <g class="node dec d5 lit-5" transform="translate(20 235)">
+          <rect width="780" height="80" rx="10"/>
+          <text class="ttl" x="12" y="24">Server: verify(token)</text>
+          <g class="mono">
+            <text x="12" y="50" class="t-accent">1 read alg from header</text>
+            <text x="200" y="50" class="t-accent">2 recompute signature with its key</text>
+            <text x="470" y="50" class="t-accent">3 compare bytes · check exp &gt; now</text>
+          </g>
+          <text class="lbl" x="12" y="70">match and not expired → the request runs as sub 42 · anything else → 401</text>
+        </g>
+        <g class="node at-5" transform="translate(815 235)">
+          <rect width="125" height="80" rx="10" class="soft-attacker"/>
+          <text class="ttl" x="10" y="24">Attack goal</text>
+          <text class="lbl" x="10" y="44">make step 3</text>
+          <text class="lbl" x="10" y="58">say yes without</text>
+          <text class="lbl" x="10" y="72">holding the key</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>A JWT is three base64url strings joined by dots. base64url is an encoding, not encryption: anyone holding the token can read parts 1 and 2 without any key.</p>
+      <p class="step"><span class="n">2</span><b>Header.</b> <code>alg</code> names the signing algorithm: HS256 is an HMAC with a shared secret, RS256 an RSA signature with a private key. The server reads this field before it checks anything else, which is the root of two of the attacks below.</p>
+      <p class="step"><span class="n">3</span><b>Payload.</b> The claims. <code>sub</code> says who the caller is, <code>role</code> what they may do, <code>iat</code> when the token was issued, <code>exp</code> when it stops being valid, <code>iss</code> who issued it. None of this is protected by anything except the signature.</p>
+      <p class="step"><span class="n">4</span><b>Signature.</b> HMAC-SHA256 over <code>header.payload</code> with the secret, or an RSA signature with the private key. Only the key holder can produce it, so changing a single claim invalidates it.</p>
+      <p class="step"><span class="n">5</span><b>The server's verify step.</b> Read <code>alg</code>, recompute the signature with its own key, compare, then check <code>exp</code> against the clock. <b>Every test on this page tries to make that comparison succeed without the key.</b></p>
+    </div>
+  </div>
+</section>
+
+<section id="forge">
+  <h2>Forging tokens: three ways to fake a signature</h2>
+  <p class="prose">The scanner starts from a real token, the <code>access_token</code> of the session the authenticated crawl logged in with. It keeps the payload, replaces the signature three different ways, and sends each forgery to one authenticated endpoint. The decision rule is the same every time.</p>
+
+  <div class="scene" id="forge" data-scene data-interval="3600">
+    <figure class="stage">
+      <svg viewBox="0 0 960 325" role="img" aria-label="The captured session token on the left is turned into a forged variant in the middle (alg none, weak secret, public key as HMAC secret) and sent to the target endpoint on the right; a 2xx response marks the server vulnerable.">
+        <defs><marker id="arrJ2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <!-- captured token -->
+        <g class="node lit-1" transform="translate(20 20)">
+          <rect width="230" height="160" rx="10"/>
+          <text class="ttl" x="12" y="22">Captured: User A's token</text>
+          <text class="lbl" x="12" y="40">access_token of the login session</text>
+          <g class="mono">
+            <text x="12" y="62">eyJhbGciOiJIUzI1NiJ9</text>
+            <text x="12" y="77">.eyJzdWIiOiI0MiIsInJv…</text>
+            <text x="12" y="92">.SflKxwRJSMeKKF2Q…</text>
+          </g>
+          <text class="lbl" x="12" y="114">decoded:</text>
+          <g class="mono"><text x="12" y="130">alg HS256 · sub 42</text><text x="12" y="145">role user · exp +1h</text></g>
+        </g>
+        <path class="wire at-2" d="M250 100 H 288" marker-end="url(#arrJ2)"/>
+        <!-- forged variant -->
+        <g class="node lit-2 lit-3 lit-4" transform="translate(290 20)">
+          <rect width="280" height="160" rx="10"/>
+          <text class="ttl" x="12" y="22">Forged variant</text>
+          <g class="until-2">
+            <text class="lbl" x="12" y="60">same payload, new header or</text>
+            <text class="lbl" x="12" y="76">new signature, built locally</text>
+            <text class="lbl" x="12" y="92">with base64 + json + hmac</text>
+          </g>
+          <g class="only-2">
+            <text class="mono t-attacker" x="12" y="48">{"alg":"none","typ":"JWT"}</text>
+            <text class="mono" x="12" y="66">{"sub":"42","role":"user"}</text>
+            <text class="mono t-attacker" x="12" y="84">&lt;signature removed&gt;</text>
+            <text class="lbl" x="12" y="108">header rewritten, third part empty</text>
+            <text class="mono" x="12" y="130">eyJhbGciOiJub25lIn0.eyJzdWIi….</text>
+            <text class="lbl" x="12" y="148">the token ends with a dot</text>
+          </g>
+          <g class="only-3">
+            <text class="mono" x="12" y="48">{"alg":"HS256","typ":"JWT"}</text>
+            <text class="mono" x="12" y="66">{"sub":"42","role":"user"}</text>
+            <text class="mono" x="12" y="84">HMAC-SHA256(…, secret)</text>
+            <text class="mono t-attacker" x="12" y="108">secret = <tspan id="jwt-secret">"secret"</tspan></text>
+            <text class="lbl" x="12" y="130">14 candidates: "secret", "password", "123456",</text>
+            <text class="lbl" x="12" y="146">"your-256-bit-secret", "changeme", "", …</text>
+          </g>
+          <g class="only-4">
+            <text class="mono" x="12" y="48">{"alg":"HS256","typ":"JWT"}</text>
+            <text class="mono" x="12" y="66">{"sub":"42","role":"user"}</text>
+            <text class="mono" x="12" y="84">HMAC-SHA256(…, key)</text>
+            <text class="mono t-attacker" x="12" y="108">key = RSA public key bytes</text>
+            <text class="lbl" x="12" y="130">n taken from /.well-known/jwks.json</text>
+            <text class="lbl" x="12" y="146">the server verifies RS256 with the same bytes</text>
+          </g>
+          <g class="only-5">
+            <text class="mono" x="12" y="52">alg:none       → 1 request</text>
+            <text class="mono" x="12" y="72">weak secrets   → up to 14 requests</text>
+            <text class="mono" x="12" y="92">key confusion  → 1 request per JWK</text>
+            <text class="lbl" x="12" y="120">same payload every time: sub 42, role user</text>
+            <text class="lbl" x="12" y="136">the server, not the payload, is under test</text>
+          </g>
+        </g>
+        <path class="wire at-2" d="M570 100 H 698" marker-end="url(#arrJ2)"/>
+        <!-- target -->
+        <g class="node lit-2 lit-3 lit-4" transform="translate(700 20)">
+          <rect width="240" height="160" rx="10"/>
+          <text class="ttl" x="12" y="22">Target endpoint</text>
+          <g class="mono"><text x="12" y="44">GET /api/me</text><text x="12" y="60">Authorization: Bearer &lt;forged&gt;</text></g>
+          <text class="lbl" x="12" y="82">response:</text>
+          <g class="resp">
+            <g class="until-2"><text class="lbl" x="12" y="104">one authenticated endpoint</text><text class="lbl" x="12" y="120">from discovery, reused for</text><text class="lbl" x="12" y="136">every forgery</text></g>
+            <g class="only-2"><text class="mono t-attacker" x="12" y="104">200 OK</text><text class="lbl" x="12" y="122">accepted → CRITICAL</text><text class="lbl" x="12" y="138">confidence 0.95</text></g>
+            <g class="only-3"><text class="mono" x="12" y="104">401 ×5, then</text><text class="mono t-attacker" x="12" y="120">200 OK with "changeme"</text><text class="lbl" x="12" y="138">accepted → CRITICAL · 0.90</text></g>
+            <g class="only-4"><text class="mono t-attacker" x="12" y="104">200 OK</text><text class="lbl" x="12" y="122">accepted → CRITICAL · 0.95</text><text class="lbl" x="12" y="138">the open JWKS itself: INFO</text></g>
+            <g class="only-5"><text class="lbl" x="12" y="104">any 2xx = finding</text><text class="lbl" x="12" y="120">any 4xx = nothing reported</text><text class="lbl" x="12" y="136">first hit stops the loop</text></g>
+          </g>
+        </g>
+        <!-- decision rule -->
+        <g class="node at-2" transform="translate(20 200)">
+          <rect width="920" height="62" rx="10"/>
+          <text class="ttl" x="12" y="22">Decision rule</text>
+          <text x="12" y="46">Status <tspan class="t-attacker">200 to 299</tspan> after a forged token = the server trusted a signature it never really checked = <tspan class="t-attacker">vulnerable</tspan>. Any 4xx = rejected, no finding.</text>
+        </g>
+        <!-- annotations -->
+        <g transform="translate(20 296)">
+          <text class="only-1 lbl">Without a session token the forgery tests are skipped entirely; only the token-in-URL check below still runs.</text>
+          <text class="only-2 lbl">The library sees alg "none", skips signature verification, and trusts whatever the payload says. jsonwebtoken did this by default (CVE-2015-9235).</text>
+          <text class="only-3 lbl">One request per candidate secret. The first 2xx stops the loop and the finding names the secret that worked.</text>
+          <text class="only-4 lbl">A library that takes alg from the header and is handed the RSA public key will happily use those bytes as an HMAC secret. One confirmed key is enough.</text>
+          <text class="only-5 lbl">One accepted forgery is enough: a token for sub 42 can be rewritten into a token for any sub, including an admin.</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span><b>Capture.</b> The authenticated crawl logged in as User A; the scanner takes that session's <code>access_token</code>, splits it on the dots and decodes the payload. No request has been sent yet.</p>
+      <p class="step" data-on="jwtForge"><span class="n">2 · ALG NONE</span>The header is rewritten to <code>{"alg":"none"}</code> and the signature is dropped, leaving a token that ends in a dot. It goes to one authenticated endpoint as <code>Authorization: Bearer</code>. <b>Accepted means anyone can forge a token for any user without knowing the secret.</b></p>
+      <p class="step" data-on="jwtForge"><span class="n">3 · WEAK SECRET</span>The same payload is signed with HS256 under each of fourteen common secrets: <code>"secret"</code>, <code>"password"</code>, <code>"123456"</code>, <code>"your-256-bit-secret"</code>, the empty string and more. One request each. <b>Accepted means the secret can be brute-forced offline, and the finding names it.</b></p>
+      <p class="step" data-on="jwtForge"><span class="n">4 · KEY CONFUSION</span>If <code>/.well-known/jwks.json</code> is served, the RSA public key is taken from it and used as an HMAC secret to sign an HS256 token. A server that lets the header choose the algorithm verifies it with the same public bytes. <b>Accepted means RS256 to HS256 confusion, CRITICAL.</b></p>
+      <p class="step"><span class="n">5</span>The rule never changes: a forged token that gets a 2xx proves the server did not verify the signature it should have. A 4xx is a pass and produces nothing. The payload is never escalated during these three tests; the server's check is what is being measured.</p>
+    </div>
+  </div>
+</section>
+
+<section id="passive">
+  <h2>Passive checks: claims and URLs</h2>
+  <p class="prose">Two of the five tests send nothing. One reads the captured token's claims; the other reads the URLs that discovery pulled out of the JavaScript bundles.</p>
+
+  <div class="scene" id="passive" data-scene data-interval="3000">
+    <figure class="stage">
+      <svg viewBox="0 0 960 250" role="img" aria-label="Left: the captured payload is missing exp, iat and iss, producing two findings. Right: discovered endpoint URLs are matched against a token-in-query pattern and one URL carrying ?token=eyJ matches.">
+        <defs><marker id="arrJ3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <!-- missing claims -->
+        <g class="node lit-1" transform="translate(20 20)">
+          <rect width="210" height="150" rx="10"/>
+          <text class="ttl" x="12" y="22">Captured payload</text>
+          <g class="mono">
+            <text x="12" y="46">"sub": "42"</text>
+            <text x="12" y="62">"role": "user"</text>
+            <text x="12" y="78">"iat": 1718000000</text>
+            <text x="12" y="94" class="at-2 t-attacker">"exp": absent</text>
+            <text x="12" y="110" class="at-2 t-attacker">"iss": absent</text>
+          </g>
+          <text class="lbl" x="12" y="136">required: exp · iat · iss</text>
+        </g>
+        <path class="wire at-2" d="M230 60 C 250 60, 250 52, 268 52" marker-end="url(#arrJ3)"/>
+        <path class="wire at-2" d="M230 130 C 250 130, 250 132, 268 132" marker-end="url(#arrJ3)"/>
+        <g class="node at-2 lit-2" transform="translate(270 20)">
+          <rect width="200" height="64" rx="8" class="soft-attacker"/>
+          <text class="ttl" x="12" y="22">Missing exp</text>
+          <text class="lbl" x="12" y="40">valid forever once stolen</text>
+          <text class="lbl" x="12" y="56">confidence 0.75</text>
+        </g>
+        <g class="node at-2 lit-2" transform="translate(270 100)">
+          <rect width="200" height="64" rx="8"/>
+          <text class="ttl" x="12" y="22">Missing iss</text>
+          <text class="lbl" x="12" y="40">recommended claim absent</text>
+          <text class="lbl" x="12" y="56">confidence 0.60</text>
+        </g>
+        <!-- token in url -->
+        <g class="node lit-3" transform="translate(510 20)">
+          <rect width="210" height="150" rx="10"/>
+          <text class="ttl" x="12" y="22">Discovered endpoints</text>
+          <text class="lbl" x="12" y="40">pulled from the JS bundles</text>
+          <g class="mono">
+            <text x="12" y="64">/api/report</text>
+            <text x="12" y="80">/api/export?format=csv</text>
+            <text x="12" y="96" class="until-3">/share?token=eyJhbG…</text>
+            <text x="12" y="96" class="at-3 t-attacker">/share?token=eyJhbG…</text>
+            <text x="12" y="112">/api/me</text>
+          </g>
+          <text class="lbl" x="12" y="136">every URL, once</text>
+        </g>
+        <path class="wire at-3" d="M720 60 C 740 60, 740 52, 758 52" marker-end="url(#arrJ3)"/>
+        <g class="node at-3 lit-3" transform="translate(760 20)">
+          <rect width="180" height="64" rx="8"/>
+          <text class="ttl" x="12" y="22">Pattern</text>
+          <g class="mono"><text x="12" y="40">[?&amp;](token|access_token</text><text x="12" y="54">|jwt|auth)=xxx.yyy.zzz</text></g>
+        </g>
+        <path class="wire at-4 attacker" d="M850 84 V 98" marker-end="url(#arrJ3)"/>
+        <g class="node at-4 lit-4" transform="translate(760 100)">
+          <rect width="180" height="76" rx="8" class="soft-attacker"/>
+          <text class="ttl" x="12" y="22">Token in URL</text>
+          <text class="lbl" x="12" y="40">proxy and server logs</text>
+          <text class="lbl" x="12" y="54">browser history and cache</text>
+          <text class="lbl" x="12" y="68">confidence 0.85</text>
+        </g>
+        <!-- annotations -->
+        <g transform="translate(20 222)">
+          <text class="only-1 lbl">The claims come straight from the captured token. This check sends no request.</text>
+          <text class="only-2 lbl">No exp is its own finding. Other required claims that are absent are grouped into a second, lower-confidence one.</text>
+          <text class="only-3 lbl">Every discovered endpoint URL is matched once against the JWT-in-query pattern: a token, access_token, jwt or auth parameter holding a three-part token.</text>
+          <text class="only-4 lbl">A JWT in a query string is written to every log between the browser and the server, and sits in browser history and caches long after the session.</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1 · CLAIMS</span>The captured payload is checked for the three claims the scanner requires: <code>exp</code>, <code>iat</code>, <code>iss</code>. This one has <code>iat</code> only.</p>
+      <p class="step"><span class="n">2</span><b>No <code>exp</code> means a stolen token works forever</b>, so it is reported on its own at confidence 0.75. Any other missing required claim is bundled into a second finding at 0.60.</p>
+      <p class="step"><span class="n">3 · TOKEN IN URL</span>Discovery already extracted the app's endpoint URLs from its JavaScript bundles. Each unique URL is matched against one pattern: a query parameter named <code>token</code>, <code>access_token</code>, <code>jwt</code> or <code>auth</code> whose value has the three-part dotted shape of a JWT.</p>
+      <p class="step"><span class="n">4</span>A match is a finding at confidence 0.85. <b>A token in the URL is logged by proxies and cached by browsers</b>, so it leaks to anyone who can read those logs, with no attack on the signature needed.</p>
+    </div>
+  </div>
+</section>
+
+<section id="fix">
+  <h2>The fixed verify call</h2>
+  <p class="prose">Three settings close all three forgeries: pin the algorithm list, use a secret long enough that guessing is hopeless, and give every token an expiry so a stolen one is bounded in time.</p>
+
+  <div class="scene" id="fixed" data-scene data-interval="2800">
+    <figure class="stage">
+      <svg viewBox="0 0 960 236" role="img" aria-label="Three forged tokens (alg none, guessed secret, expired) arrive at a verify call configured with pinned algorithms, a random 64-byte secret and a one-hour expiry; each is rejected by a different setting.">
+        <defs><marker id="arrJ4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g class="node tok t1" transform="translate(20 20)"><rect width="230" height="54" rx="8"/><text class="mono" x="12" y="22">alg: none, no signature</text><text class="lbl" x="12" y="42">forged without the secret</text></g>
+        <g class="node tok t2" transform="translate(20 90)"><rect width="230" height="54" rx="8"/><text class="mono" x="12" y="22">HS256, secret "changeme"</text><text class="lbl" x="12" y="42">signed with a guessed secret</text></g>
+        <g class="node tok t3" transform="translate(20 160)"><rect width="230" height="54" rx="8"/><text class="mono" x="12" y="22">valid signature, exp 2d ago</text><text class="lbl" x="12" y="42">stolen and replayed later</text></g>
+        <path class="wire at-2 attacker" d="M250 47 H 328" marker-end="url(#arrJ4)"/>
+        <path class="wire at-3 attacker" d="M250 117 H 328" marker-end="url(#arrJ4)"/>
+        <path class="wire at-4 attacker" d="M250 187 H 328" marker-end="url(#arrJ4)"/>
+        <g class="node lit-1" transform="translate(330 20)">
+          <rect width="370" height="194" rx="10"/>
+          <text class="ttl" x="12" y="24">jwt.verify(token, SECRET, options)</text>
+          <g class="cfg g1 mono"><text x="12" y="52">algorithms: ["HS256"]</text><text class="lbl" x="12" y="68">"none" and RS256-as-HS256 are not in the list</text></g>
+          <g class="cfg g2 mono"><text x="12" y="104">SECRET = randomBytes(64).toString("hex")</text><text class="lbl" x="12" y="120">512 random bits: no wordlist contains it</text></g>
+          <g class="cfg g3 mono"><text x="12" y="156">sign(…, { expiresIn: "1h" })</text><text class="lbl" x="12" y="172">exp is set at issue and checked at verify</text></g>
+        </g>
+        <path class="wire at-2 safe" d="M700 60 H 738" marker-end="url(#arrJ4)"/>
+        <path class="wire at-3 safe" d="M700 112 H 738" marker-end="url(#arrJ4)"/>
+        <path class="wire at-4 safe" d="M700 164 H 738" marker-end="url(#arrJ4)"/>
+        <g class="node" transform="translate(740 20)">
+          <rect width="200" height="194" rx="10"/>
+          <text class="ttl" x="12" y="24">Result</text>
+          <g class="mono">
+            <text x="12" y="64" class="at-2 t-safe">401 alg not allowed</text>
+            <text x="12" y="116" class="at-3 t-safe">401 invalid signature</text>
+            <text x="12" y="168" class="at-4 t-safe">401 jwt expired</text>
+          </g>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The fixed call pins <code>algorithms</code>, uses a 64-byte random secret and issues every token with <code>expiresIn</code>. The three forged tokens from above are about to arrive.</p>
+      <p class="step"><span class="n">2</span><b>alg:none is rejected before any signature work</b>: "none" is not in the allowed list. A token claiming HS256 against an RS256 key fails the same check, which closes key confusion too.</p>
+      <p class="step"><span class="n">3</span>The guessed-secret token is verified against the real 512-bit secret and the HMAC does not match. No wordlist reaches a random 64-byte value.</p>
+      <p class="step"><span class="n">4</span>A stolen but genuine token stops working one hour after issue. <b>The leak is bounded</b>; without <code>exp</code> it would have been permanent.</p>
+    </div>
+  </div>
+</section>
+
+<section id="why">
+  <h2>Why it matters</h2>
+  <div class="callout why">
+    <div class="label">Why it matters</div>
+    <p>JWTs are the authentication foundation of most modern web apps. If the implementation is broken, an attacker can <b>forge tokens as any user</b> (alg:none or a weak secret produce valid tokens for any user id, including admins), gain <b>permanent access</b> (a token without expiry never stops working, so a stolen one works forever) and remain <b>undetectable</b>, because a forged token is indistinguishable from a real one in every log.</p>
+  </div>
+  <div class="callout note">
+    <div class="label">Where the token lives</div>
+    <p>The <a href="../scanners/session-scanner.md">session scanner</a> covers the storage side of the same token: <code>localStorage.setItem</code> with a token-like key (readable by any script on the page, so one XSS is an account takeover), auth cookies without <code>HttpOnly</code> or <code>Secure</code>, and JWTs whose <code>exp</code> is more than 24 hours out. A perfectly signed token in <code>localStorage</code> is still one XSS away from an attacker.</p>
+  </div>
+</section>
+
+<section id="breach">
+  <h2>Real-world breaches</h2>
+  <div class="grid-2">
+    <div class="callout breach">
+      <div class="label">Auth0 / jsonwebtoken · CVE-2015-9235 (2015)</div>
+      <p>The <code>jsonwebtoken</code> npm library, with millions of downloads, accepted <code>alg: "none"</code> by default. Any app using it without an explicit algorithm restriction could be fully bypassed: test 2 on this page, as a default.</p>
+    </div>
+    <div class="callout breach">
+      <div class="label">Palo Alto Networks · CVE-2020-2021 (2020)</div>
+      <p>Improper SAML/JWT signature validation in PAN-OS allowed authentication bypass when the "Validate Identity Provider Certificate" option was disabled. A signature that is not actually verified is the same failure the forge scene measures.</p>
+    </div>
+  </div>
+</section>
+
+<section id="code">
+  <h2>Vulnerable vs fixed code</h2>
+  <p class="prose">The same three lines decide everything: the options passed to <code>verify</code>, the value of the secret, and whether <code>sign</code> sets an expiry.</p>
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true" type="button">BAD · vulnerable</button>
+      <button class="tab good" role="tab" aria-selected="false" type="button">GOOD · fixed</button>
+    </div>
+    <div role="tabpanel"><pre><code><span class="c">// BAD: No algorithm restriction: accepts alg:none</span>
+<span class="hl bad">const payload = jwt.verify(token, SECRET)</span>
+
+<span class="c">// BAD: Weak secret</span>
+<span class="hl bad">const JWT_SECRET = <span class="s">"secret"</span></span>
+const token = jwt.sign(payload, JWT_SECRET)
+
+<span class="c">// BAD: No expiration</span>
+<span class="hl bad">const token = jwt.sign({ userId: <span class="s">"123"</span>, role: <span class="s">"admin"</span> }, SECRET)</span>
+<span class="c">// Missing: expiresIn option</span></code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c">// GOOD: Restrict algorithms explicitly</span>
+<span class="hl good">const payload = jwt.verify(token, SECRET, { <span class="k">algorithms</span>: [<span class="s">"HS256"</span>] })</span>
+
+<span class="c">// GOOD: Strong random secret (256+ bits)</span>
+<span class="hl good">const JWT_SECRET = crypto.<span class="k">randomBytes</span>(64).toString(<span class="s">"hex"</span>)</span>
+
+<span class="c">// GOOD: Set expiration</span>
+<span class="hl good">const token = jwt.sign(payload, SECRET, { <span class="k">expiresIn</span>: <span class="s">"1h"</span> })</span>
+
+<span class="c">// GOOD: Use asymmetric keys (RSA) for production</span>
+const token = jwt.sign(payload, PRIVATE_KEY, { algorithm: <span class="s">"RS256"</span>, expiresIn: <span class="s">"1h"</span> })
+const decoded = jwt.verify(token, PUBLIC_KEY, { <span class="k">algorithms</span>: [<span class="s">"RS256"</span>] })</code></pre></div>
+  </div>
+</section>
+
+<section id="limits">
+  <h2>Limits and what it needs</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Test</th><th>Needs</th><th>Reports when</th><th>Severity · confidence</th></tr></thead>
+      <tbody>
+        <tr><td>Missing claims</td><td>a session JWT</td><td><code>exp</code>, <code>iat</code> or <code>iss</code> absent from the payload</td><td>no exp 0.75 · others 0.60</td></tr>
+        <tr><td>alg:none</td><td>session JWT + one authenticated endpoint</td><td>forged token gets a 2xx</td><td>Critical · 0.95</td></tr>
+        <tr><td>Weak secret</td><td>session JWT + endpoint</td><td>any of 14 secrets yields a 2xx; first hit stops</td><td>Critical · 0.90</td></tr>
+        <tr><td>Key confusion</td><td>a reachable <code>/.well-known/jwks.json</code></td><td>HS256 token signed with the public key gets a 2xx; the open JWKS alone is Info</td><td>Critical · 0.95 (JWKS 0.50)</td></tr>
+        <tr><td>Token in URL</td><td>discovered endpoints only</td><td>a URL matches the token-in-query pattern</td><td>0.85</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout note">
+    <div class="label">What it stays quiet about</div>
+    <p>No session token means every forgery test is skipped and only the URL check runs. Nothing is reported on a 4xx, so a server that rejects every forgery produces no JWT findings at all. The forgeries keep the captured payload unchanged; a separate claim-manipulation pass in the implementation (role escalation and identity swap, signed with an empty secret) is not part of the five tests described in the scanner doc.</p>
+  </div>
+</section>
+
+<footer class="foot">
+  <span>Source: <a href="../scanners/jwt-scanner.md">docs/scanners/jwt-scanner.md</a> · <a href="../scanners/session-scanner.md">session-scanner.md</a></span>
+  <span>Related: <a href="rls-supabase.html">Row Level Security</a> · <a href="scan-pipeline.html">The scan pipeline</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+<script>
+(function () {
+  const SECRETS = ["secret", "password", "123456", "jwt_secret", "your-256-bit-secret", "changeme"];
+  const LABELS = { 2: "alg:none", 3: "HS256 + guess", 4: "HS256 + pubkey" };
+  window.jwtForge = function (scene, step, el) {
+    const svg = el.querySelector("svg");
+    IsDoc.clearPackets(svg);
+    const sec = el.querySelector("#jwt-secret");
+    if (el._secretTimer) { clearInterval(el._secretTimer); el._secretTimer = null; }
+    if (step === 3) {
+      if (IsDoc.reduced) { sec.textContent = '"changeme"'; }
+      else {
+        let k = 0; sec.textContent = '"' + SECRETS[0] + '"';
+        el._secretTimer = setInterval(() => {
+          k++;
+          if (k >= SECRETS.length) { clearInterval(el._secretTimer); el._secretTimer = null; return; }
+          sec.textContent = '"' + SECRETS[k] + '"';
+        }, 380);
+      }
+    } else { sec.textContent = '"secret"'; }
+    if (el._replyTimer) { clearTimeout(el._replyTimer); el._replyTimer = null; }
+    if (step >= 2 && step <= 4) {
+      const wait = step === 3 ? 2300 : 1000;
+      IsDoc.packet(svg, "M570 100 H 698", { cls: "f-attacker", label: LABELS[step], duration: 800, hold: 150 });
+      // the reply is created only when it starts moving, so it never sits at the origin
+      el._replyTimer = setTimeout(() => {
+        if (el.dataset.step !== String(step)) return;
+        IsDoc.packet(svg, "M698 125 H 570", { cls: "f-attacker", label: "200 OK", duration: 700, hold: 500 });
+      }, IsDoc.reduced ? 0 : wait);
+    }
+  };
+})();
+</script>
+</body>
+</html>

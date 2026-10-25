@@ -1,0 +1,515 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Architecture Deep Dive · isitsecure</title>
+<meta name="description" content="How an isitsecure scan actually runs: entry points, dependency wiring, the ScanContext data flow, the concurrency model, the event stream, the finding model, and the package map.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  /* entry scene: three consumers converge on one generator */
+  #entry .flowline { stroke: var(--line); stroke-width: 1.5; fill: none; transition: stroke .3s; }
+  #entry.s2 .fl-cli, #entry.s3 .fl-fac, #entry.s4 .fl-gen, #entry.s5 .fl-out { stroke: var(--accent); stroke-dasharray: 6 6; animation: flow 1s linear infinite; }
+
+  /* wiring scene */
+  #wiring .slot > rect { transition: stroke .3s, fill .3s; }
+  #wiring .cond { opacity: .35; transition: opacity .4s; }
+  #wiring.s3 .cond.c-llm, #wiring.s4 .cond.c-deep, #wiring.s5 .cond.c-lsp { opacity: 1; }
+  #wiring.s3 .cond.c-llm > rect, #wiring.s4 .cond.c-deep > rect, #wiring.s5 .cond.c-lsp > rect { stroke: var(--accent); stroke-width: 2.5; }
+
+  /* dfd grid (built by JS) */
+  #dfd .stage { padding-bottom: 10px; }
+  #dfd text.colhead { font-family: var(--font-mono); font-size: 10px; fill: var(--muted); }
+  #dfd text.rowlab { font-family: var(--font-mono); font-size: 11px; fill: var(--fg); }
+  #dfd text.grp { font-family: var(--font-display); font-size: 11px; font-weight: 600; fill: var(--muted); letter-spacing: .08em; }
+  #dfd rect.cell { fill: var(--surface-2); stroke: var(--surface); stroke-width: 1; transition: fill .3s, opacity .3s; }
+  #dfd rect.cell.r { fill: var(--info-soft); }
+  #dfd rect.cell.w { fill: var(--accent-soft); }
+  #dfd rect.cell.rw { fill: var(--warn-soft); }
+  #dfd text.cell { font-family: var(--font-mono); font-size: 9.5px; text-anchor: middle; pointer-events: none; }
+  #dfd text.cell.r { fill: var(--info); } #dfd text.cell.w { fill: var(--accent); } #dfd text.cell.rw { fill: var(--warn); }
+  #dfd rect.colbg { fill: var(--accent); opacity: 0; transition: opacity .3s; }
+  #dfd rect.colbg.cur { opacity: .10; }
+  #dfd .colhead.cur { fill: var(--accent); font-weight: 600; }
+  #dfd .legend text { font-size: 11px; fill: var(--muted); }
+
+  /* concurrency scene */
+  #conc .task > rect { transition: stroke .3s, fill .3s; }
+  #conc .q-item { transition: opacity .35s, transform .35s; }
+
+  /* events scene */
+  #events .log { font-family: var(--font-mono); font-size: 11.5px; }
+  #events .log text { fill: var(--fg); }
+  #events .log .dim { fill: var(--muted); } #events .log .cy { fill: var(--info); } #events .log .gr { fill: var(--safe); } #events .log .ye { fill: var(--warn); }
+
+  /* finding assembly */
+  #finding .fld { transition: opacity .35s; }
+
+  pre.tree { font-size: .8rem; line-height: 1.5; }
+  .two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+  @media (max-width: 760px) { .two { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› Architecture deep dive</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../architecture.md" title="The markdown source for this page">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">Architecture</div>
+  <h1>Architecture Deep Dive</h1>
+  <p class="lede">The <a href="scan-pipeline.html">pipeline page</a> shows what a scan does. This page shows how it runs: the three entry points that share one engine, how the engine is wired, the single state object every phase reads and writes, how scanners run in parallel without losing their work, and how progress and findings flow out to a terminal, a browser, or an AI coding tool.</p>
+  <div class="meta">
+    <span class="pill">3 entry points</span><span class="pill">1 async generator</span><span class="pill">19 phases</span><span class="pill">27 context fields</span><span class="pill">6 protocols</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#entry"><span class="n">01</span>Entry points</a>
+  <a href="#wiring"><span class="n">02</span>Wiring</a>
+  <a href="#dfd-section"><span class="n">03</span>Context data flow</a>
+  <a href="#concurrency"><span class="n">04</span>Concurrency</a>
+  <a href="#events"><span class="n">05</span>Event stream</a>
+  <a href="#finding"><span class="n">06</span>The finding model</a>
+  <a href="#protocols"><span class="n">07</span>Protocols</a>
+  <a href="#package"><span class="n">08</span>Package map</a>
+  <a href="#degrade"><span class="n">09</span>Degradation</a>
+</nav>
+
+<section id="entry">
+  <h2>Three entry points, one engine</h2>
+  <p class="prose">The CLI, the web UI's server and the MCP server never contain scanning logic. Each one builds an agent through the factory, calls <code>scan()</code>, and consumes the events it yields. The engine does not know which of the three is listening.</p>
+  <div class="scene" id="entry" data-scene data-interval="3000">
+    <figure class="stage">
+      <svg viewBox="0 0 960 300" role="img" aria-label="CLI, web server and MCP server each call the factory, which returns a wired agent; agent.scan() yields events that each consumer renders in its own way.">
+        <defs><marker id="arrE" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g class="node lit-1" transform="translate(20 30)"><rect width="200" height="56" rx="8"/><text class="ttl" x="12" y="22">CLI</text><text class="lbl mono" x="12" y="42">isitsecure scan URL --repo …</text></g>
+        <g class="node lit-1" transform="translate(20 122)"><rect width="200" height="56" rx="8"/><text class="ttl" x="12" y="22">Web UI server</text><text class="lbl mono" x="12" y="42">POST /api/scan → SSE stream</text></g>
+        <g class="node lit-1" transform="translate(20 214)"><rect width="200" height="56" rx="8"/><text class="ttl" x="12" y="22">MCP server</text><text class="lbl mono" x="12" y="42">scan(path) · scan_url(url)</text></g>
+
+        <path class="flowline fl-cli" d="M220 58 C 260 58, 260 150, 298 150" marker-end="url(#arrE)"/>
+        <path class="flowline fl-cli" d="M220 150 H 298" marker-end="url(#arrE)"/>
+        <path class="flowline fl-cli" d="M220 242 C 260 242, 260 150, 298 150" marker-end="url(#arrE)"/>
+
+        <g class="node at-2 lit-3" transform="translate(300 96)"><rect width="200" height="108" rx="8"/><text class="ttl" x="12" y="22">factory.py</text><text class="lbl mono" x="12" y="42">create_deep_security_</text><text class="lbl mono" x="12" y="56">scan_agent(llm, depth,</text><text class="lbl mono" x="12" y="70">probe_writes, auth)</text><text class="lbl" x="12" y="94">all concrete classes live here</text></g>
+
+        <path class="flowline fl-fac at-3" d="M500 150 H 538" marker-end="url(#arrE)"/>
+
+        <g class="node at-3 lit-4" transform="translate(540 70)"><rect width="190" height="160" rx="8"/><text class="ttl" x="12" y="22">DeepSecurityScanAgent</text><text class="lbl mono" x="12" y="44">async def scan(…):</text><text class="lbl mono" x="24" y="60">ctx = ScanContext(mode…)</text><text class="lbl mono" x="24" y="76">async for e in phase(ctx):</text><text class="lbl mono" x="36" y="92">yield e</text><text class="lbl mono" x="24" y="108">…× 19 phases</text><text class="lbl mono" x="24" y="124">yield COMPLETE(report)</text><text class="lbl" x="12" y="148">an async generator</text></g>
+
+        <path class="flowline fl-gen at-4" d="M730 150 H 768" marker-end="url(#arrE)"/>
+
+        <g class="node at-4 lit-5" transform="translate(770 56)"><rect width="172" height="188" rx="8"/><text class="ttl" x="12" y="22">DeepScanEvent</text><text class="lbl mono" x="12" y="44">phase</text><text class="lbl mono" x="12" y="60">message</text><text class="lbl mono" x="12" y="76">progress 0–100</text><text class="lbl mono" x="12" y="92">data {…}</text>
+          <g class="at-5"><text class="lbl" x="12" y="120">CLI: live log lines</text><text class="lbl" x="12" y="136">server: text/event-stream</text><text class="lbl" x="12" y="152">MCP: cache by scan_id</text><text class="lbl" x="12" y="176">last event carries the report</text></g>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Three front doors. The CLI command, the FastAPI server behind the web UI, and the local MCP server used by AI coding tools. None of them scans anything themselves.</p>
+      <p class="step"><span class="n">2</span>Each one calls the same factory function with the options it has: an LLM client or none, quick or deep depth, whether writes may be probed, and an auth provider if credentials were given.</p>
+      <p class="step"><span class="n">3</span>The factory instantiates every concrete scanner, strategy and service and injects them into one <code>DeepSecurityScanAgent</code>. The agent itself only knows protocols, never concrete classes.</p>
+      <p class="step"><span class="n">4</span><code>scan()</code> is an async generator. It builds a <code>ScanContext</code>, then runs the phases in a fixed order, forwarding each phase's events as they happen. Two phases can abort the whole scan: URL ingestion and repo ingestion.</p>
+      <p class="step"><span class="n">5</span>Every consumer reads the same stream. The CLI prints phase headers and per-scanner lines, the server relays it as server-sent events, and the MCP server keeps the final report in an in-process cache keyed by <code>scan_id</code>. The final COMPLETE event carries the whole report as JSON.</p>
+    </div>
+  </div>
+</section>
+
+<section id="wiring">
+  <h2>How the agent is wired</h2>
+  <p class="prose">Dependency injection happens in one place. The scanner lists are plain Python lists, so adding a scanner is appending to a list. Three things are conditional: anything LLM-powered needs a client, three aggressive scanners need deep depth, and the language server is auto-detected and replaced by a no-op when absent.</p>
+  <div class="scene" id="wiring" data-scene data-interval="3000">
+    <figure class="stage">
+      <svg viewBox="0 0 960 330" role="img" aria-label="The factory fills the agent's slots: DAST scanner list, SAST scanner list, special scanners, guided-DAST strategies, services; LLM-dependent, deep-only and LSP slots are conditional.">
+        <g class="node lit-1" transform="translate(20 20)"><rect width="300" height="290" rx="8"/><text class="ttl" x="12" y="22">DeepSecurityScanAgent slots</text>
+          <g class="mono">
+            <text class="at-2" x="12" y="48">ingestion_service</text>
+            <text class="at-2" x="12" y="64">endpoint_scanner</text>
+            <text class="at-2" x="12" y="80">dast_scanners[16 + 3]</text>
+            <text class="at-2" x="12" y="96">sast_scanners[18 + 1]</text>
+            <text class="at-2" x="12" y="112">idor · jwt · rls_deep · priv_esc</text>
+            <text class="at-2" x="12" y="128">guided_dast_runner[6]</text>
+            <text class="at-2" x="12" y="144">cross_referencer</text>
+            <text class="at-2" x="12" y="160">repo_ingestion_service</text>
+            <text class="at-2" x="12" y="176">auth_provider</text>
+            <text class="at-3 t-accent" x="12" y="200">llm_code_reviewer</text>
+            <text class="at-3 t-accent" x="12" y="216">llm_triage · injection_adjudicator</text>
+            <text class="at-3 t-accent" x="12" y="232">judgment_llm_client</text>
+            <text class="at-5 t-info" x="12" y="256">lsp_client (or NoOp)</text>
+          </g>
+          <text class="lbl" x="12" y="284">every slot is a protocol type</text>
+        </g>
+
+        <g class="cond c-llm" transform="translate(350 20)"><rect width="280" height="120" rx="8" class="soft-accent"/><text class="ttl" x="12" y="22">if llm_client</text>
+          <text class="lbl" x="12" y="44">LLMCodeReviewer(planning model)</text>
+          <text class="lbl" x="12" y="60">LLMTriageService(judgment model)</text>
+          <text class="lbl" x="12" y="76">InjectionAdjudicator(judgment model)</text>
+          <text class="lbl" x="12" y="92">SemanticRuleVerifier → appended to SAST</text>
+          <text class="lbl" x="12" y="110">judgment model falls back to the primary</text>
+        </g>
+        <g class="cond c-deep" transform="translate(350 156)"><rect width="280" height="74" rx="8" class="soft-attacker"/><text class="ttl" x="12" y="22">if depth == DEEP</text>
+          <text class="lbl" x="12" y="44">+ RateLimit · AuthBypass · PasswordReset</text>
+          <text class="lbl" x="12" y="60">injection gets time-based probes; XSS adds DOM pass</text>
+        </g>
+        <g class="cond c-lsp" transform="translate(350 246)"><rect width="280" height="64" rx="8" class="soft-info"/><text class="ttl" x="12" y="22">_create_lsp_client()</text>
+          <text class="lbl" x="12" y="44">detects Node / pyright / jdtls / gopls</text>
+          <text class="lbl" x="12" y="58">absent → NoOp client, validation skipped</text>
+        </g>
+
+        <g class="node at-2" transform="translate(660 20)"><rect width="282" height="290" rx="8"/><text class="ttl" x="12" y="22">Always on</text>
+          <g class="mono"><text class="lbl" x="12" y="46">URLIngestionService (Playwright → httpx)</text><text class="lbl" x="12" y="62">EndpointDiscoveryScanner(probe_writes)</text><text class="lbl" x="12" y="78">IDORScanner(probe_writes)</text><text class="lbl" x="12" y="94">JWTScanner · RLSDeepScanner</text><text class="lbl" x="12" y="110">PrivilegeEscalationScanner</text><text class="lbl" x="12" y="126">FindingCrossReferencer</text><text class="lbl" x="12" y="142">SASTGuidedDASTRunner([6 strategies])</text><text class="lbl" x="12" y="158">16 DAST + 18 SAST scanners</text></g>
+          <text class="lbl" x="12" y="190">Open/closed: a new scanner is one</text><text class="lbl" x="12" y="206">class plus one list entry. No agent</text><text class="lbl" x="12" y="222">code changes.</text>
+          <text class="lbl" x="12" y="250">Special scanners have non-standard</text><text class="lbl" x="12" y="266">scan() signatures (sessions, keys),</text><text class="lbl" x="12" y="282">so they get named slots instead.</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The agent is a container of slots. Each slot is typed by a protocol, so the agent can be unit-tested with fakes and never imports a concrete scanner.</p>
+      <p class="step"><span class="n">2</span>The factory fills the unconditional slots: ingestion, discovery, the two scanner lists, the four special scanners with their own signatures, the cross-referencer, the guided-DAST runner with its six strategies, and the repo and auth services.</p>
+      <p class="step"><span class="n">3</span><b>With an LLM client</b> four more objects exist: the code reviewer on the planning model, and triage, the injection adjudicator and the semantic rule verifier on the cheaper judgment model. Without one, these slots are <code>None</code> and their phases are no-ops.</p>
+      <p class="step"><span class="n">4</span><b>Deep depth</b> appends the three slow or aggressive scanners to the DAST list and switches the injection scanner into time-based mode. Quick depth is the default and finishes in a fraction of the time.</p>
+      <p class="step"><span class="n">5</span>The language server client is detected from what is installed. If nothing usable is found the slot holds a no-op client, so the validation phase runs and does nothing rather than failing.</p>
+    </div>
+  </div>
+</section>
+
+<section id="dfd-section">
+  <h2>What each phase reads and writes</h2>
+  <p class="prose">Every phase is a method taking one <code>ScanContext</code>. Its 27 fields are the only state that crosses a phase boundary, which is what makes the order of phases checkable: a phase can only depend on fields an earlier phase wrote. This grid was generated from the agent's source, not drawn by hand. Step through it to watch the context fill up.</p>
+  <div class="scene" id="dfd" data-scene data-interval="2400">
+    <figure class="stage"><svg id="dfd-svg" role="img" aria-label="A grid of ScanContext fields (rows) against the 19 phases plus the report (columns), marking which fields each phase reads, writes, or both."></svg></figure>
+    <div class="scene-steps" id="dfd-steps"></div>
+  </div>
+  <div class="callout note"><div class="label">Reading the grid</div><p><b>R</b> the phase reads the field. <b>W</b> the phase sets or appends to it. <b>RW</b> it rewrites what it read: validation removes disproved findings, adjudication drops benign ones, triage deduplicates. Two phases, cross-probe analysis and injection adjudication, read nothing but the findings list itself. The inputs on the top rows are written once, by <code>scan()</code>, before the first phase.</p></div>
+</section>
+
+<section id="concurrency">
+  <h2>Parallel scanners that narrate and yield</h2>
+  <p class="prose">Phases 4 and 7 run their scanner lists concurrently. Two mechanisms make that safe to watch and safe to stop: an ambient progress reporter that scanners write to without holding a reference to the agent, and a cooperative deadline each scanner inherits so it can return its findings before the hard timeout cancels it.</p>
+  <div class="scene" id="conc" data-scene data-interval="3000">
+    <figure class="stage">
+      <svg viewBox="0 0 960 330" role="img" aria-label="Scanner tasks run concurrently; each posts progress and a done marker to a queue the agent drains into events; run_scanner_safe publishes a deadline that TimeBudget inherits.">
+        <defs><marker id="arrC" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g class="node lit-1" transform="translate(20 20)"><rect width="250" height="92" rx="8"/><text class="ttl" x="12" y="22">agent: launch</text><text class="lbl mono" x="12" y="44">for s in dast_scanners:</text><text class="lbl mono" x="24" y="60">yield "running s…"</text><text class="lbl mono" x="24" y="76">ensure_future(_run(s))</text></g>
+
+        <g class="at-2">
+          <g class="node task lit-2" transform="translate(20 130)"><rect width="250" height="26" rx="5"/><text class="mono" x="12" y="17">task · xss_scanner</text></g>
+          <g class="node task lit-2" transform="translate(20 162)"><rect width="250" height="26" rx="5"/><text class="mono" x="12" y="17">task · injection_scanner</text></g>
+          <g class="node task lit-2" transform="translate(20 194)"><rect width="250" height="26" rx="5"/><text class="mono" x="12" y="17">task · http_probe_scanner</text></g>
+          <text class="lbl" x="20" y="238">… 16 tasks, one event loop</text>
+        </g>
+
+        <g class="at-3 lit-3" transform="translate(300 20)"><rect width="300" height="128" rx="8" class="shape" fill="var(--surface-2)" stroke="var(--line)" stroke-width="1.5"/><text class="ttl" x="12" y="22">run_scanner_safe(name, coro, timeout)</text>
+          <text class="lbl mono" x="12" y="46">with scanner_deadline(timeout):</text>
+          <text class="lbl mono" x="24" y="62">await wait_for(coro, timeout)</text>
+          <text class="lbl mono" x="12" y="84">except TimeoutError: warn, return []</text>
+          <text class="lbl mono" x="12" y="100">except Exception:    log,  return []</text>
+          <text class="lbl" x="12" y="120">deadline = contextvar · usable = 90 % of timeout</text>
+        </g>
+        <g class="at-4 lit-4" transform="translate(300 164)"><rect width="300" height="74" rx="8" class="shape" fill="var(--surface-2)" stroke="var(--line)" stroke-width="1.5"/><text class="ttl" x="12" y="22">inside the scanner</text>
+          <text class="lbl mono" x="12" y="44">budget = TimeBudget()   # inherits it</text>
+          <text class="lbl mono" x="12" y="60">for ep in endpoints: if budget.expired(): break</text>
+        </g>
+
+        <path class="wire at-2" d="M270 143 C 285 143, 285 60, 298 60" marker-end="url(#arrC)"/>
+        <path class="wire at-5 accent" d="M270 207 C 300 207, 300 280, 338 280" marker-end="url(#arrC)"/>
+        <path class="wire at-5 accent" d="M270 175 C 295 175, 295 276, 338 276"/>
+
+        <g class="at-5 lit-5" transform="translate(340 250)"><rect width="260" height="60" rx="8" class="shape" fill="var(--surface-2)" stroke="var(--line)" stroke-width="1.5"/><text class="ttl" x="12" y="22">ProgressReporter.queue</text>
+          <text class="lbl mono" x="12" y="44">emit("probing /api/x") · ("__done__", n)</text>
+        </g>
+        <path class="wire at-6 accent" d="M600 280 H 638" marker-end="url(#arrC)"/>
+        <g class="at-6 lit-6" transform="translate(640 20)"><rect width="300" height="290" rx="8" class="shape" fill="var(--surface-2)" stroke="var(--line)" stroke-width="1.5"/><text class="ttl" x="12" y="22">agent: drain loop</text>
+          <text class="lbl mono" x="12" y="46">while done &lt; total:</text>
+          <text class="lbl mono" x="24" y="62">msg, data = await queue.get()</text>
+          <text class="lbl mono" x="24" y="78">if data["_scanner_done"]:</text>
+          <text class="lbl mono" x="36" y="94">done += 1</text>
+          <text class="lbl mono" x="36" y="110">yield "name: k findings (done/total)"</text>
+          <text class="lbl mono" x="24" y="126">else: yield msg   # scanner narration</text>
+          <text class="lbl mono" x="12" y="150">await gather(*tasks)</text>
+          <text class="lbl" x="12" y="182">The reporter is a contextvar. Tasks capture</text>
+          <text class="lbl" x="12" y="198">the context at creation, so every scanner's</text>
+          <text class="lbl" x="12" y="214">emit() lands in this queue with no wiring.</text>
+          <text class="lbl" x="12" y="238">Progress advances per scanner finished,</text>
+          <text class="lbl" x="12" y="254">so one slow scanner running alone still</text>
+          <text class="lbl" x="12" y="270">narrates instead of looking hung.</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The agent announces each scanner as it launches and schedules it as a task. All of them share one asyncio event loop; concurrency comes from awaiting I/O, not threads.</p>
+      <p class="step"><span class="n">2</span>Sixteen tasks are now in flight. Each wraps its scanner's <code>scan()</code> coroutine, and each scanner sends its HTTP through the shared rate-limited client.</p>
+      <p class="step"><span class="n">3</span><code>run_scanner_safe()</code> is the wrapper. It publishes the scanner's deadline into a context variable, awaits with a hard timeout, and turns any timeout or exception into an empty result and a log line. One scanner failing never fails the scan.</p>
+      <p class="step"><span class="n">4</span>Inside the scanner, <code>TimeBudget()</code> with no argument picks up that deadline at 90% of the timeout. The per-endpoint loop checks <code>expired()</code> and returns what it has. This is why a hard cancel is now a loud failure signal rather than the normal way a scanner ends.</p>
+      <p class="step"><span class="n">5</span>Scanners narrate through <code>emit()</code>, which posts to the ambient reporter's queue. When a task completes it posts a done marker with its finding count. No scanner holds a reference to the agent.</p>
+      <p class="step"><span class="n">6</span>The agent drains the queue until every task has reported done, yielding an event per message, then gathers the tasks and concatenates their findings in list order. The same shape runs the SAST list in phase 7.</p>
+    </div>
+  </div>
+</section>
+
+<section id="events">
+  <h2>The event stream, as the CLI shows it</h2>
+  <p class="prose">A <code>DeepScanEvent</code> has four fields: phase, message, progress and a data dict. The CLI's renderer only looks at three things in the data: a <code>status</code> of start or done, a <code>scanner</code> name, and whether a <code>report</code> is present. Everything else is a sub-step line.</p>
+  <div class="scene" id="events" data-scene data-interval="2600">
+    <figure class="stage">
+      <svg viewBox="0 0 960 260" role="img" aria-label="Events arriving on the left are rendered as terminal log lines on the right: phase headers, scanner start and done lines, sub-steps, and the final report capture.">
+        <g class="node" transform="translate(20 20)"><rect width="330" height="220" rx="8"/><text class="ttl" x="12" y="22">events yielded</text>
+          <g class="mono">
+            <text class="lbl at-1" x="12" y="48">DAST_SCANNING "Running scanners" 25</text>
+            <text class="lbl at-2" x="12" y="68">… {scanner: xss, status: start}</text>
+            <text class="lbl at-3" x="12" y="88">… "probing /api/users?q=" (emit)</text>
+            <text class="lbl at-4" x="12" y="108">… {scanner: xss, findings: 3,</text>
+            <text class="lbl at-4" x="24" y="124">status: done, done: 1, total: 16}</text>
+            <text class="lbl at-5" x="12" y="150">COMPLETE "…" 100 {report: {…}}</text>
+          </g>
+          <text class="lbl" x="12" y="190">progress = base + band × done/total</text>
+          <text class="lbl" x="12" y="206">so the bar moves per scanner finished</text>
+        </g>
+        <path class="wire" d="M350 130 H 388" marker-end="url(#arrC2)"/>
+        <defs><marker id="arrC2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g transform="translate(390 20)"><rect width="550" height="220" rx="8" fill="var(--code-bg)"/>
+          <g class="log" transform="translate(16 30)" style="fill:var(--code-fg)">
+            <text class="at-1" y="0" style="fill:var(--code-muted)">  12.4s <tspan style="fill:var(--info)">▶</tspan> <tspan style="fill:var(--code-fg)">Running 16 dynamic scanners</tspan></text>
+            <text class="at-2" y="22" style="fill:var(--code-muted)">  12.4s     <tspan style="fill:var(--info)">→</tspan> xss_scanner…</text>
+            <text class="at-2" y="44" style="fill:var(--code-muted)">  12.4s     <tspan style="fill:var(--info)">→</tspan> injection_scanner…</text>
+            <text class="at-3" y="66" style="fill:var(--code-muted)">  19.0s       · probing /api/users?q=</text>
+            <text class="at-4" y="88" style="fill:var(--code-muted)">  41.2s     <tspan style="fill:var(--code-good)">✓</tspan> <tspan style="fill:var(--code-fg)">xss_scanner</tspan> <tspan style="fill:var(--code-k)">— 3 finding(s)</tspan></text>
+            <text class="at-4" y="110" style="fill:var(--code-muted)">  42.8s     <tspan style="fill:var(--code-good)">✓</tspan> cors_scanner — clean</text>
+            <text class="at-5" y="140" style="fill:var(--code-muted)">1793.5s <tspan style="fill:var(--info)">▶</tspan> <tspan style="fill:var(--code-fg)">Compiling report</tspan></text>
+            <text class="at-5" y="162" style="fill:var(--code-good)">report captured from the COMPLETE event; not printed as a log line</text>
+          </g>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>A new phase value produces a header line. The CLI tracks the last phase it printed, so a phase emits one header no matter how many events it yields.</p>
+      <p class="step"><span class="n">2</span>An event whose data says <code>status: start</code> prints an in-flight arrow for that scanner. They appear together because the launches happen before any scanner has had a chance to run.</p>
+      <p class="step"><span class="n">3</span>Any other message inside the current phase is a sub-step. These come from scanners calling <code>emit()</code> deep inside their loops, which is what keeps a long scan legible.</p>
+      <p class="step"><span class="n">4</span><code>status: done</code> prints the tick with the finding count, or "clean". The progress number is computed from how many scanners have finished, not from time.</p>
+      <p class="step"><span class="n">5</span>The last event carries the report under <code>data["report"]</code>. The CLI validates it back into a <code>DeepScanReport</code> and renders the table, JSON, HTML, SARIF or fix plan the user asked for. If no report arrives, the last error message is printed instead of a shrug.</p>
+    </div>
+  </div>
+</section>
+
+<section id="finding">
+  <h2>How a finding is assembled</h2>
+  <p class="prose">One model, <code>DeepFinding</code>, carries every result regardless of where it came from. Different stages fill different field groups, so a finding's shape tells you its history.</p>
+  <div class="scene" id="finding" data-scene data-interval="2800">
+    <figure class="stage">
+      <svg viewBox="0 0 960 300" role="img" aria-label="The DeepFinding model's field groups light up in the order stages fill them: identity, DAST evidence or SAST location, cross-reference links, triage enrichment, theme.">
+        <g class="node" transform="translate(20 20)"><rect width="420" height="260" rx="8"/><text class="ttl" x="12" y="22">DeepFinding</text>
+          <g class="mono">
+            <g class="fld at-1"><text class="lbl" x="12" y="48">id · source · scanner_name · confidence</text><text class="lbl" x="12" y="64">category · severity · title · description</text><text class="lbl" x="12" y="80">technical_detail · evidence · remediation_guidance</text></g>
+            <g class="fld at-2"><text class="t-attacker" x="12" y="106">endpoint_url · http_method · request_payload</text><text class="t-attacker" x="12" y="122">response_preview · baseline_response_preview</text><text class="t-attacker" x="12" y="138">probe_captures[] (curl-reproducible)</text></g>
+            <g class="fld at-3"><text class="t-info" x="12" y="164">code_location { file_path, line_number, snippet, github_url }</text></g>
+            <g class="fld at-4"><text class="t-accent" x="12" y="190">related_finding_ids[]</text></g>
+            <g class="fld at-5"><text class="t-safe" x="12" y="216">impact · likelihood · priority 1–4</text><text class="t-safe" x="12" y="232">theme_id</text></g>
+          </g>
+          <text class="lbl" x="12" y="262">fields a stage did not fill stay None or empty</text>
+        </g>
+        <g transform="translate(470 20)">
+          <g class="node lit-1"><rect width="470" height="40" rx="6"/><text x="12" y="25">1 · the scanner that found it (DAST or SAST)</text></g>
+          <g class="node lit-2" transform="translate(0 52)"><rect width="470" height="40" rx="6"/><text x="12" y="25">2 · DAST evidence: the request, both responses, captures</text></g>
+          <g class="node lit-3" transform="translate(0 104)"><rect width="470" height="40" rx="6"/><text x="12" y="25">3 · SAST location, with a GitHub permalink when the repo is remote</text></g>
+          <g class="node lit-4" transform="translate(0 156)"><rect width="470" height="40" rx="6"/><text x="12" y="25">4 · cross-reference and guided DAST link findings to each other</text></g>
+          <g class="node lit-5" transform="translate(0 208)"><rect width="470" height="40" rx="6"/><text x="12" y="25">5 · triage adds impact, likelihood, priority and a theme</text></g>
+          <text class="lbl" x="0" y="272">A stable fingerprint (identity.py) survives re-scans, so baselines and suppressions work.</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Every finding starts with identity: which scanner raised it, its source (DAST, SAST, LLM, guided, cross-reference), category, severity, confidence, and the three text registers: plain description, technical detail, remediation.</p>
+      <p class="step"><span class="n">2</span>A dynamic finding attaches the request it sent and the response it got. Borderline injection findings also keep the baseline response, which is what the adjudicator later compares against. Probe captures make the finding reproducible with curl.</p>
+      <p class="step"><span class="n">3</span>A static finding attaches a code location. When the repository is remote the location includes a permalink at the scanned commit, so the report links straight to the line.</p>
+      <p class="step"><span class="n">4</span>Correlation stages link findings by id rather than merging them: a confirmed cross-reference finding and a guided-DAST finding both point back at what produced them.</p>
+      <p class="step"><span class="n">5</span>Triage fills the last group. Impact and likelihood come from the model, priority from the matrix, and each finding is assigned to a theme the owner summary groups by.</p>
+    </div>
+  </div>
+</section>
+
+<section id="protocols">
+  <h2>Protocols: what a new scanner has to be</h2>
+  <p class="prose">The engine depends on interfaces, not implementations. Each is a <code>typing.Protocol</code>, so a class satisfies it by shape with no inheritance.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Protocol</th><th>Lives in</th><th>Shape</th><th>Implemented by</th></tr></thead>
+    <tbody>
+      <tr><td><code>DASTScannerProtocol</code></td><td>engine/scanners/protocols.py</td><td><code>scanner_name</code>, <code>scan_categories</code>, <code>async scan(endpoints, snapshot) → list[DeepFinding]</code></td><td>16 standard DAST scanners (+3 at deep)</td></tr>
+      <tr><td><code>CodeScannerProtocol</code></td><td>engine/code_analysis/protocols.py</td><td><code>async scan(repo_snapshot) → list[CodeFinding]</code></td><td>18 SAST analyzers (+1 with an LLM)</td></tr>
+      <tr><td><code>RouteMapperProtocol</code></td><td>engine/code_analysis/route_mapper.py</td><td>files → <code>list[RouteEntry]</code> with methods, pattern, <code>has_auth_check</code>, <code>handler_source</code></td><td>Next.js, Express, tRPC, GraphQL, Django, FastAPI, Spring, Go</td></tr>
+      <tr><td><code>GuidedDASTStrategy</code></td><td>engine/guided_dast/protocols.py</td><td>SAST finding → generated request → finding</td><td>6 strategies</td></tr>
+      <tr><td><code>AuthProviderProtocol</code></td><td>engine/auth/protocols.py</td><td>credentials → <code>AuthSession</code> (headers, cookie, user id)</td><td>Supabase, Firebase, browser, REST token</td></tr>
+      <tr><td><code>LLMClientProtocol</code></td><td>llm/protocol.py</td><td>prompt in, text out, token accounting</td><td>Anthropic, Google adapters</td></tr>
+    </tbody>
+  </table></div>
+  <div class="two">
+    <div class="callout fix"><div class="label">Adding a DAST scanner</div><p>Write a class with the three members above, append it to <code>dast_scanners</code> in the factory, and check <code>budget.expired()</code> at the top of any loop over endpoints. Add a doc under <code>docs/scanners/</code>. Nothing in the agent changes.</p></div>
+    <div class="callout note"><div class="label">Why special scanners have named slots</div><p>IDOR, JWT, RLS deep and privilege escalation need sessions, keys or two users, so their <code>scan()</code> signatures differ from the protocol. They are injected individually and called by the phases that hold the inputs they need.</p></div>
+  </div>
+</section>
+
+<section id="package">
+  <h2>Package map</h2>
+  <div class="two">
+<pre class="tree"><code>isitsecure/
+├── cli/            scan · fix · badge · launch · mcp · setup (Typer)
+│   └── run.py      drives agent.scan() and narrates the log
+├── server/app.py   FastAPI: POST /api/scan → SSE; bundled UI in static/
+├── mcp_server.py   stdio MCP: scan · explain · fix · verify · export · scan_url
+├── llm/            LLMClientProtocol + Anthropic / Google adapters
+└── engine/
+    ├── agent.py            the 19 phases and scan()
+    ├── scan_context.py     the 27 fields that cross a phase boundary
+    ├── factory.py          all wiring; the only place concrete classes meet
+    ├── models.py enums.py  DeepFinding, DeepScanReport, DeepScanEvent …
+    ├── identity.py         stable finding fingerprint
+    ├── suppression.py      .isitsecureignore
+    ├── baseline.py         show only new findings
+    ├── reverify.py         per-finding re-check
+    ├── cross_referencer.py DAST ↔ SAST pairing
+    ├── ingestion/          URL snapshot (Playwright → httpx fallback)
+    ├── scanners/           DAST scanners + endpoint discovery + crawler
+    ├── code_analysis/      SAST analyzers, route mappers, lsp/, semgrep_rules/
+    ├── guided_dast/        route↔endpoint matcher, runner, 6 strategies
+    ├── auth/               Supabase · Firebase · browser · REST token providers
+    ├── shared/             rate limiter, OOB callbacks, time budget, progress
+    ├── triage/             LLM triage, priority matrix, injection adjudicator
+    ├── reporting/          JSON · HTML · SARIF · plain-English grading
+    └── fixes/              safety net, apply, verify, PR flow</code></pre>
+    <div>
+      <div class="callout note"><div class="label">One rule per directory</div><p><b>scanners/</b> and <b>code_analysis/</b> contain only things that produce findings. <b>shared/</b> contains only things more than one scanner needs. <b>triage/</b> and <b>reporting/</b> never talk to a target or a repository. <b>factory.py</b> is the only module allowed to import everything.</p></div>
+      <div class="callout why"><div class="label">Where to look when something is wrong</div><ul><li>A scanner found nothing it should have: its module, then <code>endpoint_discovery.py</code> (did it know the endpoint?).</li><li>A scan silently lost findings: <code>shared/scanner_runner.py</code> and the scanner's budget checks.</li><li>A false positive survived: <code>triage/injection_adjudicator.py</code> or <code>code_analysis/lsp/</code>.</li><li>Dedup merged too much or too little: <code>RemediationScope</code> in <code>enums.py</code>.</li></ul></div>
+    </div>
+  </div>
+</section>
+
+<section id="degrade">
+  <h2>Graceful degradation</h2>
+  <p class="prose">The engine runs at any completeness level. The interactive version of this table, where you toggle inputs and watch phases switch off, is on the <a href="scan-pipeline.html#degrade">pipeline page</a>.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Missing</th><th>What happens</th></tr></thead>
+    <tbody>
+      <tr><td>LLM API key</td><td>Rule-based scanners only. No code review, semantic verification, adjudication or triage enrichment. Dedup still runs.</td></tr>
+      <tr><td>Playwright</td><td>URL ingestion falls back to httpx. No authenticated browser crawl, no DOM XSS.</td></tr>
+      <tr><td>Language server for the project's language</td><td>LSP validation skipped. More false positives on missing-auth. A server for a different language is never substituted.</td></tr>
+      <tr><td>Repository URL</td><td>SAST, cross-reference and guided DAST skipped. DAST-only scan.</td></tr>
+      <tr><td>Repository fails to clone</td><td>Code-only: scan stops, exit 1, no report. Full: DAST findings kept, the reason recorded in <code>ingestion_errors</code>, exit 1. A zero-finding report must never read as clean.</td></tr>
+      <tr><td>Target URL</td><td>SAST-only scan.</td></tr>
+      <tr><td>Credentials</td><td>Authenticated scanners skipped. No cross-user IDOR, no privilege escalation.</td></tr>
+      <tr><td><code>semgrep</code> binary</td><td>Taint analyzer no-ops. Injection detection rests on the LLM layer.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<footer class="foot">
+  <span>Source: <a href="../architecture.md">docs/architecture.md</a> · <code>isitsecure/engine/agent.py</code> · <code>factory.py</code> · <code>scan_context.py</code></span>
+  <span>Related: <a href="scan-pipeline.html">The scan pipeline</a> · <a href="sast-dast-correlation.html">Correlation</a> · <a href="triage-and-grading.html">Triage</a> · <a href="mcp-loop.html">MCP loop</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script>
+// Context data-flow grid. Generated from isitsecure/engine/agent.py by walking each
+// _phase_* method's AST for ctx.<field> reads and writes (see the orchestrator session
+// notes); re-run that script if phases change.
+(function () {
+  const GROUPS = [
+    ["inputs", ["mode", "target_url", "repo_url", "repo_branch", "github_token", "credentials_a", "credentials_b"]],
+    ["control", ["aborted"]],
+    ["ingested", ["snapshot", "endpoints", "supabase_url", "anon_key", "tables", "repo_snapshot", "ingestion_errors"]],
+    ["sessions", ["session_a", "session_b", "crawl_result", "oob_service", "lsp_initialized"]],
+    ["results", ["all_findings", "scanners_run", "idor_results", "sast_code_findings", "auth_flow_results", "owner_summary", "themes"]],
+  ];
+  const PHASES = [
+    ["scan()", "scan() builds the context", {w: ["mode","target_url","repo_url","repo_branch","github_token","credentials_a","credentials_b"]},
+      "Before any phase runs, <code>scan()</code> detects the mode from what was provided and writes the seven inputs into a fresh <code>ScanContext</code>. Nothing else is set yet."],
+    ["1 url", "URL ingestion", {r: ["mode","target_url"], w: ["snapshot","aborted"]},
+      "Playwright (or httpx) captures the page into <code>snapshot</code>. If the target cannot be reached the phase sets <code>aborted</code>, and <code>scan()</code> returns without running anything else."],
+    ["2 disc", "Endpoint discovery", {r: ["snapshot","target_url","credentials_a"], w: ["endpoints","supabase_url","anon_key","tables"]},
+      "Reads the snapshot's bundles and writes the endpoint inventory. If a Supabase project is referenced, its URL, anon key and tables are extracted here, because three later phases need them."],
+    ["3 crawl", "Authenticated crawl", {r: ["credentials_a","credentials_b","mode","target_url"], w: ["session_a","session_b","crawl_result","endpoints","tables"]},
+      "Logs in as each user, writes their sessions, and appends the endpoints and tables seen behind the login wall. The crawl result carries the owned resource ids the IDOR pass will harvest."],
+    ["3.5 oob", "OOB registration", {r: ["crawl_result","endpoints","session_a","mode","target_url"], w: ["oob_service"]},
+      "Registers callback URLs and posts them into URL-shaped body fields using the session. The service handle is kept so collection can poll it later."],
+    ["4 dast", "DAST scanners", {r: ["endpoints","snapshot","session_a","crawl_result","supabase_url","anon_key","tables","mode","target_url"], w: ["all_findings","idor_results","scanners_run"]},
+      "The parallel list reads endpoints and the snapshot; the IDOR scanner also gets the session for its mutation probes, and anon RLS runs here when no authenticated pass will. First writes to the findings list."],
+    ["5 auth", "Authenticated DAST", {r: ["session_a","session_b","endpoints","snapshot","supabase_url","anon_key","tables","crawl_result","mode","target_url"], w: ["all_findings","scanners_run"]},
+      "JWT, RLS deep, privilege escalation and cross-user IDOR all need both sessions. They read everything discovery and the crawl produced and append findings."],
+    ["5.5 probe", "Cross-probe analysis", {rw: ["all_findings"], w: ["scanners_run"]},
+      "Reads only the findings list: it looks across the HTTP captures the scanners attached to their findings for patterns no single scanner sees, and appends what it finds."],
+    ["5.6 oob", "OOB collection", {r: ["oob_service"], w: ["all_findings","scanners_run"]},
+      "Polls the callback service registered in 3.5. A hit becomes a blind SSRF or injection finding."],
+    ["6 repo", "Repo ingestion", {r: ["repo_url","repo_branch","github_token","mode"], w: ["repo_snapshot","ingestion_errors","aborted"]},
+      "Clones and indexes the repository into <code>repo_snapshot</code>. A clone failure is recorded in <code>ingestion_errors</code>; in code-only mode it also aborts, so a clean-looking empty report is never produced."],
+    ["6.5 lsp", "LSP initialisation", {r: ["repo_snapshot","mode"], w: ["lsp_initialized"]},
+      "Starts the language server for the detected language and records whether it came up. Validation later checks this flag rather than the client."],
+    ["7 sast", "SAST scanners", {r: ["repo_snapshot","mode"], w: ["all_findings","sast_code_findings","scanners_run"]},
+      "The parallel analyzer list reads the indexed repo and writes two things: unified findings, and the raw <code>CodeFinding</code> list that validation, review and guided DAST consume."],
+    ["7.5 val", "LSP validation", {r: ["repo_snapshot","lsp_initialized"], rw: ["all_findings","sast_code_findings"], w: ["auth_flow_results","scanners_run"]},
+      "Traces each auth guard to its definition and <b>removes</b> findings it disproves from both lists, matched per route. The trace results are kept for the LLM reviewer's context."],
+    ["8 llm", "LLM code review", {r: ["repo_snapshot","sast_code_findings","auth_flow_results","mode"], w: ["all_findings","scanners_run"]},
+      "Selects routes by the five triggers, using the SAST findings to spot routes flagged by two scanners, and appends what the model finds."],
+    ["9 xref", "Cross-reference", {r: ["mode"], rw: ["all_findings"]},
+      "Pairs DAST and SAST findings by category and appends confirmed findings alongside the originals."],
+    ["9.1 guided", "SAST-guided DAST", {r: ["sast_code_findings","endpoints","repo_snapshot","mode"], w: ["all_findings","scanners_run"]},
+      "Reads code findings and the endpoint inventory, maps route files to live URLs, fires generated tests, and appends their findings."],
+    ["9.2 logic", "LLM business logic", {r: ["endpoints","repo_snapshot","session_a","session_b","target_url","mode"], w: ["all_findings","scanners_run"]},
+      "Plans flow-level attacks against the live app using the sessions, and appends confirmed ones."],
+    ["9.4 adj", "Injection adjudication", {rw: ["all_findings"], w: ["scanners_run"]},
+      "Reads only the findings list. For each borderline DAST injection finding it compares the baseline and injected responses and <b>removes</b> the ones judged benign. A strict no-op without an LLM."],
+    ["9.5 triage", "Triage", {r: ["mode","repo_url","target_url"], rw: ["all_findings"], w: ["owner_summary","themes","scanners_run"]},
+      "Deduplicates the findings list in place, enriches and calibrates with the LLM when present, and writes the owner summary and themes."],
+    ["10 report", "Report", {r: ["all_findings","endpoints","idor_results","repo_snapshot","snapshot","supabase_url","owner_summary","themes","scanners_run","ingestion_errors","mode","target_url","repo_url","lsp_initialized"]},
+      "Back in <code>scan()</code>: the report is assembled from the context, sorted, and yielded in the final COMPLETE event. Then the language server is shut down."],
+  ];
+  const svg = document.getElementById("dfd-svg"), steps = document.getElementById("dfd-steps");
+  const NS = "http://www.w3.org/2000/svg";
+  const labelW = 190, cellW = 36, cellH = 17, top = 86, grpGap = 10;
+  const rows = []; let y = top;
+  GROUPS.forEach(([g, fields]) => { rows.push({grp: g, y}); y += 14; fields.forEach(f => { rows.push({field: f, y}); y += cellH; }); y += grpGap; });
+  const H = y + 30, W = labelW + PHASES.length * cellW + 44;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const el = (t, a, txt) => { const e = document.createElementNS(NS, t); for (const k in a) e.setAttribute(k, a[k]); if (txt != null) e.textContent = txt; svg.appendChild(e); return e; };
+  // column backgrounds + heads
+  PHASES.forEach((p, i) => {
+    const x = labelW + i * cellW;
+    el("rect", {class: "colbg", "data-col": i, x, y: top - 4, width: cellW, height: y - top - grpGap + 4, rx: 4});
+    const t = el("text", {class: "colhead", "data-col": i, x: x + cellW / 2 - 4, y: top - 8, "text-anchor": "start", transform: `rotate(-55 ${x + cellW / 2 - 4} ${top - 8})`}, p[0]);
+  });
+  rows.forEach(r => {
+    if (r.grp) { el("text", {class: "grp", x: 0, y: r.y + 10}, r.grp.toUpperCase()); return; }
+    el("text", {class: "rowlab", x: 0, y: r.y + 12}, r.field);
+    PHASES.forEach((p, i) => {
+      const x = labelW + i * cellW; const io = p[2];
+      let kind = io.rw && io.rw.includes(r.field) ? "rw" : io.w && io.w.includes(r.field) ? "w" : io.r && io.r.includes(r.field) ? "r" : "";
+      el("rect", {class: "cell " + kind, x: x + 1, y: r.y, width: cellW - 2, height: cellH - 1, rx: 2});
+      if (kind) el("text", {class: "cell " + kind, x: x + cellW / 2, y: r.y + 12}, kind.toUpperCase());
+    });
+  });
+  const lg = el("g", {class: "legend", transform: `translate(0 ${H - 10})`});
+  [["r", "R  reads"], ["w", "W  writes / appends"], ["rw", "RW  rewrites in place"]].forEach(([k, label], i) => {
+    const r = document.createElementNS(NS, "rect"); r.setAttribute("class", "cell " + k); r.setAttribute("x", i * 170); r.setAttribute("y", -11); r.setAttribute("width", 14); r.setAttribute("height", 12); r.setAttribute("rx", 2); lg.appendChild(r);
+    const t = document.createElementNS(NS, "text"); t.setAttribute("x", i * 170 + 20); t.setAttribute("y", -1); t.textContent = label; lg.appendChild(t);
+  });
+  svg.setAttribute("aria-label", "ScanContext fields against phases: " + PHASES.map(p => p[1]).join(", "));
+  // captions
+  PHASES.forEach((p, i) => { const s = document.createElement("p"); s.className = "step"; s.innerHTML = `<span class="n">${p[0].toUpperCase()}</span><b>${p[1]}.</b> ${p[3]}`; steps.appendChild(s); });
+  // highlight current column on step change
+  document.getElementById("dfd").addEventListener("step", e => {
+    const i = e.detail.index - 1;
+    svg.querySelectorAll("[data-col]").forEach(n => n.classList.toggle("cur", +n.dataset.col === i));
+  });
+})();
+</script>
+<script src="assets/isdoc.js"></script>
+<script>
+  // the scene engine initialised after the grid was built; set initial column highlight
+  (function(){ const s = document.getElementById("dfd"); if (s) s.dispatchEvent(new CustomEvent("step", {detail: {index: 1}})); })();
+</script>
+</body>
+</html>

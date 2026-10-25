@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Firebase Rules Analyzer · isitsecure</title>
+<meta name="description" content="How isitsecure reads Firestore, Storage and Realtime Database rules: open rules, missing auth tests and wildcards, walked line by line, and one rule evaluated against a sample request. Animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  .code text { white-space: pre; }
+  #rules .panel > rect, #rtdb .panel > rect { fill: var(--surface); }
+  #req .box > rect { transition: fill .35s, stroke .35s; }
+  #req[data-step="1"] .dec > rect, #req[data-step="3"] .dec > rect { fill: var(--attacker-soft); }
+  #req[data-step="2"] .dec > rect, #req[data-step="4"] .dec > rect { fill: var(--safe-soft); }
+  .topbar-inner .crumb a { color: inherit; text-decoration: none; }
+  .topbar-inner .crumb a:hover { color: var(--accent); }
+  footer.foot span { min-width: 0; overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› <a href="group-schema-middleware.html">Schemas and middleware</a> › Firebase rules</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/firebase-rules-analyzer.md" title="The markdown source for this page">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">SAST scanner · reads the rules files</div>
+  <h1>Firebase Rules Analyzer</h1>
+  <p class="lede">With Firebase the rules file is the whole server-side access control: the browser talks to the database directly, so a permissive rule is an open database. The analyzer reads <code>firestore.rules</code>, <code>storage.rules</code> and <code>database.rules.json</code> as text and reports rules that grant everything, rules with no auth test and broad wildcards.</p>
+  <div class="meta">
+    <span class="pill sast">SAST</span><span class="pill crit">up to Critical</span><span class="pill">Auth Weakness</span><span class="pill">3 file types</span><span class="pill">repository only</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#rules"><span class="n">01</span>A rules file, line by line</a>
+  <a href="#rtdb"><span class="n">02</span>Realtime Database</a>
+  <a href="#request"><span class="n">03</span>One rule, one request</a>
+  <a href="#why"><span class="n">04</span>Why it matters</a>
+  <a href="#code"><span class="n">05</span>Vulnerable vs fixed rules</a>
+  <a href="#limits"><span class="n">06</span>Limits and scope</a>
+</nav>
+<section id="rules">
+  <h2>A rules file, line by line</h2>
+  <p class="prose">The scanner is the only actor and the target is a text file. Each step shows the pattern it runs, the line that answers it and the severity that comes back.</p>
+  <div class="scene" id="rules" data-scene data-interval="4000">
+    <figure class="stage">
+      <svg viewBox="0 0 960 326" role="img" aria-label="A firestore.rules file on the left with one line highlighted per step and, on the right, the regular expression tested, the result and its severity.">
+
+
+        <g class="node panel"><rect x="20" y="14" width="400" height="296" rx="10"/></g>
+        <rect class="only-1 soft-info" x="26" y="26" width="388" height="20" rx="4"/><rect class="only-2 soft-attacker" x="26" y="92" width="388" height="20" rx="4"/><rect class="only-3 soft-attacker" x="26" y="158" width="388" height="20" rx="4"/><rect class="only-4 soft-safe" x="26" y="180" width="388" height="20" rx="4"/><rect class="only-5 soft-accent" x="26" y="202" width="388" height="20" rx="4"/><rect class="only-6 soft-accent" x="26" y="246" width="388" height="20" rx="4"/>
+        <g class="mono code" style="white-space:pre">
+          <text x="36" y="40">service cloud.firestore {</text>
+          <text x="36" y="62">  match /databases/{database}/documents {</text>
+          <text x="36" y="84">    match /users/{userId} {</text>
+          <text x="36" y="106">      allow read, write: if true;</text>
+          <text x="36" y="128">    }</text>
+          <text x="36" y="150">    match /posts/{postId} {</text>
+          <text x="36" y="172">      allow read: if true;</text>
+          <text x="36" y="194">      allow write: if request.auth != null;</text>
+          <text x="36" y="216">      allow delete: if isAdmin();</text>
+          <text x="36" y="238">    }</text>
+          <text x="36" y="260">    match /{document=**} {</text>
+          <text x="36" y="282">      allow read: if request.auth != null;</text>
+        </g>
+        <g class="node panel"><rect x="440" y="14" width="500" height="296" rx="10"/></g>
+<g class="only-1">
+          <text class="lbl" x="458" y="40">which file, which service</text>
+          <text class="mono" x="458" y="64">firestore.rules  storage.rules</text>
+          <text class="mono" x="458" y="84">database.rules.json</text>
+          <text class="lbl" x="458" y="128">content has "service cloud.firestore": Firestore</text>
+          <text class="lbl" x="458" y="147">"service firebase.storage": Storage; a .json file: Realtime Database</text>
+          <text class="lbl" x="458" y="166">these rules are the only access control: there is no backend to patch</text>
+          <text class="ttl t-info" x="458" y="244" style="font-size:16px">Firestore rules file, 12 lines read</text>
+          <text class="lbl" x="458" y="268">no finding yet: this step only classifies the file</text>
+        </g>
+<g class="only-2">
+          <text class="lbl" x="458" y="40">pattern tested</text>
+          <text class="mono" x="458" y="64">allow\s+read\s*,\s*write\s*:\s*if\s+true</text>
+          <text class="lbl" x="458" y="128">matches line 4: read and write, with no condition at all</text>
+          <text class="lbl" x="458" y="147">reported once per file, with the first matching line number</text>
+          <text class="lbl" x="458" y="166">the user path does not matter: anyone on the internet qualifies</text>
+          <text class="ttl t-attacker" x="458" y="244" style="font-size:16px">CRITICAL · 0.95</text>
+          <text class="lbl" x="458" y="268">Firebase Firestore rules allow unrestricted access</text>
+        </g>
+<g class="only-3">
+          <text class="lbl" x="458" y="40">pattern tested</text>
+          <text class="mono" x="458" y="64">allow\s+read\s*:\s*if\s+true</text>
+          <text class="lbl" x="458" y="128">matches line 7: reads are open, writes are not</text>
+          <text class="lbl" x="458" y="147">a separate pattern does the same for write alone</text>
+          <text class="lbl" x="458" y="166">the comma form on line 4 cannot match this one, so there is no double count</text>
+          <text class="ttl t-attacker" x="458" y="244" style="font-size:16px">HIGH · 0.95</text>
+          <text class="lbl" x="458" y="268">Firebase Firestore rules allow unrestricted access</text>
+        </g>
+<g class="only-4">
+          <text class="lbl" x="458" y="40">auth pattern</text>
+          <text class="mono" x="458" y="64">request\.auth\s*!=\s*null</text>
+          <text class="mono" x="458" y="84">|request\.auth\.uid</text>
+          <text class="lbl" x="458" y="128">looked at line 8 and the two lines after it</text>
+          <text class="lbl" x="458" y="147">found request.auth != null, so the line is accepted</text>
+          <text class="lbl" x="458" y="166">any signed-in user can write any post: that is not reported</text>
+          <text class="ttl t-accent" x="458" y="244" style="font-size:16px">no finding</text>
+          <text class="lbl" x="458" y="268">silent by design: the check asks if an auth test exists, not what it tests</text>
+        </g>
+<g class="only-5">
+          <text class="lbl" x="458" y="40">pattern tested</text>
+          <text class="mono" x="458" y="64">allow\s+(?:read|write|create|update|delete)\s*:</text>
+          <text class="lbl" x="458" y="128">line 9 and the next two lines hold no request.auth</text>
+          <text class="lbl" x="458" y="147">isAdmin() may check auth inside its definition: not followed</text>
+          <text class="lbl" x="458" y="166">the scanner reads text, so a helper hides the check from it</text>
+          <text class="ttl t-attacker" x="458" y="244" style="font-size:16px">HIGH · 0.85</text>
+          <text class="lbl" x="458" y="268">Firebase Firestore rule missing authentication check</text>
+        </g>
+<g class="only-6">
+          <text class="lbl" x="458" y="40">pattern tested</text>
+          <text class="mono" x="458" y="64">match\s+/\{[^}]+=\*\*\}</text>
+          <text class="lbl" x="458" y="128">line 11 is a catch-all: every path not matched deeper falls under it</text>
+          <text class="lbl" x="458" y="147">the allow inside accepts any signed-in user, so only the wildcard is reported</text>
+          <text class="lbl" x="458" y="166">reported once per wildcard match, with its line number</text>
+          <text class="ttl t-accent" x="458" y="244" style="font-size:16px">MEDIUM · 0.75</text>
+          <text class="lbl" x="458" y="268">Firebase Firestore rule uses broad wildcard</text>
+        </g>
+
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The scanner picks a file whose path ends in <code>firestore.rules</code>, <code>storage.rules</code> or <code>database.rules.json</code>, then decides which service it is from the text. <b>Rules are the only access control</b>, because a Firebase client talks to the database directly.</p>
+      <p class="step"><span class="n">2</span>Pattern one is the literal <code>allow read, write: if true</code>. <b>Critical, 0.95</b>: anyone, signed in or not, can read and write whatever this match block covers.</p>
+      <p class="step"><span class="n">3</span>Pattern two is <code>allow read: if true</code> on its own; a third does the same for write. <b>High, 0.95</b> for each, once per file. Open reads leak data but cannot be used to plant it.</p>
+      <p class="step"><span class="n">4</span>Every other <code>allow</code> line is checked for an auth test in a three-line window. <code>request.auth != null</code> satisfies it, so <b>line 8 is accepted even though any signed-in user may write any post</b>.</p>
+      <p class="step"><span class="n">5</span><code>allow delete: if isAdmin()</code> has no <code>request.auth</code> within three lines. <b>High, 0.85.</b> The check is textual: it does not follow <code>isAdmin()</code> to its definition, so a helper that does verify auth is still reported.</p>
+      <p class="step"><span class="n">6</span>A <code>match /{document=**}</code> catch-all is reported at <b>Medium, 0.75</b>, because it may expose collections the author never meant to cover. The rule inside it is a plain auth check, so nothing else fires here.</p>
+    </div>
+  </div>
+</section>
+
+<section id="rtdb">
+  <h2>Realtime Database</h2>
+  <p class="prose">The older database keeps its rules in JSON. The analyzer treats the file as text and looks for exactly two shapes.</p>
+  <div class="scene" id="rtdb" data-scene data-interval="3800">
+    <figure class="stage">
+      <svg viewBox="0 0 960 326" role="img" aria-label="A database.rules.json file with its open read rule highlighted as Critical and its string-expression rules left alone.">
+
+
+        <g class="node panel"><rect x="20" y="14" width="400" height="296" rx="10"/></g>
+        <rect class="only-1 soft-info" x="26" y="26" width="388" height="20" rx="4"/><rect class="only-2 soft-attacker" x="26" y="70" width="388" height="20" rx="4"/><rect class="only-3 soft-info" x="26" y="92" width="388" height="20" rx="4"/><rect class="only-3 soft-info" x="26" y="136" width="388" height="20" rx="4"/>
+        <g class="mono code" style="white-space:pre">
+          <text x="36" y="40">{</text>
+          <text x="36" y="62">  "rules": {</text>
+          <text x="36" y="84">    ".read": true,</text>
+          <text x="36" y="106">    ".write": "auth != null",</text>
+          <text x="36" y="128">    "users": {</text>
+          <text x="36" y="150">      "$uid": { ".read": "$uid === auth.uid" }</text>
+          <text x="36" y="172">    }</text>
+          <text x="36" y="194">  }</text>
+          <text x="36" y="216">}</text>
+        </g>
+        <g class="node panel"><rect x="440" y="14" width="500" height="296" rx="10"/></g>
+<g class="only-1">
+          <text class="lbl" x="458" y="40">which file, which service</text>
+          <text class="mono" x="458" y="64">database.rules.json</text>
+          <text class="lbl" x="458" y="128">a .json file is Realtime Database, whatever it contains</text>
+          <text class="lbl" x="458" y="147">the file is not parsed as JSON: the scanner runs two regular expressions on its text</text>
+          <text class="lbl" x="458" y="166">nested paths such as users/$uid are never walked</text>
+          <text class="ttl t-info" x="458" y="244" style="font-size:16px">Realtime Database rules, 9 lines read</text>
+          <text class="lbl" x="458" y="268">no finding yet: this step only classifies the file</text>
+        </g>
+<g class="only-2">
+          <text class="lbl" x="458" y="40">pattern tested</text>
+          <text class="mono" x="458" y="64">"\.read"\s*:\s*true</text>
+          <text class="lbl" x="458" y="128">matches line 3: the whole database is readable by anyone</text>
+          <text class="lbl" x="458" y="147">the same file would also raise a second finding for ".write": true</text>
+          <text class="lbl" x="458" y="166">open read is Critical here, High in a Firestore file</text>
+          <text class="ttl t-attacker" x="458" y="244" style="font-size:16px">CRITICAL · 0.95</text>
+          <text class="lbl" x="458" y="268">Firebase Realtime Database rules allow unrestricted access</text>
+        </g>
+<g class="only-3">
+          <text class="lbl" x="458" y="40">what stays silent</text>
+          <text class="mono" x="458" y="64">".write": "auth != null"</text>
+          <text class="mono" x="458" y="84">".read": "$uid === auth.uid"</text>
+          <text class="lbl" x="458" y="128">only the literal true is matched, a string expression is not evaluated</text>
+          <text class="lbl" x="458" y="147">so these conditions are never judged, good or bad</text>
+          <text class="lbl" x="458" y="166">one finding for the file, on line 3</text>
+          <text class="ttl t-accent" x="458" y="244" style="font-size:16px">1 finding</text>
+          <text class="lbl" x="458" y="268">an expression that is too broad, such as auth != null, passes unseen</text>
+        </g>
+
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>A path ending in <code>.json</code> is treated as Realtime Database rules. <b>The text is searched, not parsed</b>, so the nesting of the rule tree plays no part.</p>
+      <p class="step"><span class="n">2</span><code>".read": true</code> grants the whole tree to the internet. <b>Critical, 0.95.</b> A literal <code>".write": true</code> would be a second Critical finding.</p>
+      <p class="step"><span class="n">3</span>Rules written as strings, <code>"auth != null"</code> or <code>"$uid === auth.uid"</code>, are never matched. <b>Only the boolean literal true is flagged</b>, so a too-broad expression is not reported here.</p>
+    </div>
+  </div>
+</section>
+
+<section id="request">
+  <h2>One rule, one request</h2>
+  <p class="prose">A rule is a condition that Firebase evaluates against each request. Here is the same document read four times, with the verdict Firebase gives and the verdict isitsecure gives on the file. They differ in step 3, and that difference is what the check does not cover.</p>
+  <div class="scene" id="req" data-scene data-interval="4200">
+    <figure class="stage">
+      <svg viewBox="0 0 960 326" role="img" aria-label="A client request on the left, a Firestore rule in the middle and Firebase's allow or deny decision on the right, with the scanner's verdict on the rule file below.">
+        <defs><marker id="arr-fb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+
+        <g class="node box"><rect x="20" y="24" width="250" height="140" rx="10"/>
+          <text class="ttl" x="36" y="50">Request</text>
+          <g class="until-3"><text x="36" y="78">Anonymous visitor</text><text class="mono" x="36" y="100">no token</text><text class="mono" x="36" y="120">request.auth = null</text></g>
+          <g class="at-3"><text x="36" y="78">Bob, signed in</text><text class="mono" x="36" y="100">uid = bob</text><text class="mono" x="36" y="120">request.auth.uid = bob</text></g>
+          <text class="mono" x="36" y="148">get /users/alice</text>
+        </g>
+
+        <g class="node box"><rect x="330" y="24" width="300" height="140" rx="10"/>
+          <text class="ttl" x="346" y="50">Rule on /users/{userId}</text>
+          <g class="mono only-1"><text x="346" y="78">allow read: if true;</text><text class="lbl" x="346" y="120">evaluates to  true</text></g>
+          <g class="mono only-2"><text x="346" y="78">allow read:</text><text x="346" y="98">  if request.auth != null;</text><text class="lbl" x="346" y="120">null != null  is  false</text></g>
+          <g class="mono only-3"><text x="346" y="78">allow read:</text><text x="346" y="98">  if request.auth != null;</text><text class="lbl" x="346" y="120">bob != null  is  true</text></g>
+          <g class="mono only-4"><text x="346" y="78">allow read: if request.auth != null</text><text x="346" y="98">  &amp;&amp; request.auth.uid == userId;</text><text class="lbl" x="346" y="120">bob == alice  is  false</text></g>
+        </g>
+        <g class="node box dec"><rect x="690" y="24" width="250" height="140" rx="10"/>
+          <text class="ttl" x="706" y="50">Firestore decision</text>
+          <g class="only-1"><text class="t-attacker" x="706" y="86" style="font-weight:600;font-size:15px">ALLOWED</text><text class="lbl" x="706" y="110">document returned to anyone</text></g>
+          <g class="only-2"><text class="t-safe" x="706" y="86" style="font-weight:600;font-size:15px">DENIED</text><text class="lbl" x="706" y="110">permission-denied</text></g>
+          <g class="only-3"><text class="t-attacker" x="706" y="86" style="font-weight:600;font-size:15px">ALLOWED</text><text class="lbl" x="706" y="110">Bob reads Alice's document</text></g>
+          <g class="only-4"><text class="t-safe" x="706" y="86" style="font-weight:600;font-size:15px">DENIED</text><text class="lbl" x="706" y="110">only the owner passes</text></g>
+        </g>
+        <path id="req-w1" class="wire" d="M270 94 H 330" marker-end="url(#arr-fb)"/>
+        <path id="req-w2" class="wire" d="M630 94 H 690" marker-end="url(#arr-fb)"/>
+
+        <g class="node box"><rect x="20" y="190" width="920" height="120" rx="10"/>
+          <text class="ttl" x="36" y="216">What isitsecure says about the rule</text>
+          <text class="lbl" x="36" y="238">It reads the rules file only. It never sends this request.</text>
+          <g class="only-1"><text class="t-attacker" x="36" y="268" style="font-weight:600">HIGH: allow read: if true matches the open-read pattern.</text><text class="lbl" x="36" y="288">Anyone can read every document under /users.</text></g>
+          <g class="only-2"><text class="t-safe" x="36" y="268" style="font-weight:600">No finding, and that is right: the auth test is present and the visitor is refused.</text><text class="lbl" x="36" y="288">The scanner sees request.auth != null and moves on.</text></g>
+          <g class="only-3"><text class="t-accent" x="36" y="268" style="font-weight:600">No finding, but the rule lets every signed-in user read every user document.</text><text class="lbl" x="36" y="288">The scanner accepts any request.auth test. A missing ownership check is not reported.</text></g>
+          <g class="only-4"><text class="t-safe" x="36" y="268" style="font-weight:600">No finding, and that is right: owner-only access.</text><text class="lbl" x="36" y="288">This is the shape the markdown recommends for per-user data.</text></g>
+        </g>
+
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step" data-on="fbReq"><span class="n">1</span>An anonymous visitor asks for <code>/users/alice</code>. The rule is <code>if true</code>, so Firestore <b>returns the document</b>. isitsecure catches this one from the file alone: <b>High</b>.</p>
+      <p class="step" data-on="fbReq"><span class="n">2</span>Same visitor, rule <code>if request.auth != null</code>. With no token <code>request.auth</code> is null, so the condition is false and <b>Firestore refuses</b>. The scanner stays quiet, correctly.</p>
+      <p class="step" data-on="fbReq"><span class="n">3</span>Bob signs in and asks for Alice's document under the same rule. <code>request.auth</code> is not null, so <b>Firestore allows it</b>. The rule never compares the uid to the path. The scanner is silent here too, and this is the gap in the check.</p>
+      <p class="step" data-on="fbReq"><span class="n">4</span>Add <code>request.auth.uid == userId</code>. Bob's uid is not Alice's, so <b>the read is denied</b>. This is the owner-only shape from the fix section, and the scanner accepts it.</p>
+    </div>
+  </div>
+</section>
+
+<section id="why">
+  <h2>Why it matters</h2>
+  <div class="grid-2">
+    <div class="callout why"><div class="label">Why it matters</div><p>Firebase security rules are <b>the only access control</b> for Firestore, Realtime Database and Storage. There is no backend API to add an auth check to. If the rules are permissive, anyone can read all data, anyone can write it, and nothing sits behind the database to stop them.</p></div>
+    <div class="callout breach"><div class="label">Real-world breach</div><p>Security researchers have published scans finding thousands of Firebase databases with open rules. In 2020 a study by Comparitech found <b>24,000 Android apps with misconfigured Firebase databases</b> leaking user data, including emails, passwords and health data.</p></div>
+  </div>
+</section>
+
+<section id="code">
+  <h2>Vulnerable vs fixed rules</h2>
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true" type="button">BAD · flagged</button>
+      <button class="tab good" role="tab" aria-selected="false" type="button">GOOD · clean</button>
+    </div>
+    <div role="tabpanel"><pre><code><span class="c">// BAD: wide open</span>
+match /users/{userId} {
+  <span class="hl bad">allow read, write: if true;</span>
+}
+
+<span class="c">// BAD: no auth test anywhere near the allow</span>
+match /logs/{logId} {
+  <span class="hl bad">allow delete: if isAdmin();</span>
+}</code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c">// GOOD: owner-only access</span>
+match /users/{userId} {
+  <span class="hl good">allow read: if request.auth != null &amp;&amp; request.auth.uid == userId;</span>
+  <span class="hl good">allow write: if request.auth != null &amp;&amp; request.auth.uid == userId;</span>
+}
+
+<span class="c">// GOOD: validate data on write (not checked by the analyzer)</span>
+match /posts/{postId} {
+  allow create: if request.auth != null
+    &amp;&amp; request.resource.data.authorId == request.auth.uid
+    &amp;&amp; request.resource.data.title is string
+    &amp;&amp; request.resource.data.title.size() &lt;= 200;
+}</code></pre></div>
+  </div>
+  <div class="callout note"><div class="label">Scope note</div><p>The markdown lists four problems. The analyzer detects the first, wide-open rules, and in a narrower form the third: a missing auth test is reported, but <code>request.auth != null</code> with no ownership check is accepted. <b>Missing rules for a collection and missing validation rules are not checked.</b> The wildcard check and the Realtime Database check are in the code but not in the markdown.</p></div>
+</section>
+
+<section id="limits">
+  <h2>Limits and scope</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Behaviour</th><th>Detail</th></tr></thead>
+    <tbody>
+      <tr><td>Input</td><td>Files whose path ends in <code>firestore.rules</code>, <code>storage.rules</code>, <code>database.rules.json</code>, or the same names under <code>firebase/</code>. The repository only; no live Firebase project is contacted.</td></tr>
+      <tr><td>Severity and confidence</td><td>Open read and write together: Critical 0.95. Open read or write alone: High 0.95. Missing auth test: High 0.85. Wildcard: Medium 0.75. Realtime Database <code>true</code> rules: Critical 0.95 each.</td></tr>
+      <tr><td>Open rules</td><td>Reported once per file and pattern, with the first matching line. Only the literal <code>if true</code> counts.</td></tr>
+      <tr><td>Missing auth test</td><td>Looks at an <code>allow read|write|create|update|delete:</code> line and the two after it. Multi-operation lines such as <code>allow read, write: if x</code> do not match this pattern, so only the exact <code>if true</code> form of them is caught.</td></tr>
+      <tr><td>What counts as auth</td><td><code>request.auth != null</code> or any mention of <code>request.auth.uid</code>. Ownership is not checked. Helper functions are not followed.</td></tr>
+      <tr><td>Realtime Database</td><td>Two regular expressions on the text. String expressions are not evaluated.</td></tr>
+      <tr><td>Not implemented</td><td>Missing rules for collections, data validation checks, ownership checks on <code>auth != null</code>.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<footer class="foot">
+  <span>Source: <a href="../scanners/firebase-rules-analyzer.md">docs/scanners/firebase-rules-analyzer.md</a> · <a href="https://github.com/jaurakunal/isitsecure/blob/main/isitsecure/engine/code_analysis/firebase_rules_analyzer.py">isitsecure/engine/code_analysis/firebase_rules_analyzer.py</a></span>
+  <span>Group: <a href="group-schema-middleware.html">Schemas and middleware</a> · Related: <a href="rls-supabase.html">Row Level Security</a> · <a href="route-auth-lsp.html">Route auth tracing</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+<script>
+(function () {
+  window.fbReq = function (scene, step, el) {
+    const svg = el.querySelector("svg");
+    IsDoc.clearPackets(svg);
+    const cls = (step === 1 || step === 3) ? "f-attacker" : "f-safe";
+    IsDoc.packet(svg, document.getElementById("req-w1"), { cls: "f-info", r: 5, duration: 700, hold: 100, label: "get" });
+    IsDoc.packet(svg, document.getElementById("req-w2"), { cls: cls, r: 5, duration: 700, delay: 800, hold: 400 });
+  };
+})();
+</script>
+</body>
+</html>

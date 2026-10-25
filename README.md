@@ -762,9 +762,11 @@ Most targets spin the app up in Docker, run a DAST scan, score against a known g
 
 See [docs/architecture.md](docs/architecture.md) for the full pipeline design, including how SAST feeds DAST, how LLM review is prioritized, and how cross-referencing works.
 
+Prefer pictures to prose? [docs/interactive/](docs/interactive/index.html) is a site of animated, step-by-step explainers: an [architecture deep dive](docs/interactive/architecture.html), nine scanner-group pages, and one page for every scanner. Open `docs/interactive/index.html` in a browser; no build step.
+
 ## Scanner Documentation
 
-See [docs/scanners/](docs/scanners/) for detailed documentation on every scanner — what it detects, why it matters, real-world breach examples, and how to fix the vulnerabilities it finds.
+See [docs/scanners/](docs/scanners/) for detailed documentation on every scanner — what it detects, why it matters, real-world breach examples, and how to fix the vulnerabilities it finds. The scanners with a mechanism worth watching also have an animated page under [docs/interactive/](docs/interactive/index.html).
 
 ## LSP Setup (Optional, Reduces False Positives)
 

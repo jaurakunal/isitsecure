@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Subresource Integrity · isitsecure</title>
+<meta name="description" content="How isitsecure finds cross-origin scripts and stylesheets loaded without an integrity hash, why a compromised CDN makes that dangerous, and what keeps the scanner quiet — animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  .topbar-inner .crumb a { color: inherit; text-decoration: none; }
+  .topbar-inner .crumb a:hover { color: var(--accent); }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› <a href="group-browser-defenses.html">Browser-side defenses</a> › Subresource integrity</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../../isitsecure/engine/scanners/sri_scanner.py" title="The implementation this page is built from">source .py</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">DAST scanner · passive</div>
+  <h1>Subresource Integrity</h1>
+  <p class="lede">A script loaded from someone else's CDN runs with the full power of your page. An <code>integrity="sha384-…"</code> attribute lets the browser refuse bytes that do not match a hash you pinned. isitsecure reads the HTML it already captured and reports every cross-origin script or stylesheet that has no such attribute. It sends no requests of its own.</p>
+  <div class="meta">
+    <span class="pill dast">DAST</span><span class="pill med">Medium</span><span class="pill">Low</span><span class="pill">Supply chain</span><span class="pill">Snapshot-based</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#scan"><span class="n">01</span>What it reads</a>
+  <a href="#attack"><span class="n">02</span>What SRI prevents</a>
+  <a href="#fix"><span class="n">03</span>The fix</a>
+  <a href="#reference"><span class="n">04</span>Reference</a>
+</nav>
+
+<section id="scan">
+  <h2>What it reads and what it reports</h2>
+  <p class="prose">The scanner takes the page HTML from the snapshot and walks every <code>&lt;script src&gt;</code> tag, then every <code>&lt;link&gt;</code> tag whose <code>rel</code> contains <code>stylesheet</code>. A tag is reported only when its URL points at another host and the tag carries no <code>integrity</code> attribute. A script is graded higher than a stylesheet.</p>
+
+  <div class="scene" id="sri-scan" data-scene data-interval="3200">
+    <figure class="stage">
+      <svg viewBox="0 0 960 330" role="img" aria-label="Five tags from a page at app.example and the verdict each gets: a cross-origin script without integrity is Medium, a cross-origin stylesheet without integrity is Low, a script with integrity is quiet, a relative script is quiet, a same-host absolute script is quiet.">
+        <defs><marker id="sri-arr1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <text class="mono t-safe" x="20" y="20">page: https://app.example</text>
+        <text class="lbl" x="560" y="20">verdict</text>
+
+        <g class="node lit-2" transform="translate(20 32)"><rect width="500" height="50" rx="8"/><text class="mono" x="12" y="22">&lt;script src="https://cdn.other.net/v.js"&gt;</text><text class="lbl" x="12" y="40">other host, no integrity</text></g>
+        <path class="wire at-2 attacker" d="M520 57 H 548" marker-end="url(#sri-arr1)"/>
+        <g class="node verdict at-2 lit-2" transform="translate(550 32)"><rect width="390" height="50" rx="8" class="soft-attacker"/><text class="t-attacker" x="12" y="22">MEDIUM · External script missing SRI</text><text class="lbl" x="12" y="40">reported once per URL</text></g>
+
+        <g class="node lit-3" transform="translate(20 92)"><rect width="500" height="50" rx="8"/><text class="mono" x="12" y="22">&lt;link rel="stylesheet" href="https://f.other.net/a.css"&gt;</text><text class="lbl" x="12" y="40">other host, rel=stylesheet, no integrity</text></g>
+        <path class="wire at-3 accent" d="M520 117 H 548" marker-end="url(#sri-arr1)"/>
+        <g class="node verdict at-3 lit-3" transform="translate(550 92)"><rect width="390" height="50" rx="8" class="soft-accent"/><text class="t-accent" x="12" y="22">LOW · External stylesheet missing SRI</text><text class="lbl" x="12" y="40">CSS can restyle a form, not run code</text></g>
+
+        <g class="node lit-4" transform="translate(20 152)"><rect width="500" height="50" rx="8"/><text class="mono" x="12" y="22">&lt;script src="https://cdn.other.net/v.js" integrity="sha384-…"&gt;</text><text class="lbl" x="12" y="40">other host, integrity present</text></g>
+        <path class="wire at-4" d="M520 177 H 548" marker-end="url(#sri-arr1)"/>
+        <g class="node verdict at-4 lit-4" transform="translate(550 152)"><rect width="390" height="50" rx="8" class="soft-safe"/><text class="t-safe" x="12" y="22">quiet · integrity attribute found</text><text class="lbl" x="12" y="40">any non-empty value counts</text></g>
+
+        <g class="node lit-5" transform="translate(20 212)"><rect width="500" height="50" rx="8"/><text class="mono" x="12" y="22">&lt;script src="/static/app.js"&gt;</text><text class="lbl" x="12" y="40">no scheme or host: first-party path</text></g>
+        <path class="wire at-5" d="M520 237 H 548" marker-end="url(#sri-arr1)"/>
+        <g class="node verdict at-5 lit-5" transform="translate(550 212)"><rect width="390" height="50" rx="8" class="soft-safe"/><text class="t-safe" x="12" y="22">quiet · first-party</text><text class="lbl" x="12" y="40">you control the origin</text></g>
+
+        <g class="node lit-5" transform="translate(20 272)"><rect width="500" height="50" rx="8"/><text class="mono" x="12" y="22">&lt;script src="https://app.example/main.js"&gt;</text><text class="lbl" x="12" y="40">absolute URL, same host as the page</text></g>
+        <path class="wire at-5" d="M520 297 H 548" marker-end="url(#sri-arr1)"/>
+        <g class="node verdict at-5 lit-5" transform="translate(550 272)"><rect width="390" height="50" rx="8" class="soft-safe"/><text class="t-safe" x="12" y="22">quiet · same host as the page</text><text class="lbl" x="12" y="40">compared after dropping a leading www.</text></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The snapshot holds the rendered HTML of <code>https://app.example</code>. The scanner reads it as text. <b>No request is sent</b>, and an empty page returns no findings.</p>
+      <p class="step"><span class="n">2</span>A <code>&lt;script src&gt;</code> with an absolute URL on another host and no <code>integrity</code> in the tag is the main finding. <b>Script → MEDIUM</b>, because the CDN's bytes run as your page.</p>
+      <p class="step"><span class="n">3</span>A <code>&lt;link&gt;</code> counts only when its <code>rel</code> contains <code>stylesheet</code>. The same test on its <code>href</code> gives <b>stylesheet → LOW</b>.</p>
+      <p class="step"><span class="n">4</span>If the tag carries <code>integrity="…"</code> with any non-empty value, the scanner moves on. <b>It checks that the attribute exists, not that the hash is right.</b></p>
+      <p class="step"><span class="n">5</span>First-party resources are excluded. A relative path has no host, and an absolute URL on the page's own host is first-party. Both are skipped, because SRI matters most for code you do not control.</p>
+    </div>
+  </div>
+
+  <div class="callout note">
+    <div class="label">Built from the code, not a markdown doc</div>
+    <p>This scanner has no page under <code>docs/scanners/</code>. Everything here is taken from <code>isitsecure/engine/scanners/sri_scanner.py</code> and the README scanner-table row ("External CDN scripts/styles loaded without Subresource Integrity hashes"). The regexes, severities, the first-party test and the cap of 20 findings are read directly from that file.</p>
+  </div>
+</section>
+
+<section id="attack">
+  <h2>What the hash buys you</h2>
+  <p class="prose">An integrity attribute is a promise made at build time: these exact bytes, and no others. The browser downloads the resource, hashes it, and compares. Without the promise the browser has nothing to compare against and runs whatever the CDN returns.</p>
+
+  <div class="scene" id="sri-attack" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 330" role="img" aria-label="A page pins a SHA-384 hash for a CDN script. The CDN is compromised and serves altered bytes. With the attribute the browser's hash comparison fails and the script is blocked; without it the altered script runs.">
+        <defs><marker id="sri-arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+
+        <g class="node lit-1" transform="translate(20 30)">
+          <rect width="330" height="120" rx="10"/>
+          <text class="ttl" x="12" y="24">Your page</text>
+          <g class="mono">
+            <text x="12" y="50">&lt;script src="https://cdn.x.net/v.js"</text>
+            <g class="until-4"><text class="t-safe" x="12" y="70">  integrity="sha384-AbC…"</text><text x="12" y="90">  crossorigin="anonymous"&gt;</text></g>
+            <text class="at-4 t-attacker" x="12" y="70">  (no integrity attribute)&gt;</text>
+          </g>
+          <text class="lbl" x="12" y="110">the hash was computed at build time</text>
+        </g>
+
+        <path class="wire at-1 info" d="M350 90 H 628" marker-end="url(#sri-arr2)"/>
+        <text class="lbl" x="490" y="80" text-anchor="middle">GET /v.js</text>
+
+        <g class="node lit-2" transform="translate(630 30)">
+          <rect width="310" height="120" rx="10"/>
+          <text class="ttl" x="12" y="24">CDN (third party)</text>
+          <text class="lbl" x="12" y="46">not your server, not your control</text>
+          <text class="mono until-2" x="12" y="76">v.js bytes: original</text>
+          <text class="mono at-2 t-attacker" x="12" y="76">v.js bytes: altered</text>
+          <text class="lbl at-2" x="12" y="100">compromised: payload appended</text>
+        </g>
+
+        <path class="wire at-3 attacker" d="M630 130 H 352" marker-end="url(#sri-arr2)"/>
+        <text class="lbl at-3" x="490" y="122" text-anchor="middle">v.js + payload</text>
+
+        <g class="node at-3 lit-3 lit-4" transform="translate(20 180)">
+          <rect width="920" height="130" rx="10"/>
+          <text class="ttl" x="12" y="26">Browser</text>
+          <g class="only-3">
+            <text class="mono" x="12" y="58">sha384(received bytes) = Zq9…</text>
+            <text class="mono" x="12" y="82">integrity attribute    = AbC…</text>
+            <text class="t-safe" x="400" y="70">hashes differ → resource blocked, the script never runs</text>
+            <text class="lbl" x="12" y="112">the page keeps working without the injected code</text>
+          </g>
+          <g class="only-4">
+            <text class="mono" x="12" y="58">integrity attribute    = (absent)</text>
+            <text class="mono" x="12" y="82">nothing to compare against</text>
+            <text class="t-attacker" x="400" y="70">payload executes with full page privileges</text>
+            <text class="lbl" x="12" y="112">this is the exact state the scanner reports</text>
+          </g>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The page loads <code>v.js</code> from a CDN it does not run. With SRI, the tag also carries a SHA-384 hash of the file as it looked when the developer reviewed it.</p>
+      <p class="step"><span class="n">2</span>The CDN is breached, or its account is taken over. <code>v.js</code> now contains attacker code. Every site that links it is affected at once.</p>
+      <p class="step"><span class="n">3</span>The browser downloads the altered file, hashes it, and compares it with the attribute. <b>The hashes differ, so the resource is blocked.</b></p>
+      <p class="step"><span class="n">4</span>Take the attribute away and the browser has no reference value. The altered script runs with the page's DOM, cookies and tokens. <b>This is the state the scanner flags.</b></p>
+    </div>
+  </div>
+
+  <div class="callout why">
+    <div class="label">Why it matters</div>
+    <p>The finding text states the risk directly: if the CDN is compromised, "the browser will execute the altered content with full page privileges". A stylesheet is graded lower because it cannot run code, though it can still restyle a login form. The fix the finding gives is to add an SRI hash (<code>integrity="sha384-..."</code>) and a <code>crossorigin</code> attribute.</p>
+  </div>
+</section>
+
+<section id="fix">
+  <h2>Vulnerable vs fixed markup</h2>
+  <p class="prose">The same two tags, before and after. The hash is the base64 SHA-384 digest of the exact file you reviewed; <code>crossorigin</code> lets the browser read the cross-origin response so it can hash it.</p>
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true">BAD · no integrity</button>
+      <button class="tab good" role="tab" aria-selected="false">GOOD · pinned hash</button>
+    </div>
+    <div role="tabpanel"><pre><code><span class="c">&lt;!-- served from https://app.example --&gt;</span>
+<span class="hl bad">&lt;script src="<span class="s">https://cdn.other.net/lib/v1.4.2/v.js</span>"&gt;&lt;/script&gt;      <span class="c">&lt;!-- MEDIUM --&gt;</span></span>
+<span class="hl bad">&lt;link rel="stylesheet" href="<span class="s">https://cdn.other.net/lib/v1.4.2/a.css</span>"&gt; <span class="c">&lt;!-- LOW --&gt;</span></span></code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c">&lt;!-- served from https://app.example --&gt;</span>
+<span class="hl good">&lt;script src="<span class="s">https://cdn.other.net/lib/v1.4.2/v.js</span>"
+        <span class="k">integrity</span>="sha384-<span class="s">AbC…</span>"
+        <span class="k">crossorigin</span>="anonymous"&gt;&lt;/script&gt;</span>
+<span class="hl good">&lt;link rel="stylesheet" href="<span class="s">https://cdn.other.net/lib/v1.4.2/a.css</span>"
+      <span class="k">integrity</span>="sha384-<span class="s">XyZ…</span>" <span class="k">crossorigin</span>="anonymous"&gt;</span>
+<span class="c">&lt;!-- Pin a versioned URL: a hash on a "latest" URL breaks when the file changes.
+     Or self-host the file and the scanner treats it as first-party. --&gt;</span></code></pre></div>
+  </div>
+</section>
+
+<section id="reference">
+  <h2>Reference: what the code does</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Item</th><th>Value</th><th>Where it comes from</th></tr></thead>
+      <tbody>
+        <tr><td>Input</td><td>the snapshot's rendered HTML only (not the JavaScript files)</td><td><code>snapshot.html_content</code></td></tr>
+        <tr><td>Script rule</td><td><code>&lt;script … src="…"&gt;</code> with a quoted src, cross-origin, no <code>integrity=</code> in the tag → MEDIUM</td><td><code>_SCRIPT_TAG_RE</code>, <code>_scan_scripts</code></td></tr>
+        <tr><td>Stylesheet rule</td><td><code>&lt;link&gt;</code> with <code>rel</code> containing <code>stylesheet</code>, a quoted href, cross-origin, no integrity → LOW</td><td><code>_LINK_TAG_RE</code>, <code>_scan_stylesheets</code></td></tr>
+        <tr><td>External means</td><td>absolute URL with scheme and host, and a host different from the page's (a leading <code>www.</code> is ignored)</td><td><code>_is_external</code>, <code>is_first_party_url</code></td></tr>
+        <tr><td>Dedup / cap</td><td>one finding per resource URL; scripts are listed first; at most 20 findings in total</td><td><code>seen</code>, <code>_MAX_FINDINGS</code></td></tr>
+        <tr><td>Finding</td><td>category MISSING_SRI, source DAST_URL, confidence 0.9, method GET, endpoint = page URL</td><td><code>_build_finding</code></td></tr>
+        <tr><td>Network</td><td>none</td><td>module docstring</td></tr>
+        <tr><td>Scan depth</td><td>runs at both <code>quick</code> and <code>deep</code></td><td><code>factory.py</code> DAST list</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout note">
+    <div class="label">Things it does not do</div>
+    <p>It does not verify that an <code>integrity</code> value is a valid or correct hash, and it does not check for <code>crossorigin</code>. A subdomain of your own site (for example <code>cdn.app.example</code>) has a different host and is reported as external. A protocol-relative URL such as <code>//cdn.other.net/v.js</code> has no scheme, so the first-party test passes and the tag is skipped. Unquoted <code>src</code> values and resources added to the DOM by JavaScript after load are not matched by the regexes.</p>
+  </div>
+</section>
+
+<footer class="foot">
+  <span>Source: <a href="../../isitsecure/engine/scanners/sri_scanner.py">sri_scanner.py</a> · <a href="../../README.md">README scanner table</a></span>
+  <span>Group: <a href="group-browser-defenses.html">Browser-side defenses</a> · Related: <a href="mixed-content.html">Mixed content</a> · <a href="client-exposure.html">Client exposure</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+</body>
+</html>

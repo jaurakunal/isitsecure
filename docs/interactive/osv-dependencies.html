@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>OSV Dependencies · isitsecure</title>
+<meta name="description" content="How isitsecure turns six manifest formats into batched queries against api.osv.dev, what it does when the call fails, and how one OSV record becomes one finding, animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  /* page-specific: record lines that light up per step, row cards */
+  .scene .stage svg .row-r > rect { fill: var(--surface); stroke: var(--line); stroke-width: 1; }
+  #record .rec { transition: fill .35s; }
+  #record[data-step="2"] .r-id, #record[data-step="3"] .r-sev, #record[data-step="4"] .r-alias,
+  #record[data-step="5"] .r-fix { fill: var(--accent); }
+  #flow .batch { transition: opacity .4s; }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› <a href="group-secrets-dependencies.html">Secrets and dependencies</a> › OSV dependencies</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/README.md" title="No dedicated markdown page exists; this is the scanner index">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">SAST scanner · one network call per 100 packages</div>
+  <h1>OSV Dependency Scanner</h1>
+  <p class="lede">The Java and Python scanners carry a short hand-written CVE table. This one carries none. It parses six kinds of manifest into <code>(name, version, ecosystem)</code> triples, posts them in batches of 100 to Google's OSV.dev database, and turns every vulnerability record that comes back into a finding. It needs no API key.</p>
+  <div class="meta">
+    <span class="pill sast">SAST</span><span class="pill crit">Critical–Low</span><span class="pill">Dependency Vulnerability</span><span class="pill">4 ecosystems</span><span class="pill">confidence 0.95</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#parse"><span class="n">01</span>From manifest to query</a>
+  <a href="#flow-sec"><span class="n">02</span>The query and response flow</a>
+  <a href="#record-sec"><span class="n">03</span>From OSV record to finding</a>
+  <a href="#why"><span class="n">04</span>Why it matters</a>
+  <a href="#code"><span class="n">05</span>Vulnerable vs fixed</a>
+  <a href="#limits"><span class="n">06</span>Limits and what it stays quiet about</a>
+</nav>
+
+<div class="callout note">
+  <div class="label">No dedicated markdown page</div>
+  <p>This scanner has no <code>docs/scanners/*.md</code> file. The page is built from <code>isitsecure/engine/code_analysis/osv_dependency_scanner.py</code> and the one-line row in <a href="../scanners/README.md">scanners/README.md</a>. Every number below is read from that code.</p>
+</div>
+
+<div class="callout why">
+  <div class="label">Known gap, checked against the live API</div>
+  <p>The scanner reads <code>summary</code>, <code>details</code>, <code>affected</code> and <code>database_specific.severity</code> from each entry in the <code>/v1/querybatch</code> response. A live query for <code>lodash@4.17.15</code> on 2026-10-25 returned only <code>id</code> and <code>modified</code> for each vulnerability. If that holds for every query, the later scenes show what the code is written to do, while real findings would fall back to Medium severity, an empty summary and the generic upgrade text. The usual fix is a follow-up <code>GET /v1/vulns/{id}</code> per unique id. This page describes the code as written; the scanner has not been changed.</p>
+</div>
+
+<section id="parse">
+  <h2>From manifest to query</h2>
+  <p class="prose">The scanner walks every file in the repository snapshot and routes it by file name. Each routine produces <code>ParsedDependency</code> records: name, version, ecosystem, file, line, and the raw line. The ecosystem is the label OSV uses to know which version-ordering rules apply.</p>
+
+  <div class="scene" id="parse-scene" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 360" role="img" aria-label="Four rows map manifest files to an OSV ecosystem. package.json becomes npm, requirements and pyproject become PyPI, pom.xml and Gradle files become Maven, go.mod becomes Go. Each row shows a raw line and the name and version that is queried.">
+        <text class="lbl" x="34" y="20">manifest</text>
+        <text class="lbl" x="224" y="20">raw line</text>
+        <text class="lbl" x="530" y="20">queried as name @ version</text>
+        <text class="lbl" x="860" y="20">ecosystem</text>
+
+        <g class="node lit-2" transform="translate(20 30)"><rect width="920" height="72" rx="8"/>
+          <text class="mono" x="14" y="28">package.json</text>
+          <g class="at-2"><text class="mono" x="204" y="28">"lodash": "^4.17.15"</text><text class="mono t-info" x="510" y="28">lodash @ 4.17.15</text>
+          <text class="lbl" x="14" y="56">dependencies + devDependencies; leading ^ ~ &gt; = &lt; ! and spaces stripped; "*" skipped; no line number</text></g>
+          <text class="mono t-accent" x="840" y="28">npm</text></g>
+        <g class="node lit-3" transform="translate(20 112)"><rect width="920" height="72" rx="8"/>
+          <text class="mono" x="14" y="28">requirements*.txt</text><text class="mono" x="14" y="46">pyproject.toml</text>
+          <g class="at-3"><text class="mono" x="204" y="28">PyJWT==2.3.0</text><text class="mono t-info" x="510" y="28">PyJWT @ 2.3.0</text>
+          <text class="lbl" x="204" y="56">needs an operator and a version; a bare name or a -r line is skipped</text></g>
+          <text class="mono t-accent" x="840" y="28">PyPI</text></g>
+        <g class="node lit-4" transform="translate(20 194)"><rect width="920" height="72" rx="8"/>
+          <text class="mono" x="14" y="28">pom.xml</text><text class="mono" x="14" y="46">build.gradle(.kts)</text>
+          <g class="at-4"><text class="mono" x="204" y="28">api "com.google.guava:guava:31.0"</text><text class="mono t-info" x="510" y="28">com.google.guava:guava @ 31.0</text>
+          <text class="lbl" x="204" y="56">pom.xml: a version that is empty or starts with $ is skipped; Gradle uses the same regex as the Java scanner</text></g>
+          <text class="mono t-accent" x="840" y="28">Maven</text></g>
+        <g class="node lit-5" transform="translate(20 276)"><rect width="920" height="72" rx="8"/>
+          <text class="mono" x="14" y="28">go.mod</text>
+          <g class="at-5"><text class="mono" x="204" y="28">golang.org/x/net v0.17.0</text><text class="mono t-info" x="510" y="28">golang.org/x/net @ 0.17.0</text>
+          <text class="lbl" x="204" y="56">require block or single-line require; "// indirect" comments dropped; leading v stripped</text></g>
+          <text class="mono t-accent" x="840" y="28">Go</text></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Routing is by file name alone: <code>package.json</code>, <code>requirements*.txt</code>, <code>pyproject.toml</code>, <code>pom.xml</code>, <code>build.gradle</code> or <code>.kts</code>, and <code>go.mod</code>. Four ecosystems come out of those six formats.</p>
+      <p class="step"><span class="n">2</span><b>npm.</b> Both dependency sections are read. Only leading operator characters are removed, so <code>^4.17.15</code> is queried as <code>4.17.15</code>. A wildcard <code>*</code> is dropped. <code>package.json</code> has no line numbers, so these findings carry none.</p>
+      <p class="step"><span class="n">3</span><b>PyPI.</b> A line counts only if it has a name, an operator and a version, so an unpinned <code>requests</code> is skipped here. Nothing is flagged for being unpinned.</p>
+      <p class="step"><span class="n">4</span><b>Maven.</b> The pom and Gradle extractors use the same regexes as the Java scanner, with a different consumer: the result is a query, not a table lookup. A property version in a pom is skipped; in Gradle it is sent to OSV as text.</p>
+      <p class="step"><span class="n">5</span><b>Go.</b> Direct and indirect requires are both read; <code>module</code>, <code>go</code>, <code>replace</code> and similar directives are ignored. The <code>v</code> prefix is stripped to the semver OSV compares.</p>
+    </div>
+  </div>
+</section>
+
+<section id="flow-sec">
+  <h2>The query and response flow</h2>
+  <p class="prose">All parsed dependencies, across all manifests, are queried together. The only network host is <code>api.osv.dev</code>; no source code leaves the machine, only package names and versions.</p>
+
+  <div class="scene" id="flow" data-scene data-interval="3600">
+    <figure class="stage">
+      <svg viewBox="0 0 960 340" role="img" aria-label="The scanner splits 230 example dependencies into three batches, posts each batch to api.osv.dev querybatch, and receives a results array in the same order. A failed call, whether a non-200 status, a timeout or an exception, drops only that batch and the scan continues.">
+        <defs><marker id="arrO1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+
+        <g class="node lit-1" transform="translate(20 20)"><rect width="300" height="300" rx="10"/>
+          <text class="ttl" x="14" y="26">Scanner</text>
+          <text class="lbl" x="14" y="44">example: 230 deps, 4 ecosystems</text>
+          <g class="only-1 mono"><text class="t-accent" x="14" y="86">OSV: querying 230 package(s)</text><text x="14" y="104">  across Go, Maven, PyPI, npm</text>
+            <text class="lbl" x="14" y="132">progress line emitted before any request</text></g>
+          <g class="at-2 batch mono">
+            <g class="row-r" transform="translate(14 56)"><rect width="272" height="26" rx="5"/><text x="10" y="18">OSV: batch 1/3 (100 pkg)</text></g>
+            <g class="row-r" transform="translate(14 88)"><rect width="272" height="26" rx="5"/><text x="10" y="18">OSV: batch 2/3 (100 pkg)</text></g>
+            <g class="row-r" transform="translate(14 120)"><rect width="272" height="26" rx="5"/><text x="10" y="18">OSV: batch 3/3 (30 pkg)</text></g>
+          </g>
+          <g class="at-3 mono">
+            <text class="t-accent" x="14" y="178">POST /v1/querybatch</text>
+            <text x="14" y="196">{"queries":[</text>
+            <text x="14" y="214">  {"package":{"name":"lodash",</text>
+            <text x="14" y="232">   "ecosystem":"npm"},</text>
+            <text x="14" y="250">   "version":"4.17.15"}, …]}</text>
+          </g>
+          <text class="lbl at-5 t-attacker" x="14" y="274">findings from a failed batch: none</text>
+          <text class="lbl at-5" x="14" y="290">no finding records that it failed</text>
+        </g>
+
+        <g class="at-3">
+          <path class="wire accent flowing" id="osvreq" d="M320 130 H 640" marker-end="url(#arrO1)"/>
+          <text class="lbl" x="480" y="118" text-anchor="middle">one POST per batch, in order</text>
+        </g>
+        <g class="at-4">
+          <path class="wire safe" id="osvres" d="M640 215 H 320" marker-end="url(#arrO1)"/>
+          <text class="lbl" x="480" y="203" text-anchor="middle">200 OK, results in query order</text>
+        </g>
+        <g class="at-5">
+          <path class="wire attacker dashed" d="M640 285 H 320"/>
+          <text class="mono t-attacker" x="480" y="272" text-anchor="middle">no reply · not 200 · error</text>
+        </g>
+
+        <g class="node" transform="translate(640 20)"><rect width="300" height="300" rx="10"/>
+          <text class="ttl" x="14" y="26">api.osv.dev</text>
+          <text class="lbl" x="14" y="44">no API key · 30 s timeout per call</text>
+          <text class="lbl" x="14" y="68">ecosystems the scanner sends:</text>
+          <text class="mono" x="14" y="86">npm · PyPI · Maven · Go</text>
+          <g class="at-4 mono">
+            <text x="14" y="116">{"results":[</text>
+            <text x="14" y="134">  {"vulns":[{"id":"GHSA-…"}]},</text>
+            <text class="lbl" x="14" y="152">  {}   no vulns: dropped</text>
+            <text x="14" y="170">  {"vulns":[…]} ]}</text>
+          </g>
+          <g class="at-5">
+            <text class="ttl t-attacker" x="14" y="204">When the call fails</text>
+            <text class="lbl" x="14" y="224">HTTP status other than 200: warn, []</text>
+            <text class="lbl" x="14" y="242">timeout, DNS error, offline: caught</text>
+            <text class="lbl" x="14" y="260">bad JSON in the reply: caught</text>
+            <text class="lbl" x="14" y="284">the next batch is still attempted</text>
+          </g>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The scanner counts what it parsed and reports progress as <code>OSV: querying N package(s) across Go, Maven, PyPI, npm</code>. If nothing parsed, it returns with no network call at all.</p>
+      <p class="step"><span class="n">2</span>The list is cut into slices of <b>100</b>. 230 packages make three batches of 100, 100 and 30. They run one after another, not in parallel.</p>
+      <p class="step" data-on="osvSend"><span class="n">3</span>Each batch is one <code>POST</code> to <code>https://api.osv.dev/v1/querybatch</code> with a <code>queries</code> array. Every query is a package name, an ecosystem and a version. A fresh HTTP client with a <b>30 second timeout</b> is made per batch.</p>
+      <p class="step" data-on="osvRecv"><span class="n">4</span>OSV answers with a <code>results</code> array in the same order as the queries. The scanner pairs each result with its dependency by position and <b>keeps only those with a non-empty <code>vulns</code> list</b>.</p>
+      <p class="step"><span class="n">5</span><b>Offline or slow.</b> A status other than 200, a timeout, a DNS failure or an unreadable reply logs a warning and returns an empty list for that batch. The scan does not abort and does not raise a finding, so the result is silent: an offline run reports zero vulnerable packages, which is the same as a clean one.</p>
+    </div>
+  </div>
+</section>
+
+<section id="record-sec">
+  <h2>From OSV record to finding</h2>
+  <p class="prose">For each dependency that matched, every vulnerability record becomes at most one finding. The example below is illustrative; it lists only the fields this scanner reads.</p>
+
+  <div class="scene" id="record" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 350" role="img" aria-label="An example OSV record on the left with the id, aliases, summary, database_specific severity and fixed event highlighted in turn. On the right a finding is assembled: a dedup key, a severity, a title carrying the CVE, and an upgrade instruction.">
+        <defs><marker id="arrO2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g class="node lit-1" transform="translate(20 20)"><rect width="430" height="310" rx="10"/>
+          <text class="ttl" x="14" y="26">One OSV record for lodash 4.17.15</text>
+          <g class="mono">
+            <text class="rec" x="14" y="62">{</text>
+            <text class="rec r-id" x="14" y="84">  "id": "GHSA-35jh-r3h4-6jhm",</text>
+            <text class="rec r-alias" x="14" y="106">  "aliases": ["CVE-2021-23337"],</text>
+            <text class="rec r-alias" x="14" y="128">  "summary": "Command Injection in lodash",</text>
+            <text class="rec r-sev" x="14" y="150">  "database_specific": {"severity": "HIGH"},</text>
+            <text class="rec" x="14" y="172">  "affected": [{"ranges": [{"events": [</text>
+            <text class="rec r-fix" x="14" y="194">     {"introduced": "0"}, {"fixed": "4.17.21"}</text>
+            <text class="rec" x="14" y="216">  ]}]}]</text>
+            <text class="rec" x="14" y="238">}</text>
+          </g>
+          <text class="lbl" x="14" y="272">illustrative values; other fields are never read</text>
+          <text class="lbl" x="14" y="288">the CVSS vector in "severity" is not parsed</text>
+        </g>
+        <path class="wire at-2 accent" d="M450 175 H 488" marker-end="url(#arrO2)"/>
+        <g class="node" transform="translate(490 20)"><rect width="450" height="310" rx="10"/>
+          <text class="ttl" x="14" y="26">CodeFinding</text>
+          <text class="lbl" x="14" y="44">confidence 0.95 · Dependency Vulnerability</text>
+          <g class="at-2"><text class="lbl" x="14" y="76">dedup key: name : version : id</text>
+            <text class="mono" x="14" y="94">lodash:4.17.15:GHSA-35jh-r3h4-6jhm</text></g>
+          <g class="at-3"><text class="lbl" x="14" y="126">severity</text>
+            <text class="mono t-attacker" x="14" y="144">HIGH</text>
+            <text class="lbl" x="70" y="144">from database_specific.severity</text></g>
+          <g class="at-4"><text class="lbl" x="14" y="176">title</text>
+            <text class="mono" x="14" y="194">Vulnerable dependency: lodash@4.17.15 (CVE-2021-23337)</text></g>
+          <g class="at-5"><text class="lbl" x="14" y="226">fix</text>
+            <text class="mono t-safe" x="14" y="244">Upgrade lodash to 4.17.21 or later</text>
+            <text class="lbl" x="14" y="276">file and line from the manifest; npm has no line</text>
+            <text class="lbl" x="14" y="292">link: https://osv.dev/vulnerability/&lt;id&gt;</text></g>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>OSV returns one record per vulnerability. The scanner reads six fields from it: <code>id</code>, <code>aliases</code>, <code>summary</code> (or <code>details</code>), <code>database_specific.severity</code>, <code>affected[].ecosystem_specific.severity</code>, and the <code>fixed</code> event of <code>affected[].ranges[]</code>.</p>
+      <p class="step"><span class="n">2</span><b>Dedup.</b> Findings are keyed on <code>name:version:id</code>. If the same package at the same version appears in two manifests, only the first is kept.</p>
+      <p class="step"><span class="n">3</span><b>Severity.</b> The first match wins: <code>database_specific.severity</code> (CRITICAL, HIGH, MEDIUM, LOW; MODERATE maps to Medium), then <code>ecosystem_specific.severity</code> on an affected entry, then a default of <b>Medium</b>. The code has a loop over the CVSS vector but it does nothing, so a CVSS string never sets the severity.</p>
+      <p class="step"><span class="n">4</span><b>Title and text.</b> The first alias that starts with <code>CVE-</code> is added to the title. The description carries the summary cut to 200 characters, the package, the OSV id, all CVE aliases and the osv.dev link.</p>
+      <p class="step"><span class="n">5</span><b>Fix.</b> The first <code>fixed</code> event found across all affected ranges gives <code>Upgrade &lt;name&gt; to &lt;version&gt; or later</code>. With no <code>fixed</code> event, the text is <code>Upgrade &lt;name&gt; to the latest version</code>.</p>
+    </div>
+  </div>
+</section>
+
+<section id="why">
+  <h2>Why it matters</h2>
+  <div class="callout why">
+    <div class="label">Why it matters</div>
+    <p>A hand-written table goes stale the day it is written. The README describes this scanner as real-time lookups against OSV.dev (200K+ vulnerabilities), with no hardcoded CVE list and no API key, so a new advisory is picked up without a release of isitsecure. Your application is mostly other people's code, and a bug in any dependency is your bug.</p>
+  </div>
+  <div class="callout breach">
+    <div class="label">Real-world breach</div>
+    <p><b>Equifax (2017).</b> 147 million records were stolen through an unpatched Apache Struts dependency (CVE-2017-5638). The patch had been available for two months, and the settlements cost $700 million. <b>Log4Shell (2021)</b>, CVE-2021-44228 in Log4j, allowed remote code execution from a crafted log message and affected hundreds of thousands of applications.</p>
+  </div>
+</section>
+
+<section id="code">
+  <h2>Vulnerable vs fixed</h2>
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true" type="button">BAD · vulnerable</button>
+      <button class="tab good" role="tab" aria-selected="false" type="button">GOOD · fixed</button>
+    </div>
+    <div role="tabpanel"><pre><code><span class="c">// package.json: lodash 4.17.15 matches GHSA-35jh-r3h4-6jhm</span>
+<span class="hl bad"><span class="s">"lodash"</span>: <span class="s">"^4.17.15"</span></span>
+
+<span class="c">// go.mod: queried as the Go ecosystem, version 0.17.0</span>
+<span class="hl bad">golang.org/x/net v0.17.0</span></code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c">// package.json: the version named in "Upgrade lodash to 4.17.21 or later"</span>
+<span class="hl good"><span class="s">"lodash"</span>: <span class="s">"^4.17.21"</span></span>
+
+<span class="c">// go.mod: take the version each finding's fix line names</span>
+<span class="hl good">golang.org/x/net <span class="k">vX.Y.Z</span></span></code></pre></div>
+  </div>
+</section>
+
+<section id="limits">
+  <h2>Limits and what it stays quiet about</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Stage</th><th>Value in the code</th></tr></thead>
+      <tbody>
+        <tr><td>Endpoint</td><td><code>https://api.osv.dev/v1/querybatch</code>, no API key</td></tr>
+        <tr><td>Batch size</td><td>100 queries per request, sent sequentially</td></tr>
+        <tr><td>Timeout</td><td>30 seconds per request</td></tr>
+        <tr><td>Ecosystems sent</td><td>npm, PyPI, Maven, Go</td></tr>
+        <tr><td>Severity order</td><td><code>database_specific.severity</code>, then <code>ecosystem_specific.severity</code>, then Medium</td></tr>
+        <tr><td>Confidence</td><td>0.95 on every finding</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout note">
+    <div class="label">What it deliberately stays quiet about</div>
+    <p>Only the four ecosystems above are ever queried. The README row lists Rust among the covered ecosystems, but the code has no extractor for <code>Cargo.toml</code> or <code>Cargo.lock</code>, so Rust dependencies are not looked at. Only direct, pinned versions in the manifest are read; transitive dependencies and lockfiles are not. A network failure leaves no trace in the report. An npm range such as <code>&gt;=1.0.0 &lt;2.0.0</code> has only its leading operator removed and is sent as <code>1.0.0 &lt;2.0.0</code>. The npm scanner also queries OSV for <code>package.json</code>, so the same vulnerability can appear from both scanners before triage merges them.</p>
+  </div>
+</section>
+
+<footer class="foot">
+  <span>Source: <code>isitsecure/engine/code_analysis/osv_dependency_scanner.py</code> · <a href="../scanners/README.md">docs/scanners/README.md</a> (no dedicated md)</span>
+  <span>Group: <a href="group-secrets-dependencies.html">Secrets and dependencies</a> · Related: <a href="npm-dependencies.html">npm dependencies</a> · <a href="java-dependencies.html">Java dependencies</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+<script>
+(function () {
+  const q = (svg, s) => svg.querySelector(s);
+  window.osvSend = function (scene, i, el) {
+    const svg = el.querySelector("svg"); IsDoc.clearPackets(svg);
+    IsDoc.packet(svg, q(svg, "#osvreq"), { cls: "f-accent", label: "batch 1/3", duration: 1100 });
+  };
+  window.osvRecv = function (scene, i, el) {
+    const svg = el.querySelector("svg"); IsDoc.clearPackets(svg);
+    IsDoc.packet(svg, q(svg, "#osvres"), { cls: "f-safe", label: "results[100]", duration: 1100 });
+  };
+})();
+</script>
+</body>
+</html>

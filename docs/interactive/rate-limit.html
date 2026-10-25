@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Rate Limit Scanner · isitsecure</title>
+<meta name="description" content="How isitsecure measures rate limiting on login, signup and reset endpoints: a sequential run to the first 429, concurrent bursts of 10, 50 and 100, and a check of whether a new identity resets the counter, animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  /* page-specific: request strips and burst bars */
+  .topbar-inner .crumb a { color: inherit; text-decoration: none; }
+  .topbar-inner .crumb a:hover { color: var(--accent); }
+  .track { stroke: var(--line); stroke-width: 22; stroke-dasharray: 22 4; fill: none; }
+  .cells-pass { stroke: var(--accent); stroke-width: 22; stroke-dasharray: 22 4; fill: none; opacity: .75; }
+  .cell-429 > rect { fill: var(--safe); stroke: none; }
+  .bar-pass { fill: var(--accent); opacity: .75; }
+  .bar-429 { fill: var(--safe); }
+  .bar-none { fill: none; stroke: var(--muted); stroke-dasharray: 3 3; }
+  #strip .cells-pass { transition: stroke-dashoffset .9s linear; }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› <a href="group-auth-sessions.html">Authentication and sessions</a> › Rate limit</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/rate-limit-scanner.md" title="The markdown source for this page">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">DAST scanner · deep depth · auth-aware</div>
+  <h1>Rate Limit Scanner</h1>
+  <p class="lede">A login form that answers every request will answer ten thousand of them. The scanner picks the endpoints where guessing pays (login, signup, password, reset, token, otp) and measures what the server does under load: how many requests pass before the first 429, what happens when a burst arrives at once, and whether switching to a new identity resets the counter.</p>
+  <div class="meta">
+    <span class="pill dast">DAST</span><span class="pill high">High</span><span class="pill med">Medium</span><span class="pill">Auth Weakness</span><span class="pill">3 measurements</span><span class="pill">--depth deep only</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#sequential"><span class="n">01</span>Counting to the first 429</a>
+  <a href="#bursts"><span class="n">02</span>Concurrent bursts</a>
+  <a href="#identity"><span class="n">03</span>New identity, same address</a>
+  <a href="#why"><span class="n">04</span>Why it matters</a>
+  <a href="#code"><span class="n">05</span>Vulnerable vs fixed code</a>
+  <a href="#limits"><span class="n">06</span>Limits and configuration</a>
+</nav>
+
+<section id="sequential">
+  <h2>Counting to the first 429</h2>
+  <p class="prose">An endpoint is tested when its URL contains <code>/login</code>, <code>/signin</code>, <code>/auth</code>, <code>/signup</code>, <code>/register</code>, <code>/password</code>, <code>/reset</code>, <code>/forgot</code>, <code>/token</code> or <code>/otp</code>. The first measurement sends the endpoint's own request over and over, one at a time, and waits for a 429.</p>
+
+  <div class="scene" id="strip" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 330" role="img" aria-label="A strip of sequential requests. In the first example 20 requests pass and the 21st returns 429, an informational finding. In the second, 150 requests all pass, a high severity finding.">
+        <g class="node lit-1" transform="translate(20 14)">
+          <rect width="920" height="66" rx="8"/>
+          <text class="ttl" x="14" y="24">Which endpoints</text>
+          <text class="lbl" x="14" y="44">URL contains any of: /login  /signin  /auth  /signup  /register  /password  /reset  /forgot  /token  /otp</text>
+          <text class="lbl" x="14" y="58">each endpoint keeps its own method; the request carries no body</text>
+        </g>
+        <!-- run A -->
+        <text class="ttl" x="20" y="112">Run A · a limiter exists</text>
+        <text class="lbl" x="20" y="130">one request every 0.05 s, up to 150</text>
+        <line class="track" x1="20" y1="158" x2="644" y2="158"/>
+        <line class="cells-pass at-2" x1="20" y1="158" x2="540" y2="158"/>
+        <g class="cell-429 at-2"><rect x="540" y="147" width="22" height="22"/></g>
+        <text class="mono at-2" x="551" y="162" text-anchor="middle" style="font-size:10px;fill:var(--surface)">429</text>
+        <g class="at-3">
+          <text class="mono t-accent" x="690" y="146">INFO · 0.90</text>
+          <text class="lbl" x="690" y="164">limit after 20 accepted requests</text>
+          <text class="lbl" x="690" y="180">reported, not a fault</text>
+        </g>
+        <!-- run B -->
+        <text class="ttl" x="20" y="224">Run B · no limiter</text>
+        <text class="lbl" x="20" y="242">the same loop against another endpoint</text>
+        <line class="track" x1="20" y1="270" x2="644" y2="270"/>
+        <line class="cells-pass at-4" x1="20" y1="270" x2="644" y2="270"/>
+        <text class="mono at-4" x="652" y="274">… 150</text>
+        <g class="at-5">
+          <text class="mono t-attacker" x="720" y="258">HIGH · 0.85</text>
+          <text class="lbl" x="720" y="276">150 of 150 requests, no 429</text>
+          <text class="lbl" x="720" y="292">"No rate limiting on critical endpoint"</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The scanner filters the endpoints by URL substring, then works through them one at a time, within a shared time budget. If a session was captured, it rides along, so the numbers describe the logged-in user's limit.</p>
+      <p class="step"><span class="n">2</span>It sends the endpoint's own request sequentially, <b>0.05 s apart, up to 150 times</b>, and counts every reply that is not a 429. This limiter lets 20 through, then answers 429.</p>
+      <p class="step"><span class="n">3</span>A 429 at all means a limiter exists. The scanner records the count as an <b>INFO finding, confidence 0.90</b>: a measured threshold you can judge against your own policy, not a vulnerability.</p>
+      <p class="step"><span class="n">4</span>This second endpoint never answers 429. The status of the replies does not matter, only that none is a 429, so even a stream of 401s from a login form counts as accepted.</p>
+      <p class="step"><span class="n">5</span>150 requests and no 429 is <b>HIGH, confidence 0.85</b>. That is the brute-force and credential-stuffing condition: the attacker is never slowed down.</p>
+    </div>
+  </div>
+</section>
+
+<section id="bursts">
+  <h2>Concurrent bursts</h2>
+  <p class="prose">A limiter that counts per minute may not react to a slow loop but still trip on a flood. The second measurement sends requests all at once, in three sizes.</p>
+
+  <div class="scene" id="burst" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 330" role="img" aria-label="Three burst sizes. A burst of 10 all passes and the scanner waits 5 seconds. A burst of 50 has 30 accepted and 20 answered 429, a medium finding, and the burst of 100 is never sent.">
+        <!-- lane 1 -->
+        <g class="node" transform="translate(20 20)">
+          <rect width="170" height="70" rx="8"/>
+          <text class="ttl" x="12" y="26">Burst of 10</text>
+          <text class="lbl" x="12" y="46">all sent together</text>
+        </g>
+        <rect class="bar-pass at-2" x="210" y="42" width="50" height="26"/>
+        <text class="mono at-2" x="272" y="60">10 accepted</text>
+        <g class="at-2">
+          <text class="lbl" x="760" y="52">no 429 in this burst: no finding</text>
+          <text class="lbl" x="760" y="68">wait 5 s, try the next size</text>
+        </g>
+        <!-- lane 2 -->
+        <g class="node lit-3" transform="translate(20 110)">
+          <rect width="170" height="70" rx="8"/>
+          <text class="ttl" x="12" y="26">Burst of 50</text>
+          <text class="lbl" x="12" y="46">all sent together</text>
+        </g>
+        <rect class="bar-pass at-3" x="210" y="132" width="150" height="26"/>
+        <rect class="bar-429 at-3" x="360" y="132" width="100" height="26"/>
+        <text class="mono at-3" x="472" y="150">30 accepted · 20 × 429</text>
+        <g class="at-3">
+          <text class="mono t-accent" x="760" y="136">MEDIUM · 0.90</text>
+          <text class="lbl" x="760" y="154">"Rate limit threshold measured"</text>
+          <text class="lbl" x="760" y="170">about 30 requests per burst of 50</text>
+        </g>
+        <!-- lane 3 -->
+        <g class="node" transform="translate(20 200)">
+          <rect width="170" height="70" rx="8"/>
+          <text class="ttl" x="12" y="26">Burst of 100</text>
+          <text class="lbl" x="12" y="46">only if no mix yet</text>
+        </g>
+        <rect class="bar-none at-4" x="210" y="222" width="300" height="26"/>
+        <text class="lbl at-4" x="522" y="240">never sent: the loop stops at the first mixed burst</text>
+        <text class="lbl" x="20" y="302">A burst counts only if it holds both a 429 and at least one other reply. A burst that passes entirely stays silent.</text>
+        <text class="lbl" x="20" y="318">Missing limits are reported by the sequential run.</text>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The scanner launches 10, then 50, then 100 requests at once with <code>asyncio.gather</code>, always against the same endpoint and with the endpoint's own method.</p>
+      <p class="step"><span class="n">2</span>All 10 get through and none is a 429. The burst produces no finding, and the scanner <b>waits 5 seconds</b> so the counter can reset before the next size.</p>
+      <p class="step"><span class="n">3</span>In the burst of 50, 30 replies are accepted and 20 are 429. <b>A mixed burst is MEDIUM, confidence 0.90</b>: it reports roughly where the limiter bites, so you can compare it with what you intended.</p>
+      <p class="step"><span class="n">4</span>The scanner stops at the first burst that shows a threshold. The burst of 100 is never sent.</p>
+    </div>
+  </div>
+</section>
+
+<section id="identity">
+  <h2>New identity, same address</h2>
+  <p class="prose">The last measurement asks what the limiter keys on. It exhausts the limit with one made-up identity, then tries a second made-up identity from the same machine.</p>
+
+  <div class="scene" id="ident" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 340" role="img" aria-label="The scanner sends up to 20 requests with a Bearer alpha token until a 429, then one request with a Bearer beta token. If beta is not refused, a medium finding is raised. Any injected session is blanked for these requests.">
+        <defs><marker id="arrRlId" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g class="node" transform="translate(20 30)">
+          <rect width="150" height="190" rx="10"/>
+          <text class="ttl" x="12" y="26">Scanner</text>
+          <text class="lbl" x="12" y="46">one IP address</text>
+          <text class="lbl" x="12" y="62">two fake identities</text>
+        </g>
+        <!-- lane alpha -->
+        <path class="wire attacker at-1" d="M170 80 H 220" marker-end="url(#arrRlId)"/>
+        <g class="node lit-1 lit-2" transform="translate(220 30)">
+          <rect width="420" height="100" rx="8"/>
+          <text class="ttl" x="12" y="24">Identity alpha</text>
+          <text class="mono" x="12" y="46">Authorization: Bearer test-rate-limit-user-alpha</text>
+          <text class="lbl" x="12" y="68">up to 20 requests, 0.05 s apart, until a 429</text>
+          <text class="mono t-safe at-2" x="12" y="90">429 reached: the limit is triggered</text>
+        </g>
+        <!-- lane beta -->
+        <path class="wire attacker at-3" d="M170 170 H 220" marker-end="url(#arrRlId)"/>
+        <g class="node lit-3 at-3" transform="translate(220 140)">
+          <rect width="420" height="100" rx="8"/>
+          <text class="ttl" x="12" y="24">Identity beta</text>
+          <text class="mono" x="12" y="46">Authorization: Bearer test-rate-limit-user-beta</text>
+          <text class="lbl" x="12" y="68">one request, right after</text>
+          <text class="mono t-attacker at-3" x="12" y="90">200: not refused</text>
+        </g>
+        <!-- decision -->
+        <g class="node lit-4 at-4" transform="translate(670 30)">
+          <rect width="270" height="210" rx="10"/>
+          <text class="ttl" x="12" y="26">Decision</text>
+          <text class="lbl" x="12" y="48">alpha never reached 429: stop, silent</text>
+          <text class="lbl" x="12" y="66">beta also 429: stop, silent</text>
+          <text class="mono t-attacker" x="12" y="98">beta passed:</text>
+          <text class="mono t-accent" x="12" y="120">MEDIUM · 0.90</text>
+          <text class="lbl" x="12" y="144">the counter follows the</text>
+          <text class="lbl" x="12" y="160">Authorization value, not</text>
+          <text class="lbl" x="12" y="176">the address it came from</text>
+        </g>
+        <!-- session stripping -->
+        <g class="node lit-5 at-5" transform="translate(20 258)">
+          <rect width="920" height="68" rx="8"/>
+          <text class="ttl" x="12" y="24">An injected session is blanked for these requests</text>
+          <text class="lbl" x="12" y="44">The crawl's Cookie or Authorization header is set to "" so alpha and beta really are two different callers.</text>
+          <text class="lbl" x="12" y="58">The other two measurements keep the session.</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The scanner invents an identity, <code>Bearer test-rate-limit-user-alpha</code>, and sends requests with it.</p>
+      <p class="step"><span class="n">2</span>It stops at the first 429, after at most 20 requests. If 20 requests never trigger a 429 there is nothing to compare and the test ends with no finding.</p>
+      <p class="step"><span class="n">3</span>Straight away it sends <b>one</b> request from the same address with a different invented identity, <code>Bearer test-rate-limit-user-beta</code>.</p>
+      <p class="step"><span class="n">4</span>If beta is refused too, the limiter ignores who is asking and the scanner reports nothing. <b>If beta passes, MEDIUM, confidence 0.90</b>: changing the Authorization header was enough to get a fresh allowance.</p>
+      <p class="step"><span class="n">5</span>On an authenticated scan, the crawl's session would otherwise ride on both identities and make them the same user. This test is the one exception to session injection: it blanks every injected header and sets only the test one.</p>
+    </div>
+  </div>
+
+  <div class="callout note">
+    <div class="label">Read the wording with care</div>
+    <p>The trigger is "a new identity from the same address was not refused". The finding's title says the limit "appears IP-based only" and its description says it is applied per IP and not per user, while its technical detail and the code comment call the same condition "per-user, not per-IP". The trigger itself is unambiguous: the allowance reset when only the Authorization header changed. Treat it as a limit that is keyed on a client-controlled value.</p>
+  </div>
+</section>
+
+<section id="why">
+  <h2>Why it matters</h2>
+  <div class="callout why">
+    <div class="label">Why it matters</div>
+    <p>Without rate limiting, attackers can <b>brute-force passwords</b> at thousands of tries per minute against a login endpoint, run <b>credential stuffing</b> with stolen username and password pairs from other breaches, <b>enumerate accounts</b> with rapid-fire email checks, and <b>overwhelm the server</b> with requests.</p>
+  </div>
+  <div class="grid-2">
+    <div class="callout breach">
+      <div class="label">iCloud, "The Fappening" (2014)</div>
+      <p>Apple's Find My iPhone API lacked rate limiting, allowing attackers to brute-force celebrity iCloud passwords. This led to the mass leak of private photos.</p>
+    </div>
+    <div class="callout breach">
+      <div class="label">Dunkin' Donuts (2015)</div>
+      <p>Credential-stuffing attacks against Dunkin's app, which had no rate limiting, took over customer accounts and drained stored value.</p>
+    </div>
+  </div>
+</section>
+
+<section id="code">
+  <h2>Vulnerable vs fixed code</h2>
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true" type="button">BAD · vulnerable</button>
+      <button class="tab good" role="tab" aria-selected="false" type="button">GOOD · fixed</button>
+    </div>
+    <div role="tabpanel"><pre><code><span class="c">// BAD: every attempt is checked, none is ever refused</span>
+export async function POST(request: Request) {
+  const { email, password } = await request.json()
+  <span class="hl bad">const user = await verifyLogin(email, password)</span>
+  <span class="c">// ... login logic</span>
+}</code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c">// GOOD: Use a rate limiting library</span>
+import { Ratelimit } from <span class="s">"@upstash/ratelimit"</span>
+
+const limiter = new Ratelimit({
+  redis: Redis.fromEnv(),
+  limiter: Ratelimit.<span class="k">slidingWindow</span>(5, <span class="s">"1m"</span>),  <span class="c">// 5 attempts per minute</span>
+})
+
+export async function POST(request: Request) {
+  <span class="hl good">const ip = request.headers.get(<span class="s">"x-forwarded-for"</span>) || <span class="s">"anonymous"</span></span>
+  const { success } = await limiter.limit(ip)
+
+  if (!success) {
+    return NextResponse.json({ error: <span class="s">"Too many attempts"</span> }, { status: <span class="k">429</span> })
+  }
+  <span class="c">// ... login logic</span>
+}</code></pre></div>
+  </div>
+  <div class="callout fix">
+    <div class="label">Key the limit on something the client cannot choose</div>
+    <p>The identity measurement flags limits that follow a header the caller sets. Key on the network address, or on the account being attacked, and the new-identity trick no longer resets the counter.</p>
+  </div>
+</section>
+
+<section id="limits">
+  <h2>Limits and configuration</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Measurement</th><th>Requests per endpoint</th><th>Reports when</th><th>Severity · confidence</th></tr></thead>
+      <tbody>
+        <tr><td>Sequential run</td><td>up to 150, 0.05 s apart</td><td>no 429 in 150 requests; with a 429, the accepted count is reported</td><td>High · 0.85 / Info · 0.90</td></tr>
+        <tr><td>Concurrent bursts</td><td>10, 50, 100 at once, 5 s between</td><td>a burst holds both a 429 and a non-429 reply; stops at the first</td><td>Medium · 0.90</td></tr>
+        <tr><td>Identity switch</td><td>up to 20, then 1</td><td>429 for alpha, then beta is not 429</td><td>Medium · 0.90</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout note">
+    <div class="label">What it deliberately stays quiet about</div>
+    <p>It runs only at <code>--depth deep</code>, with a 900 s timeout and a time budget checked between endpoints, because the three measurements can send over 300 requests to each one. It uses a plain HTTP client on purpose, not the throttled one the other scanners use. Requests carry no body and no credentials of their own, so a limiter that only counts failed logins, or only reacts to a particular payload, may never trip. A dropped connection ends the sequential loop and is treated like a run with no 429 seen.</p>
+  </div>
+</section>
+
+<footer class="foot">
+  <span>Source: <a href="../scanners/rate-limit-scanner.md">docs/scanners/rate-limit-scanner.md</a> · <a href="../../isitsecure/engine/scanners/rate_limit_scanner.py">rate_limit_scanner.py</a></span>
+  <span>Group: <a href="group-auth-sessions.html">Authentication and sessions</a> · Related: <a href="auth-bypass.html">Auth bypass</a> · <a href="password-reset.html">Password reset</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+</body>
+</html>

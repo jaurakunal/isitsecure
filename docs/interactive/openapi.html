@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>OpenAPI Spec Scanner · isitsecure</title>
+<meta name="description" content="How the static OpenAPI scanner finds spec files in the repository and runs six regex checks over them: missing global security, http servers, Basic auth, API keys in the query, security overrides and sensitive paths.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  /* files scene */
+  #files-s .tag { font-size: 11px; }
+  #files-s .row-f { transition: opacity .4s ease; }
+  #files-s.s2 .row-f.drop-ext { opacity: .35; }
+  #files-s.s3 .row-f.drop-ext, #files-s.s3 .row-f.drop-marker { opacity: .35; }
+
+  /* checks scene: spec lines get a band, rows dim to the active one */
+  #checks-s .band { fill: var(--attacker-soft); opacity: 0; transition: opacity .4s ease; }
+  #checks-s[data-step="1"] .band { opacity: .6; }
+  #checks-s[data-step="2"] .b1 { opacity: 1; }
+  #checks-s[data-step="3"] .b2 { opacity: 1; }
+  #checks-s[data-step="4"] .b3 { opacity: 1; }
+  #checks-s[data-step="5"] .b4 { opacity: 1; }
+  #checks-s[data-step="6"] .b5 { opacity: 1; }
+  #checks-s[data-step="7"] .b6 { opacity: 1; }
+  #checks-s .row { transition: opacity .4s ease; }
+  #checks-s[data-step="2"] .row:not(.r1), #checks-s[data-step="3"] .row:not(.r2), #checks-s[data-step="4"] .row:not(.r3), #checks-s[data-step="5"] .row:not(.r4), #checks-s[data-step="6"] .row:not(.r5), #checks-s[data-step="7"] .row:not(.r6) { opacity: .3; }
+  #checks-s[data-step="2"] .r1 > .node > rect, #checks-s[data-step="3"] .r2 > .node > rect, #checks-s[data-step="4"] .r3 > .node > rect, #checks-s[data-step="5"] .r4 > .node > rect, #checks-s[data-step="6"] .r5 > .node > rect, #checks-s[data-step="7"] .r6 > .node > rect { }
+  #checks-s[data-step="2"] .r1 > .node > rect, #checks-s[data-step="3"] .r2 > .node > rect, #checks-s[data-step="4"] .r3 > .node > rect,
+  #checks-s[data-step="5"] .r4 > .node > rect, #checks-s[data-step="6"] .r5 > .node > rect, #checks-s[data-step="7"] .r6 > .node > rect { stroke: var(--accent); stroke-width: 2.5; }
+  #checks-s .gnote { opacity: 0; transition: opacity .4s; }
+
+  /* guard scene */
+  #guard-s .card-r { transition: opacity .4s ease; }
+  #guard-s[data-step="2"] .cb, #guard-s[data-step="2"] .cc,
+  #guard-s[data-step="3"] .ca, #guard-s[data-step="3"] .cc,
+  #guard-s[data-step="4"] .ca, #guard-s[data-step="4"] .cb { opacity: .3; }
+  #guard-s[data-step="2"] .ca > rect.frame, #guard-s[data-step="3"] .cb > rect.frame, #guard-s[data-step="4"] .cc > rect.frame { stroke: var(--accent); stroke-width: 2.5; }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› <a href="group-surface.html">Attack surface and exposure</a> › OpenAPI spec</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/openapi-scanner.md" title="The markdown source for this page">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">SAST scanner</div>
+  <h1>OpenAPI Spec Scanner</h1>
+  <p class="lede">An API spec is a map of every route and what it demands. This scanner reads the spec files committed in your repository and asks six questions of their text: is there a global security requirement, is every server HTTPS, is Basic auth used, is an API key put in the query string, does any operation switch security off, and do sensitive-looking paths sit in a spec with no global security.</p>
+  <div class="meta">
+    <span class="pill sast">SAST</span><span class="pill high">Medium to High</span><span class="pill">API exposure</span><span class="pill">repository only</span><span class="pill">no LLM</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#files"><span class="n">01</span>Which files are specs</a>
+  <a href="#checks"><span class="n">02</span>Six regex checks</a>
+  <a href="#guard"><span class="n">03</span>The global-security guard</a>
+  <a href="#why"><span class="n">04</span>Why it matters</a>
+  <a href="#fix"><span class="n">05</span>Vulnerable vs fixed</a>
+  <a href="#limits"><span class="n">06</span>Limits</a>
+</nav>
+
+<section id="files">
+  <h2>Which files are specs</h2>
+  <p class="prose">There is no list of file names. The scanner walks the repository's in-memory file index and keeps a file only if it passes two gates: its extension, then a marker in its text. This is the static scanner for specs <em>in your repo</em>; probing a live target for a served <code>/openapi.json</code> is a different job, done by <a href="endpoint-discovery.html">endpoint discovery</a>.</p>
+
+  <div class="scene" id="files-s" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 290" role="img" aria-label="Five repository files pass through two gates. Gate one keeps .yaml, .yml and .json; gate two keeps files that contain an openapi or swagger marker. openapi.yaml and swagger.json survive and are scanned.">
+        <defs><marker id="arr-oa1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g class="node" transform="translate(10 14)"><rect width="320" height="236" rx="10"/>
+          <text class="ttl" x="14" y="26">Repository file index</text>
+          <g class="row-f"><text class="mono" x="14" y="62">openapi.yaml</text><text class="lbl at-3 t-safe tag" x="306" y="62" text-anchor="end">spec</text></g>
+          <g class="row-f"><text class="mono" x="14" y="98">api/swagger.json</text><text class="lbl at-3 t-safe tag" x="306" y="98" text-anchor="end">spec</text></g>
+          <g class="row-f drop-marker"><text class="mono" x="14" y="134">package.json</text><text class="lbl at-3 tag" x="306" y="134" text-anchor="end">no marker</text></g>
+          <g class="row-f drop-ext"><text class="mono" x="14" y="170">docs/api.md</text><text class="lbl at-2 tag" x="306" y="170" text-anchor="end">wrong extension</text></g>
+          <g class="row-f drop-marker"><text class="mono" x="14" y="206">k8s/config.yml</text><text class="lbl at-3 tag" x="306" y="206" text-anchor="end">no marker</text></g>
+        </g>
+        <path class="wire" d="M330 132 H 368" marker-end="url(#arr-oa1)"/>
+        <g class="node lit-2" transform="translate(370 14)"><rect width="250" height="106" rx="10"/>
+          <text class="mono t-accent" x="14" y="26">1</text><text class="ttl" x="34" y="26">Extension</text>
+          <g class="mono"><text x="14" y="56">.yaml  .yml  .json</text></g>
+          <text class="lbl" x="14" y="82">a path ending in any of these</text>
+        </g>
+        <g class="node lit-3" transform="translate(370 136)"><rect width="250" height="114" rx="10"/>
+          <text class="mono t-accent" x="14" y="26">2</text><text class="ttl" x="34" y="26">Marker in the text</text>
+          <g class="mono"><text x="14" y="54">openapi:   swagger:</text><text x="14" y="72">"openapi":  "swagger":</text></g>
+          <text class="lbl" x="14" y="98">regex match anywhere in the file</text>
+        </g>
+        <path class="wire at-3" d="M620 190 H 658" marker-end="url(#arr-oa1)"/>
+        <g class="node at-3 lit-3" transform="translate(660 60)"><rect width="290" height="170" rx="10"/>
+          <text class="ttl" x="14" y="26">Spec files</text>
+          <g class="mono"><text x="14" y="56">openapi.yaml</text><text x="14" y="76">api/swagger.json</text></g>
+          <text class="lbl" x="14" y="106">each runs all six checks</text>
+          <text class="lbl" x="14" y="124">an error in one file is logged;</text>
+          <text class="lbl" x="14" y="140">the next file still runs</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The scanner reads files already in memory from repository ingestion. It needs no network, no credentials and no LLM, and it never asks for a particular name: <code>openapi.yaml</code>, <code>api/swagger.json</code> and <code>spec/v2.yml</code> are treated alike.</p>
+      <p class="step"><span class="n">2</span><b>Gate one: extension.</b> Only paths ending in <code>.yaml</code>, <code>.yml</code> or <code>.json</code> go on. A Markdown file that quotes <code>openapi: 3.0</code> is dropped here.</p>
+      <p class="step"><span class="n">3</span><b>Gate two: marker.</b> The text must match <code>openapi:</code>, <code>swagger:</code>, <code>"openapi":</code> or <code>"swagger":</code>. That keeps <code>package.json</code> and ordinary config out. What survives is the spec set, and every spec gets the six checks.</p>
+    </div>
+  </div>
+</section>
+
+<section id="checks">
+  <h2>Six regex checks</h2>
+  <p class="prose">Each check is a regular expression over the raw text of the file. There is no YAML or JSON parser, so there is no notion of "this operation" or "this server entry"; a pattern either appears or it does not. The sample below is built to trip all six.</p>
+
+  <div class="scene" id="checks-s" data-scene data-interval="3600">
+    <figure class="stage">
+      <svg viewBox="0 0 960 366" role="img" aria-label="A sample OpenAPI spec on the left and six checks on the right. Each check highlights the lines it matches: missing top-level security, an http server URL, Basic auth, an API key in the query, security empty array, and a sensitive path.">
+        <g class="node" transform="translate(0 0)"><rect x="10" y="8" width="450" height="350" rx="10"/>
+          <g class="mono" style="font-size:11.5px">
+          <rect class="band b1" x="16" y="197" width="428" height="16" rx="3"/>
+          <rect class="band b1" x="16" y="316" width="428" height="16" rx="3"/>
+          <rect class="band b2" x="16" y="61" width="428" height="16" rx="3"/>
+          <rect class="band b3" x="16" y="231" width="428" height="33" rx="3"/>
+          <rect class="band b4" x="16" y="282" width="428" height="33" rx="3"/>
+          <rect class="band b5" x="16" y="163" width="428" height="16" rx="3"/>
+          <rect class="band b6" x="16" y="95" width="428" height="16" rx="3"/>
+          <text x="26" y="40" style="white-space:pre">openapi: 3.0.0</text>
+          <text x="26" y="57" style="white-space:pre">servers:</text>
+          <text x="26" y="74" style="white-space:pre">  - url: http://api.example.com</text>
+          <text x="26" y="91" style="white-space:pre">paths:</text>
+          <text x="26" y="108" style="white-space:pre">  /payments:</text>
+          <text x="26" y="125" style="white-space:pre">    post: {}</text>
+          <text x="26" y="142" style="white-space:pre">  /health:</text>
+          <text x="26" y="159" style="white-space:pre">    get:</text>
+          <text x="26" y="176" style="white-space:pre">      security: []</text>
+          <text x="26" y="193" style="white-space:pre">components:</text>
+          <text x="26" y="210" style="white-space:pre">  securitySchemes:</text>
+          <text x="26" y="227" style="white-space:pre">    basic:</text>
+          <text x="26" y="244" style="white-space:pre">      type: http</text>
+          <text x="26" y="261" style="white-space:pre">      scheme: basic</text>
+          <text x="26" y="278" style="white-space:pre">    key:</text>
+          <text x="26" y="295" style="white-space:pre">      type: apiKey</text>
+          <text x="26" y="312" style="white-space:pre">      in: query</text>
+          </g>
+          <text class="lbl" x="26" y="329" style="font-style:italic">(no line begins with security:)</text>
+        </g>
+        <g class="row r1" transform="translate(480 6)"><g class="node"><rect width="472" height="50" rx="8"/><text class="mono t-accent" x="12" y="21">1</text><text class="ttl" x="32" y="21">No global security</text><text class="lbl" x="32" y="39">securitySchemes missing, or no line starting security:</text><text class="t-attacker" x="460" y="21" text-anchor="end" style="font-weight:600;font-size:12px">HIGH · 0.85</text></g></g>
+        <g class="row r2" transform="translate(480 64)"><g class="node"><rect width="472" height="50" rx="8"/><text class="mono t-accent" x="12" y="21">2</text><text class="ttl" x="32" y="21">Plain-HTTP server</text><text class="lbl" x="32" y="39">url: http://… unless localhost, 127.0.0.1, 0.0.0.0</text><text class="t-accent" x="460" y="21" text-anchor="end" style="font-weight:600;font-size:12px">MEDIUM · 0.80</text></g></g>
+        <g class="row r3" transform="translate(480 122)"><g class="node"><rect width="472" height="50" rx="8"/><text class="mono t-accent" x="12" y="21">3</text><text class="ttl" x="32" y="21">Basic auth</text><text class="lbl" x="32" y="39">type: http, then scheme: basic within 50 characters</text><text class="t-accent" x="460" y="21" text-anchor="end" style="font-weight:600;font-size:12px">MEDIUM · 0.85</text></g></g>
+        <g class="row r4" transform="translate(480 180)"><g class="node"><rect width="472" height="50" rx="8"/><text class="mono t-accent" x="12" y="21">4</text><text class="ttl" x="32" y="21">API key in query</text><text class="lbl" x="32" y="39">type: apiKey, then in: query within 50 characters</text><text class="t-accent" x="460" y="21" text-anchor="end" style="font-weight:600;font-size:12px">MEDIUM · 0.85</text></g></g>
+        <g class="row r5" transform="translate(480 238)"><g class="node"><rect width="472" height="50" rx="8"/><text class="mono t-accent" x="12" y="21">5</text><text class="ttl" x="32" y="21">Auth switched off</text><text class="lbl" x="32" y="39">security: [] anywhere in the file</text><text class="t-accent" x="460" y="21" text-anchor="end" style="font-weight:600;font-size:12px">MEDIUM · 0.80</text></g></g>
+        <g class="row r6" transform="translate(480 296)"><g class="node"><rect width="472" height="50" rx="8"/><text class="mono t-accent" x="12" y="21">6</text><text class="ttl" x="32" y="21">Sensitive path</text><text class="lbl" x="32" y="39">7 path words; only if no top-level security: line</text><text class="t-attacker" x="460" y="21" text-anchor="end" style="font-weight:600;font-size:12px">HIGH · 0.75</text></g></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>One spec, six findings, one per check. Highlighted lines are what each regex latches onto.</p>
+      <p class="step"><span class="n">2</span><b>No global security.</b> Fires when either <code>securitySchemes</code> (or <code>securityDefinitions</code>) is missing <b>or</b> no line starts with <code>security:</code> at column 0. Here the scheme is defined but never applied, so every endpoint is public by default. HIGH, 0.85.</p>
+      <p class="step"><span class="n">3</span><b>HTTP server.</b> A <code>url:</code> that starts with <code>http://</code>, skipped for <code>localhost</code>, <code>127.0.0.1</code> and <code>0.0.0.0</code>. One finding per URL: traffic to the API is unencrypted. MEDIUM, 0.80.</p>
+      <p class="step"><span class="n">4</span><b>Basic auth.</b> <code>type: http</code> followed within 50 characters by <code>scheme: basic</code>. Credentials travel Base64-encoded on every request. MEDIUM, 0.85.</p>
+      <p class="step"><span class="n">5</span><b>API key in the query.</b> <code>type: apiKey</code> followed within 50 characters by <code>in: query</code>. Keys in URLs end up in server logs, browser history and proxy logs. MEDIUM, 0.85.</p>
+      <p class="step"><span class="n">6</span><b>Security switched off.</b> Any <code>security: []</code> opts that part of the API out of authentication. One finding per occurrence; the check cannot tell which operation it belongs to. MEDIUM, 0.80.</p>
+      <p class="step"><span class="n">7</span><b>Sensitive path.</b> A path key starting with <code>/admin</code>, <code>/users</code>, <code>/payment(s)</code>, <code>/billing</code>, <code>/token(s)</code>, <code>/auth</code> or <code>/secret(s)</code>, reported only when the file has <b>no top-level <code>security:</code> line</b>. HIGH, 0.75.</p>
+    </div>
+  </div>
+</section>
+
+<section id="guard">
+  <h2>The global-security guard</h2>
+  <p class="prose">Checks 1 and 6 both hinge on one pattern, <code>^security\s*:</code>, matched per line. A spec that applies a requirement at the top level silences both. How the pattern reads three kinds of file shows what it protects and where it misleads.</p>
+
+  <div class="scene" id="guard-s" data-scene data-interval="3800">
+    <figure class="stage">
+      <svg viewBox="0 0 960 304" role="img" aria-label="Three specs against the pattern that a line must begin with security colon. A YAML top-level security line matches and silences the checks. An indented security under one operation does not match, so the spec is flagged. A JSON file with a top-level security key does not match either, because the line starts with spaces and a quote, so it is flagged although protected.">
+        <g class="card-r ca"><rect class="frame" x="10" y="14" width="300" height="190" rx="10" style="fill:var(--surface-2);stroke:var(--line);stroke-width:1.5"/>
+          <text class="ttl" x="26" y="42">A · YAML, top-level</text>
+          <g class="mono" style="font-size:11px"><text x="26" y="72" style="white-space:pre">security:</text><text x="26" y="90" style="white-space:pre">  - bearerAuth: []</text><text x="26" y="108" style="white-space:pre">paths:</text></g>
+          <text class="lbl" x="26" y="140">line 1 starts with security:</text>
+          <rect x="26" y="156" width="268" height="30" rx="6" class="soft-safe"/><text class="t-safe" x="38" y="176" style="font-weight:600;font-size:12.5px">matches · checks 1 and 6 silent</text>
+        </g>
+        <g class="card-r cb"><rect class="frame" x="330" y="14" width="300" height="190" rx="10" style="fill:var(--surface-2);stroke:var(--line);stroke-width:1.5"/>
+          <text class="ttl" x="346" y="42">B · only one operation</text>
+          <g class="mono" style="font-size:11px"><text x="346" y="72" style="white-space:pre">paths:</text><text x="346" y="90" style="white-space:pre">  /orders:</text><text x="346" y="108" style="white-space:pre">    get:</text><text x="346" y="126" style="white-space:pre">      security: [ { b: [] } ]</text></g>
+          <text class="lbl" x="346" y="148">indented, so not a top-level line</text>
+          <rect x="346" y="156" width="268" height="30" rx="6" class="soft-attacker"/><text class="t-attacker" x="358" y="176" style="font-weight:600;font-size:12.5px">no match · flagged HIGH</text>
+        </g>
+        <g class="card-r cc"><rect class="frame" x="650" y="14" width="300" height="190" rx="10" style="fill:var(--surface-2);stroke:var(--line);stroke-width:1.5"/>
+          <text class="ttl" x="666" y="42">C · JSON, top-level</text>
+          <g class="mono" style="font-size:11px"><text x="666" y="72" style="white-space:pre">{</text><text x="666" y="90" style="white-space:pre">  "openapi": "3.0.0",</text><text x="666" y="108" style="white-space:pre">  "security": [{"b": []}],</text></g>
+          <text class="lbl" x="666" y="140">line starts with spaces and a quote</text>
+          <rect x="666" y="156" width="268" height="30" rx="6" class="soft-attacker"/><text class="t-attacker" x="678" y="176" style="font-weight:600;font-size:12.5px">no match · flagged although protected</text>
+        </g>
+        <text class="lbl" x="10" y="238">pattern, applied to each line:</text>
+        <text class="mono t-accent" x="10" y="258" style="font-size:12px">^security\s*:</text>
+        <text class="lbl" x="10" y="286">With a match, check 1 passes (given a scheme) and check 6 never runs. Without one, both can fire.</text>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The pattern asks one thing: does any line <b>begin</b> with <code>security:</code>? That is a YAML idiom, and the three cases below differ in whether it holds.</p>
+      <p class="step"><span class="n">2</span><b>Case A.</b> A top-level <code>security:</code> block in YAML is found. A requirement is applied to the whole API, so check 1 stays quiet when a scheme exists and the sensitive-path check never runs.</p>
+      <p class="step"><span class="n">3</span><b>Case B.</b> <code>security:</code> under a single operation is indented, so it is not global. That is the right outcome: one guarded route does not make the rest of the API protected, and the spec is flagged.</p>
+      <p class="step"><span class="n">4</span><b>Case C.</b> A JSON spec with a top-level <code>"security"</code> key does not match, because the line starts with whitespace and a quote. Such a spec is flagged as having no global security even though it has one. For JSON specs, read checks 1 and 6 as "verify by hand".</p>
+    </div>
+  </div>
+</section>
+
+<section id="why">
+  <h2>Why it matters</h2>
+  <div class="callout why">
+    <div class="label">Why it matters</div>
+    <p>OpenAPI specs are often served at <code>/docs</code>, <code>/swagger</code> or <code>/api-docs</code> in production. They hand an attacker the complete API map (every endpoint, parameter and response schema), which routes need authentication and which do not, any internal admin routes, and the exact field names and types for crafting payloads.</p>
+  </div>
+  <div class="callout breach">
+    <div class="label">Real-world context</div>
+    <p>Exposed Swagger or OpenAPI documentation is a common bug bounty finding. Attackers routinely check <code>/api-docs</code>, <code>/swagger.json</code> and <code>/openapi.yaml</code> as their first reconnaissance step, and use the spec to pick the most promising targets.</p>
+  </div>
+</section>
+
+<section id="fix">
+  <h2>Vulnerable vs fixed</h2>
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true">BAD · the spec itself</button>
+      <button class="tab good" role="tab" aria-selected="false">GOOD · https, bearer, global security</button>
+    </div>
+    <div role="tabpanel"><pre><code><span class="c"># BAD: nothing applies authentication, and the transport is plain HTTP</span>
+openapi: 3.0.0
+servers:
+<span class="hl bad">  - url: http://api.example.com</span>
+paths:
+  /payments:
+    post: {}
+components:
+  securitySchemes:
+<span class="hl bad">    basic: { type: http, scheme: basic }</span>
+    key:   { type: apiKey, in: query, name: api_key }</code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c"># GOOD: https, a bearer scheme, and a requirement applied to the whole API</span>
+openapi: 3.0.0
+servers:
+<span class="hl good">  - url: https://api.example.com</span>
+<span class="hl good">security:</span>
+<span class="hl good">  - bearerAuth: []</span>
+paths:
+  /payments:
+    post: {}
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer }</code></pre></div>
+  </div>
+
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true">BAD · spec UI served to everyone</button>
+      <button class="tab good" role="tab" aria-selected="false">GOOD · dev only, or behind auth</button>
+    </div>
+    <div role="tabpanel"><pre><code><span class="c">// BAD: the interactive spec is public in production</span>
+<span class="hl bad">app.use("/api-docs", swaggerUi.serve)</span></code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c">// GOOD: don't serve the spec in production, only in development</span>
+<span class="hl good">if (process.env.NODE_ENV === "development") {</span>
+  app.use("/api-docs", swaggerUi.serve)
+}
+
+<span class="c">// GOOD: if you must serve it, add auth</span>
+<span class="hl good">app.use("/api-docs", authMiddleware, swaggerUi.serve)</span>
+
+<span class="c">// Keep a separate internal-api.yaml for internal routes</span></code></pre></div>
+  </div>
+  <p class="prose">The static scanner reads what is committed; it cannot tell whether the UI is served. Fixing the spec text clears these six findings, and not serving the spec in production removes the reconnaissance value that makes the findings matter.</p>
+</section>
+
+<section id="limits">
+  <h2>Limits</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Topic</th><th>Behaviour</th></tr></thead>
+    <tbody>
+      <tr><td>Needs</td><td>An indexed repository. No credentials, no LLM key, no external binary. Without a repo it does not run.</td></tr>
+      <tr><td>Matching</td><td>Regex over raw text. Comments and example values count as text, so a commented-out <code>security: []</code> would also match.</td></tr>
+      <tr><td>Multiplicity</td><td>One finding for check 1 per file; checks 2, 5 and 6 report once per match (per URL, per path key, per <code>security: []</code>); checks 3 and 4 once per file.</td></tr>
+      <tr><td>Categories</td><td>Checks 1, 3, 5 and 6 report as auth weakness; the HTTP server as mixed content; the API key in the query as exposed secrets.</td></tr>
+      <tr><td>Overlap</td><td>A path such as <code>/admin/users:</code> matches both the <code>/admin</code> and <code>/users</code> patterns and is reported twice.</td></tr>
+      <tr><td>Not covered</td><td>Example values holding real keys or PII, and freeform object parameters, are not inspected. Those are listed in the markdown doc but have no check in the code.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<footer class="foot">
+  <span>Source: <a href="../scanners/openapi-scanner.md">openapi-scanner.md</a></span>
+  <span>Related: <a href="group-surface.html">Attack surface and exposure</a> · <a href="http-probe.html">HTTP probe</a> · <a href="graphql.html">GraphQL</a> · <a href="endpoint-discovery.html">Endpoint discovery</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+</body>
+</html>

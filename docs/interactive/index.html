@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>isitsecure</title>
+<meta name="description" content="Open-source security scanner for modern web apps. SAST, DAST and LLM code review in one scan, explained with animated walkthroughs of every scanner.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  .hero-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 28px; align-items: center; }
+  @media (max-width: 760px) { .hero-grid { grid-template-columns: 1fr; } }
+  .cta { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 1.4rem; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; padding: .55em 1.2em; font-size: .95rem; }
+  .btn.primary:hover { color: #fff; filter: brightness(1.08); }
+  .btn.big { padding: .55em 1.2em; font-size: .95rem; }
+  .hero-art { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); padding: 12px; box-shadow: var(--shadow); }
+  .hero-art svg { display: block; width: 100%; height: auto; color: var(--fg); }
+  .hero-art svg text { fill: currentColor; font-size: 11px; font-family: var(--font-mono); }
+  .hero-art .node > rect { fill: var(--surface-2); stroke: var(--line); stroke-width: 1.5; }
+  .hero-art .wire { stroke: var(--line); stroke-width: 1.5; fill: none; }
+  .hero-art .beam { stroke: var(--accent); stroke-width: 2; fill: none; stroke-dasharray: 6 6; animation: flow 1s linear infinite; }
+  .hero-art .pk { fill: var(--accent); }
+  .install { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr)); gap: 16px; margin: 1.2rem 0 0; }
+  .install > * { min-width: 0; }
+  .cmd { position: relative; }
+  .cmd .label { font-family: var(--font-mono); font-size: .72rem; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+  .cmd pre { margin: 0; padding-right: 4.5rem; }
+  .cmd button { position: absolute; top: 28px; right: 8px; font: inherit; font-size: .75rem; color: var(--code-fg); background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.18); border-radius: 6px; padding: .2em .6em; cursor: pointer; }
+  .cmd button:hover { border-color: var(--code-k); color: var(--code-k); }
+  .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); gap: 14px; margin: 1.4rem 0 0; }
+  .fact { border-top: 2px solid var(--accent); padding-top: 10px; }
+  .fact b { display: block; font-family: var(--font-display); font-size: 1.6rem; line-height: 1.1; }
+  .fact span { color: var(--muted); font-size: .9rem; }
+  .thumb svg .n > rect, .thumb svg .n > circle { fill: var(--surface); stroke: var(--muted); stroke-width: 1.3; }
+  .thumb svg .w { stroke: var(--muted); stroke-width: 1.3; fill: none; }
+  .thumb svg .a { stroke: var(--accent); }
+  .thumb svg .fa { fill: var(--accent); }
+  .thumb svg .fr { fill: var(--attacker); }
+  .thumb svg .fs { fill: var(--safe); }
+  .thumb svg .fi { fill: var(--info); }
+  .thumb svg .r { stroke: var(--attacker); }
+  .thumb svg .s { stroke: var(--safe); }
+  .group-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; margin-top: 3rem; }
+  .group-title .count { font-family: var(--font-mono); font-size: .75rem; color: var(--muted); }
+  .howto { display: flex; flex-wrap: wrap; gap: 10px 22px; font-size: .9rem; color: var(--muted); margin: 1rem 0 0; }
+  .howto kbd { font-family: var(--font-mono); font-size: .78em; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: .05em .4em; background: var(--surface); color: var(--fg); }
+  .card .count { font-family: var(--font-mono); font-size: .72rem; color: var(--muted); }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure</a>
+  <span class="crumb">how it works</span>
+  <span class="spacer"></span>
+  <a class="btn" href="https://github.com/jaurakunal/isitsecure">GitHub</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="hero-grid">
+    <div>
+      <div class="eyebrow">Open-source security scanner</div>
+      <h1>Know if your app is secure before you ship it</h1>
+      <p class="lede">isitsecure attacks your running site, reads your source code, and has a language model review the risky parts. One scan, one graded report, and patches for what it finds. These pages show how each part works, step by step.</p>
+      <div class="cta">
+        <a class="btn primary" href="#install">Install and scan</a>
+        <a class="btn big" href="scan-pipeline.html">Watch a scan run</a>
+        <a class="btn big" href="https://github.com/jaurakunal/isitsecure">View on GitHub</a>
+      </div>
+    </div>
+    <div class="hero-art" aria-hidden="true">
+      <svg viewBox="0 0 400 180">
+        <g class="node"><rect x="10" y="70" width="90" height="40" rx="8"/><text x="55" y="94" text-anchor="middle">your app</text></g>
+        <g class="node"><rect x="155" y="20" width="90" height="34" rx="8"/><text x="200" y="41" text-anchor="middle">DAST ×16</text></g>
+        <g class="node"><rect x="155" y="73" width="90" height="34" rx="8"/><text x="200" y="94" text-anchor="middle">auth DAST</text></g>
+        <g class="node"><rect x="155" y="126" width="90" height="34" rx="8"/><text x="200" y="147" text-anchor="middle">SAST ×18</text></g>
+        <g class="node"><rect x="300" y="70" width="90" height="40" rx="8"/><text x="345" y="94" text-anchor="middle">grade A–F</text></g>
+        <path class="beam" d="M100 85 C 128 85, 128 37, 155 37"/>
+        <path class="beam" d="M100 90 H 155"/>
+        <path class="beam" d="M100 95 C 128 95, 128 143, 155 143"/>
+        <path class="wire" d="M245 37 C 272 37, 272 85, 300 85"/>
+        <path class="wire" d="M245 90 H 300"/>
+        <path class="wire" d="M245 143 C 272 143, 272 95, 300 95"/>
+        <circle class="pk" r="4"><animateMotion dur="2.4s" repeatCount="indefinite" path="M245 37 C 272 37, 272 85, 300 85"/></circle>
+        <circle class="pk" r="4"><animateMotion dur="2.4s" begin="0.8s" repeatCount="indefinite" path="M245 90 H 300"/></circle>
+        <circle class="pk" r="4"><animateMotion dur="2.4s" begin="1.6s" repeatCount="indefinite" path="M245 143 C 272 143, 272 95, 300 95"/></circle>
+      </svg>
+    </div>
+  </div>
+  <div class="facts">
+    <div class="fact"><b>42+</b><span>rule-based scanners, live and static</span></div>
+    <div class="fact"><b>4 languages</b><span>TypeScript, Python, Java/Kotlin, Go</span></div>
+    <div class="fact"><b>$0</b><span>with no API key; ~$5–15 with LLM review</span></div>
+    <div class="fact"><b>find → fix</b><span>patches, pull requests, and an MCP server</span></div>
+  </div>
+</header>
+
+<section id="install">
+  <h2>Install and run a scan</h2>
+  <p class="prose">Needs Python 3.11+ and git. The installer sets up an isolated environment and runs first-time setup. Nothing here needs an API key; add one to turn on the LLM review.</p>
+  <div class="install">
+    <div class="cmd"><div class="label">Install · macOS / Linux</div><pre><code>curl -fsSLo install.sh \
+  https://raw.githubusercontent.com/jaurakunal/isitsecure/main/install.sh
+bash install.sh</code></pre><button type="button" data-copy>Copy</button></div>
+    <div class="cmd"><div class="label">Scan a live site</div><pre><code>isitsecure scan https://your-app.com --llm none</code></pre><button type="button" data-copy>Copy</button></div>
+    <div class="cmd"><div class="label">Scan source code</div><pre><code>isitsecure scan --repo ./your-app \
+  --mode code-only --llm none</code></pre><button type="button" data-copy>Copy</button></div>
+    <div class="cmd"><div class="label">Scan and fix everything</div><pre><code>isitsecure fix --repo ./your-app --dry-run</code></pre><button type="button" data-copy>Copy</button></div>
+  </div>
+  <p class="muted small">Windows installer, manual install, MCP setup and every flag are in the <a href="https://github.com/jaurakunal/isitsecure#install">README</a>.</p>
+</section>
+
+<section id="how">
+  <h2>How it works</h2>
+  <p class="prose">Start here. The architecture page explains how a scan is built and run; the others zoom into one stage.</p>
+  <div class="howto"><span><kbd>▶</kbd> play / pause a figure</span><span><kbd>←</kbd> <kbd>→</kbd> step when a figure is focused</span><span><kbd>☾</kbd> theme</span><span>Motion is off if your system prefers reduced motion.</span></div>
+  <div class="cards">
+    <a class="card" href="architecture.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><g class="n"><rect x="10" y="10" width="52" height="16" rx="3"/><rect x="10" y="32" width="52" height="16" rx="3"/><rect x="10" y="54" width="52" height="16" rx="3"/><rect x="84" y="28" width="40" height="24" rx="4"/><rect x="146" y="28" width="46" height="24" rx="4"/></g><path class="w a" d="M62 18 C 74 18, 74 40, 84 40 M62 40 H84 M62 62 C 74 62, 74 40, 84 40 M124 40 H146"/><circle class="fa" cx="104" cy="40" r="3"/></svg></div>
+      <h3>Architecture deep dive</h3><p>Three entry points, one engine. How it is wired, the state every phase reads and writes, the concurrency model and the event stream.</p>
+      <div class="foot"><span class="pill">6 figures</span><span class="pill">data flow grid</span></div>
+    </a>
+    <a class="card" href="scan-pipeline.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><g class="n"><rect x="8" y="28" width="30" height="24" rx="4"/><rect x="48" y="28" width="30" height="24" rx="4"/><rect x="88" y="28" width="30" height="24" rx="4"/><rect x="128" y="28" width="30" height="24" rx="4"/><rect x="168" y="28" width="24" height="24" rx="4"/></g><path class="w a" d="M38 40H48M78 40H88M118 40H128M158 40H168"/><circle class="fa" cx="23" cy="40" r="4"/></svg></div>
+      <h3>The scan pipeline</h3><p>Twenty phases in five stages, and which of them run with the inputs you give.</p>
+      <div class="foot"><span class="pill">architecture.md</span></div>
+    </a>
+    <a class="card" href="sast-dast-correlation.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><g class="n"><rect x="8" y="12" width="64" height="22" rx="4"/><rect x="8" y="46" width="64" height="22" rx="4"/><rect x="120" y="28" width="72" height="24" rx="4"/></g><text x="40" y="27" text-anchor="middle" class="fr">DAST</text><text x="40" y="61" text-anchor="middle" class="fi">SAST</text><path class="w a" d="M72 23 C 100 23, 100 40, 120 40 M72 57 C 100 57, 100 40, 120 40"/><text x="156" y="44" text-anchor="middle">confirmed</text></svg></div>
+      <h3>SAST ↔ DAST correlation</h3><p>Paired findings confirm each other, and code findings generate new dynamic tests.</p>
+      <div class="foot"><span class="pill">architecture.md</span></div>
+    </a>
+    <a class="card" href="triage-and-grading.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><path class="w" d="M20 12 H180 L150 36 H50 Z M50 36 H150 L128 58 H72 Z"/><g class="n"><rect x="72" y="58" width="56" height="14" rx="3"/></g><text x="100" y="22" text-anchor="middle">raw findings</text><text x="100" y="50" text-anchor="middle">dedup</text><text x="100" y="69" text-anchor="middle" class="fs">grade A–F</text></svg></div>
+      <h3>Triage and grading</h3><p>Dedup without an LLM, remediation scope, the impact × likelihood matrix and the grade ladder.</p>
+      <div class="foot"><span class="pill">architecture.md</span></div>
+    </a>
+    <a class="card" href="mcp-loop.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><g class="n"><rect x="6" y="30" width="40" height="20" rx="4"/><rect x="54" y="30" width="48" height="20" rx="4"/><rect x="110" y="30" width="34" height="20" rx="4"/><rect x="152" y="30" width="44" height="20" rx="4"/></g><text x="26" y="44" text-anchor="middle" style="font-size:9px">scan</text><text x="78" y="44" text-anchor="middle" style="font-size:9px">explain</text><text x="127" y="44" text-anchor="middle" style="font-size:9px">fix</text><text x="174" y="44" text-anchor="middle" style="font-size:9px">verify</text><path class="w a" d="M46 40H54M102 40H110M144 40H152"/><path class="w" d="M174 50 V 66 H 26 V 50"/></svg></div>
+      <h3>The MCP remediation loop</h3><p>Scan, explain, fix and verify from inside Cursor or Claude Code.</p>
+      <div class="foot"><span class="pill">mcp.md</span></div>
+    </a>
+  </div>
+</section>
+
+<section id="groups">
+  <h2>The scanners, by what they look for</h2>
+  <p class="prose">Every scanner has its own animated page. Each group page first explains what the scanners in it have in common, then links to the individual pages.</p>
+  <div class="cards">
+    <a class="card" href="group-injection.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><text x="12" y="30" class="fr">' OR '1'='1' --</text><path class="w" d="M12 40 H 188"/><text x="12" y="62">response: ORA-01756</text><circle class="fs" cx="180" cy="58" r="5"/></svg></div>
+      <h3>Injection</h3><p>SQL, command, NoSQL, XXE and template injection; XSS; SSRF; file upload; taint analysis.</p>
+      <div class="foot"><span class="count">6 scanners</span></div></a>
+    <a class="card" href="group-access-control.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><text x="12" y="30">User B →</text><text x="76" y="30" class="fr">GET /api/tasks/42</text><text x="12" y="58">200</text><text x="40" y="58">{ owner: "user-a" }</text><circle class="fr" cx="186" cy="54" r="5"/></svg></div>
+      <h3>Access control</h3><p>IDOR, cross-user access, Row Level Security, route auth, privilege escalation, mass assignment.</p>
+      <div class="foot"><span class="count">6 scanners</span></div></a>
+    <a class="card" href="group-auth-sessions.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><g class="n"><rect x="8" y="28" width="56" height="24" rx="4"/><rect x="72" y="28" width="56" height="24" rx="4"/><rect x="136" y="28" width="56" height="24" rx="4" style="stroke-dasharray:3 3"/></g><text x="36" y="44" text-anchor="middle">header</text><text x="100" y="44" text-anchor="middle">payload</text><text x="164" y="44" text-anchor="middle" class="fr">forged</text></svg></div>
+      <h3>Authentication and sessions</h3><p>JWT forgery, token storage and cookie flags, login bypass, password reset, rate limiting.</p>
+      <div class="foot"><span class="count">5 scanners</span></div></a>
+    <a class="card" href="group-browser-defenses.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><g class="n"><rect x="10" y="14" width="80" height="52" rx="4"/><rect x="110" y="14" width="80" height="52" rx="4"/></g><text x="50" y="44" text-anchor="middle">your origin</text><text x="150" y="44" text-anchor="middle" class="fr">evil.com</text><path class="w r" d="M110 40 H90"/></svg></div>
+      <h3>Browser-side defenses</h3><p>CSRF, CORS, open redirects, security headers, mixed content, SRI, source maps, client exposure.</p>
+      <div class="foot"><span class="count">8 scanners</span></div></a>
+    <a class="card" href="group-business-logic.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><text x="10" y="26">A</text><text x="10" y="58">B</text><path class="w" d="M24 22H190M24 54H190"/><circle class="fi" cx="60" cy="22" r="4"/><circle class="fi" cx="64" cy="54" r="4"/><circle class="fr" cx="150" cy="22" r="4"/><circle class="fr" cx="154" cy="54" r="4"/></svg></div>
+      <h3>Business logic</h3><p>Race conditions, price manipulation and flow abuse that only reasoning can find.</p>
+      <div class="foot"><span class="count">4 scanners</span></div></a>
+    <a class="card" href="group-surface.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><g class="n"><rect x="10" y="14" width="56" height="52" rx="4"/></g><text x="38" y="30" text-anchor="middle">shell</text><path class="w a" d="M66 40 C 90 40, 90 22, 110 22 M66 40 C 90 40, 90 58, 110 58"/><g class="n"><rect x="104" y="12" width="90" height="20" rx="4"/><rect x="104" y="48" width="90" height="20" rx="4"/></g><text x="149" y="26" text-anchor="middle" style="font-size:9px">GET /api/Users</text><text x="149" y="62" text-anchor="middle" style="font-size:9px">/file-upload</text></svg></div>
+      <h3>Attack surface</h3><p>Endpoint discovery, exposed files, method tampering, GraphQL, OpenAPI.</p>
+      <div class="foot"><span class="count">4 scanners</span></div></a>
+    <a class="card" href="group-secrets-dependencies.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><text x="12" y="28" class="fr">sk_live_51abc…</text><text x="12" y="48" class="muted">commit 3f2a · removed</text><text x="12" y="66" class="fr">still in git history</text></svg></div>
+      <h3>Secrets and dependencies</h3><p>Keys in git history, known CVEs in npm, Python and Java packages, live OSV lookups.</p>
+      <div class="foot"><span class="count">5 scanners</span></div></a>
+    <a class="card" href="group-infrastructure.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><text x="12" y="26">FROM node:latest</text><text x="12" y="44" class="fr">USER root</text><text x="12" y="62">EXPOSE 22</text><path class="w r" d="M130 40 H 188"/></svg></div>
+      <h3>Infrastructure configuration</h3><p>Dockerfiles, Kubernetes manifests, Terraform and shell scripts.</p>
+      <div class="foot"><span class="count">4 scanners</span></div></a>
+    <a class="card" href="group-schema-middleware.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><g class="n"><rect x="12" y="12" width="70" height="56" rx="4"/><rect x="118" y="12" width="70" height="56" rx="4"/></g><text x="47" y="30" text-anchor="middle">/api/*</text><text x="153" y="30" text-anchor="middle">matcher</text><path class="w a" d="M82 40 H118"/><text x="47" y="56" text-anchor="middle" class="fr">uncovered</text></svg></div>
+      <h3>Schemas and middleware</h3><p>Prisma, Drizzle, Firebase rules, and middleware that does not cover every route.</p>
+      <div class="foot"><span class="count">5 scanners</span></div></a>
+  </div>
+</section>
+
+<footer class="foot">
+  <span><a href="https://github.com/jaurakunal/isitsecure">github.com/jaurakunal/isitsecure</a> · Apache-2.0</span>
+  <span>Markdown sources: <a href="../architecture.md">architecture.md</a> · <a href="../scanners/README.md">scanners/</a> · <a href="../taint-analysis.md">taint-analysis.md</a> · <a href="../mcp.md">mcp.md</a></span>
+  <span>These pages are static HTML in <code>docs/interactive/</code>; open any of them locally with no build step.</span>
+</footer>
+</main>
+<script src="assets/isdoc.js"></script>
+<script>
+  document.querySelectorAll("[data-copy]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var code = btn.parentElement.querySelector("code");
+      var text = code ? code.textContent : "";
+      function done() { btn.textContent = "Copied"; setTimeout(function () { btn.textContent = "Copy"; }, 1400); }
+      function fallback() {
+        var r = document.createRange(); r.selectNodeContents(code);
+        var s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
+        btn.textContent = "Selected"; setTimeout(function () { btn.textContent = "Copy"; }, 1400);
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, fallback); else fallback();
+    });
+  });
+</script>
+</body>
+</html>

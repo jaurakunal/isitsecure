@@ -1,0 +1,477 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Race Conditions · isitsecure</title>
+<meta name="description" content="How a time-of-check-to-time-of-use race lets two requests spend the same balance, how isitsecure fires concurrent copies of a mutation to detect it, and how a row lock or an atomic update closes the gap. Animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  /* TOCTOU timeline: the check-to-write gap lights up, the balance counter swaps */
+  #toctou .gap { fill: var(--attacker-soft); stroke: var(--attacker); stroke-dasharray: 4 4; opacity: 0; transition: opacity .45s; }
+  #toctou.s3 .gap { opacity: 1; }
+  #toctou .bal { font-family: var(--font-display); font-weight: 700; font-size: 30px; }
+  #toctou .axis { stroke: var(--line); stroke-width: 1.5; fill: none; }
+  #toctou .lane { stroke: var(--line); stroke-dasharray: 2 6; }
+  #toctou.s5 .db > rect { stroke: var(--attacker) !important; stroke-width: 2.5 !important; }
+
+  /* scanner: the shared connection pipe and the status grid */
+  #scanner .pipe { stroke: var(--line); stroke-width: 10; stroke-linecap: round; fill: none; transition: stroke .35s; }
+  #scanner.s2 .pipe { stroke: var(--accent-soft); }
+  #scanner .pipe-core { stroke: var(--line); stroke-width: 1.5; fill: none; transition: stroke .35s; }
+  #scanner.s2 .pipe-core { stroke: var(--accent); }
+  #scanner .cell > rect { fill: var(--surface-2); stroke: var(--line); transition: fill .35s, stroke .35s; }
+  #scanner.s4 .cell.ok > rect { fill: var(--safe-soft); stroke: var(--safe); }
+  #scanner.s4 .cell.no > rect { fill: var(--surface-2); stroke: var(--line); }
+  #scanner.s6 .cell.ok.late > rect { fill: var(--surface-2); stroke: var(--line); }
+  #scanner .cand { transition: opacity .35s; }
+  #scanner.s2 .cand.skip, #scanner.s2 .cand.other { opacity: .35; }
+  #scanner .verdict > rect { transition: fill .35s, stroke .35s; }
+
+  /* fixed: lock badge, blocked lane, atomic band */
+  #fixed .blocked > rect { stroke-dasharray: 5 4; }
+  #fixed .lock { fill: var(--accent); }
+  #fixed .bal { font-family: var(--font-display); font-weight: 700; font-size: 26px; }
+  #fixed .lane { stroke: var(--line); stroke-dasharray: 2 6; }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› Race Conditions</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/race-condition-scanner.md" title="The markdown source for this page">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">DAST scanner · special</div>
+  <h1>Race Conditions</h1>
+  <p class="lede">A balance check and the write that follows it are two separate steps. Two requests that arrive together can both pass the check before either writes. isitsecure provokes exactly that by sending identical copies of a mutation at the same instant and counting how many the server accepts.</p>
+  <div class="meta">
+    <span class="pill dast">DAST</span><span class="pill high">High</span><span class="pill crit">Critical</span><span class="pill">Business logic</span><span class="pill">TOCTOU</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#race"><span class="n">01</span>The race</a>
+  <a href="#scanner-sec"><span class="n">02</span>How the scanner tests it</a>
+  <a href="#fix"><span class="n">03</span>The fix</a>
+  <a href="#why"><span class="n">04</span>Why it matters</a>
+  <a href="#code"><span class="n">05</span>Vulnerable vs fixed code</a>
+  <a href="#limits"><span class="n">06</span>Limits</a>
+</nav>
+
+<section id="race">
+  <h2>The race: check, gap, write</h2>
+  <p class="prose">The endpoint reads a balance, checks it covers the amount, then writes the new balance. Nothing stops a second request from reading the same old balance in the gap between the check and the write. Two lanes, one row in the database.</p>
+
+  <div class="scene" id="toctou" data-scene data-interval="3000">
+    <figure class="stage">
+      <svg viewBox="0 0 960 330" role="img" aria-label="Two requests A and B on parallel lanes each read balance 100, check 100 is at least 50, and write 100 minus 50. Both read before either writes, so the balance ends at 50 instead of 0.">
+        <defs><marker id="arr-rc1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <!-- time axis -->
+        <path class="axis" d="M110 296 H 740" marker-end="url(#arr-rc1)"/>
+        <text class="lbl" x="110" y="314">time</text>
+        <!-- lane guides -->
+        <line class="lane" x1="110" y1="100" x2="740" y2="100"/>
+        <line class="lane" x1="110" y1="210" x2="740" y2="210"/>
+        <text class="ttl" x="20" y="92">Request A</text>
+        <text class="lbl" x="20" y="108">redeem 50</text>
+        <text class="ttl" x="20" y="202">Request B</text>
+        <text class="lbl" x="20" y="218">redeem 50</text>
+
+        <!-- the gap band (step 3 on) -->
+        <rect class="gap" x="508" y="40" width="54" height="236" rx="6"/>
+        <text class="lbl at-3 t-attacker" x="535" y="30" text-anchor="middle">the gap</text>
+
+        <!-- lane A -->
+        <g class="node at-2 lit-2" transform="translate(120 70)">
+          <rect width="150" height="60" rx="8"/>
+          <text class="ttl" x="12" y="24">READ</text>
+          <text class="mono" x="12" y="46">balance = 100</text>
+        </g>
+        <path class="wire at-2" d="M270 100 H 318" marker-end="url(#arr-rc1)"/>
+        <g class="node at-3 lit-3" transform="translate(320 70)">
+          <rect width="180" height="60" rx="8"/>
+          <text class="ttl" x="12" y="24">CHECK</text>
+          <text class="mono" x="12" y="46">100 ≥ 50  <tspan class="t-safe">passes</tspan></text>
+        </g>
+        <path class="wire at-4" d="M500 100 H 568" marker-end="url(#arr-rc1)"/>
+        <g class="node at-4 lit-4" transform="translate(570 70)">
+          <rect width="170" height="60" rx="8"/>
+          <text class="ttl" x="12" y="24">WRITE</text>
+          <text class="mono" x="12" y="46">100 − 50 = 50</text>
+        </g>
+
+        <!-- lane B (a little later in time) -->
+        <g class="node at-2 lit-2" transform="translate(150 180)">
+          <rect width="150" height="60" rx="8"/>
+          <text class="ttl" x="12" y="24">READ</text>
+          <text class="mono" x="12" y="46">balance = 100</text>
+        </g>
+        <path class="wire at-2" d="M300 210 H 338" marker-end="url(#arr-rc1)"/>
+        <g class="node at-3 lit-3" transform="translate(340 180)">
+          <rect width="160" height="60" rx="8"/>
+          <text class="ttl" x="12" y="24">CHECK</text>
+          <text class="mono" x="12" y="46">100 ≥ 50  <tspan class="t-safe">passes</tspan></text>
+        </g>
+        <path class="wire at-5" d="M500 210 H 588" marker-end="url(#arr-rc1)"/>
+        <g class="node at-5 lit-5" transform="translate(590 180)">
+          <rect width="150" height="60" rx="8"/>
+          <text class="ttl" x="12" y="24">WRITE</text>
+          <text class="mono" x="12" y="46">100 − 50 = 50</text>
+        </g>
+
+        <!-- database row -->
+        <g class="node db" transform="translate(790 60)">
+          <rect width="150" height="150" rx="10"/>
+          <text class="ttl" x="12" y="24">credits row</text>
+          <text class="lbl" x="12" y="42">user_id = 7</text>
+          <text class="lbl" x="12" y="76">balance</text>
+          <text class="bal until-4" x="12" y="112">100</text>
+          <text class="bal at-4" x="12" y="112">50</text>
+          <text class="lbl at-5 t-attacker" x="12" y="136">should be 0</text>
+        </g>
+        <!-- outcome -->
+        <g class="only-5" transform="translate(790 230)">
+          <text class="t-attacker" style="font-weight:600" x="0" y="0">Spent 100 of balance,</text>
+          <text class="t-attacker" style="font-weight:600" x="0" y="18">got 2× the value.</text>
+        </g>
+        <g class="only-1" transform="translate(120 140)">
+          <text class="lbl" x="0" y="0">Two identical POST /redeem requests arrive within the same few milliseconds.</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Two identical requests, A and B, each ask to redeem 50 credits from a balance of 100. They arrive together, so the server handles them on two concurrent workers against the same row.</p>
+      <p class="step"><span class="n">2</span><b>Read.</b> Both workers read the balance before either has changed it. Both see 100.</p>
+      <p class="step"><span class="n">3</span><b>Check.</b> Both compare 100 ≥ 50 and both pass. The gap between this check and the write is the vulnerability: the value being checked is already stale for one of them.</p>
+      <p class="step"><span class="n">4</span><b>Write (A).</b> A writes 100 − 50 and the row becomes 50. Correct so far.</p>
+      <p class="step"><span class="n">5</span><b>Write (B).</b> B also writes 100 − 50, computed from the 100 it read earlier, so the row stays at 50 instead of reaching 0. <b>The user spent 100 of balance and received twice the value.</b></p>
+    </div>
+  </div>
+</section>
+
+<section id="scanner-sec">
+  <h2>How the scanner tests it</h2>
+  <p class="prose">The scanner does not reason about the code. It picks the state-changing requests the authenticated crawl already saw succeed, fires N identical copies of one at the same instant over one shared connection, and counts how many the server accepts. One success is normal. Two or more means the check did not hold.</p>
+
+  <div class="scene" id="scanner" data-scene data-interval="3000">
+    <figure class="stage">
+      <svg viewBox="0 0 960 340" role="img" aria-label="The scanner selects state-changing endpoints, opens one shared HTTP connection to the target, fires ten identical POST requests at once, receives the responses and flags the endpoint when two or more return success.">
+        <defs><marker id="arr-rc2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <!-- candidates -->
+        <g class="node lit-1" transform="translate(230 14)">
+          <rect width="500" height="130" rx="8"/>
+          <text class="ttl" x="12" y="22">State-changing requests seen during the authenticated crawl</text>
+          <g class="mono">
+            <g class="cand pick"><text x="12" y="46">POST  /api/wallet/redeem      {"amount": 50}</text><text class="lbl" x="372" y="46">balance deduction</text></g>
+            <g class="cand other"><text x="12" y="64">POST  /api/coupons/apply      {"code": "SAVE20"}</text><text class="lbl" x="372" y="64">one-time code</text></g>
+            <g class="cand other"><text x="12" y="82">PUT   /api/polls/9/vote       {"choice": 2}</text><text class="lbl" x="372" y="82">one vote per user</text></g>
+            <g class="cand other"><text x="12" y="100">POST  /api/users              {"email": …}</text><text class="lbl" x="372" y="100">unique constraint</text></g>
+            <g class="cand skip"><text class="lbl" x="12" y="118">GET   /api/wallet</text><text class="lbl t-attacker" x="372" y="118">read only, skipped</text></g>
+          </g>
+        </g>
+        <!-- scanner -->
+        <g class="node lit-2" transform="translate(20 150)">
+          <rect width="170" height="96" rx="10"/>
+          <text class="ttl" x="12" y="24">Scanner</text>
+          <text class="lbl" x="12" y="44">race_condition_scanner</text>
+          <text class="lbl" x="12" y="62">replays A's own session</text>
+          <text class="lbl at-3" x="12" y="82">N = 10 identical copies</text>
+        </g>
+        <!-- target -->
+        <g class="node lit-4" transform="translate(756 150)">
+          <rect width="184" height="96" rx="10"/>
+          <text class="ttl" x="12" y="24">Target</text>
+          <text class="mono" x="12" y="46">POST /api/wallet/redeem</text>
+          <text class="lbl" x="12" y="66">read · check · write</text>
+          <text class="lbl" x="12" y="84">on every copy</text>
+        </g>
+        <!-- the single shared connection -->
+        <path class="pipe" d="M190 198 H 756"/>
+        <path class="pipe-core at-2" d="M190 198 H 756"/>
+        <text class="lbl at-2 t-accent" x="480" y="178" text-anchor="middle">one httpx client · one shared connection · all copies in flight together</text>
+        <g id="rc-packets"></g>
+        <!-- response grid -->
+        <text class="lbl at-4" x="230" y="268">responses</text>
+        <g class="mono at-4">
+          <g class="cell ok" transform="translate(230 276)"><rect width="42" height="26" rx="5"/><text x="21" y="18" text-anchor="middle" class="t-safe">201</text></g>
+          <g class="cell ok late" transform="translate(278 276)"><rect width="42" height="26" rx="5"/><text class="until-6 t-safe" x="21" y="18" text-anchor="middle">201</text><text class="only-6" x="21" y="18" text-anchor="middle">409</text></g>
+          <g class="cell ok late" transform="translate(326 276)"><rect width="42" height="26" rx="5"/><text class="until-6 t-safe" x="21" y="18" text-anchor="middle">201</text><text class="only-6" x="21" y="18" text-anchor="middle">409</text></g>
+          <g class="cell no" transform="translate(374 276)"><rect width="42" height="26" rx="5"/><text x="21" y="18" text-anchor="middle">409</text></g>
+          <g class="cell no" transform="translate(422 276)"><rect width="42" height="26" rx="5"/><text x="21" y="18" text-anchor="middle">409</text></g>
+          <g class="cell no" transform="translate(470 276)"><rect width="42" height="26" rx="5"/><text x="21" y="18" text-anchor="middle">409</text></g>
+          <g class="cell no" transform="translate(518 276)"><rect width="42" height="26" rx="5"/><text x="21" y="18" text-anchor="middle">409</text></g>
+          <g class="cell no" transform="translate(566 276)"><rect width="42" height="26" rx="5"/><text x="21" y="18" text-anchor="middle">409</text></g>
+          <g class="cell no" transform="translate(614 276)"><rect width="42" height="26" rx="5"/><text x="21" y="18" text-anchor="middle">409</text></g>
+          <g class="cell no" transform="translate(662 276)"><rect width="42" height="26" rx="5"/><text x="21" y="18" text-anchor="middle">409</text></g>
+        </g>
+        <!-- verdict -->
+        <g class="node verdict at-5 lit-5" transform="translate(730 258)">
+          <rect width="210" height="66" rx="8" class="until-6 soft-attacker"/>
+          <rect width="210" height="66" rx="8" class="only-6 soft-safe"/>
+          <g class="until-6"><text class="ttl t-attacker" x="12" y="22">3 of 10 succeeded</text><text class="lbl" x="12" y="40">2xx count ≥ 2</text><text class="lbl" x="12" y="56">flag: HIGH · confidence 0.80</text></g>
+          <g class="only-6"><text class="ttl t-safe" x="12" y="22">1 of 10 succeeded</text><text class="lbl" x="12" y="40">below the threshold of 2</text><text class="lbl" x="12" y="56">not flagged</text></g>
+        </g>
+        <g class="only-3" transform="translate(230 268)"><text class="lbl">ten copies leave in one burst, same body, same session headers</text></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span><b>Pick targets.</b> From the requests captured while crawling as the logged-in user, keep the state-changing ones (POST, PUT, PATCH) that carried a body and got a success. Balance deductions, coupon redemption, votes and account creation are the shapes where a double success costs something. Reads are skipped, and one request per path is kept.</p>
+      <p class="step"><span class="n">2</span><b>One connection.</b> The copies are sent through a single shared HTTP client, so they travel the same connection and reach the server as close together as the network allows. Separate connections would spread them out and hide the race.</p>
+      <p class="step" data-on="rcFire"><span class="n">3</span><b>Fire.</b> Ten identical copies of the request leave in one burst, byte-for-byte the same body and the same session headers as the original.</p>
+      <p class="step" data-on="rcReply"><span class="n">4</span><b>Responses.</b> Each copy gets its own status. A server that serialises correctly accepts one and rejects the rest; this one accepted three.</p>
+      <p class="step"><span class="n">5</span><b>Decision.</b> Count the copies that returned 200, 201 or 204. <b>Two or more successes means the endpoint has a race condition</b>: it is reported as HIGH with confidence 0.80, and the success count goes in the description.</p>
+      <p class="step"><span class="n">6</span><b>The quiet case.</b> One success and nine rejections is exactly what a locked or atomic implementation produces, so nothing is reported. Any 2xx below the threshold is treated as normal.</p>
+    </div>
+  </div>
+
+  <div class="callout note">
+    <div class="label">Also triggered from code</div>
+    <p>When the LLM code review flags a route as a check-then-act pattern, SAST-guided DAST generates the same test for that route directly: five concurrent identical mutations, fired even if the crawl never exercised the endpoint.</p>
+  </div>
+</section>
+
+<section id="fix">
+  <h2>The fix: make the check and the write one step</h2>
+  <p class="prose">Either hold a row lock from the read until the write, so the second request has to wait and then reads the real value, or move the check into the write itself so the database performs both atomically. The scene uses the Starbucks shape: both requests try to spend the whole balance.</p>
+
+  <div class="scene" id="fixed" data-scene data-interval="3200">
+    <figure class="stage">
+      <svg viewBox="0 0 960 340" role="img" aria-label="With SELECT FOR UPDATE, request A locks the row, request B waits, A commits balance 0, then B reads 0 and its check fails. Below, the atomic UPDATE with WHERE balance greater or equal to the amount updates one row for A and zero rows for B.">
+        <defs><marker id="arr-rc3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <text class="ttl" x="20" y="24">1 · Row lock: SELECT … FOR UPDATE</text>
+        <line class="lane" x1="110" y1="70" x2="740" y2="70"/>
+        <line class="lane" x1="110" y1="150" x2="740" y2="150"/>
+        <text class="ttl" x="20" y="66">A</text><text class="lbl" x="20" y="82">spend 100</text>
+        <text class="ttl" x="20" y="146">B</text><text class="lbl" x="20" y="162">spend 100</text>
+
+        <!-- lane A -->
+        <g class="node lit-1" transform="translate(110 46)">
+          <rect width="190" height="48" rx="8"/>
+          <text class="mono" x="12" y="20">SELECT … FOR UPDATE</text>
+          <text class="lbl" x="12" y="38">lock taken · balance = 100</text>
+        </g>
+        <path class="wire at-2" d="M300 70 H 328" marker-end="url(#arr-rc3)"/>
+        <g class="node at-2 lit-2" transform="translate(330 46)">
+          <rect width="170" height="48" rx="8"/>
+          <text class="mono" x="12" y="20">100 ≥ 100  <tspan class="t-safe">passes</tspan></text>
+          <text class="lbl" x="12" y="38">UPDATE balance = 0</text>
+        </g>
+        <path class="wire at-2" d="M500 70 H 528" marker-end="url(#arr-rc3)"/>
+        <g class="node at-2 lit-2" transform="translate(530 46)">
+          <rect width="110" height="48" rx="8"/>
+          <text class="mono" x="12" y="20">COMMIT</text>
+          <text class="lbl" x="12" y="38">lock released</text>
+        </g>
+
+        <!-- lane B -->
+        <g class="node blocked lit-1" transform="translate(140 126)">
+          <rect width="190" height="48" rx="8"/>
+          <text class="mono" x="12" y="20">SELECT … FOR UPDATE</text>
+          <text class="lbl until-3 t-accent" x="12" y="38">blocked: waiting for the lock</text>
+          <text class="lbl at-3" x="12" y="38">lock acquired · balance = 0</text>
+        </g>
+        <path class="wire at-3" d="M330 150 H 358" marker-end="url(#arr-rc3)"/>
+        <g class="node at-3 lit-3" transform="translate(360 126)">
+          <rect width="170" height="48" rx="8"/>
+          <text class="mono" x="12" y="20">0 ≥ 100  <tspan class="t-attacker">fails</tspan></text>
+          <text class="lbl" x="12" y="38">throw "Insufficient"</text>
+        </g>
+        <path class="wire at-3" d="M530 150 H 558" marker-end="url(#arr-rc3)"/>
+        <g class="node at-3 lit-3" transform="translate(560 126)">
+          <rect width="120" height="48" rx="8"/>
+          <text class="mono" x="12" y="20">ROLLBACK</text>
+          <text class="lbl" x="12" y="38">nothing written</text>
+        </g>
+
+        <!-- db -->
+        <g class="node db" transform="translate(790 40)">
+          <rect width="150" height="136" rx="10"/>
+          <text class="ttl" x="12" y="24">credits row</text>
+          <text class="lbl" x="12" y="42">user_id = 7</text>
+          <text class="lbl" x="12" y="70">balance</text>
+          <text class="bal until-2" x="12" y="104">100</text>
+          <text class="bal at-2" x="12" y="104">0</text>
+          <g class="until-2" transform="translate(100 58)"><rect class="lock" x="0" y="8" width="26" height="20" rx="4"/><path d="M5 8 V2 a8 8 0 0 1 16 0 V8" fill="none" stroke="var(--accent)" stroke-width="3"/><text class="lbl t-accent" x="13" y="48" text-anchor="middle">A holds</text></g>
+          <g class="only-2" transform="translate(100 58)"><text class="lbl t-safe" x="13" y="48" text-anchor="middle">free</text></g>
+          <g class="only-3" transform="translate(100 58)"><rect class="lock" x="0" y="8" width="26" height="20" rx="4"/><path d="M5 8 V2 a8 8 0 0 1 16 0 V8" fill="none" stroke="var(--accent)" stroke-width="3"/><text class="lbl t-accent" x="13" y="48" text-anchor="middle">B holds</text></g>
+          <g class="at-4" transform="translate(100 58)"><text class="lbl t-safe" x="13" y="48" text-anchor="middle">free</text></g>
+          <text class="lbl at-3 t-safe" x="12" y="128">spent 100, got 100</text>
+        </g>
+
+        <!-- atomic alternative -->
+        <g class="at-4">
+          <line class="lane" x1="20" y1="196" x2="940" y2="196"/>
+          <text class="ttl" x="20" y="222">2 · Atomic: the check lives inside the UPDATE</text>
+          <g class="node lit-4" transform="translate(20 236)">
+            <rect width="470" height="86" rx="8"/>
+            <text class="mono" x="12" y="22">UPDATE credits SET balance = balance − $1</text>
+            <text class="mono" x="12" y="40">WHERE user_id = $2 <tspan class="t-safe">AND balance ≥ $1</tspan></text>
+            <text class="mono" x="12" y="58">RETURNING balance</text>
+            <text class="lbl" x="12" y="76">one statement: no read, no gap, no lock to hold in application code</text>
+          </g>
+          <g class="node lit-4" transform="translate(510 236)">
+            <rect width="210" height="86" rx="8" class="soft-safe"/>
+            <text class="ttl" x="12" y="22">A</text>
+            <text class="mono" x="12" y="44">1 row updated</text>
+            <text class="mono" x="12" y="62">RETURNING 0</text>
+          </g>
+          <g class="node lit-4" transform="translate(740 236)">
+            <rect width="200" height="86" rx="8" class="soft-attacker"/>
+            <text class="ttl" x="12" y="22">B</text>
+            <text class="mono" x="12" y="44">0 rows updated</text>
+            <text class="lbl" x="12" y="62">WHERE matched nothing</text>
+            <text class="lbl" x="12" y="78">→ Insufficient</text>
+          </g>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span><b>Lock.</b> Inside a transaction, A reads the row with <code>SELECT … FOR UPDATE</code> and takes a row lock. B issues the same statement a moment later and blocks: it cannot read the row until A's transaction ends.</p>
+      <p class="step"><span class="n">2</span><b>A completes.</b> A checks 100 ≥ 100, writes balance 0 and commits. Committing releases the lock.</p>
+      <p class="step"><span class="n">3</span><b>B reads the truth.</b> B's read now returns 0, the committed value. Its check 0 ≥ 100 fails, it throws "Insufficient" and rolls back. <b>The second request was serialised behind the first, so it checked a real balance.</b></p>
+      <p class="step"><span class="n">4</span><b>Atomic alternative.</b> Fold the check into the write: <code>UPDATE … WHERE balance ≥ $1 RETURNING balance</code>. The database evaluates the condition and applies the change as one operation. A updates one row; for B the WHERE matches nothing, so <b>zero rows update and there is no gap to race</b>.</p>
+    </div>
+  </div>
+</section>
+
+<section id="why">
+  <h2>Why it matters</h2>
+  <div class="grid-2">
+    <div class="callout why">
+      <div class="label">What a double success buys</div>
+      <ul>
+        <li><b>Double-spend</b>: redeem credits or gift cards twice.</li>
+        <li><b>Free purchases</b>: exploit payment flows to get products without paying.</li>
+        <li><b>Bypass limits</b>: vote multiple times, create duplicate accounts.</li>
+        <li><b>Data corruption</b>: concurrent writes leave the database inconsistent.</li>
+      </ul>
+    </div>
+    <div class="callout breach">
+      <div class="label">Real-world breaches</div>
+      <p><b>Starbucks (2015).</b> Researchers demonstrated a race condition in Starbucks' gift card system that allowed duplicating gift card balances by simultaneously transferring the same balance to multiple cards.</p>
+      <p><b>Docker runc, CVE-2019-5736 (2019).</b> A TOCTOU race condition in runc allowed a malicious container to overwrite the host runc binary, gaining root-level access on the host system.</p>
+    </div>
+  </div>
+</section>
+
+<section id="code">
+  <h2>Vulnerable vs fixed code</h2>
+  <p class="prose">The vulnerable handler reads, checks and writes as three separate operations. The fixed versions either hold a row lock across all three or let the database do the check inside the write.</p>
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true">BAD · check-then-act</button>
+      <button class="tab good" role="tab" aria-selected="false">GOOD · row lock</button>
+      <button class="tab good" role="tab" aria-selected="false">GOOD · atomic update</button>
+    </div>
+    <div role="tabpanel"><pre><code><span class="c">// BAD: Check-then-act without locking</span>
+export async function POST(request: Request) {
+  const { amount } = await request.json()
+
+  <span class="c">// Read current balance</span>
+  const credits = await db.query(<span class="s">"credits"</span>, <span class="s">`user_id = '${userId}'`</span>)
+  const balance = credits[0].balance
+
+  <span class="c">// Check</span>
+  if (balance &lt; amount) return error(<span class="s">"Insufficient"</span>)
+
+<span class="hl bad">  <span class="c">// GAP: Another request can read the same balance here</span></span>
+
+  <span class="c">// Act</span>
+  await db.update(<span class="s">"credits"</span>, { balance: balance - amount })
+  return success({ redeemed: amount })
+}</code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c">// GOOD: Use a database transaction with row-level locking</span>
+export async function POST(request: Request) {
+  const { amount } = await request.json()
+
+  const result = await db.transaction(async (tx) =&gt; {
+    <span class="c">// SELECT ... FOR UPDATE locks the row</span>
+<span class="hl good">    const credits = await tx.query(
+      <span class="s">`SELECT * FROM credits WHERE user_id = $1 FOR UPDATE`</span>, [userId]
+    )</span>
+
+    if (credits[0].balance &lt; amount) {
+      throw new Error(<span class="s">"Insufficient"</span>)
+    }
+
+    await tx.query(
+      <span class="s">`UPDATE credits SET balance = balance - $1 WHERE user_id = $2`</span>,
+      [amount, userId]
+    )
+
+    return { redeemed: amount }
+  })
+
+  return NextResponse.json(result)
+}</code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c">// GOOD: Use atomic operations</span>
+await db.query(
+  <span class="s">`UPDATE credits SET balance = balance - $1</span>
+<span class="hl good">   <span class="s">WHERE user_id = $2 AND balance &gt;= $1</span></span>
+   <span class="s">RETURNING balance`</span>,
+  [amount, userId]
+)
+<span class="c">// If balance &lt; amount, zero rows updated — no race possible</span></code></pre></div>
+  </div>
+</section>
+
+<section id="limits">
+  <h2>Limits and configuration</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Setting</th><th>Value</th><th>Note</th></tr></thead>
+      <tbody>
+        <tr><td>Copies per endpoint</td><td>10</td><td><code>CONCURRENT_REQUESTS</code>; the SAST-guided variant fires 5</td></tr>
+        <tr><td>Flag threshold</td><td>2 successes</td><td>200, 201 or 204 among the copies</td></tr>
+        <tr><td>Methods replayed</td><td>POST, PUT, PATCH</td><td>the scanner doc also lists DELETE; the replay list in config is these three</td></tr>
+        <tr><td>Endpoints per scan</td><td>10</td><td>unique by path, first seen first; a cooperative time budget stops early</td></tr>
+        <tr><td>Input</td><td>intercepted authenticated requests</td><td>only mutations that carried a body and already succeeded once during the crawl</td></tr>
+        <tr><td>Severity · confidence</td><td>HIGH · 0.80</td><td>the success count varies run to run, so it lives in the description, not the title</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout note">
+    <div class="label">What it stays quiet about</div>
+    <p>The test needs a mutation the crawl saw succeed with a body, so an endpoint the logged-in user never touched is not replayed unless code review flags it. A server that legitimately accepts several copies (a balance large enough for two redemptions, or an endpoint that is idempotent by design) will still count as two successes; the finding reports the count so the reader can judge.</p>
+  </div>
+</section>
+
+<footer class="foot">
+  <span>Source: <a href="../scanners/race-condition-scanner.md">docs/scanners/race-condition-scanner.md</a></span>
+  <span>Related: <a href="scan-pipeline.html">The scan pipeline</a> · <a href="idor-bola.html">IDOR and BOLA</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+<script>
+(function () {
+  const LANE = "M200 198 H 746";
+  const BACK = "M746 198 H 200";
+  function svgOf(el) { return el.querySelector("svg"); }
+  window.rcFire = function (scene, step, el) {
+    const svg = svgOf(el); IsDoc.clearPackets(svg);
+    const layer = svg.querySelector("#rc-packets");
+    for (let i = 0; i < 10; i++) {
+      IsDoc.packet(svg, LANE, { r: 5, cls: "f-accent", duration: 1100, delay: i * 45, hold: 300, layer });
+    }
+  };
+  window.rcReply = function (scene, step, el) {
+    const svg = svgOf(el); IsDoc.clearPackets(svg);
+    const layer = svg.querySelector("#rc-packets");
+    const ok = [0, 1, 2];
+    for (let i = 0; i < 10; i++) {
+      IsDoc.packet(svg, BACK, { r: 5, cls: ok.includes(i) ? "f-safe" : "f-muted", duration: 1000, delay: 120 + i * 60, hold: 250, layer });
+    }
+  };
+})();
+</script>
+</body>
+</html>

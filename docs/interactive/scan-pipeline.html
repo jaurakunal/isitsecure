@@ -1,0 +1,515 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The Scan Pipeline · isitsecure</title>
+<meta name="description" content="How one isitsecure scan moves through discovery, dynamic testing, static analysis, correlation, triage and reporting — animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  /* page-specific: pipeline columns tick on with a stagger */
+  #pipeline .col .ph { opacity: .28; transition: opacity .4s ease; }
+  #pipeline .col .ph:nth-child(2) { transition-delay: .05s } #pipeline .col .ph:nth-child(3) { transition-delay: .15s }
+  #pipeline .col .ph:nth-child(4) { transition-delay: .25s } #pipeline .col .ph:nth-child(5) { transition-delay: .35s } #pipeline .col .ph:nth-child(6) { transition-delay: .45s }
+  #pipeline.s2 .c1 .ph, #pipeline.s3 .c2 .ph, #pipeline.s4 .c3 .ph, #pipeline.s5 .c4 .ph, #pipeline.s6 .c5 .ph { opacity: 1; }
+  #pipeline .col > rect { fill: var(--surface-2); stroke: var(--line); stroke-width: 1.5; transition: stroke .35s, fill .35s; }
+  #pipeline[data-step="2"] .c1 > rect, #pipeline[data-step="3"] .c2 > rect, #pipeline[data-step="4"] .c3 > rect,
+  #pipeline[data-step="5"] .c4 > rect, #pipeline[data-step="6"] .c5 > rect { stroke: var(--accent); stroke-width: 2.5; }
+  #pipeline .link { stroke: var(--line); stroke-width: 2; fill: none; transition: stroke .35s; }
+  #pipeline.s3 .l1, #pipeline.s4 .l2, #pipeline.s5 .l3, #pipeline.s6 .l4 { stroke: var(--accent); stroke-dasharray: 6 6; animation: flow 1s linear infinite; }
+
+  /* parallel scanners: bars scale with the step */
+  #parallel .bar { fill: var(--info); transform-box: fill-box; transform-origin: left center; transform: scaleX(0); transition: transform 1.4s cubic-bezier(.4,0,.2,1); }
+  #parallel.s2 .bar { transform: scaleX(var(--p1)); }
+  #parallel.s3 .bar { transform: scaleX(var(--p2)); }
+  #parallel.s6 .bar { transform: scaleX(1); }
+  #parallel .bar.probe { fill: var(--accent); }
+  #parallel.s4 .bar.probe, #parallel.s5 .bar.probe { transform: scaleX(.99); }
+  #parallel[data-step="4"] .bar.probe.cancelled { fill: var(--attacker); }
+  #parallel.s5 .bar.probe { fill: var(--safe); }
+  #parallel .track { fill: var(--surface-2); stroke: var(--line); }
+  #parallel .deadline { stroke: var(--attacker); stroke-dasharray: 3 3; }
+
+  /* degradation widget */
+  .degrade { display: grid; grid-template-columns: minmax(0, 240px) minmax(0, 1fr); gap: 18px; align-items: start; border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; background: var(--surface); margin: 1.4rem 0 2rem; }
+  @media (max-width: 640px) { .degrade { grid-template-columns: 1fr; } }
+  .degrade fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 8px; }
+  .degrade legend { font-family: var(--font-mono); font-size: .72rem; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+  .degrade label { display: flex; gap: 10px; align-items: center; font-size: .95rem; cursor: pointer; }
+  .degrade input { width: 16px; height: 16px; accent-color: var(--accent); }
+  .degrade ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: .9rem; }
+  .degrade li { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 10px; align-items: baseline; padding: 4px 8px; border-radius: 6px; transition: background .3s, opacity .3s; }
+  .degrade li .ph { font-family: var(--font-mono); font-size: .72rem; color: var(--muted); }
+  .degrade li .how { font-size: .8rem; color: var(--muted); text-align: right; }
+  .degrade li.on { background: var(--safe-soft); }
+  .degrade li.on .ph { color: var(--safe); }
+  .degrade li.fallback { background: var(--warn-soft); }
+  .degrade li.fallback .ph { color: var(--warn); }
+  .degrade li.off { opacity: .45; text-decoration: line-through; text-decoration-color: var(--line); }
+  .degrade .verdict { font-family: var(--font-mono); font-size: .8rem; margin-top: 12px; color: var(--muted); }
+  .degrade .verdict b { color: var(--fg); }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› The Scan Pipeline</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../architecture.md" title="The markdown source for this page">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">Architecture</div>
+  <h1>The Scan Pipeline</h1>
+  <p class="lede">One scan is a fixed sequence of phases. Each phase adds something the next one needs: discovery produces endpoints, dynamic tests produce findings, code analysis produces more, and the two sides are then matched against each other before the report is written.</p>
+  <div class="meta">
+    <span class="pill">20 phases</span><span class="pill dast">16 DAST scanners</span><span class="pill sast">18 SAST scanners</span><span class="pill llm">LLM review + triage</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#overview"><span class="n">01</span>End to end</a>
+  <a href="#discovery"><span class="n">02</span>Discovery</a>
+  <a href="#parallel-dast"><span class="n">03</span>Parallel scanners</a>
+  <a href="#sast"><span class="n">04</span>Code analysis</a>
+  <a href="#correlate"><span class="n">05</span>Correlation</a>
+  <a href="#degrade"><span class="n">06</span>What runs with what</a>
+  <a href="#dataflow"><span class="n">07</span>Data flow</a>
+</nav>
+
+<section id="overview">
+  <h2>One scan, end to end</h2>
+  <p class="prose">The twenty phases fall into five stages. Phases skip themselves when their input is missing: no repository means no static analysis, no credentials means no cross-user tests. Press play, or step through with the arrows.</p>
+
+  <div class="scene" id="pipeline" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 330" role="img" aria-label="Five stages of a scan: discover, dynamic testing, static analysis, correlate, report. Each stage lists its phases.">
+        <defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g class="link l1"><path d="M190 165 H206" marker-end="url(#arr)"/></g>
+        <g class="link l2"><path d="M378 165 H394" marker-end="url(#arr)"/></g>
+        <g class="link l3"><path d="M566 165 H582" marker-end="url(#arr)"/></g>
+        <g class="link l4"><path d="M754 165 H770" marker-end="url(#arr)"/></g>
+
+        <g class="col c1" transform="translate(16 24)">
+          <rect width="174" height="282" rx="10"/>
+          <text class="ttl" x="14" y="28">1 · Discover</text>
+          <text class="lbl" x="14" y="46">What is there to test?</text>
+          <g class="ph" transform="translate(14 72)"><text class="mono t-accent">1</text><text x="26" y="0">URL ingestion</text><text class="lbl" x="26" y="15">render page + capture JS</text></g>
+          <g class="ph" transform="translate(14 116)"><text class="mono t-accent">2</text><text x="26" y="0">Endpoint discovery</text><text class="lbl" x="26" y="15">JS · spec · forms · probing</text></g>
+          <g class="ph" transform="translate(14 160)"><text class="mono t-accent">3</text><text x="26" y="0">Authenticated crawl</text><text class="lbl" x="26" y="15">login · pages · owned IDs</text></g>
+          <g class="ph" transform="translate(14 204)"><text class="mono t-accent">3.5</text><text x="26" y="0">OOB registration</text><text class="lbl" x="26" y="15">callbacks for blind SSRF</text></g>
+        </g>
+
+        <g class="col c2" transform="translate(204 24)">
+          <rect width="174" height="282" rx="10"/>
+          <text class="ttl" x="14" y="28">2 · Dynamic (DAST)</text>
+          <text class="lbl" x="14" y="46">Real requests to the live app</text>
+          <g class="ph" transform="translate(14 72)"><text class="mono t-accent">4</text><text x="26" y="0">16 scanners in parallel</text><text class="lbl" x="26" y="15">XSS · SQLi · CSRF · SSRF…</text></g>
+          <g class="ph" transform="translate(14 116)"><text class="mono t-accent">5</text><text x="26" y="0">Authenticated DAST</text><text class="lbl" x="26" y="15">JWT · RLS · BOLA · privesc</text></g>
+          <g class="ph" transform="translate(14 160)"><text class="mono t-accent">5.5</text><text x="26" y="0">Probe analysis</text><text class="lbl" x="26" y="15">patterns across HTTP pairs</text></g>
+          <g class="ph" transform="translate(14 204)"><text class="mono t-accent">5.6</text><text x="26" y="0">OOB collection</text><text class="lbl" x="26" y="15">did anything call back?</text></g>
+        </g>
+
+        <g class="col c3" transform="translate(392 24)">
+          <rect width="174" height="282" rx="10"/>
+          <text class="ttl" x="14" y="28">3 · Static (SAST)</text>
+          <text class="lbl" x="14" y="46">Read the code without running it</text>
+          <g class="ph" transform="translate(14 72)"><text class="mono t-accent">6</text><text x="26" y="0">Repo ingestion</text><text class="lbl" x="26" y="15">clone · framework · routes</text></g>
+          <g class="ph" transform="translate(14 116)"><text class="mono t-accent">6.5</text><text x="26" y="0">Language server</text><text class="lbl" x="26" y="15">tsserver · pyright · jdtls</text></g>
+          <g class="ph" transform="translate(14 160)"><text class="mono t-accent">7</text><text x="26" y="0">18 scanners in parallel</text><text class="lbl" x="26" y="15">taint · auth · RLS · keys</text></g>
+          <g class="ph" transform="translate(14 204)"><text class="mono t-accent">7.5</text><text x="26" y="0">LSP validation</text><text class="lbl" x="26" y="15">trace auth, drop FPs</text></g>
+          <g class="ph" transform="translate(14 248)"><text class="mono t-accent">8</text><text x="26" y="0">LLM code review</text><text class="lbl" x="26" y="15">high-risk routes only</text></g>
+        </g>
+
+        <g class="col c4" transform="translate(580 24)">
+          <rect width="174" height="282" rx="10"/>
+          <text class="ttl" x="14" y="28">4 · Correlate</text>
+          <text class="lbl" x="14" y="46">Prove it from both sides</text>
+          <g class="ph" transform="translate(14 72)"><text class="mono t-accent">9</text><text x="26" y="0">Cross-reference</text><text class="lbl" x="26" y="15">DAST ↔ SAST on one route</text></g>
+          <g class="ph" transform="translate(14 116)"><text class="mono t-accent">9.1</text><text x="26" y="0">SAST-guided DAST</text><text class="lbl" x="26" y="15">code findings → new tests</text></g>
+          <g class="ph" transform="translate(14 160)"><text class="mono t-accent">9.2</text><text x="26" y="0">LLM business logic</text><text class="lbl" x="26" y="15">planned attacks on flows</text></g>
+          <g class="ph" transform="translate(14 204)"><text class="mono t-accent">9.4</text><text x="26" y="0">Injection adjudication</text><text class="lbl" x="26" y="15">baseline vs injected body</text></g>
+        </g>
+
+        <g class="col c5" transform="translate(768 24)">
+          <rect width="174" height="282" rx="10"/>
+          <text class="ttl" x="14" y="28">5 · Report</text>
+          <text class="lbl" x="14" y="46">Fewer, clearer, graded</text>
+          <g class="ph" transform="translate(14 72)"><text class="mono t-accent">9.5</text><text x="26" y="0">Triage</text><text class="lbl" x="26" y="15">dedup · enrich · grade</text></g>
+          <g class="ph" transform="translate(14 116)"><text class="mono t-accent">10</text><text x="26" y="0">DeepScanReport</text><text class="lbl" x="26" y="15">JSON · HTML · SARIF · MD</text></g>
+          <g class="ph" transform="translate(14 160)"><text class="mono t-accent">11</text><text x="26" y="0">Fix generation</text><text class="lbl" x="26" y="15">optional: patches + PRs</text></g>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">START</span>A scan takes up to four inputs: a <b>target URL</b>, a <b>repository</b>, <b>credentials</b> and an <b>LLM API key</b>. Which stages run depends on which of those are present.</p>
+      <p class="step"><span class="n">1 · DISCOVER</span>Playwright renders the page and captures every JavaScript bundle. Endpoints are pulled from the bundles, from any OpenAPI spec, from HTML forms, and by probing common API paths. With credentials, the crawler logs in and harvests the IDs the user owns.</p>
+      <p class="step"><span class="n">2 · DYNAMIC</span>Sixteen scanners send real requests in parallel, each inside its own timeout. Authenticated scanners run with two sessions so User B can try to reach User A's data. Blind vulnerabilities are caught by polling the out-of-band callback server.</p>
+      <p class="step"><span class="n">3 · STATIC</span>The repo is cloned and its framework detected. Route mappers list every API route, eighteen analyzers read the code, and a language server traces whether an auth guard really guards. Only high-risk routes are sent to the LLM.</p>
+      <p class="step"><span class="n">4 · CORRELATE</span>A dynamic finding and a static finding of paired categories confirm each other. Static findings also <b>generate</b> new dynamic tests that would not otherwise have run, and an LLM drops heuristic injection false positives.</p>
+      <p class="step"><span class="n">5 · REPORT</span>Triage collapses duplicates without an LLM, then enriches, calibrates severity and assigns an A–F grade. The report is written, and optionally turned into code patches and pull requests.</p>
+    </div>
+  </div>
+</section>
+
+<section id="discovery">
+  <h2>Discovery: finding the attack surface</h2>
+  <p class="prose">A scanner can only test an endpoint it knows about. Single-page apps hide their API in JavaScript, server-rendered apps expose it only in forms, and bare REST services may publish nothing but a spec. Four strategies cover all three.</p>
+
+  <div class="scene" id="discover" data-scene data-interval="3000">
+    <figure class="stage">
+      <svg viewBox="0 0 960 330" role="img" aria-label="A target app is probed four ways: JavaScript bundles, OpenAPI spec, HTML forms, and active path probing. Each feeds a shared endpoint inventory that is categorised and ranked.">
+        <defs><marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <!-- target -->
+        <g class="node lit-1" transform="translate(20 110)">
+          <rect width="150" height="110" rx="10"/>
+          <text class="ttl" x="14" y="26">Target app</text>
+          <text class="mono" x="14" y="50">https://app.example</text>
+          <text class="lbl" x="14" y="72">shell HTML + bundles</text>
+          <text class="lbl" x="14" y="88">forms · spec · /api</text>
+        </g>
+        <!-- four strategies -->
+        <g class="node at-2 lit-2" transform="translate(240 14)">
+          <rect width="250" height="62" rx="8"/>
+          <text class="ttl" x="12" y="22">JS bundles</text>
+          <text class="lbl" x="12" y="40">&lt;script src&gt; and &lt;link href=…js&gt;</text>
+          <text class="lbl" x="12" y="54">7 regexes: fetch, axios, from(), routes</text>
+        </g>
+        <g class="node at-3 lit-3" transform="translate(240 92)">
+          <rect width="250" height="62" rx="8"/>
+          <text class="ttl" x="12" y="22">OpenAPI / Swagger</text>
+          <text class="lbl" x="12" y="40">13 well-known spec paths per API base</text>
+          <text class="lbl" x="12" y="54">methods, {path} params, query params</text>
+        </g>
+        <g class="node at-4 lit-4" transform="translate(240 170)">
+          <rect width="250" height="62" rx="8"/>
+          <text class="ttl" x="12" y="22">HTML forms &amp; links</text>
+          <text class="lbl" x="12" y="40">&lt;form action&gt; + field names as params</text>
+          <text class="lbl" x="12" y="54">&lt;a href&gt; links carrying ?query</text>
+        </g>
+        <g class="node at-5 lit-5" transform="translate(240 248)">
+          <rect width="250" height="62" rx="8"/>
+          <text class="ttl" x="12" y="22">Active probing</text>
+          <text class="lbl" x="12" y="40">/api · /graphql · /rest/v1/ …</text>
+          <text class="lbl" x="12" y="54">paths that no bundle mentions</text>
+        </g>
+        <!-- wires target → strategies -->
+        <path class="wire at-2" d="M170 150 C 205 150, 205 45, 238 45" marker-end="url(#arr2)"/>
+        <path class="wire at-3" d="M170 150 C 205 150, 205 123, 238 123" marker-end="url(#arr2)"/>
+        <path class="wire at-4" d="M170 165 C 205 165, 205 201, 238 201" marker-end="url(#arr2)"/>
+        <path class="wire at-5" d="M170 165 C 205 165, 205 279, 238 279" marker-end="url(#arr2)"/>
+        <!-- wires strategies → inventory -->
+        <path class="wire at-2" d="M490 45 C 530 45, 530 140, 568 140" marker-end="url(#arr2)"/>
+        <path class="wire at-3" d="M490 123 C 530 123, 530 150, 568 150" marker-end="url(#arr2)"/>
+        <path class="wire at-4" d="M490 201 C 530 201, 530 160, 568 160" marker-end="url(#arr2)"/>
+        <path class="wire at-5" d="M490 279 C 530 279, 530 170, 568 170" marker-end="url(#arr2)"/>
+        <!-- inventory -->
+        <g class="node at-2 lit-6" transform="translate(570 60)">
+          <rect width="180" height="200" rx="10"/>
+          <text class="ttl" x="14" y="26">Endpoint inventory</text>
+          <g class="mono">
+            <text class="at-2" x="14" y="52">GET  /api/Users</text>
+            <text class="at-2" x="14" y="68">GET  /api/Feedbacks</text>
+            <text class="at-3" x="14" y="84">POST /api/orders/{id}</text>
+            <text class="at-3" x="14" y="100">GET  /api/items?q=</text>
+            <text class="at-4" x="14" y="116">POST /login</text>
+            <text class="at-4" x="14" y="132">POST /profile</text>
+            <text class="at-5" x="14" y="148">POST /graphql</text>
+            <text class="at-5" x="14" y="164">GET  /rest/v1/tasks</text>
+          </g>
+          <text class="lbl at-6" x="14" y="188">categorised · ranked</text>
+        </g>
+        <!-- ranking out -->
+        <path class="wire at-6 accent" d="M750 160 H 790" marker-end="url(#arr2)"/>
+        <g class="node at-6" transform="translate(792 76)">
+          <rect width="150" height="168" rx="10"/>
+          <text class="ttl" x="12" y="24">Ranked per attack</text>
+          <text class="lbl" x="12" y="44">INJECTION · IDOR · XSS</text>
+          <text class="lbl" x="12" y="58">CSRF · AUTH</text>
+          <g class="mono">
+            <text x="12" y="86" class="t-attacker">1 /file-upload</text>
+            <text x="12" y="102">2 /api/orders/{id}</text>
+            <text x="12" y="118">3 /rest/v1/tasks</text>
+            <text x="12" y="134">4 /api/Users</text>
+          </g>
+          <text class="lbl" x="12" y="158">tested first, within budget</text>
+        </g>
+        <!-- counter for Juice Shop anecdote -->
+        <g class="only-2" transform="translate(20 250)">
+          <text class="lbl" x="0" y="0">Juice Shop, url-only:</text>
+          <text class="mono t-accent" x="0" y="20">61 → 123 endpoints</text>
+          <text class="lbl" x="0" y="38">once &lt;link&gt; chunks were read</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Playwright loads the target and keeps the rendered HTML plus every JavaScript file it pulled in. The HTML of a single-page app is just a shell; the routes and API calls live in the bundles.</p>
+      <p class="step"><span class="n">2</span><b>JS bundles.</b> Scripts come from <code>&lt;script src&gt;</code> and from <code>&lt;link href="….js"&gt;</code> (modulepreload, preload, prefetch). A code-split app ships every lazy route as a <code>&lt;link&gt;</code>, so a script-only sweep sees the shell and none of the routes. Seven regexes then extract fetch calls, axios requests, Supabase <code>from()</code> queries and route tables.</p>
+      <p class="step"><span class="n">3</span><b>OpenAPI.</b> Thirteen well-known spec locations are probed for each API base. A spec yields methods, templated <code>{id}</code> path segments and query parameters, which is how a frontend-less REST API becomes testable.</p>
+      <p class="step"><span class="n">4</span><b>HTML forms and links.</b> A stdlib HTML parser pulls <code>&lt;form action&gt;</code> targets with their input names, and links that carry query parameters. This is what a classic server-rendered app exposes instead of a bundle.</p>
+      <p class="step"><span class="n">5</span><b>Active probing</b> hits common API bases such as <code>/api</code>, <code>/graphql</code> and <code>/rest/v1/</code>, for endpoints nothing else mentioned.</p>
+      <p class="step"><span class="n">6</span>Each endpoint is categorised (USER_DATA, RESOURCE_CRUD, AUTH, ADMIN, PAYMENT, FILE_ACCESS, PUBLIC) and ranked per attack dimension so the most likely-vulnerable endpoints are tested first. A file upload has no parameters at all, so FILE_ACCESS counts toward INJECTION: that moved <code>/file-upload</code> from 73rd to 6th and uncovered two XXE bugs behind it.</p>
+    </div>
+  </div>
+
+  <div class="callout note">
+    <div class="label">Routes vs endpoints</div>
+    <p>A bundle contains two kinds of path. <code>{path: "/about", component: About}</code> is a route the app's own router renders; <code>fetch(host + "/file-upload")</code> is an endpoint the app calls. Only the second is attack surface, and they are told apart by the request-making token that precedes the path, not by how interesting the path looks.</p>
+  </div>
+</section>
+
+<section id="parallel-dast">
+  <h2>Parallel scanners and the time budget</h2>
+  <p class="prose">Every dynamic scanner runs inside <code>run_scanner_safe()</code> with its own timeout, so one hanging scanner never stops the rest. But a cancelled coroutine cannot return anything, so a scanner that ran one second too long used to lose every finding it held. Scanners now stop themselves.</p>
+
+  <div class="scene" id="parallel" data-scene data-interval="2800">
+    <figure class="stage">
+      <svg viewBox="0 0 960 330" role="img" aria-label="Eight scanner lanes progress in parallel toward their own deadlines. The http_probe lane reaches its deadline holding four findings; a hard cancel would discard them, the cooperative time budget returns them.">
+        <g class="mono" style="--p1:.18;--p2:.55">
+          <text class="lbl" x="20" y="22">scanner</text><text class="lbl" x="200" y="22">progress toward its own timeout</text><text class="lbl" x="860" y="22">findings</text>
+          <!-- lanes: name, track, bar -->
+          <g transform="translate(0 40)"><text x="20" y="13">xss</text><text class="lbl" x="130" y="13">3600s</text><rect class="track" x="200" y="2" width="620" height="14" rx="7"/><rect class="bar" style="--p1:.2;--p2:.6" x="200" y="2" width="620" height="14" rx="7"/><text class="at-6 t-safe" x="860" y="13">3</text></g>
+          <g transform="translate(0 70)"><text x="20" y="13">injection</text><text class="lbl" x="130" y="13">5400s</text><rect class="track" x="200" y="2" width="620" height="14" rx="7"/><rect class="bar" style="--p1:.12;--p2:.4" x="200" y="2" width="620" height="14" rx="7"/><text class="at-6 t-safe" x="860" y="13">5</text></g>
+          <g transform="translate(0 100)"><text x="20" y="13">csrf</text><text class="lbl" x="130" y="13">600s</text><rect class="track" x="200" y="2" width="620" height="14" rx="7"/><rect class="bar" style="--p1:.3;--p2:.9" x="200" y="2" width="620" height="14" rx="7"/><text class="at-6 t-safe" x="860" y="13">1</text></g>
+          <g transform="translate(0 130)"><text x="20" y="13">cors</text><text class="lbl" x="130" y="13">600s</text><rect class="track" x="200" y="2" width="620" height="14" rx="7"/><rect class="bar" style="--p1:.4;--p2:1" x="200" y="2" width="620" height="14" rx="7"/><text class="at-3 t-safe" x="860" y="13">0</text></g>
+          <g transform="translate(0 160)"><text x="20" y="13">ssrf</text><text class="lbl" x="130" y="13">600s</text><rect class="track" x="200" y="2" width="620" height="14" rx="7"/><rect class="bar" style="--p1:.25;--p2:.7" x="200" y="2" width="620" height="14" rx="7"/><text class="at-6 t-safe" x="860" y="13">1</text></g>
+          <g transform="translate(0 190)"><text x="20" y="13">headers</text><text class="lbl" x="130" y="13">600s</text><rect class="track" x="200" y="2" width="620" height="14" rx="7"/><rect class="bar" style="--p1:.6;--p2:1" x="200" y="2" width="620" height="14" rx="7"/><text class="at-3 t-safe" x="860" y="13">4</text></g>
+          <g transform="translate(0 220)"><text x="20" y="13">upload</text><text class="lbl" x="130" y="13">600s</text><rect class="track" x="200" y="2" width="620" height="14" rx="7"/><rect class="bar" style="--p1:.15;--p2:.5" x="200" y="2" width="620" height="14" rx="7"/><text class="at-6 t-safe" x="860" y="13">2</text></g>
+          <g transform="translate(0 250)">
+            <text x="20" y="13" class="t-accent">http_probe</text><text class="lbl" x="130" y="13">900s</text>
+            <rect class="track" x="200" y="2" width="620" height="14" rx="7"/>
+            <rect class="bar probe cancelled" style="--p1:.22;--p2:.7" x="200" y="2" width="620" height="14" rx="7"/>
+            <line class="deadline at-3" x1="820" y1="-6" x2="820" y2="24"/>
+            <text class="at-3 lbl" x="814" y="-8" text-anchor="end">deadline</text>
+            <text class="at-3 until-4 t-accent" x="860" y="13">4 held</text>
+            <text class="only-4 t-attacker" x="860" y="13">0 ✕</text>
+            <text class="at-5 t-safe" x="860" y="13">4 ✓</text>
+          </g>
+        </g>
+        <!-- annotations -->
+        <g class="only-3" transform="translate(200 296)"><text class="lbl">http_probe at 899 s, holding an exposed /.env and three more findings</text></g>
+        <g class="only-4" transform="translate(200 296)"><text class="t-attacker" style="font-size:12px">Before: hard cancel at 901 s. A cancelled coroutine returns nothing. Four findings discarded.</text></g>
+        <g class="only-5" transform="translate(200 296)"><text class="t-safe" style="font-size:12px">Now: the scanner sees budget.expired() in its endpoint loop and returns the four findings itself.</text></g>
+        <g class="only-6" transform="translate(200 296)"><text class="lbl">Every lane completes or yields. The hard cancel is now a loud failure signal, not how scanners end.</text></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Sixteen scanners start together, each wrapped in <code>run_scanner_safe()</code> with a generous per-scanner timeout: 600 s by default, 3600 s for XSS, 5400 s for injection. Time, not an endpoint cap, is the only bound.</p>
+      <p class="step"><span class="n">2</span>They progress at different rates. Snapshot-based scanners like headers and CORS finish in seconds; the ones that walk every endpoint take longer. All HTTP goes through a rate-limited client so the target's WAF is not tripped.</p>
+      <p class="step"><span class="n">3</span><code>http_probe</code> reaches its deadline mid-inventory. It is holding four real findings, among them an exposed <code>/.env</code>.</p>
+      <p class="step"><span class="n">4</span><b>The old failure.</b> The hard cancel fired at 901 s. A cancelled coroutine cannot hand anything back, so the four findings were silently lost. A measurement that looked like a tidy trade-off was one bug.</p>
+      <p class="step"><span class="n">5</span><b>The fix.</b> The runner publishes its deadline; a <code>TimeBudget()</code> with no argument inherits it. Every scanner checks <code>budget.expired()</code> at the top of its per-endpoint loop and returns early with its findings. Fixed-cost checks run before the ones that scale with inventory.</p>
+      <p class="step"><span class="n">6</span>Findings from every lane merge. Reaching the hard cancel is now a failure signal that logs loudly, because it means a scanner blocked between budget checks rather than merely ran long.</p>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="callout why"><div class="label">Why endpoint caps are gone</div><p>Probing costs HTTP requests, not tokens. Measured over nine scans, a DAST run cost $0.12–$0.18 whether it covered 59 endpoints or 154. The endpoint was never the scarce thing, so the caps of 20 for XSS, 30 for injection and 5 for CORS, which silently decided which quarter of an app got tested, were removed.</p></div>
+    <div class="callout note"><div class="label">Two caps that stay</div><p><code>MAX_ENDPOINTS_IN_PROMPT</code> bounds LLM tokens and <code>MAX_OOB_POST_ENDPOINTS</code> bounds registrations against the external callback service. Both limit something genuinely scarce.</p></div>
+  </div>
+</section>
+
+<section id="sast">
+  <h2>Code analysis: clone, map, read, verify</h2>
+  <p class="prose">The static side starts from a shallow clone and ends with findings that a language server has tried to disprove. Everything in between is framework-specific plumbing that makes the analyzers language-agnostic.</p>
+
+  <div class="scene" id="sast-flow" data-scene data-interval="3000">
+    <figure class="stage">
+      <svg viewBox="0 0 960 300" role="img" aria-label="Repository clone flows through framework detection, route mapping and file indexing into eighteen parallel analyzers, then LSP validation removes false positives and the LLM reviews selected routes.">
+        <defs><marker id="arr3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g class="node lit-1" transform="translate(20 100)"><rect width="110" height="80" rx="10"/><text class="ttl" x="12" y="26">Shallow clone</text><text class="lbl" x="12" y="46">temp dir</text><text class="lbl" x="12" y="62">node_modules skipped</text></g>
+        <path class="wire at-2" d="M130 140 H 148" marker-end="url(#arr3)"/>
+        <g class="node at-2 lit-2" transform="translate(150 30)"><rect width="240" height="220" rx="10"/>
+          <text class="ttl" x="12" y="26">Understand the repo</text>
+          <text x="12" y="56">Framework</text><text class="lbl mono" x="12" y="72">Next.js · Express · Spring</text>
+          <text x="12" y="100">Backend</text><text class="lbl mono" x="12" y="116">Supabase · Prisma · Drizzle</text>
+          <text x="12" y="144">Route mapper</text><text class="lbl mono" x="12" y="160">app/api/**/route.ts → GET</text>
+          <text x="12" y="188">File index</text><text class="lbl mono" x="12" y="204">source read into memory</text>
+        </g>
+        <path class="wire at-3" d="M390 140 H 408" marker-end="url(#arr3)"/>
+        <g class="node at-3 lit-3" transform="translate(410 30)"><rect width="210" height="220" rx="10"/>
+          <text class="ttl" x="12" y="26">18 analyzers, parallel</text>
+          <g class="mono">
+            <text class="lbl" x="12" y="52">semgrep_taint    source→sink</text>
+            <text class="lbl" x="12" y="68">route_auth       missing guards</text>
+            <text class="lbl" x="12" y="84">rls_policy       Supabase RLS</text>
+            <text class="lbl" x="12" y="100">git_secret       history scan</text>
+            <text class="lbl" x="12" y="116">middleware       coverage gaps</text>
+            <text class="lbl" x="12" y="132">dependency ×3    CVEs + OSV</text>
+            <text class="lbl" x="12" y="148">docker · k8s · iac</text>
+            <text class="lbl" x="12" y="164">prisma · drizzle · firebase</text>
+            <text class="lbl" x="12" y="180">mass_assignment · injection</text>
+            <text class="lbl" x="12" y="196">shell_script · openapi…</text>
+          </g>
+        </g>
+        <path class="wire at-4" d="M620 140 H 638" marker-end="url(#arr3)"/>
+        <g class="node at-4 lit-4" transform="translate(640 40)"><rect width="140" height="200" rx="10"/>
+          <text class="ttl" x="12" y="26">LSP validation</text>
+          <text class="lbl" x="12" y="50">go-to-definition</text>
+          <text class="lbl" x="12" y="66">on each guard</text>
+          <g class="mono at-4">
+            <text x="12" y="98" class="t-attacker">missing auth?</text>
+            <text x="12" y="118" class="lbl">guard → definition</text>
+            <text x="12" y="138" class="t-safe">auth found → drop</text>
+          </g>
+          <text class="lbl" x="12" y="172">matched per route,</text>
+          <text class="lbl" x="12" y="188">not per file</text>
+        </g>
+        <path class="wire at-5" d="M780 140 H 798" marker-end="url(#arr3)"/>
+        <g class="node at-5 lit-5" transform="translate(800 60)"><rect width="142" height="160" rx="10"/>
+          <text class="ttl" x="12" y="26">LLM review</text>
+          <text class="lbl" x="12" y="48">5 triggers pick</text>
+          <text class="lbl" x="12" y="64">routes worth the cost</text>
+          <g class="mono"><text class="lbl" x="12" y="92">0 financial</text><text class="lbl" x="12" y="108">1 cross-flagged</text><text class="lbl" x="12" y="124">2 mutation</text><text class="lbl" x="12" y="140">3 risk pattern</text></g>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The repository is cloned shallow into a temp directory. Vendored and generated directories are pruned.</p>
+      <p class="step"><span class="n">2</span><code>package.json</code> and friends identify the framework and backend. A framework-specific route mapper turns files into routes with methods. Express routes are searched everywhere, then filtered to the ones actually reachable through the import graph, so fixture code like Juice Shop's 135 unused route definitions is ignored.</p>
+      <p class="step"><span class="n">3</span>Eighteen analyzers run against the indexed code at once. The Semgrep taint layer gives a deterministic source-to-sink floor for injection; the rest look for missing auth, missing RLS, leaked secrets, CVEs and infrastructure misconfiguration.</p>
+      <p class="step"><span class="n">4</span>If a language server is available, every auth guard is resolved to its definition and read. A finding the tracer disproves is removed, matched back per route, so one guarded route in a file of a hundred cannot vouch for the rest.</p>
+      <p class="step"><span class="n">5</span>Only routes selected by one of five triggers reach the LLM. Financial routes always go; after that, routes flagged by two scanners, mutations, risk patterns, and shared helpers with high fan-in from risky routes.</p>
+    </div>
+  </div>
+</section>
+
+<section id="correlate">
+  <h2>Correlation: proving it from both sides</h2>
+  <p class="prose">A dynamic finding says the app misbehaved. A static finding says the code looks wrong. When the two categories form a known pair, a confirmed finding is added and its severity rises. The pairing is by category; aligning an endpoint to its route file is the job of the guided-DAST matcher. isitsecure also runs the relationship forward: a code finding becomes a new dynamic test.</p>
+
+  <div class="scene" id="xref" data-scene data-interval="3000">
+    <figure class="stage">
+      <svg viewBox="0 0 960 240" role="img" aria-label="A DAST IDOR finding and a SAST missing-auth finding on the same route merge into a confirmed finding; separately a SAST finding generates a targeted DAST test.">
+        <defs><marker id="arr4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g class="node lit-1" transform="translate(20 30)"><rect width="260" height="64" rx="8"/><text class="eyebrow" x="12" y="20" style="font-size:10px;fill:var(--attacker)">DAST</text><text class="ttl" x="12" y="40">IDOR on /api/tasks/{id}</text><text class="lbl mono" x="12" y="56">swapped id → another user's task</text></g>
+        <g class="node lit-1" transform="translate(20 140)"><rect width="260" height="64" rx="8"/><text class="eyebrow" x="12" y="20" style="font-size:10px;fill:var(--info)">SAST</text><text class="ttl" x="12" y="40">Missing auth · tasks/[id]/route.ts</text><text class="lbl mono" x="12" y="56">no getUser / ownership check</text></g>
+        <path class="wire at-2 accent" d="M280 62 C 330 62, 330 117, 378 117" marker-end="url(#arr4)"/>
+        <path class="wire at-2 accent" d="M280 172 C 330 172, 330 117, 378 117" marker-end="url(#arr4)"/>
+        <g class="node at-2 lit-2" transform="translate(380 80)"><rect width="200" height="74" rx="8" class="soft-accent"/><text class="ttl" x="12" y="24">CONFIRMED IDOR</text><text class="lbl" x="12" y="44">category pair, both sides</text><text class="lbl" x="12" y="60">confidence ↑ · severity boosted</text></g>
+
+        <g class="at-3" transform="translate(620 30)">
+          <g class="node lit-3"><rect width="320" height="64" rx="8"/><text class="eyebrow" x="12" y="20" style="font-size:10px;fill:var(--info)">SAST ONLY</text><text class="ttl" x="12" y="40">Schema has isAdmin · POST /api/users</text><text class="lbl mono" x="12" y="56">no DAST test ran against this field</text></g>
+        </g>
+        <path class="wire at-4 accent dashed" d="M780 94 V 138" marker-end="url(#arr4)"/>
+        <g class="node at-4 lit-4" transform="translate(620 140)"><rect width="320" height="64" rx="8"/><text class="eyebrow" x="12" y="20" style="font-size:10px;fill:var(--accent)">GENERATED DAST TEST</text><text class="ttl mono" x="12" y="40">POST {"isAdmin": true}</text><text class="lbl" x="12" y="56">one of six SAST→DAST strategies</text></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Two independent findings arrive: the dynamic scanner read another user's task by swapping an id, and the static analyzer found no auth check in a route file.</p>
+      <p class="step"><span class="n">2</span>The cross-referencer pairs them <b>by category</b>: IDOR + missing auth, RLS bypass + missing RLS, injection + injection risk, secret exposure + secret in code. Each SAST finding is consumed once. The confirmed finding is added alongside the originals with higher confidence and boosted severity.</p>
+      <p class="step"><span class="n">3</span>Some static findings have no dynamic counterpart because no scanner thought to try. Here the schema exposes an <code>isAdmin</code> column on a route that accepts a body.</p>
+      <p class="step"><span class="n">4</span>SAST-guided DAST turns that into a test: POST <code>{"isAdmin": true}</code> to the endpoint. Six strategies exist (auth bypass, targeted IDOR, targeted injection, mass assignment, race condition, RLS bypass). Commercial tools match after the fact; this generates tests that would not otherwise run.</p>
+    </div>
+  </div>
+  <p class="prose">The full mechanics, including the injection adjudicator and the triage funnel, have their own pages: <a href="sast-dast-correlation.html">SAST ↔ DAST correlation</a> and <a href="triage-and-grading.html">Triage and grading</a>.</p>
+</section>
+
+<section id="degrade">
+  <h2>What runs with what you provide</h2>
+  <p class="prose">The scanner works at any completeness level. Toggle the inputs to see which phases run, which fall back, and which are skipped. A missing input never fails the scan, with one exception: a repository that fails to clone exits non-zero, because a zero-finding report must never read as "your code is fine".</p>
+
+  <div class="degrade" id="degrade-widget">
+    <fieldset>
+      <legend>Inputs</legend>
+      <label><input type="checkbox" id="in-url" checked> Target URL</label>
+      <label><input type="checkbox" id="in-repo" checked> Repository URL</label>
+      <label><input type="checkbox" id="in-creds" checked> Credentials (two accounts)</label>
+      <label><input type="checkbox" id="in-llm" checked> LLM API key</label>
+      <label><input type="checkbox" id="in-pw" checked> Playwright installed</label>
+      <label><input type="checkbox" id="in-lsp" checked> Language server available</label>
+      <label><input type="checkbox" id="in-semgrep" checked> <code>semgrep</code> binary</label>
+      <div class="verdict" id="degrade-verdict"></div>
+    </fieldset>
+    <ol id="degrade-list" aria-live="polite"></ol>
+  </div>
+</section>
+
+<section id="dataflow">
+  <h2>Data flow</h2>
+  <p class="prose">The same pipeline drawn as data rather than time. Three parallel branches feed one merge point, and nothing after the merge talks to the target or the repository again.</p>
+  <figure class="scene" style="padding:0">
+    <div class="stage">
+      <svg viewBox="0 0 960 420" role="img" aria-label="User input feeds URL ingestion and endpoint discovery; three branches (DAST scanners, authenticated DAST, repo ingestion then SAST) merge into cross-reference, SAST-guided DAST, triage and the report.">
+        <defs><marker id="arr5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g class="node"><rect x="380" y="10" width="200" height="40" rx="8"/><text x="480" y="35" text-anchor="middle">URL · repo · credentials</text></g>
+        <path class="wire" d="M480 50 V 68" marker-end="url(#arr5)"/>
+        <g class="node"><rect x="380" y="70" width="200" height="40" rx="8"/><text x="480" y="95" text-anchor="middle">URL ingestion + endpoint discovery</text></g>
+        <path class="wire" d="M480 110 V 128" marker-end="url(#arr5)"/>
+        <path class="wire" d="M480 128 H 160 V 148" marker-end="url(#arr5)"/>
+        <path class="wire" d="M480 128 V 148" marker-end="url(#arr5)"/>
+        <path class="wire" d="M480 128 H 800 V 148" marker-end="url(#arr5)"/>
+        <g class="node"><rect x="60" y="150" width="200" height="52" rx="8" class="soft-attacker"/><text x="160" y="172" text-anchor="middle">DAST scanners</text><text class="lbl" x="160" y="190" text-anchor="middle">16 in parallel</text></g>
+        <g class="node"><rect x="380" y="150" width="200" height="52" rx="8" class="soft-attacker"/><text x="480" y="172" text-anchor="middle">Authenticated DAST</text><text class="lbl" x="480" y="190" text-anchor="middle">JWT · IDOR · RLS · priv-esc</text></g>
+        <g class="node"><rect x="700" y="150" width="200" height="52" rx="8" class="soft-info"/><text x="800" y="172" text-anchor="middle">Repo ingestion</text><text class="lbl" x="800" y="190" text-anchor="middle">clone + index</text></g>
+        <path class="wire" d="M800 202 V 220" marker-end="url(#arr5)"/>
+        <g class="node"><rect x="700" y="222" width="200" height="52" rx="8" class="soft-info"/><text x="800" y="244" text-anchor="middle">SAST scanners</text><text class="lbl" x="800" y="262" text-anchor="middle">18 in parallel · LSP · LLM review</text></g>
+        <path class="wire" d="M160 202 V 300 H 462" marker-end="url(#arr5)"/>
+        <path class="wire" d="M480 202 V 300" marker-end="url(#arr5)"/>
+        <path class="wire" d="M800 274 V 300 H 498" marker-end="url(#arr5)"/>
+        <g class="node"><rect x="380" y="300" width="200" height="40" rx="8" class="soft-accent"/><text x="480" y="325" text-anchor="middle">Cross-reference → guided DAST</text></g>
+        <path class="wire" d="M480 340 V 358" marker-end="url(#arr5)"/>
+        <g class="node"><rect x="380" y="360" width="200" height="40" rx="8"/><text x="480" y="385" text-anchor="middle">Triage → DeepScanReport</text></g>
+      </svg>
+    </div>
+  </figure>
+</section>
+
+<footer class="foot">
+  <span>Source: <a href="../architecture.md">docs/architecture.md</a></span>
+  <span>Related: <a href="endpoint-discovery.html">Endpoint discovery</a> · <a href="sast-dast-correlation.html">Correlation</a> · <a href="triage-and-grading.html">Triage</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+<script>
+(function () {
+  // "What runs with what" widget
+  const PHASES = [
+    { n: "1",   name: "URL ingestion",          need: s => s.url ? (s.pw ? "on" : "fb") : "off", fb: "httpx fallback: no JS rendering" },
+    { n: "2",   name: "Endpoint discovery",     need: s => s.url ? "on" : "off" },
+    { n: "3",   name: "Authenticated crawl",    need: s => s.url && s.creds ? (s.pw ? "on" : "fb") : "off", fb: "REST login provider only (no browser)" },
+    { n: "3.5", name: "OOB registration",       need: s => s.url ? "on" : "off" },
+    { n: "4",   name: "DAST scanners",          need: s => s.url ? "on" : "off" },
+    { n: "5",   name: "Authenticated DAST",     need: s => s.url && s.creds ? "on" : "off" },
+    { n: "5.6", name: "OOB collection",         need: s => s.url ? "on" : "off" },
+    { n: "6",   name: "Repo ingestion",         need: s => s.repo ? "on" : "off" },
+    { n: "6.5", name: "Language server",        need: s => s.repo ? (s.lsp ? "on" : "off") : "off" },
+    { n: "7",   name: "SAST scanners",          need: s => s.repo ? (s.semgrep ? "on" : "fb") : "off", fb: "no taint floor: injection rests on the LLM" },
+    { n: "7.5", name: "LSP validation",         need: s => s.repo && s.lsp ? "on" : "off" },
+    { n: "8",   name: "LLM code review",        need: s => s.repo && s.llm ? "on" : "off" },
+    { n: "9",   name: "Cross-reference",        need: s => s.url && s.repo ? "on" : "off" },
+    { n: "9.1", name: "SAST-guided DAST",       need: s => s.url && s.repo ? "on" : "off" },
+    { n: "9.2", name: "LLM business logic",     need: s => s.url && s.llm ? "on" : "off" },
+    { n: "9.4", name: "Injection adjudication", need: s => s.url && s.llm ? "on" : "off" },
+    { n: "9.5", name: "Triage",                 need: s => s.llm ? "on" : "fb", fb: "rule-based dedup only, no enrichment" },
+    { n: "10",  name: "Report",                 need: () => "on" },
+    { n: "11",  name: "Fix generation",         need: s => s.repo && s.llm ? "on" : "off" },
+  ];
+  const ids = ["url", "repo", "creds", "llm", "pw", "lsp", "semgrep"];
+  const list = document.getElementById("degrade-list"), verdict = document.getElementById("degrade-verdict");
+  function state() { const s = {}; ids.forEach(k => s[k] = document.getElementById("in-" + k).checked); return s; }
+  function render() {
+    const s = state(); list.innerHTML = "";
+    let on = 0, fb = 0;
+    PHASES.forEach(p => {
+      const st = p.need(s); if (st === "on") on++; if (st === "fb") fb++;
+      const li = document.createElement("li"); li.className = st === "fb" ? "fallback" : st;
+      li.innerHTML = `<span class="ph">${p.n}</span><span>${p.name}</span><span class="how">${st === "fb" ? p.fb : st === "off" ? "skipped" : "runs"}</span>`;
+      list.appendChild(li);
+    });
+    let mode = !s.url && !s.repo ? "nothing to scan" : s.url && s.repo ? "full" : s.url ? (s.creds ? "authenticated" : "url-only") : "code-only";
+    let cost = s.llm ? (s.url && s.repo ? "~$10–15" : s.repo ? "~$5–8" : "~$0.15") : "$0";
+    verdict.innerHTML = `mode <b>${mode}</b> · ${on} phases run, ${fb} degrade · est. <b>${cost}</b>`;
+  }
+  ids.forEach(k => document.getElementById("in-" + k).addEventListener("change", render));
+  render();
+})();
+</script>
+</body>
+</html>

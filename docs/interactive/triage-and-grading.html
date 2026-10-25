@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Triage and Grading · isitsecure</title>
+<meta name="description" content="How isitsecure turns a raw finding list into a report: rule-based deduplication guided by remediation scope, LLM enrichment through an impact × likelihood matrix, severity calibration, and the owner summary with its A–F grade — animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  /* funnel: merged rows strike through at the pass that removes them */
+  #funnel .row text { transition: opacity .4s; }
+  #funnel.s2 .p1, #funnel.s3 .p2, #funnel.s4 .p3, #funnel.s5 .p4 { opacity: .3; }
+  #funnel.s2 .p1 text, #funnel.s3 .p2 text, #funnel.s4 .p3 text, #funnel.s5 .p4 text { text-decoration: line-through; }
+  #funnel .bar { fill: var(--info-soft); stroke: var(--info); stroke-width: 1.2; }
+  #funnel .cnt { font-weight: 500; font-size: 13px; }
+  /* scope: title-only dedup ghosts three of the four IDORs */
+  #scope.s6 .ghost { opacity: .3; }
+  #scope.s6 .ghost text { text-decoration: line-through; }
+  /* matrix cells */
+  #matrix .cell > rect { fill: var(--surface-2); stroke: var(--line); stroke-width: 1.2; transition: fill .35s, stroke .35s; }
+  #matrix .cell text { font-family: var(--font-mono); font-size: 13px; font-weight: 500; }
+  #matrix[data-step="2"] .c-db-ae > rect, #matrix[data-step="3"] .c-op-ra > rect, #matrix[data-step="4"] .c-rp-th > rect { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 2.5; }
+  #matrix[data-step="6"] .combo > rect { fill: var(--attacker-soft); stroke: var(--attacker); stroke-width: 2.5; }
+  #matrix.s2 .p1 > rect { stroke: var(--accent); }
+  /* grade ladder */
+  #grade .rung > rect { fill: var(--surface-2); stroke: var(--line); stroke-width: 1.2; transition: fill .35s, stroke .35s; }
+  #grade .rung .g { font-family: var(--font-mono); font-size: 13px; font-weight: 500; }
+  #grade[data-step="5"] .rung-f > rect { fill: var(--attacker-soft); stroke: var(--attacker); stroke-width: 2.5; }
+  #grade[data-step="6"] .rung-cp > rect { fill: var(--safe-soft); stroke: var(--safe); stroke-width: 2.5; }
+  #grade .badge > circle { fill: var(--attacker-soft); stroke: var(--attacker); stroke-width: 2; }
+  #grade .badge.badge-ok > circle { fill: var(--safe-soft); stroke: var(--safe); }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› Triage and Grading</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../architecture.md" title="The markdown source for this page">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">Architecture</div>
+  <h1>Triage and Grading</h1>
+  <p class="lede">Scanners report one finding per affected location, which is right for detection and unreadable as a report. Phase 9.5 shrinks the list by rule, asks an LLM what each survivor would cost and how easily it could be exploited, lifts the severity of anything both financial and live, and writes the summary a site owner will actually read.</p>
+  <div class="meta">
+    <span class="pill">Phase 9.5</span><span class="pill">Stage 0 · no LLM</span><span class="pill llm">Stages 1–2 · LLM</span><span class="pill">A–F grade</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#funnel-s"><span class="n">01</span>The dedup funnel</a>
+  <a href="#scope-s"><span class="n">02</span>Remediation scope</a>
+  <a href="#matrix-s"><span class="n">03</span>Impact × likelihood</a>
+  <a href="#grade-s"><span class="n">04</span>Owner summary and grade</a>
+  <a href="#why"><span class="n">05</span>Why it matters</a>
+  <a href="#limits"><span class="n">06</span>Limits</a>
+</nav>
+
+<section id="funnel-s">
+  <h2>Stage 0: four passes, no LLM</h2>
+  <p class="prose">Deduplication is a rule about where a fix goes, so it needs no model and costs nothing. It used to sit behind the LLM triage phase, which meant a scan run with <code>--llm none</code> shipped the raw list: <b>296 findings on Juice Shop, of which 272 were five issues restated once per endpoint</b>. It now runs first, with or without an API key. The example below is thirteen findings; follow the right-hand counter.</p>
+
+  <div class="scene" id="funnel" data-scene data-interval="3200">
+    <figure class="stage">
+      <svg viewBox="0 0 960 330" role="img" aria-label="Thirteen raw findings on the left are struck through pass by pass: four identical CSP headers collapse to one, two findings on the same source line merge, three Stripe keys in one file group, and two differently worded dependency findings fuzzy-match. A funnel on the right counts 13, 10, 9, 7, 6.">
+        <text class="lbl" x="20" y="24">raw findings · one per location</text>
+        <g class="mono">
+          <g class="row k1"><text x="20" y="46">Missing Content-Security-Policy</text><text class="lbl" x="300" y="46">GET /</text><text class="t-safe at-2" x="430" y="46">kept · lists 4 endpoints</text></g>
+          <g class="row p1"><text x="20" y="62">Missing Content-Security-Policy</text><text class="lbl" x="300" y="62">GET /api/products</text></g>
+          <g class="row p1"><text x="20" y="78">Missing Content-Security-Policy</text><text class="lbl" x="300" y="78">GET /api/users</text></g>
+          <g class="row p1"><text x="20" y="94">Missing Content-Security-Policy</text><text class="lbl" x="300" y="94">GET /rest/basket</text></g>
+          <g class="row"><text x="20" y="110">IDOR: object reachable by id</text><text class="lbl" x="300" y="110">GET /api/tasks/42</text><text class="t-accent at-2" x="430" y="110">INSTANCE · stays</text></g>
+          <g class="row"><text x="20" y="126">IDOR: object reachable by id</text><text class="lbl" x="300" y="126">GET /api/orders/7</text><text class="t-accent at-2" x="430" y="126">INSTANCE · stays</text></g>
+          <g class="row"><text x="20" y="142">Hardcoded Stripe secret key</text><text class="lbl" x="300" y="142">config.ts:12</text><text class="t-safe at-3" x="430" y="142">kept · higher severity</text></g>
+          <g class="row p2"><text x="20" y="158">Stripe key in git history</text><text class="lbl" x="300" y="158">config.ts:12</text></g>
+          <g class="row"><text x="20" y="174">stripe_live key in plaintext</text><text class="lbl" x="300" y="174">lib/pay.ts:4</text><text class="t-safe at-4" x="430" y="174">kept · also affects: 2 more</text></g>
+          <g class="row p3"><text x="20" y="190">stripe_test key in plaintext</text><text class="lbl" x="300" y="190">lib/pay.ts:9</text></g>
+          <g class="row p3"><text x="20" y="206">stripe_webhook secret in plaintext</text><text class="lbl" x="300" y="206">lib/pay.ts:15</text></g>
+          <g class="row"><text x="20" y="222">Vulnerable jsonwebtoken 8.5.1 (CVE)</text><text class="lbl" x="300" y="222">package.json:31</text><text class="t-safe at-5" x="430" y="222">kept · 67% word overlap</text></g>
+          <g class="row p4"><text x="20" y="238">Vulnerable package jsonwebtoken 8.5.1</text><text class="lbl" x="300" y="238">package.json</text></g>
+        </g>
+        <g class="at-6">
+          <text class="lbl" x="20" y="272">Measured on Juice Shop, --llm none, before dedup moved ahead of the LLM:</text>
+          <text class="mono t-attacker" x="20" y="290">296 findings shipped · 272 of them were 5 issues restated per endpoint</text>
+          <text class="lbl" x="20" y="308">Stage 0 now runs first, so the no-key scan gets the readable list too.</text>
+        </g>
+
+        <!-- funnel bars -->
+        <g class="mono">
+          <text class="lbl" x="650" y="44">raw</text>
+          <rect class="bar" x="650" y="50" width="286" height="22" rx="4"/><text class="cnt c1" x="928" y="66" text-anchor="end">13</text>
+
+          <g class="at-2"><text class="lbl" x="650" y="94">pass 1 · exact title (INSTANCE: per location)</text>
+          <rect class="bar" x="650" y="100" width="220" height="22" rx="4"/><text class="cnt c2" x="928" y="116" text-anchor="end">10</text></g>
+
+          <g class="at-3"><text class="lbl" x="650" y="144">pass 2 · same file + line</text>
+          <rect class="bar" x="650" y="150" width="198" height="22" rx="4"/><text class="cnt c3" x="928" y="166" text-anchor="end">9</text></g>
+
+          <g class="at-4"><text class="lbl" x="650" y="194">pass 3 · scanner + category + file, 3+</text>
+          <rect class="bar" x="650" y="200" width="154" height="22" rx="4"/><text class="cnt c4" x="928" y="216" text-anchor="end">7</text></g>
+
+          <g class="at-5"><text class="lbl" x="650" y="244">pass 4 · fuzzy title, word overlap ≥ 60%</text>
+          <rect class="bar" x="650" y="250" width="132" height="22" rx="4"/><text class="cnt c5" x="928" y="266" text-anchor="end">6</text></g>
+        </g>
+        <text class="lbl" x="650" y="300">no LLM call · no cost · runs with --llm none</text>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step" data-on="funnelCount"><span class="n">1</span>Thirteen findings arrive, one per location. Four scanners reported the same missing header on four URLs, two IDORs share a title, a Stripe key was found twice on one line and three times in one file, and two dependency scanners described the same package differently.</p>
+      <p class="step" data-on="funnelCount"><span class="n">2</span><b>Pass 1: exact title.</b> Lower-cased, trimmed titles group together. The group keeps its best finding (highest severity, then an LLM-reviewed one, then the longest description) and appends "Affects 4 endpoints: …". <b>Categories whose fix is per location are keyed by title plus location</b>, which is why the two IDORs are not a group.</p>
+      <p class="step" data-on="funnelCount"><span class="n">3</span><b>Pass 2: same file and line.</b> Two scanners, the secret scanner and the git-history scanner, flagged <code>config.ts:12</code>. One source line is one fix, so the best of the two is kept. For per-location categories the endpoint is part of the key, so a shared handler reached from two routes stays two findings.</p>
+      <p class="step" data-on="funnelCount"><span class="n">4</span><b>Pass 3: same SAST scanner, category and file, three or more.</b> Three Stripe values in <code>lib/pay.ts</code> become one finding that lists the others. This pass only applies to the deterministic SAST scanners; two LLM findings in one file are usually different issues and are left alone.</p>
+      <p class="step" data-on="funnelCount"><span class="n">5</span><b>Pass 4: fuzzy title.</b> Titles are reduced to words of three or more letters minus stop words; both need at least three. Overlap is measured against the larger set, and <b>60% or more merges</b>. "vulnerable, jsonwebtoken, cve" against "vulnerable, package, jsonwebtoken" is two of three. Two live findings on different endpoints never fuzzy-merge, and per-location categories never merge across locations.</p>
+      <p class="step" data-on="funnelCount"><span class="n">6</span>Six findings leave Stage 0, each still pointing at every place it was seen. The pass that produced the Juice Shop number was not a smarter rule; it was running the rules at all when no LLM key is present.</p>
+    </div>
+  </div>
+</section>
+
+<section id="scope-s">
+  <h2>Remediation scope decides how a pass behaves</h2>
+  <p class="prose"><code>RemediationScope</code> answers one question per category: how many places does the fix go? Every pass consults it, the fuzzy pass included, because that one is the loosest and a wrong merge there is both most likely and least visible.</p>
+
+  <div class="scene" id="scope" data-scene data-interval="3200">
+    <figure class="stage">
+      <svg viewBox="0 0 960 340" role="img" aria-label="Three scope cards: SERVER (reported once with endpoints as evidence), INSTANCE (every occurrence kept), SHARED_ROOT (grouped under the cause). Below, two failure modes: a report buried under 76 identical CSP lines, and four IDORs collapsed into one with three hidden.">
+        <defs><marker id="arrD" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g class="node lit-2" transform="translate(20 34)"><rect width="290" height="118" rx="10"/>
+          <text class="ttl" x="14" y="24">SERVER</text><text class="lbl" x="14" y="42">one config change covers everything</text>
+          <text class="t-safe" x="14" y="62" style="font-size:12px">reported once · endpoints listed as evidence</text>
+          <text class="lbl" x="14" y="86">missing headers · CORS · mixed content</text><text class="lbl" x="14" y="102">source maps · SRI</text></g>
+        <g class="node lit-3" transform="translate(335 34)"><rect width="290" height="118" rx="10"/>
+          <text class="ttl" x="14" y="24">INSTANCE</text><text class="lbl" x="14" y="42">each occurrence is its own fix</text>
+          <text class="t-attacker" x="14" y="62" style="font-size:12px">every one reported · never collapsed</text>
+          <text class="lbl" x="14" y="86">IDOR · injection · auth · privilege escalation</text><text class="lbl" x="14" y="102">business logic · open redirect · (default)</text></g>
+        <g class="node lit-4" transform="translate(650 34)"><rect width="290" height="118" rx="10"/>
+          <text class="ttl" x="14" y="24">SHARED_ROOT</text><text class="lbl" x="14" y="42">one cause, many call sites</text>
+          <text class="t-info" x="14" y="62" style="font-size:12px">grouped under the cause · sites listed</text>
+          <text class="lbl" x="14" y="86">exposed secrets · dependencies</text><text class="lbl" x="14" y="102">RLS · client exposure</text></g>
+
+        <!-- failure mode A: buried -->
+        <g class="node at-5 lit-5" transform="translate(20 172)"><rect width="440" height="150" rx="10"/>
+          <text class="ttl" x="14" y="22">Treat everything as INSTANCE: one header, 76 times</text>
+          <g class="mono">
+            <text class="lbl" x="14" y="44">Missing Content-Security-Policy   GET /</text>
+            <text class="lbl" x="14" y="58">Missing Content-Security-Policy   GET /api/products</text>
+            <text class="lbl" x="14" y="72">Missing Content-Security-Policy   GET /api/users</text>
+            <text class="lbl" x="14" y="86">Missing Content-Security-Policy   GET /rest/basket</text>
+            <text class="lbl" x="14" y="100">… 72 more identical lines</text>
+            <text class="t-attacker" x="14" y="122">IDOR   GET /api/tasks/42</text>
+          </g>
+          <text class="lbl" x="14" y="138">the one finding that matters, on page four</text></g>
+
+        <!-- failure mode B: hidden -->
+        <g class="node at-6 lit-6" transform="translate(500 172)"><rect width="440" height="150" rx="10"/>
+          <text class="ttl" x="14" y="22">Treat everything as SERVER: four IDORs become one</text>
+          <g class="mono">
+            <text x="14" y="48">IDOR · GET /api/tasks/42</text>
+            <g class="ghost"><text x="14" y="70">IDOR · GET /api/orders/7</text></g>
+            <g class="ghost"><text x="14" y="92">IDOR · GET /api/users/3</text></g>
+            <g class="ghost"><text x="14" y="114">IDOR · GET /api/files/9</text></g>
+          </g>
+          <path class="wire attacker" d="M210 80 H 248" marker-end="url(#arrD)"/>
+          <g class="node" transform="translate(250 58)"><rect width="176" height="44" rx="8" class="soft-attacker"/><text class="ttl" x="12" y="18">IDOR · 1 finding</text><text class="lbl" x="12" y="34">three ownership checks unwritten</text></g>
+          <text class="lbl" x="14" y="138">a report that looks handled and is not</text></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>A category's scope is set once in code. Scanners keep reporting per location; the scope tells each dedup pass whether those locations are one problem or many.</p>
+      <p class="step"><span class="n">2</span><b>SERVER.</b> Missing headers, CORS, mixed content, source maps and SRI are one setting on one server. Reported once, and the list of endpoints it was seen on is kept as evidence: 76 URLs says "the server has no CSP", which is what makes the single fix worth doing.</p>
+      <p class="step"><span class="n">3</span><b>INSTANCE.</b> IDOR, injection, auth, privilege escalation, business logic and open redirect are each somebody writing a check in a specific place. Every occurrence is kept and never collapsed across locations. A category with no scope assigned defaults here, the safe direction.</p>
+      <p class="step"><span class="n">4</span><b>SHARED_ROOT.</b> Exposed secrets, dependencies, RLS and client exposure have one cause reached from many places: rotate the key, bump the package, write the policy. Grouped under the cause, with the sites listed.</p>
+      <p class="step"><span class="n">5</span><b>Failure mode one.</b> Without the scope, dedup on title alone was the only option, and turning it off meant "Missing Content-Security-Policy" restated on 76 endpoints. The real finding is on page four.</p>
+      <p class="step"><span class="n">6</span><b>Failure mode two.</b> Dedup on title alone does the header case correctly and this one silently: four IDORs on four endpoints share a title, so three of them vanish behind something that looks handled. The two modes point opposite ways, which is why one rule cannot serve both.</p>
+    </div>
+  </div>
+</section>
+
+<section id="matrix-s">
+  <h2>Stage 1: impact × likelihood → priority, then calibration</h2>
+  <p class="prose">Findings that still need judgement go to the LLM in batches of twenty, up to three batches at a time. For each one it returns an impact category and a likelihood level, and the priority is read from a fixed table. Findings from the deterministic SAST scanners never make the trip: their impact comes from a category table and their likelihood from their severity.</p>
+
+  <div class="scene" id="matrix" data-scene data-interval="3200">
+    <figure class="stage">
+      <svg viewBox="0 0 960 330" role="img" aria-label="A five by four grid of impact categories against likelihood levels, each cell holding a priority from 1 to 4. Example findings on the left land on a cell. In the last step the two cells that trigger HIGH-to-CRITICAL escalation are highlighted.">
+        <!-- column labels -->
+        <g class="lbl" text-anchor="middle">
+          <text class="lbl" x="495" y="40" text-anchor="middle">ACTIVELY</text><text class="lbl" x="495" y="52" text-anchor="middle">EXPLOITABLE</text>
+          <text class="lbl" x="605" y="40" text-anchor="middle">REQUIRES</text><text class="lbl" x="605" y="52" text-anchor="middle">AUTH</text>
+          <text class="lbl" x="715" y="40" text-anchor="middle">REQUIRES</text><text class="lbl" x="715" y="52" text-anchor="middle">ADMIN</text>
+          <text class="lbl" x="825" y="46" text-anchor="middle">THEORETICAL</text>
+        </g>
+        <!-- row labels -->
+        <text class="lbl" x="432" y="85" text-anchor="end">FINANCIAL</text>
+        <text class="lbl" x="432" y="125" text-anchor="end">DATA_BREACH</text>
+        <text class="lbl" x="432" y="165" text-anchor="end">LEGAL</text>
+        <text class="lbl" x="432" y="205" text-anchor="end">OPERATIONAL</text>
+        <text class="lbl" x="432" y="245" text-anchor="end">REPUTATIONAL</text>
+        <!-- cells -->
+        <g class="cell combo"><rect x="440" y="60" width="110" height="40"/><text x="495" y="85" text-anchor="middle">1</text></g>
+        <g class="cell"><rect x="550" y="60" width="110" height="40"/><text x="605" y="85" text-anchor="middle">2</text></g>
+        <g class="cell"><rect x="660" y="60" width="110" height="40"/><text x="715" y="85" text-anchor="middle">3</text></g>
+        <g class="cell"><rect x="770" y="60" width="110" height="40"/><text x="825" y="85" text-anchor="middle">3</text></g>
+
+        <g class="cell combo c-db-ae"><rect x="440" y="100" width="110" height="40"/><text x="495" y="125" text-anchor="middle">1</text></g>
+        <g class="cell"><rect x="550" y="100" width="110" height="40"/><text x="605" y="125" text-anchor="middle">2</text></g>
+        <g class="cell"><rect x="660" y="100" width="110" height="40"/><text x="715" y="125" text-anchor="middle">3</text></g>
+        <g class="cell"><rect x="770" y="100" width="110" height="40"/><text x="825" y="125" text-anchor="middle">3</text></g>
+
+        <g class="cell"><rect x="440" y="140" width="110" height="40"/><text x="495" y="165" text-anchor="middle">1</text></g>
+        <g class="cell"><rect x="550" y="140" width="110" height="40"/><text x="605" y="165" text-anchor="middle">2</text></g>
+        <g class="cell"><rect x="660" y="140" width="110" height="40"/><text x="715" y="165" text-anchor="middle">3</text></g>
+        <g class="cell"><rect x="770" y="140" width="110" height="40"/><text x="825" y="165" text-anchor="middle">4</text></g>
+
+        <g class="cell"><rect x="440" y="180" width="110" height="40"/><text x="495" y="205" text-anchor="middle">2</text></g>
+        <g class="cell"><rect x="550" y="180" width="110" height="40"/><text x="605" y="205" text-anchor="middle">3</text></g>
+        <g class="cell c-op-ra"><rect x="660" y="180" width="110" height="40"/><text x="715" y="205" text-anchor="middle">3</text></g>
+        <g class="cell"><rect x="770" y="180" width="110" height="40"/><text x="825" y="205" text-anchor="middle">4</text></g>
+
+        <g class="cell"><rect x="440" y="220" width="110" height="40"/><text x="495" y="245" text-anchor="middle">2</text></g>
+        <g class="cell"><rect x="550" y="220" width="110" height="40"/><text x="605" y="245" text-anchor="middle">3</text></g>
+        <g class="cell"><rect x="660" y="220" width="110" height="40"/><text x="715" y="245" text-anchor="middle">4</text></g>
+        <g class="cell c-rp-th"><rect x="770" y="220" width="110" height="40"/><text x="825" y="245" text-anchor="middle">4</text></g>
+        <text class="lbl" x="440" y="286">priority 1 is highest, 4 lowest · a pair not in the table → 3</text>
+        <text class="lbl at-6 t-attacker" x="440" y="306">red cells: a HIGH finding landing here is escalated to CRITICAL, priority 1</text>
+
+        <!-- left panel: one card per step -->
+        <g class="node only-1" transform="translate(20 60)"><rect width="320" height="150" rx="10"/>
+          <text class="ttl" x="14" y="24">Stage 1 · LLM enrichment</text>
+          <text class="lbl" x="14" y="48">findings needing judgement, batches of 20</text>
+          <text class="lbl" x="14" y="64">up to 3 batches in flight</text>
+          <text class="lbl" x="14" y="88">the model returns, per finding:</text>
+          <text class="mono" x="14" y="106">impact · likelihood · remediation</text>
+          <text class="lbl" x="14" y="132">priority = table[impact][likelihood]</text></g>
+
+        <g class="node only-2 p1" transform="translate(20 60)"><rect width="320" height="150" rx="10"/>
+          <text class="ttl" x="14" y="24">SQL injection</text>
+          <text class="mono" x="14" y="44">POST /rest/products/search</text>
+          <text class="lbl" x="14" y="64">severity HIGH, from the scanner</text>
+          <text class="t-info" x="14" y="90" style="font-size:12px">impact: data_breach</text>
+          <text class="t-info" x="14" y="108" style="font-size:12px">likelihood: actively_exploitable</text>
+          <text class="ttl t-accent" x="14" y="136">→ priority 1</text></g>
+
+        <g class="node only-3" transform="translate(20 60)"><rect width="320" height="150" rx="10"/>
+          <text class="ttl" x="14" y="24">Admin settings form lacks CSRF token</text>
+          <text class="mono" x="14" y="44">POST /admin/settings</text>
+          <text class="lbl" x="14" y="64">severity MEDIUM, from the scanner</text>
+          <text class="t-info" x="14" y="90" style="font-size:12px">impact: operational</text>
+          <text class="t-info" x="14" y="108" style="font-size:12px">likelihood: requires_admin</text>
+          <text class="ttl t-accent" x="14" y="136">→ priority 3</text></g>
+
+        <g class="node only-4" transform="translate(20 60)"><rect width="320" height="150" rx="10"/>
+          <text class="ttl" x="14" y="24">Server header reveals version</text>
+          <text class="mono" x="14" y="44">GET /</text>
+          <text class="lbl" x="14" y="64">severity LOW, from the scanner</text>
+          <text class="t-info" x="14" y="90" style="font-size:12px">impact: reputational</text>
+          <text class="t-info" x="14" y="108" style="font-size:12px">likelihood: theoretical</text>
+          <text class="ttl t-accent" x="14" y="136">→ priority 4</text></g>
+
+        <g class="node only-5" transform="translate(20 40)"><rect width="320" height="214" rx="10"/>
+          <text class="ttl" x="14" y="24">SAST-only scanners skip the LLM</text>
+          <text class="lbl" x="14" y="46">route_auth · secret · dependency · docker · iac …</text>
+          <text class="lbl" x="14" y="70">impact from a category table, e.g.</text>
+          <text class="mono" x="14" y="88">exposed_secrets   → data_breach</text>
+          <text class="mono" x="14" y="104">business_logic    → financial</text>
+          <text class="mono" x="14" y="120">unencrypted_pii   → legal</text>
+          <text class="lbl" x="14" y="144">likelihood from severity:</text>
+          <text class="mono" x="14" y="162">CRITICAL      → actively_exploitable</text>
+          <text class="mono" x="14" y="178">HIGH, MEDIUM  → requires_auth</text>
+          <text class="mono" x="14" y="194">LOW           → theoretical</text></g>
+
+        <g class="node only-6" transform="translate(20 60)"><rect width="320" height="150" rx="10"/>
+          <text class="ttl" x="14" y="24">Stage 1.5 · calibration</text>
+          <text class="mono" x="14" y="44">SQL injection · severity HIGH</text>
+          <text class="lbl" x="14" y="68">impact data_breach ✓ · actively_exploitable ✓</text>
+          <text class="ttl t-attacker" x="14" y="96">HIGH → CRITICAL · priority 1</text>
+          <text class="lbl" x="14" y="120">only HIGH is lifted; MEDIUM never jumps,</text>
+          <text class="lbl" x="14" y="136">the model's own "not HIGH" is respected</text></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The table is fixed in code. Rows are the five impact categories, columns the four likelihood levels, cells the priority. The LLM's job is to place each finding; the priority is never asked of the model.</p>
+      <p class="step"><span class="n">2</span>A SQL injection on a public search endpoint: the model says <b>data_breach</b> and <b>actively_exploitable</b>. The cell reads 1, the highest priority.</p>
+      <p class="step"><span class="n">3</span>A missing CSRF token on an admin-only form: <b>operational</b> impact, exploitable only with an admin already logged in. Priority 3.</p>
+      <p class="step"><span class="n">4</span>A version string in the Server header: <b>reputational</b>, <b>theoretical</b>. Priority 4. Any pair the table does not list falls back to 3.</p>
+      <p class="step"><span class="n">5</span>Deterministic SAST scanners are placed by rule, with no LLM call: impact from the category (unknown categories count as operational), likelihood from severity. Anything the LLM batch skipped or timed out on gets the same rule-based placement, so nothing leaves triage without a priority.</p>
+      <p class="step"><span class="n">6</span><b>Stage 1.5 calibration.</b> After enrichment, any finding still rated HIGH whose impact is financial or data_breach <b>and</b> whose likelihood is actively_exploitable is lifted to CRITICAL with priority 1. The two red cells are the only ones that trigger it. MEDIUM findings are never jumped.</p>
+    </div>
+  </div>
+</section>
+
+<section id="grade-s">
+  <h2>Stage 2: the owner summary and the grade</h2>
+  <p class="prose">One small LLM call receives the severity counts and a compact serialization of the findings and returns a summary for someone who does not read code: a plain-language risk statement, a letter grade, up to five key risks, and a remediation plan in phases. The headline grade on the report itself is computed by rule from the severity counts, on the ladder shown on the right.</p>
+
+  <div class="scene" id="grade" data-scene data-interval="3200">
+    <figure class="stage">
+      <svg viewBox="0 0 960 340" role="img" aria-label="Left: an owner summary document fills in with a typed plain-language summary, a grade badge, five key risks and three remediation phases. Right: the nine-rung grade ladder from F to A+ with the threshold for each; an example set of counts lands on F, then on C+ after the critical and high findings are fixed.">
+        <g class="node" transform="translate(20 30)"><rect width="430" height="290" rx="10"/>
+          <text class="ttl" x="14" y="24">Owner summary · Stage 2</text>
+          <g class="only-1">
+            <text class="lbl" x="14" y="56">one LLM call · input:</text>
+            <g class="mono"><text x="14" y="76">scan mode · target</text><text x="14" y="92">critical / high / medium counts</text><text x="14" y="108">compact JSON of the triaged findings</text></g>
+            <text class="lbl" x="14" y="136">asked back, as JSON:</text>
+            <g class="mono"><text x="14" y="156">risk_summary</text><text x="14" y="172">grade  A | B | C | D | F</text><text x="14" y="188">key_risks[]      → cut to 5</text><text x="14" y="204">remediation_phases[]</text></g>
+            <text class="lbl" x="14" y="232">if the call fails: count-based fallback grade,</text>
+            <text class="lbl" x="14" y="248">no risks, no phases</text>
+          </g>
+          <g class="badge at-2 until-6"><circle cx="400" cy="42" r="20"/><text class="ttl t-attacker" x="400" y="47" text-anchor="middle">F</text></g><g class="badge badge-ok at-6"><circle cx="400" cy="42" r="20"/><text class="ttl t-safe" x="400" y="47" text-anchor="middle">C+</text></g>
+          <text class="sum at-2" x="14" y="56">Anyone with a browser can read other customers' orders.</text>
+          <text class="at-2" x="14" y="74">Two issues need fixing before launch.</text>
+          <text class="lbl at-2" x="14" y="90">illustrative wording · the grade letter is the model's, A to F</text>
+          <g class="at-3">
+            <text class="ttl" x="14" y="116">Key risks · capped at 5</text>
+            <g class="mono">
+              <text x="14" y="134">1 Anyone can read other users' orders</text>
+              <text x="14" y="150">2 Product search accepts SQL</text>
+              <text x="14" y="166">3 A Stripe key is committed to git</text>
+              <text x="14" y="182">4 The admin form has no CSRF token</text>
+              <text x="14" y="198">5 jsonwebtoken 8.5.1 is outdated</text>
+            </g>
+          </g>
+          <g class="at-4">
+            <text class="ttl" x="14" y="224">Remediation plan · each finding in exactly one phase</text>
+            <g class="node" transform="translate(14 232)"><rect width="128" height="58" rx="8"/><text class="ttl" x="10" y="18">Phase 1 · 3</text><text class="lbl" x="10" y="33">immediate</text><text class="lbl" x="10" y="47">CRITICAL + HIGH</text></g>
+            <g class="node" transform="translate(152 232)"><rect width="128" height="58" rx="8"/><text class="ttl" x="10" y="18">Phase 2 · 2</text><text class="lbl" x="10" y="33">short-term</text><text class="lbl" x="10" y="47">MEDIUM</text></g>
+            <g class="node" transform="translate(290 232)"><rect width="128" height="58" rx="8"/><text class="ttl" x="10" y="18">Phase 3 · 4</text><text class="lbl" x="10" y="33">ongoing</text><text class="lbl" x="10" y="47">LOW</text></g>
+          </g>
+        </g>
+
+        <!-- ladder -->
+        <text class="lbl" x="490" y="24">Report grade · calculate_grade, first match from the top wins</text>
+        <g class="rung rung-f" transform="translate(490 36)"><rect width="450" height="26" rx="5"/><text class="g" x="12" y="17">F</text><text class="lbl" x="50" y="17">any critical</text><text class="lbl" x="300" y="17">fix before launch</text><text class="mono only-5 t-attacker" x="438" y="17" text-anchor="end">1 critical ✓</text><text class="mono only-6 t-safe" x="438" y="17" text-anchor="end">0 ✗</text></g>
+        <g class="rung rung-d" transform="translate(490 66)"><rect width="450" height="26" rx="5"/><text class="g" x="12" y="17">D</text><text class="lbl" x="50" y="17">any high</text><text class="lbl" x="300" y="17">fix before launch</text><text class="mono only-6 t-safe" x="438" y="17" text-anchor="end">0 ✗</text></g>
+        <g class="rung rung-c" transform="translate(490 96)"><rect width="450" height="26" rx="5"/><text class="g" x="12" y="17">C</text><text class="lbl" x="50" y="17">3 or more medium</text><text class="lbl" x="300" y="17">fix soon</text><text class="mono only-6 t-safe" x="438" y="17" text-anchor="end">2 &lt; 3 ✗</text></g>
+        <g class="rung rung-cp" transform="translate(490 126)"><rect width="450" height="26" rx="5"/><text class="g" x="12" y="17">C+</text><text class="lbl" x="50" y="17">1 or 2 medium</text><text class="lbl" x="300" y="17">fix soon</text><text class="mono only-6 t-safe" x="438" y="17" text-anchor="end">2 medium ✓</text></g>
+        <g class="rung rung-b" transform="translate(490 156)"><rect width="450" height="26" rx="5"/><text class="g" x="12" y="17">B</text><text class="lbl" x="50" y="17">6 or more low</text><text class="lbl" x="300" y="17">good, work through them</text></g>
+        <g class="rung rung-bp" transform="translate(490 186)"><rect width="450" height="26" rx="5"/><text class="g" x="12" y="17">B+</text><text class="lbl" x="50" y="17">3 to 5 low</text><text class="lbl" x="300" y="17">good</text></g>
+        <g class="rung rung-am" transform="translate(490 216)"><rect width="450" height="26" rx="5"/><text class="g" x="12" y="17">A-</text><text class="lbl" x="50" y="17">1 or 2 low</text><text class="lbl" x="300" y="17">very good</text></g>
+        <g class="rung rung-a" transform="translate(490 246)"><rect width="450" height="26" rx="5"/><text class="g" x="12" y="17">A</text><text class="lbl" x="50" y="17">no findings</text><text class="lbl" x="300" y="17">safe to ship</text></g>
+        <g class="rung rung-ap" transform="translate(490 276)"><rect width="450" height="26" rx="5"/><text class="g" x="12" y="17">A+</text><text class="lbl" x="50" y="17">no findings and hardened</text><text class="lbl" x="300" y="17">safe to ship</text></g>
+        <text class="lbl until-5" x="490" y="326">A = safe to ship · C = fix soon · F = fix before launch</text>
+        <text class="mono only-5 t-attacker" x="490" y="326">example: 1 critical · 2 high · 2 medium · 4 low → F</text>
+        <text class="mono only-6 t-safe" x="490" y="326">fix the critical and both highs: 0 · 0 · 2 · 4 → C+</text>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The prompt carries the scan mode, the target, the totals of critical, high and medium findings, and a compact JSON of the triaged list. The model is asked for a fixed JSON shape in return.</p>
+      <p class="step" data-on="typeSummary"><span class="n">2</span><b>Risk summary and grade.</b> A sentence or two a site owner can act on, and a letter from A to F. The letter here is the model's; if the call fails, a count-based fallback grades A with no critical or high, B with at most two high, C with at most five, D with at most one critical and ten high, F beyond that.</p>
+      <p class="step"><span class="n">3</span><b>Key risks.</b> Whatever the model lists is cut to five. Each is meant to be readable without the finding it came from.</p>
+      <p class="step"><span class="n">4</span><b>Phased plan.</b> The model names the phases; the counts are filled by rule so they always add up: CRITICAL and HIGH findings in phase 1, MEDIUM in phase 2, LOW in phase 3. Each finding belongs to exactly one phase.</p>
+      <p class="step"><span class="n">5</span><b>The report grade</b> does not come from the model. <code>calculate_grade</code> walks the ladder from the top and stops at the first rung that matches: any critical is F regardless of everything else. The example counts land there.</p>
+      <p class="step"><span class="n">6</span>Fix the critical and both highs and the same ladder gives C+: no critical, no high, two medium is fewer than three. The report also lists these steps as "what it takes to reach the next grade", computed from the same thresholds.</p>
+    </div>
+  </div>
+</section>
+
+<section id="why">
+  <h2>Why it matters</h2>
+  <div class="grid-2">
+    <div class="callout why"><div class="label">The raw list is the wrong unit</div><p>A scanner is right to emit one finding per URL: that is where it saw the problem. A report built from that list is wrong twice over. Collapse by wording and three of four IDORs disappear; refuse to collapse and one missing header fills four pages. The scope rule exists because those two mistakes point in opposite directions, and the measured Juice Shop list, 296 findings of which 272 were five issues restated per endpoint, is what the first mistake looks like at scale.</p></div>
+    <div class="callout why"><div class="label">Severity is not priority</div><p>Severity says how bad the bug class is. Priority says what to fix this week, which depends on who can reach it and what it costs the business. The matrix makes that a table lookup, and calibration catches the one combination, live and financial or data-exposing, where a HIGH label would understate a breach already in reach.</p></div>
+  </div>
+</section>
+
+<section id="limits">
+  <h2>Limits and exact rules</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Where</th><th>Rule</th><th>Effect</th></tr></thead>
+      <tbody>
+        <tr><td>Pass 1 keep rule</td><td>Highest severity, then a finding from <code>llm_code_reviewer</code>, then the longest description.</td><td>The surviving wording may be the LLM's even when a rule scanner found it first.</td></tr>
+        <tr><td>Pass 3</td><td>Only for the deterministic SAST scanners (route_auth, express_middleware, drizzle_schema, iac, docker, shell_script, dependency, firebase_rules, secret, static_injection). Groups of one or two are left alone.</td><td>LLM findings in the same file are never grouped by this pass.</td></tr>
+        <tr><td>Pass 4</td><td>Words of three or more letters, stop words removed, at least three words on both sides; overlap against the larger set must be 60% or more. Never across two different live endpoints; never across locations for INSTANCE categories.</td><td>Short titles and single-word differences do not fuzzy-merge.</td></tr>
+        <tr><td>Scope default</td><td>A category not in the scope table counts as INSTANCE.</td><td>Unmapped categories are never collapsed; they may repeat.</td></tr>
+        <tr><td>Stage 1</td><td>Batches of 20, up to 3 in flight. SAST-only scanners are placed by rule. Unknown category → operational impact; unknown pair → priority 3.</td><td>Rule-placed findings never get the model's narrative, only the category remediation text.</td></tr>
+        <tr><td>Calibration</td><td>Only HIGH is lifted, only for financial or data_breach impact with actively_exploitable likelihood.</td><td>A MEDIUM the model under-rated stays MEDIUM.</td></tr>
+        <tr><td>Owner summary</td><td>Key risks cut to 5. On LLM failure the fallback summary has a count-based A–F grade and empty risks and phases.</td><td>A report without an API key still has a report grade from the ladder, with no narrative.</td></tr>
+        <tr><td>Without an LLM</td><td>Only Stage 0 runs. Findings keep scanner severity; the ladder grade is still computed.</td><td>No impact, likelihood, priority or themes in the output.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<footer class="foot">
+  <span>Source: <a href="../architecture.md">docs/architecture.md</a> (Phase 9.5, Remediation scope, Testing the mutation surface)</span>
+  <span>Related: <a href="scan-pipeline.html">The scan pipeline</a> · <a href="sast-dast-correlation.html">SAST ↔ DAST correlation</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+<script>
+(function () {
+  // Funnel counters: static values live in the markup; animate only the counter for the step just entered.
+  const COUNTS = [13, 10, 9, 7, 6];
+  window.funnelCount = function (scene, step, el) {
+    COUNTS.forEach((v, k) => {
+      const t = el.querySelector(".c" + (k + 1));
+      if (!t) return;
+      if (k + 1 === step && k > 0) { t.textContent = String(COUNTS[k - 1]); IsDoc.count(t, v, 700); }
+      else t.textContent = String(v);
+    });
+  };
+  // Owner summary: retype the risk sentence when step 2 is entered; other steps keep the static text.
+  window.typeSummary = function (scene, step, el) {
+    const t = el.querySelector(".sum");
+    if (t && step === 2) IsDoc.typeText(t, "Anyone with a browser can read other customers' orders.", 22);
+  };
+})();
+</script>
+</body>
+</html>

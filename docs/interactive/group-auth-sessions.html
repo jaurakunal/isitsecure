@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Authentication and Sessions · isitsecure</title>
+<meta name="description" content="The five isitsecure scanners that test who you are and how many tries you get: JWT forgery, session storage and cookie flags, auth bypass, password reset and rate limiting. One shared mechanism, animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  /* card thumbnails (same classes as index.html) */
+  .thumb svg .n > rect, .thumb svg .n > circle { fill: var(--surface); stroke: var(--muted); stroke-width: 1.3; }
+  .thumb svg .w { stroke: var(--muted); stroke-width: 1.3; fill: none; }
+  .thumb svg .a { stroke: var(--accent); }
+  .thumb svg .fa { fill: var(--accent); }
+  .thumb svg .fr { fill: var(--attacker); }
+  .thumb svg .fs { fill: var(--safe); }
+  .thumb svg .fi { fill: var(--info); }
+  .thumb svg .r { stroke: var(--attacker); }
+  .thumb svg .s { stroke: var(--safe); }
+  .thumb svg .i { stroke: var(--info); }
+  /* loop scene: the exchange box sits over the wires, so a packet re-emerges on the far side */
+  #loop .exchange > rect { fill: var(--surface); }
+  #loop .principal > rect, #loop .resource > rect { transition: fill .35s, stroke .35s; }
+  #loop[data-step="2"] .pForged > rect, #loop[data-step="3"] .pAnon > rect, #loop[data-step="4"] .pAnon > rect, #loop[data-step="5"] .pAnon > rect, #loop[data-step="6"] .pSnap > rect { fill: var(--attacker-soft); }
+  #loop[data-step="2"] .rMe > rect, #loop[data-step="3"] .rLogin > rect, #loop[data-step="4"] .rReset > rect, #loop[data-step="5"] .rLogin > rect { fill: var(--accent-soft); }
+  .topbar-inner .crumb a { color: inherit; text-decoration: none; }
+  .topbar-inner .crumb a:hover { color: var(--accent); }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› Authentication and sessions</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/README.md" title="The markdown scanner index">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">Scanner group</div>
+  <h1>Authentication and sessions</h1>
+  <p class="lede">These scanners all test how a server decides who you are and how many tries you get. Four of them send requests as a client that should be refused: with no session, with a forged token, or with a made-up identity. The fifth reads the page the crawler already captured. Each one turns a difference the server should not show into a finding: a reply that varies with the account, a credential that works without a valid signature, a counter that never trips.</p>
+  <div class="meta">
+    <span class="pill"><b>5</b> scanners</span><span class="pill dast">5 DAST</span><span class="pill">3 need <code>--depth deep</code></span><span class="pill crit">up to Critical</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#how"><span class="n">01</span>How this group works</a>
+  <a href="#scanners"><span class="n">02</span>Scanners in this group</a>
+  <a href="#glance"><span class="n">03</span>At a glance</a>
+  <a href="#why"><span class="n">04</span>Why this class matters</a>
+</nav>
+
+<section id="how">
+  <h2>How this group works</h2>
+  <p class="prose">Three clients, three doors. Each step below is one scanner of the group sending its characteristic request, or in the last step reading what it already has. Watch which client sends it, what comes back, and which part of the reply is the finding.</p>
+
+  <div class="scene" id="loop" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 330" role="img" aria-label="Three scanner clients on the left (anonymous, forged token, snapshot reader) and three endpoints on the right (login, forgot-password, me). A central box shows each scanner's request, reply and decision.">
+        <defs><marker id="arr-loop" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+
+        <g id="loop-wires">
+          <path class="wire only-2 attacker" d="M200 149 C 480 149, 480 239, 760 239" marker-end="url(#arr-loop)"/>
+          <path class="wire only-3 attacker" d="M200 59 H 760" marker-end="url(#arr-loop)"/>
+          <path class="wire only-4 attacker" d="M200 59 C 480 59, 480 149, 760 149" marker-end="url(#arr-loop)"/>
+          <path class="wire only-5 attacker" d="M200 59 H 760" marker-end="url(#arr-loop)"/>
+        </g>
+
+        <g class="node principal pAnon" transform="translate(20 30)">
+          <rect width="180" height="58" rx="8"/>
+          <text class="ttl" x="12" y="24">Anonymous client</text>
+          <text class="lbl" x="12" y="44">no session, no token</text>
+        </g>
+        <g class="node principal pForged" transform="translate(20 120)">
+          <rect width="180" height="58" rx="8"/>
+          <text class="ttl" x="12" y="24">Forged token</text>
+          <text class="lbl" x="12" y="44">real payload, fake signature</text>
+        </g>
+        <g class="node principal pSnap" transform="translate(20 210)">
+          <rect width="180" height="58" rx="8"/>
+          <text class="ttl" x="12" y="24">Snapshot reader</text>
+          <text class="lbl" x="12" y="44">sends nothing at all</text>
+        </g>
+
+        <g class="node resource rLogin" transform="translate(760 30)">
+          <rect width="180" height="58" rx="8"/>
+          <text class="ttl" x="12" y="24">/api/login</text>
+          <text class="lbl" x="12" y="44">credentials in, token out</text>
+        </g>
+        <g class="node resource rReset" transform="translate(760 120)">
+          <rect width="180" height="58" rx="8"/>
+          <text class="ttl" x="12" y="24">/api/forgot-password</text>
+          <text class="lbl" x="12" y="44">mails a reset link</text>
+        </g>
+        <g class="node resource rMe" transform="translate(760 210)">
+          <rect width="180" height="58" rx="8"/>
+          <text class="ttl" x="12" y="24">/api/me</text>
+          <text class="lbl" x="12" y="44">needs a valid login</text>
+        </g>
+
+        <g class="node exchange" transform="translate(270 40)">
+          <rect width="420" height="210" rx="10"/>
+          <text class="ttl" x="14" y="24">Request → reply → decision</text>
+          <g class="only-1">
+            <text class="lbl" x="14" y="56">the shared question</text>
+            <text x="14" y="82">The scanner plays a client that should not get in:</text>
+            <text x="14" y="102">no session, a forged token, a made-up identity.</text>
+            <text x="14" y="130">It reads what the server gives away: <tspan class="t-accent">status,</tspan></text>
+            <text x="14" y="150"><tspan class="t-accent">body, timing or a count</tspan> of accepted requests.</text>
+            <text class="lbl" x="14" y="180">One scanner reads no reply at all. See step 6.</text>
+          </g>
+          <g class="only-2 mono">
+            <text class="lbl" x="14" y="56">JWT scanner · forged token</text>
+            <text x="14" y="82">GET /api/me   Bearer eyJ…  (alg: none)</text>
+            <text x="14" y="104">200 {"id":"u_42","role":"admin"}</text>
+            <text class="t-attacker" x="14" y="134">FLAG: a token with no signature was accepted</text>
+            <text class="lbl" x="14" y="160">also weak secrets, RS to HS key confusion and</text>
+            <text class="lbl" x="14" y="176">missing exp, iat or iss claims</text>
+          </g>
+          <g class="only-3 mono">
+            <text class="lbl" x="14" y="56">Auth bypass scanner · two logins, no session</text>
+            <text x="14" y="82">no such user   → 401 User not found</text>
+            <text x="14" y="104">admin@test.com → 401 Invalid password</text>
+            <text class="t-attacker" x="14" y="134">FLAG: the reply tells the accounts apart</text>
+            <text class="lbl" x="14" y="160">also lockout, default credentials, reset token</text>
+            <text class="lbl" x="14" y="176">leaks and Authorization header bypass</text>
+          </g>
+          <g class="only-4 mono">
+            <text class="lbl" x="14" y="56">Password reset scanner · 5 requests, one email</text>
+            <text x="14" y="82">POST /api/forgot-password  admin@test.com</text>
+            <text x="14" y="104">202  202  202  202  202</text>
+            <text class="t-attacker" x="14" y="134">FLAG: five resets, no 429</text>
+            <text class="lbl" x="14" y="160">also email enumeration and a token of 20+</text>
+            <text class="lbl" x="14" y="176">characters in the reply body</text>
+          </g>
+          <g class="only-5 mono">
+            <text class="lbl" x="14" y="56">Rate limit scanner · sequential run</text>
+            <text x="14" y="82">POST /api/login  ×150, 0.05 s apart</text>
+            <text x="14" y="104">150 accepted, no 429</text>
+            <text class="t-attacker" x="14" y="134">FLAG: HIGH, no rate limiting</text>
+            <text class="lbl" x="14" y="160">a 429 at request 21 is only INFO; also bursts of</text>
+            <text class="lbl" x="14" y="176">10, 50, 100 and a new-identity check</text>
+          </g>
+          <g class="only-6 mono">
+            <text class="lbl" x="14" y="56">Session scanner · reads the captured page</text>
+            <text x="14" y="82">Set-Cookie: sid=…   no HttpOnly, no Secure</text>
+            <text x="14" y="104">app.js: localStorage.setItem("token", …)</text>
+            <text class="t-attacker" x="14" y="134">FLAG: any script on the page can read the token</text>
+            <text class="lbl" x="14" y="160">also a session JWT that outlives 24 hours</text>
+            <text class="lbl" x="14" y="176">when the scanner is given one</text>
+          </g>
+        </g>
+
+        <g class="at-6" transform="translate(270 282)">
+          <text class="lbl" x="0" y="0">Shared rule: the finding is a difference the server should not show:</text>
+          <text class="lbl" x="0" y="18">a reply that varies with the account, a forgery that works, a counter that never trips.</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step" data-on="groupLoop"><span class="n">1</span>Three clients and three doors. Each scanner picks the client that should be refused and sends the request a legitimate user would send. <b>The decision rests on what the reply reveals, or on how many requests it takes before the server pushes back.</b></p>
+      <p class="step" data-on="groupLoop"><span class="n">2</span><b>JWT.</b> The scanner takes the real token from the login session, rebuilds it with <code>alg: none</code>, a weak secret or a swapped algorithm, and sends it to a protected endpoint. A 2xx means the server never checked the signature.</p>
+      <p class="step" data-on="groupLoop"><span class="n">3</span><b>Auth bypass.</b> Two logins that differ only in the email. Different error phrases, a timing gap above 0.5 s or different status codes reveal which accounts exist. It deliberately carries no session: with one, its anonymous probes would not be anonymous.</p>
+      <p class="step" data-on="groupLoop"><span class="n">4</span><b>Password reset.</b> Five reset requests in a row. If none is answered 429, an attacker can flood an inbox or grind through tokens. The same endpoint is also compared across two emails and searched for a token in the reply.</p>
+      <p class="step" data-on="groupLoop"><span class="n">5</span><b>Rate limit.</b> The endpoint's own request repeated up to 150 times. Reaching the end without a 429 is HIGH. A 429 gives a measured threshold, and further bursts and an identity switch probe how the limit is keyed.</p>
+      <p class="step" data-on="groupLoop"><span class="n">6</span><b>Session.</b> No request goes out. The scanner reads the HTML, scripts and cookies the crawler captured, and flags tokens in <code>localStorage</code> and auth cookies without <code>HttpOnly</code> or <code>Secure</code>.</p>
+    </div>
+  </div>
+</section>
+
+<section id="scanners">
+  <h2>Scanners in this group</h2>
+  <div class="cards">
+    <a class="card" href="jwt-attacks.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><g class="n"><rect x="12" y="26" width="48" height="26" rx="4"/><rect x="66" y="26" width="64" height="26" rx="4"/><rect x="136" y="26" width="52" height="26" rx="4"/></g><text x="36" y="43" text-anchor="middle" style="font-size:9px">header</text><text x="98" y="43" text-anchor="middle" style="font-size:9px">payload</text><text x="162" y="43" text-anchor="middle" style="font-size:9px">sig</text><path class="w r" d="M142 30 L 182 48 M182 30 L 142 48"/><text x="12" y="70" class="fr" style="font-size:9px">alg: none → 200</text></svg></div>
+      <h3>JWT attacks</h3><p>A forged token that the server accepts: alg none, weak secrets, RS to HS key confusion, plus the claims a token should carry.</p>
+      <div class="foot"><span class="pill dast">DAST</span><span class="pill crit">Critical</span><span class="pill">jwt-scanner.md</span></div>
+    </a>
+    <a class="card" href="session.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><text x="12" y="24">Set-Cookie: sid=…</text><text x="12" y="44" class="fr">HttpOnly ✗</text><text x="100" y="44" class="fr">Secure ✗</text><text x="12" y="66">localStorage.setItem("token")</text><circle class="fr" cx="186" cy="62" r="5"/></svg></div>
+      <h3>Session</h3><p>No request at all: it reads the captured snapshot for tokens in localStorage, auth cookies missing HttpOnly or Secure, and JWTs valid for more than 24 hours.</p>
+      <div class="foot"><span class="pill dast">DAST</span><span class="pill high">High</span><span class="pill">session-scanner.md</span></div>
+    </a>
+    <a class="card" href="auth-bypass.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><text x="12" y="24">nobody@x.test</text><text x="100" y="24" class="fr">User not found</text><text x="12" y="48">admin@test.com</text><text x="100" y="48" class="fr">Invalid password</text><path class="w r" d="M12 62 H 188"/><text x="12" y="76" style="font-size:9px">two replies, two stories</text></svg></div>
+      <h3>Auth bypass</h3><p>Five phases with no session: username enumeration, 10 failed logins, seven default credential pairs, reset token leaks and Authorization header tricks.</p>
+      <div class="foot"><span class="pill dast">DAST</span><span class="pill crit">Critical</span><span class="pill">deep</span><span class="pill">auth-bypass-scanner.md</span></div>
+    </a>
+    <a class="card" href="password-reset.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><text x="12" y="20">POST /forgot-password</text><g class="n"><rect x="12" y="32" width="28" height="16" rx="3"/><rect x="46" y="32" width="28" height="16" rx="3"/><rect x="80" y="32" width="28" height="16" rx="3"/><rect x="114" y="32" width="28" height="16" rx="3"/><rect x="148" y="32" width="28" height="16" rx="3"/></g><text x="26" y="44" text-anchor="middle" style="font-size:8px">202</text><text x="60" y="44" text-anchor="middle" style="font-size:8px">202</text><text x="94" y="44" text-anchor="middle" style="font-size:8px">202</text><text x="128" y="44" text-anchor="middle" style="font-size:8px">202</text><text x="162" y="44" text-anchor="middle" style="font-size:8px">202</text><text x="12" y="68" class="fr">"token":"9f3a1c77…"</text></svg></div>
+      <h3>Password reset</h3><p>Email enumeration by status or length, five rapid requests with no 429, and a reset token returned in the reply.</p>
+      <div class="foot"><span class="pill dast">DAST</span><span class="pill crit">Critical</span><span class="pill med">Medium</span><span class="pill">deep</span><span class="pill">password-reset-scanner.md</span></div>
+    </a>
+    <a class="card" href="rate-limit.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><g class="n"><rect x="10" y="24" width="12" height="16" rx="2"/><rect x="26" y="24" width="12" height="16" rx="2"/><rect x="42" y="24" width="12" height="16" rx="2"/><rect x="58" y="24" width="12" height="16" rx="2"/><rect x="74" y="24" width="12" height="16" rx="2"/><rect x="90" y="24" width="12" height="16" rx="2"/><rect x="106" y="24" width="12" height="16" rx="2"/><rect x="122" y="24" width="12" height="16" rx="2"/></g><rect class="fs" x="138" y="24" width="30" height="16" rx="2"/><text x="153" y="36" text-anchor="middle" style="font-size:8px;fill:var(--bg)">429</text><text x="10" y="62">limit after 20 → INFO</text></svg></div>
+      <h3>Rate limit</h3><p>The count to the first 429, bursts of 10, 50 and 100, and whether a new Authorization header resets the allowance.</p>
+      <div class="foot"><span class="pill dast">DAST</span><span class="pill high">High</span><span class="pill med">Medium</span><span class="pill">deep</span><span class="pill">rate-limit-scanner.md</span></div>
+    </a>
+  </div>
+</section>
+
+<section id="glance">
+  <h2>At a glance</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Scanner</th><th>What it looks at</th><th>What it reports</th><th>Severity</th><th>Needs</th></tr></thead>
+    <tbody>
+      <tr><td><a href="jwt-attacks.html">JWT scanner</a></td><td>The session JWT, a protected endpoint, scripts for tokens in URLs</td><td>Forged tokens accepted (alg none, weak secret, key confusion); missing exp, iat, iss; a token in a URL</td><td>Critical</td><td>URL; an authenticated session (forgery tests are skipped without a token)</td></tr>
+      <tr><td><a href="session.html">Session scanner</a></td><td>The captured snapshot: JavaScript, response cookies, optionally the session JWT</td><td>A token in localStorage; auth cookies missing HttpOnly or Secure; a JWT valid more than 24 hours</td><td>Medium to High</td><td>URL only; runs at quick depth; sends no request</td></tr>
+      <tr><td><a href="auth-bypass.html">Auth bypass scanner</a></td><td>Login, reset and auth-required endpoints, matched by URL substring</td><td>Username enumeration, no lockout, default credentials, reset token in a reply, Authorization header bypass</td><td>Medium to Critical</td><td>URL; <code>--depth deep</code>; deliberately not auth-aware</td></tr>
+      <tr><td><a href="password-reset.html">Password reset scanner</a></td><td>Endpoints whose URL looks like forgot or reset password</td><td>Email enumeration, five unthrottled resets, a token in the reply body</td><td>Medium to Critical</td><td>URL; <code>--depth deep</code>; auth-aware when a session exists</td></tr>
+      <tr><td><a href="rate-limit.html">Rate limit scanner</a></td><td>Endpoints with login, signup, password, reset, token or otp in the URL</td><td>No 429 in 150 requests; the measured threshold; mixed bursts; a limit that resets on a new identity</td><td>Info to High</td><td>URL; <code>--depth deep</code>; auth-aware except the identity test</td></tr>
+    </tbody>
+  </table></div>
+  <div class="callout note">
+    <div class="label">Depth and the session</div>
+    <p>The session scanner runs in the default quick scan. The rate limit, auth bypass and password reset scanners are the three aggressive probes added by <code>--depth deep</code>. On an authenticated deep scan the crawl's session is handed to every HTTP scanner that exposes <code>_auth_headers</code>: rate limit and password reset take it, while auth bypass is skipped on purpose because its tests depend on the absence or forging of authentication.</p>
+  </div>
+</section>
+
+<section id="why">
+  <h2>Why this class matters</h2>
+  <div class="grid-2">
+    <div class="callout why"><div class="label">Why it matters</div><p>Authentication is the front door and the session is the key it hands out. A token in localStorage or a cookie without HttpOnly turns any XSS into account takeover. A JWT that is accepted without a valid signature lets anyone mint tokens for any user. Without lockout or rate limiting, guessing is free, and a reset flow that confirms which emails exist or returns its own token makes takeover a single request. Nothing here needs a clever payload: the server simply answers what it should have refused.</p></div>
+    <div class="callout breach"><div class="label">Real-world breaches</div><p><b>British Airways (2018).</b> Injected JavaScript could reach client-side storage, enabling exfiltration of payment data and session tokens. <b>iCloud (2014).</b> No lockout or rate limit on the Find My iPhone API allowed brute-force attacks on celebrity accounts. <b>Dunkin' Donuts (2015).</b> Credential stuffing against an app with no rate limiting took over accounts and drained stored value. <b>Snapchat (2014).</b> The password reset flow allowed enumeration and confirmation of phone numbers linked to accounts. <b>jsonwebtoken CVE-2015-9235.</b> The library accepted <code>alg: "none"</code> by default, a complete authentication bypass for apps that did not restrict algorithms.</p></div>
+  </div>
+</section>
+
+<footer class="foot">
+  <span>Sources: <a href="../scanners/jwt-scanner.md">jwt-scanner.md</a> · <a href="../scanners/session-scanner.md">session-scanner.md</a> · <a href="../scanners/auth-bypass-scanner.md">auth-bypass-scanner.md</a> · <a href="../scanners/password-reset-scanner.md">password-reset-scanner.md</a> · <a href="../scanners/rate-limit-scanner.md">rate-limit-scanner.md</a></span>
+  <span>Other groups: <a href="group-injection.html">Injection</a> · <a href="group-access-control.html">Access control</a> · <a href="group-browser-defenses.html">Browser-side defenses</a> · <a href="group-business-logic.html">Business logic</a> · <a href="group-surface.html">Attack surface and exposure</a> · <a href="group-secrets-dependencies.html">Secrets and dependencies</a> · <a href="group-infrastructure.html">Infrastructure configuration</a> · <a href="group-schema-middleware.html">Schemas and middleware</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+<script>
+(function () {
+  // [request path, reply path, request packet class, repeat count]
+  const PATHS = {
+    2: ["M200 149 C 480 149, 480 239, 760 239", "M760 239 C 480 239, 480 149, 200 149", "f-attacker", 1],
+    3: ["M200 59 H 760", "M760 59 H 200", "f-attacker", 1],
+    4: ["M200 59 C 480 59, 480 149, 760 149", "M760 149 C 480 149, 480 59, 200 59", "f-attacker", 3],
+    5: ["M200 59 H 760", "M760 59 H 200", "f-attacker", 4]
+  };
+  window.groupLoop = function (scene, step, el) {
+    const svg = el.querySelector("svg");
+    IsDoc.clearPackets(svg);
+    const p = PATHS[step];
+    if (!p) return;
+    const layer = svg.querySelector("#loop-wires");
+    for (let i = 0; i < p[3]; i++) {
+      IsDoc.packet(svg, p[0], { cls: p[2], r: p[3] > 1 ? 4 : 6, duration: 900, delay: i * 220, hold: 100, layer: layer });
+    }
+    IsDoc.packet(svg, p[1], { cls: "f-accent", r: 5, duration: 1000, delay: 1500, hold: 400, layer: layer });
+  };
+})();
+</script>
+</body>
+</html>

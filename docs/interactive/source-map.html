@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Source Maps · isitsecure</title>
+<meta name="description" content="How isitsecure finds publicly reachable JavaScript source maps, confirms each one by its JSON markers so a single-page app's 200-for-everything is never a finding, and grades first-party leaks High — animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  .topbar-inner .crumb a { color: inherit; text-decoration: none; }
+  .topbar-inner .crumb a:hover { color: var(--accent); }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› <a href="group-browser-defenses.html">Browser-side defenses</a> › Source maps</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../../isitsecure/engine/scanners/source_map_scanner.py" title="The implementation this page is built from">source .py</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">DAST scanner · light requests</div>
+  <h1>Source Maps</h1>
+  <p class="lede">A <code>.map</code> file turns minified JavaScript back into the original source: file paths, comments, and anything a developer left in the code. isitsecure collects map URLs the page already announces, guesses <code>&lt;asset&gt;.map</code> for every first-party script, fetches each one, and reports it only if the body really is a source map. Single-page apps answer 200 to almost any path, so a bare 200 never counts.</p>
+  <div class="meta">
+    <span class="pill dast">DAST</span><span class="pill high">High</span><span class="pill">Low</span><span class="pill">Information disclosure</span><span class="pill">GET only</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#scan"><span class="n">01</span>Find, fetch, confirm</a>
+  <a href="#guard"><span class="n">02</span>The false-positive guard</a>
+  <a href="#fix"><span class="n">03</span>The fix</a>
+  <a href="#reference"><span class="n">04</span>Reference</a>
+</nav>
+
+<section id="scan">
+  <h2>Find, fetch, confirm</h2>
+  <p class="prose">The scanner has three jobs: build a list of candidate URLs, request each one, and decide from the response body whether it is a genuine source map. Only then does it pick a severity.</p>
+
+  <div class="scene" id="sm-scan" data-scene data-interval="3200">
+    <figure class="stage">
+      <svg viewBox="0 0 960 330" role="img" aria-label="Candidate map URLs come from the ingestion list and from appending .map to first-party script URLs; each is fetched with GET; a 200 whose body contains sources or mappings is graded High if first-party and Low if third-party.">
+        <defs><marker id="sm-arr1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+
+        <g class="node lit-1 lit-2" transform="translate(20 20)">
+          <rect width="300" height="290" rx="10"/>
+          <text class="ttl" x="12" y="26">Candidates · max 40</text>
+          <text class="mono" x="12" y="58">1  source_maps_found</text>
+          <text class="lbl" x="12" y="76">maps the page already announced</text>
+          <text class="lbl" x="12" y="92">(//# sourceMappingURL= comments)</text>
+          <text class="mono" x="12" y="128">2  first-party JS assets</text>
+          <text class="lbl" x="12" y="146">.js .mjs .cjs only, vendor bundles skipped</text>
+          <g class="at-2">
+            <text class="mono" x="12" y="182">/assets/app.3f9a.js?v=2</text>
+            <text class="mono t-info" x="12" y="204">→ /assets/app.3f9a.js.map</text>
+            <text class="lbl" x="12" y="230">query and fragment stripped first</text>
+            <text class="lbl" x="12" y="246">duplicates dropped, first 40 kept</text>
+          </g>
+        </g>
+
+        <path class="wire at-3 accent" d="M322 165 H 348" marker-end="url(#sm-arr1)"/>
+        <g class="node at-3 lit-3" transform="translate(350 20)">
+          <rect width="260" height="290" rx="10"/>
+          <text class="ttl" x="12" y="26">GET each candidate</text>
+          <text class="mono t-info" x="12" y="60">GET …/app.3f9a.js.map</text>
+          <text class="lbl" x="12" y="96">5 requests at a time</text>
+          <text class="lbl" x="12" y="114">0.2 s delay between them</text>
+          <text class="lbl" x="12" y="132">redirects followed</text>
+          <text class="lbl" x="12" y="150">auth headers attached if present</text>
+          <text class="lbl" x="12" y="168">failed request: skipped</text>
+          <text class="lbl" x="12" y="186">stops when the time budget ends</text>
+        </g>
+
+        <path class="wire at-4 accent" d="M612 165 H 638" marker-end="url(#sm-arr1)"/>
+        <g class="node at-4 lit-4" transform="translate(640 20)">
+          <rect width="300" height="290" rx="10"/>
+          <text class="ttl" x="12" y="26">Confirm, then grade</text>
+          <text class="mono" x="12" y="58">status == 200</text>
+          <text class="lbl" x="12" y="76">any other status: dropped</text>
+          <text class="mono" x="12" y="108">"sources": or "mappings":</text>
+          <text class="lbl" x="12" y="126">in the body, else dropped</text>
+          <g class="node at-5 lit-5" transform="translate(12 148)">
+            <rect width="276" height="62" rx="8" class="soft-attacker"/>
+            <text class="t-attacker" x="12" y="24">HIGH · first-party map</text>
+            <text class="lbl" x="12" y="44">host matches the page, confidence 0.95</text>
+          </g>
+          <g class="node at-5" transform="translate(12 220)">
+            <rect width="276" height="56" rx="8" class="soft-accent"/>
+            <text class="t-accent" x="12" y="24">LOW · third-party map</text>
+            <text class="lbl" x="12" y="43">another host, lower risk</text>
+          </g>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The first source of candidates is what URL ingestion already saw, mainly <code>sourceMappingURL</code> comments inside the page's scripts. Those URLs go on the list as they are.</p>
+      <p class="step"><span class="n">2</span>The second source is a guess. For each <b>first-party</b> script ending in <code>.js</code>, <code>.mjs</code> or <code>.cjs</code>, the scanner strips any query string and appends <code>.map</code>. Inline scripts are skipped. The list is deduplicated and capped at 40.</p>
+      <p class="step"><span class="n">3</span>Each candidate is requested with a plain GET, five at a time with a short delay, using the engagement's auth headers when there are any. The scanner stops early if its time budget runs out.</p>
+      <p class="step"><span class="n">4</span>A candidate survives only if the status is 200 <b>and</b> the body contains <code>"sources":</code> or <code>"mappings":</code>. Everything else is dropped without a finding.</p>
+      <p class="step"><span class="n">5</span>Grading looks at the map's host. <b>Same host as the page → HIGH</b>, because it exposes your own source. A map on another host → LOW, because it only exposes a vendor library.</p>
+    </div>
+  </div>
+
+  <div class="callout note">
+    <div class="label">Built from the code, not a markdown doc</div>
+    <p>This scanner has no page under <code>docs/scanners/</code>. Everything here is taken from <code>isitsecure/engine/scanners/source_map_scanner.py</code> and the README scanner-table row ("Publicly exposed <code>.map</code> files leaking original source (verified, not just present)"). The cap of 40, the concurrency of 5, the 0.2 s delay and the two body markers are read directly from that file.</p>
+  </div>
+</section>
+
+<section id="guard">
+  <h2>Why a 200 is not enough</h2>
+  <p class="prose">Many single-page apps route every unknown path to <code>index.html</code> and return it with status 200. If the scanner trusted the status code, every guessed <code>.map</code> URL on such a site would look exposed. The body check is what separates a leaked map from a catch-all page.</p>
+
+  <div class="scene" id="sm-guard" data-scene data-interval="3000">
+    <figure class="stage">
+      <svg viewBox="0 0 960 300" role="img" aria-label="Four responses to a map request and the verdict each gets: a 404 is dropped, a 200 HTML catch-all page without markers is dropped, a 200 with sources and mappings on the same host is High, and the same body on another host is Low.">
+        <defs><marker id="sm-arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <text class="lbl" x="20" y="20">request and response</text>
+        <text class="lbl" x="560" y="20">verdict</text>
+
+        <g class="node lit-2" transform="translate(20 32)"><rect width="500" height="56" rx="8"/><text class="mono" x="12" y="22">GET https://app.example/assets/app.js.map</text><text class="mono t-attacker" x="12" y="42">404 Not Found</text></g>
+        <path class="wire at-2" d="M520 60 H 548" marker-end="url(#sm-arr2)"/>
+        <g class="node verdict at-2 lit-2" transform="translate(550 32)"><rect width="390" height="56" rx="8" class="soft-safe"/><text class="t-safe" x="12" y="22">quiet · status is not 200</text><text class="lbl" x="12" y="42">no body is inspected</text></g>
+
+        <g class="node lit-3" transform="translate(20 100)"><rect width="500" height="56" rx="8"/><text class="mono" x="12" y="22">GET https://spa.example/assets/app.js.map</text><text class="mono" x="12" y="42">200  &lt;!doctype html&gt;&lt;div id="root"&gt;…</text></g>
+        <path class="wire at-3" d="M520 128 H 548" marker-end="url(#sm-arr2)"/>
+        <g class="node verdict at-3 lit-3" transform="translate(550 100)"><rect width="390" height="56" rx="8" class="soft-safe"/><text class="t-safe" x="12" y="22">quiet · SPA catch-all page</text><text class="lbl" x="12" y="42">200, but neither marker is in the body</text></g>
+
+        <g class="node lit-4" transform="translate(20 168)"><rect width="500" height="56" rx="8"/><text class="mono" x="12" y="22">GET https://app.example/assets/app.js.map</text><text class="mono t-attacker" x="12" y="42">200  {"sources":["src/App.tsx"],"mappings":"AAAA…"}</text></g>
+        <path class="wire at-4 attacker" d="M520 196 H 548" marker-end="url(#sm-arr2)"/>
+        <g class="node verdict at-4 lit-4" transform="translate(550 168)"><rect width="390" height="56" rx="8" class="soft-attacker"/><text class="t-attacker" x="12" y="22">HIGH · First-party source map exposed</text><text class="lbl" x="12" y="42">markers present, host matches the page</text></g>
+
+        <g class="node lit-5" transform="translate(20 236)"><rect width="500" height="56" rx="8"/><text class="mono" x="12" y="22">GET https://cdn.vendor.net/lib.js.map</text><text class="mono t-attacker" x="12" y="42">200  {"sources":["lib/index.js"],"mappings":"…"}</text></g>
+        <path class="wire at-5 accent" d="M520 264 H 548" marker-end="url(#sm-arr2)"/>
+        <g class="node verdict at-5 lit-5" transform="translate(550 236)"><rect width="390" height="56" rx="8" class="soft-accent"/><text class="t-accent" x="12" y="22">LOW · Third-party source map exposed</text><text class="lbl" x="12" y="42">reached via a sourceMappingURL hint</text></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Four guessed or announced map URLs, four different replies. The scanner has to tell the real leak from the three lookalikes using only the response.</p>
+      <p class="step"><span class="n">2</span>A 404 is the healthy case. <b>Anything other than 200 is dropped</b> before the body is read.</p>
+      <p class="step"><span class="n">3</span>A single-page app returns its shell with status 200 for any path. The body is HTML and contains neither <code>"sources":</code> nor <code>"mappings":</code>, so <b>no finding</b>. This is the guard the code comments call out.</p>
+      <p class="step"><span class="n">4</span>A real Source Map v3 file carries both keys. On the same host as the page it is reported as <b>First-party JavaScript source map exposed, HIGH</b>.</p>
+      <p class="step"><span class="n">5</span>The same body on another host is a vendor library's map. It is still reported, as <b>LOW</b>. Third-party maps can only be reached through the URLs ingestion already found, because guessing is limited to first-party scripts.</p>
+    </div>
+  </div>
+
+  <div class="callout why">
+    <div class="label">Why it matters</div>
+    <p>The finding text explains it: source maps "reconstruct the original, un-minified source code, exposing internal file paths, comments, and any secrets embedded at build time". Minification is the only thing between an attacker and a readable copy of your client logic, hidden endpoints and API shapes. That is why a first-party map is graded HIGH while a vendor map, which is public code anyway, is LOW.</p>
+  </div>
+</section>
+
+<section id="fix">
+  <h2>Vulnerable vs fixed build config</h2>
+  <p class="prose">The finding's advice is to disable source map generation in production or restrict access to the files. The tabs show where that switch lives in three common toolchains. These are illustrative; use the option your own build tool provides.</p>
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true">BAD · maps shipped publicly</button>
+      <button class="tab good" role="tab" aria-selected="false">GOOD · maps off or private</button>
+    </div>
+    <div role="tabpanel"><pre><code><span class="c">// vite.config.js</span>
+<span class="hl bad">build: { <span class="k">sourcemap</span>: true }          <span class="c">// app.js.map deployed next to app.js</span></span>
+
+<span class="c">// webpack.config.js</span>
+<span class="hl bad">devtool: <span class="s">'source-map'</span>                 <span class="c">// and //# sourceMappingURL= left in app.js</span></span>
+
+<span class="c">// next.config.js</span>
+<span class="hl bad">productionBrowserSourceMaps: <span class="k">true</span></span></code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c">// vite.config.js</span>
+<span class="hl good">build: { <span class="k">sourcemap</span>: false }</span>
+
+<span class="c">// webpack.config.js</span>
+<span class="hl good">devtool: <span class="k">false</span></span>
+
+<span class="c">// next.config.js</span>
+<span class="hl good">productionBrowserSourceMaps: <span class="k">false</span></span>
+
+<span class="c">// Need maps for error tracking? Upload them to the tracker at build time
+// and delete them from the public output, or serve them only behind auth.</span></code></pre></div>
+  </div>
+</section>
+
+<section id="reference">
+  <h2>Reference: what the code does</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Item</th><th>Value</th><th>Where it comes from</th></tr></thead>
+      <tbody>
+        <tr><td>Candidate sources</td><td>the ingestion list of source maps, then <code>&lt;asset&gt;.map</code> for each first-party JS asset</td><td><code>_collect_candidates</code></td></tr>
+        <tr><td>Derived name</td><td>asset path must end in <code>.js</code>, <code>.mjs</code> or <code>.cjs</code>; query and fragment stripped; <code>inline-script</code> assets skipped</td><td><code>_derive_map_url</code>, <code>_JS_SUFFIXES</code></td></tr>
+        <tr><td>Caps</td><td>40 candidates; 5 concurrent requests; 0.2 s between requests; stops at the time budget</td><td><code>_MAX_CANDIDATES</code>, <code>_MAX_CONCURRENT</code>, <code>_REQUEST_DELAY_SECONDS</code>, <code>TimeBudget</code></td></tr>
+        <tr><td>Confirmation</td><td>status 200 and the body contains <code>"sources":</code> or <code>"mappings":</code></td><td><code>_SOURCE_MAP_MARKERS</code>, <code>_verify_map</code></td></tr>
+        <tr><td>Severity</td><td>same host as the page (leading <code>www.</code> ignored) → HIGH; otherwise LOW</td><td><code>_build_finding</code>, <code>is_first_party_url</code></td></tr>
+        <tr><td>Finding</td><td>category SOURCE_MAP_LEAK, source DAST_URL, confidence 0.95, method GET, endpoint = the map URL</td><td><code>_build_finding</code></td></tr>
+        <tr><td>Auth</td><td>attaches the engagement's auth headers when present; works without them</td><td><code>AuthAwareScanner</code></td></tr>
+        <tr><td>Scan depth</td><td>runs at both <code>quick</code> and <code>deep</code></td><td><code>factory.py</code> DAST list</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout note">
+    <div class="label">Things it does not do</div>
+    <p>It never reads the map's contents beyond the two markers, so it does not look for secrets inside <code>sourcesContent</code>. It guesses <code>&lt;asset&gt;.map</code> only; a bundler that names maps differently is found only when ingestion saw a <code>sourceMappingURL</code>. Vendor and framework bundles are filtered out of the guessing step. A different subdomain of your own site counts as third-party and gets LOW.</p>
+  </div>
+</section>
+
+<footer class="foot">
+  <span>Source: <a href="../../isitsecure/engine/scanners/source_map_scanner.py">source_map_scanner.py</a> · <a href="../../README.md">README scanner table</a></span>
+  <span>Group: <a href="group-browser-defenses.html">Browser-side defenses</a> · Related: <a href="client-exposure.html">Client exposure</a> · <a href="security-headers.html">Security headers</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+</body>
+</html>

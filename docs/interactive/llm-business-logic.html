@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>LLM Business Logic · isitsecure</title>
+<meta name="description" content="How the LLM business logic scanner reads your source, asks a model for attack plans, runs them against the live app with two sessions, and asks a model whether each one worked. What is sent, what comes back, and what guards the output.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  .topbar-inner .crumb a { color: inherit; text-decoration: none; }
+  .topbar-inner .crumb a:hover { color: var(--accent); }
+  /* flow scene: boxes light up as the phase they stand for is explained */
+  #flow .ph > rect, #flow .panel > rect { transition: fill .35s, stroke .35s; }
+  #flow .model > rect { fill: var(--accent-soft); }
+  #flow .panel > rect { fill: var(--surface-2); }
+  /* example scene */
+  #example .panel > rect { fill: var(--surface-2); }
+  #example .verdict-yes > rect { fill: var(--attacker-soft); stroke: var(--attacker); }
+  #example .verdict-no > rect { fill: var(--safe-soft); stroke: var(--safe); }
+  /* guard scene */
+  #guards .gate > rect { transition: fill .35s, stroke .35s; }
+  #guards .open > rect { fill: var(--attacker-soft); stroke: var(--attacker); }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› <a href="group-business-logic.html">Business logic</a> › LLM business logic</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../architecture.md" title="Phase 9.2 in the architecture doc (this scanner has no scanner md)">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">LLM-powered · Phase 9.2</div>
+  <h1>LLM Business Logic Scanner</h1>
+  <p class="lede">A pattern matcher cannot know that your checkout should ignore a price sent by the client. This scanner hands your source and your endpoint list to a model, asks it to write attack plans as plain HTTP requests, runs those requests itself with two real logins, and asks a model whether the responses prove the flaw.</p>
+  <div class="meta">
+    <span class="pill llm">LLM</span><span class="pill dast">Runs against the live app</span><span class="pill high">High</span><span class="pill crit">Critical</span><span class="pill">Business logic</span><span class="pill">needs two sessions</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#flow-sec"><span class="n">01</span>Four phases</a>
+  <a href="#example-sec"><span class="n">02</span>One plan, start to finish</a>
+  <a href="#guards-sec"><span class="n">03</span>What guards the output</a>
+  <a href="#why"><span class="n">04</span>Why it matters</a>
+  <a href="#code"><span class="n">05</span>Vulnerable vs fixed code</a>
+  <a href="#limits"><span class="n">06</span>Limits</a>
+</nav>
+
+<section id="flow-sec">
+  <h2>Four phases: two are code, two are the model</h2>
+  <p class="prose">The scanner code picks the files and sends every request. The model is used twice: once to plan, once to judge. It never touches the network itself, and the scanner never decides on its own that an attack worked.</p>
+
+  <div class="scene" id="flow" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 350" role="img" aria-label="Four phase boxes left to right: select files (scanner code), plan attacks (model), execute steps (scanner code), judge results (model). A finding comes out of the last box.">
+        <defs><marker id="arr-flow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <text class="lbl" x="20" y="22">Runs only with: repo snapshot, discovered endpoints, target URL, a logged-in admin and regular user,</text>
+        <text class="lbl" x="20" y="38">scan mode authenticated or full, and an LLM client.</text>
+
+        <g class="wire at-3" id="flow-w1"><path class="wire" d="M222 78 H253" marker-end="url(#arr-flow)"/></g>
+        <g class="wire at-4"><path class="wire" d="M457 78 H488" marker-end="url(#arr-flow)"/></g>
+        <g class="wire at-5"><path class="wire" d="M692 78 H723" marker-end="url(#arr-flow)"/></g>
+
+        <g class="node ph lit-2" transform="translate(20 52)"><rect width="200" height="52" rx="8"/>
+          <text class="ttl" x="12" y="23">1 Select files</text><text class="lbl" x="12" y="41">scanner code</text></g>
+        <g class="node ph model lit-3" transform="translate(255 52)"><rect width="200" height="52" rx="8"/>
+          <text class="ttl" x="12" y="23">2 Plan attacks</text><text class="lbl" x="12" y="41">model · primary client</text></g>
+        <g class="node ph lit-4" transform="translate(490 52)"><rect width="200" height="52" rx="8"/>
+          <text class="ttl" x="12" y="23">3 Execute steps</text><text class="lbl" x="12" y="41">scanner code · httpx</text></g>
+        <g class="node ph model lit-5" transform="translate(725 52)"><rect width="200" height="52" rx="8"/>
+          <text class="ttl" x="12" y="23">4 Judge results</text><text class="lbl" x="12" y="41">model · judgment client</text></g>
+
+        <g class="only-1" transform="translate(20 132)">
+          <rect x="0" y="0" width="14" height="14" rx="3" style="fill:var(--surface-2);stroke:var(--line)"/>
+          <text x="26" y="12">Scanner code: picks the files, sends every HTTP request, records status and body.</text>
+          <rect x="0" y="32" width="14" height="14" rx="3" style="fill:var(--accent-soft);stroke:var(--line)"/>
+          <text x="26" y="44">Model: writes the attack plans and judges the outcome. It never sends a request.</text>
+          <text class="lbl" x="0" y="84">Both model calls use the same shared client, so token use is counted in the scan's cost report.</text>
+        </g>
+        <g class="at-2 mono" transform="translate(20 116)"><g class="node panel"><rect width="200" height="140" rx="8"/></g>
+          <text class="lbl" x="12" y="22">keep .ts .tsx .js .jsx</text>
+          <text class="lbl" x="12" y="40">.py .go .rs</text>
+          <text class="lbl" x="12" y="58">path holds router, route,</text>
+          <text class="lbl" x="12" y="76">checkout, payment, order,</text>
+          <text class="lbl" x="12" y="94">webhook, cart, invoice ...</text>
+          <text class="lbl" x="12" y="112">skip node_modules, test,</text>
+          <text class="lbl" x="12" y="130">.spec. , max 30 files</text></g>
+        <g class="at-3" transform="translate(255 116)"><g class="node panel"><rect width="200" height="140" rx="8"/></g>
+          <text class="lbl t-info" x="12" y="22">IN</text><text class="lbl" x="34" y="22">whole source of each file</text>
+          <text class="lbl t-info" x="12" y="40">IN</text><text class="lbl" x="34" y="40">up to 50 METHOD url lines</text>
+          <text class="lbl t-info" x="12" y="58">IN</text><text class="lbl" x="34" y="58">a framework guess</text>
+          <text class="lbl t-accent" x="12" y="82">OUT</text><text class="lbl" x="40" y="82">JSON attack_plans</text>
+          <text class="lbl" x="40" y="100">up to 10 plans</text>
+          <text class="lbl" x="40" y="118">up to 8 steps each</text></g>
+        <g class="at-4" transform="translate(490 116)"><g class="node panel"><rect width="200" height="140" rx="8"/></g>
+          <text class="lbl" x="12" y="22">each step: method, url, body</text>
+          <text class="lbl" x="12" y="40">sent as admin_user,</text>
+          <text class="lbl" x="12" y="58">regular_user or no_auth</text>
+          <text class="lbl" x="12" y="76">15 s timeout per request</text>
+          <text class="lbl" x="12" y="100">keeps the status and the</text>
+          <text class="lbl" x="12" y="118">first 300 chars of the body</text></g>
+        <g class="at-5" transform="translate(725 116)"><g class="node panel"><rect width="200" height="140" rx="8"/></g>
+          <text class="lbl t-info" x="12" y="22">IN</text><text class="lbl" x="34" y="22">plan + success criteria</text>
+          <text class="lbl" x="34" y="40">each step: status, body[:300]</text>
+          <text class="lbl t-accent" x="12" y="64">OUT</text><text class="lbl" x="40" y="64">confirmed true or false</text>
+          <text class="lbl" x="40" y="82">confidence, severity,</text>
+          <text class="lbl" x="40" y="100">evidence, remediation</text>
+          <text class="lbl t-attacker" x="12" y="124">false: no finding</text></g>
+
+        <path class="wire at-6" d="M825 258 V290" marker-end="url(#arr-flow)"/>
+        <g class="node at-6 lit-6" transform="translate(655 292)"><rect width="270" height="46" rx="8"/>
+          <text class="ttl" x="12" y="20">Finding, only if confirmed</text><text class="lbl" x="12" y="37">source: SAST-guided DAST</text></g>
+        <text class="lbl at-6" x="20" y="306">Confidence is the judge's value, capped at 1.0 (0.7 if it gave none).</text>
+        <text class="lbl at-6" x="20" y="324">Severity is the judge's; the plan's file and line become the code location.</text>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Four phases. The two shaded boxes call a model; the other two are ordinary code. <b>Nothing runs unless two logged-in users, the endpoint list and an LLM client all exist</b>, so a scan without an API key never reaches this phase.</p>
+      <p class="step" data-on="bizFlow"><span class="n">2</span><b>Select.</b> The scanner keeps source files whose path contains words like checkout, payment, order, webhook or cart, drops tests and <code>node_modules</code>, and stops at 30 files. Each file is kept whole: the size limit is switched off.</p>
+      <p class="step" data-on="bizFlow"><span class="n">3</span><b>Plan.</b> One call. The model gets the file contents, up to 50 discovered endpoints and a framework guess, and must answer with JSON: attack plans, each a list of HTTP steps plus a success criterion. The prompt tells it to use real endpoint URLs from the list.</p>
+      <p class="step" data-on="bizFlow"><span class="n">4</span><b>Execute.</b> The scanner, not the model, sends each step, with the bearer token of the user the plan names. For every step it records the status and the first 300 characters of the body.</p>
+      <p class="step" data-on="bizFlow"><span class="n">5</span><b>Judge.</b> A second call, on the cheaper judgment client when one is configured, receives the plan and what actually came back. It answers confirmed or not, with evidence, severity and a fix.</p>
+      <p class="step" data-on="bizFlow"><span class="n">6</span>Only <code>confirmed: true</code> becomes a finding. A plan that errors, parses badly or is judged not confirmed leaves no trace in the report.</p>
+    </div>
+  </div>
+</section>
+
+<section id="example-sec">
+  <h2>One plan, start to finish</h2>
+  <p class="prose">An illustrative plan for a checkout route that trusts a price from the request body. The shapes are the real ones from the prompts; the endpoint, values and file are made up for the picture.</p>
+
+  <div class="scene" id="example" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 372" role="img" aria-label="Three panels: the model's attack plan as JSON, the live app answering two steps, and the judge's verdict. The attack succeeds against a vulnerable server and is dropped against a fixed one.">
+        <defs><marker id="arr-ex" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+
+        <text class="lbl" x="20" y="22">1 · plan from the model</text>
+        <text class="lbl at-2" x="335" y="22">2 · live app, sent by the scanner</text>
+        <text class="lbl at-4" x="650" y="22">3 · verdict from the judge</text>
+
+        <g class="node panel" transform="translate(20 34)"><rect width="295" height="320" rx="8"/></g>
+        <g class="mono" transform="translate(20 34)">
+          <text x="12" y="24">"title":</text>
+          <text x="12" y="42" class="t-accent"> "Client-set price"</text>
+          <text x="12" y="64">"affected_file":</text>
+          <text x="12" y="82"> "api/checkout/route.ts"</text>
+          <text x="12" y="104">"steps": [</text>
+          <text x="12" y="122" class="t-info"> {"user":"admin_user",</text>
+          <text x="12" y="140" class="t-info"> "GET /api/products/7"},</text>
+          <text x="12" y="162" class="t-attacker"> {"user":"regular_user",</text>
+          <text x="12" y="180" class="t-attacker"> "POST /api/checkout",</text>
+          <text x="12" y="198" class="t-attacker"> "body":{"id":7,"price":1}}]</text>
+          <text x="12" y="226">"success_criteria":</text>
+          <text x="12" y="244"> "201 and total is 1"</text>
+          <text class="lbl" x="12" y="282">Setup step as admin_user,</text>
+          <text class="lbl" x="12" y="300">attack step as regular_user.</text>
+        </g>
+
+        <g class="at-2" transform="translate(335 34)"><g class="node panel"><rect width="295" height="320" rx="8"/></g>
+          <text class="lbl" x="12" y="24">step 1 · admin_user</text>
+          <text class="mono" x="12" y="46">GET /api/products/7</text>
+          <text class="mono" x="12" y="68">200 {"id":7,"price":40}</text>
+        </g>
+        <g class="at-3" transform="translate(335 34)">
+          <text class="lbl" x="12" y="108">step 2 · regular_user</text>
+          <text class="mono" x="12" y="130">POST /api/checkout</text>
+          <text class="mono" x="12" y="148">{"id":7,"price":1}</text>
+          <text class="mono t-attacker at-3 until-6" x="12" y="176">201 {"total":1,"paid":true}</text>
+          <text class="mono t-safe at-6" x="12" y="176">201 {"total":40,"paid":true}</text>
+          <text class="lbl" x="12" y="216">The scanner stores status and</text>
+          <text class="lbl" x="12" y="234">the first 300 characters of</text>
+          <text class="lbl" x="12" y="252">each body, nothing more.</text>
+        </g>
+
+        <path class="wire accent at-4 until-6" d="M630 140 H 648" marker-end="url(#arr-ex)"/>
+        <path class="wire accent at-6" d="M630 140 H 648" marker-end="url(#arr-ex)"/>
+
+        <g class="at-4" transform="translate(650 34)"><g class="node panel"><rect width="290" height="320" rx="8"/></g>
+          <text class="lbl" x="12" y="24">sent to the judge</text>
+          <text class="mono" x="12" y="46">plan, success_criteria,</text>
+          <text class="mono" x="12" y="64">steps[].expected,</text>
+          <text class="mono" x="12" y="82">steps[].actual_status,</text>
+          <text class="mono" x="12" y="100">steps[].actual_body_preview</text>
+          <text class="lbl" x="12" y="128">The judge cannot send anything.</text>
+          <text class="lbl" x="12" y="146">It only reads what came back.</text>
+        </g>
+        <g class="at-5 until-6 verdict-yes" transform="translate(662 190)"><g class="node verdict-yes"><rect width="266" height="154" rx="8"/></g>
+          <text class="lbl" x="12" y="22">judge replies</text>
+          <text class="mono t-attacker" x="12" y="44">"confirmed": true</text>
+          <text class="mono" x="12" y="64">"confidence": 0.9</text>
+          <text class="mono" x="12" y="84">"severity": "HIGH"</text>
+          <text class="mono" x="12" y="104">"evidence": "total 1 for</text>
+          <text class="mono" x="12" y="122"> a 40 product"</text>
+          <text class="lbl" x="12" y="144">+ remediation text</text></g>
+        <g class="at-6" transform="translate(662 190)"><g class="node verdict-no"><rect width="266" height="154" rx="8"/></g>
+          <text class="lbl" x="12" y="22">same plan, fixed server</text>
+          <text class="mono t-safe" x="12" y="46">"confirmed": false</text>
+          <text class="lbl" x="12" y="76">The price was ignored: the</text>
+          <text class="lbl" x="12" y="94">total is the catalog price.</text>
+          <text class="ttl t-safe" x="12" y="130">No finding is created.</text></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The model reads the checkout route and writes a plan: a setup request as the admin, then the attack request as the regular user, plus a success criterion in words. It also names the file and line it suspects.</p>
+      <p class="step" data-on="bizEx"><span class="n">2</span>The scanner runs step 1 with the admin's token. The response gives a baseline: product 7 costs 40.</p>
+      <p class="step" data-on="bizEx"><span class="n">3</span>Step 2 runs as the regular user with a client-chosen price of 1. The server answers 201 and charges 1. The scanner has only recorded this so far; no verdict exists yet.</p>
+      <p class="step"><span class="n">4</span>The plan, its success criterion and the recorded responses go to the judge. Each body is cut to 300 characters before it is sent.</p>
+      <p class="step"><span class="n">5</span>The judge answers <code>confirmed: true</code> and quotes the evidence. This becomes a HIGH finding on <code>POST /api/checkout</code>, located at the file and line from the plan.</p>
+      <p class="step"><span class="n">6</span>Against a fixed server the same plan returns the catalog price. The judge answers <code>confirmed: false</code> and <b>the plan is dropped without a finding</b>.</p>
+    </div>
+  </div>
+</section>
+
+<section id="guards-sec">
+  <h2>What guards the output</h2>
+  <p class="prose">Model output is untrusted text at both ends. Four gates stand between it and a finding. The fifth box is what the code does not check, which is why the judge's verdict is the only proof.</p>
+
+  <div class="scene" id="guards" data-scene data-interval="3600">
+    <figure class="stage">
+      <svg viewBox="0 0 960 300" role="img" aria-label="Five boxes: preconditions before any model call, plan parsing, bounds while executing, the judge's verdict, and what is not guarded.">
+        <text class="lbl" x="12" y="20">before the model</text>
+        <text class="lbl" x="202" y="20">plan reply</text>
+        <text class="lbl" x="392" y="20">while executing</text>
+        <text class="lbl" x="582" y="20">judge reply</text>
+        <text class="lbl" x="772" y="20">left open</text>
+
+        <g class="node gate lit-1" transform="translate(12 30)"><rect width="176" height="174" rx="8"/>
+          <text class="ttl" x="12" y="24">Preconditions</text>
+          <text class="lbl" x="12" y="50">mode authenticated/full</text>
+          <text class="lbl" x="12" y="68">two sessions: A and B</text>
+          <text class="lbl" x="12" y="86">endpoints and target URL</text>
+          <text class="lbl" x="12" y="104">repo snapshot, LLM client</text>
+          <text class="lbl t-accent" x="12" y="130">else the phase is skipped.</text>
+          <text class="lbl" x="12" y="148">No key, no code reviewer,</text>
+          <text class="lbl" x="12" y="164">so nothing here starts.</text></g>
+        <g class="node gate lit-2" transform="translate(202 30)"><rect width="176" height="174" rx="8"/>
+          <text class="ttl" x="12" y="24">Plan parse</text>
+          <text class="lbl" x="12" y="50">reply read as JSON; code</text>
+          <text class="lbl" x="12" y="68">fences are stripped first</text>
+          <text class="lbl" x="12" y="86">a plan without steps or</text>
+          <text class="lbl" x="12" y="104">not an object: dropped</text>
+          <text class="lbl t-accent" x="12" y="130">unparseable: zero plans,</text>
+          <text class="lbl" x="12" y="148">so nothing is sent to the</text>
+          <text class="lbl" x="12" y="164">app.</text></g>
+        <g class="node gate lit-3" transform="translate(392 30)"><rect width="176" height="174" rx="8"/>
+          <text class="ttl" x="12" y="24">Bounds</text>
+          <text class="lbl" x="12" y="50">30 files, 50 endpoints</text>
+          <text class="lbl" x="12" y="68">10 plans, 8 steps each</text>
+          <text class="lbl" x="12" y="86">15 s per request</text>
+          <text class="lbl" x="12" y="104">failed request: status 0</text>
+          <text class="lbl t-accent" x="12" y="130">time budget: stop early</text>
+          <text class="lbl" x="12" y="148">and return the findings</text>
+          <text class="lbl" x="12" y="164">found so far.</text></g>
+        <g class="node gate lit-4" transform="translate(582 30)"><rect width="176" height="174" rx="8"/>
+          <text class="ttl" x="12" y="24">Verdict</text>
+          <text class="lbl" x="12" y="50">must say confirmed: true</text>
+          <text class="lbl" x="12" y="68">false, bad JSON or any</text>
+          <text class="lbl" x="12" y="86">error: no finding</text>
+          <text class="lbl" x="12" y="104">confidence capped at 1.0</text>
+          <text class="lbl t-accent" x="12" y="130">the judge reads 300 chars</text>
+          <text class="lbl" x="12" y="148">per body, so a long reply</text>
+          <text class="lbl" x="12" y="164">is judged on its start.</text></g>
+        <g class="node gate open lit-5" transform="translate(772 30)"><rect width="176" height="174" rx="8"/>
+          <text class="ttl t-attacker" x="12" y="24">Not guarded</text>
+          <text class="lbl" x="12" y="50">the verdict is the proof;</text>
+          <text class="lbl" x="12" y="68">no code re-reads the body</text>
+          <text class="lbl" x="12" y="86">step URL is not checked</text>
+          <text class="lbl" x="12" y="104">against the target URL</text>
+          <text class="lbl" x="12" y="130">DELETE can be sent, with</text>
+          <text class="lbl" x="12" y="148">real session tokens</text></g>
+
+        <text class="lbl" x="12" y="236">No API key: the primary LLM client is missing, no code reviewer exists, and this phase never starts.</text>
+        <text class="lbl" x="12" y="254">Rule-based scanners are unaffected.</text>
+        <text class="lbl at-5" x="12" y="278">Unlike the rule-based scanners, a finding here is as sound as the model's judgment of 300 characters of response.</text>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span><b>Before any call.</b> All preconditions must hold: scan mode, both logins, endpoints, target URL, repository and an LLM client. Without an API key the phase is simply absent.</p>
+      <p class="step"><span class="n">2</span><b>The plan reply.</b> Parsed as JSON, with code fences stripped and a fallback that hunts for the first <code>{...}</code> block. A plan that is not an object or has no steps is dropped. If nothing parses, no request is sent.</p>
+      <p class="step"><span class="n">3</span><b>While executing.</b> Hard caps on files, endpoints, plans and steps. A request that fails is recorded as status 0 and the plan continues. A cooperative time budget stops the loop before the runner's 30 minute cancel would discard everything.</p>
+      <p class="step"><span class="n">4</span><b>The verdict.</b> Only <code>confirmed: true</code> passes. Anything else, including an exception, gives no finding. Evidence and response preview are cut to 300 characters.</p>
+      <p class="step"><span class="n">5</span><b>What the code does not check.</b> The judge's word is final: no code re-reads the body. The executor sends the plan's URL as written without comparing its host to the target, so the prompt rule "use a real endpoint from the list" is the only constraint. Read confirmed findings as strong leads.</p>
+    </div>
+  </div>
+</section>
+
+<section id="why">
+  <h2>Why it matters</h2>
+  <div class="grid-2">
+    <div class="callout why"><div class="label">Why it matters</div><p>The flaws this finds depend on what your app is for: a price the client may set, a workflow step that can be skipped, a webhook with no signature check, a tenant id nobody scopes by. They have no signature a regex could match. The planner prompt covers seven classes: authorization bypass, state machine violations, price manipulation, race conditions, cross-tenant access, webhook replay or forgery, and mass assignment. Because the plans run against the live app, a flaw that looks plausible in code is either shown in a response or discarded.</p></div>
+    <div class="callout note"><div class="label">What leaves your machine</div><p>The model receives the full text of up to 30 source files and up to 50 endpoint lines, then the plan with the recorded status and a 300 character preview of each response. Those previews come from the live app under the admin and regular sessions, so they can contain real records. Use a test environment and test accounts, as for the other authenticated scanners.</p></div>
+  </div>
+</section>
+
+<section id="code">
+  <h2>Vulnerable vs fixed code</h2>
+  <p class="prose">The shape of flaw a plan like the one above proves, and the fix. The server must derive the price itself.</p>
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true">BAD · client-set price</button>
+      <button class="tab good" role="tab" aria-selected="false">GOOD · server-side price</button>
+    </div>
+    <div role="tabpanel"><pre><code><span class="c">// BAD: the total comes from the request body</span>
+export async function POST(request: Request) {
+  const { id, price } = await request.json()
+<span class="hl bad">  const order = await db.insert(<span class="s">"orders"</span>, { productId: id, total: price })</span>
+  return NextResponse.json({ total: order.total, paid: <span class="k">true</span> })
+}</code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c">// GOOD: look the price up; ignore any client value</span>
+export async function POST(request: Request) {
+  const { id } = await request.json()
+<span class="hl good">  const product = await db.get(<span class="s">"products"</span>, id)   <span class="c">// authoritative price</span></span>
+  const order = await db.insert(<span class="s">"orders"</span>, { productId: id, total: product.price })
+  return NextResponse.json({ total: order.total, paid: <span class="k">true</span> })
+}</code></pre></div>
+  </div>
+</section>
+
+<section id="limits">
+  <h2>Limits and configuration</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Setting</th><th>Value</th><th>Note</th></tr></thead>
+      <tbody>
+        <tr><td>Files sent to the planner</td><td>30</td><td>path must contain a business-logic word; extensions .ts .tsx .js .jsx .py .go .rs; whole file, no truncation</td></tr>
+        <tr><td>Endpoints in the prompt</td><td>50</td><td>as <code>METHOD url</code> lines</td></tr>
+        <tr><td>Plans · steps</td><td>10 · 8</td><td>asked for in the prompt and enforced by slicing in code</td></tr>
+        <tr><td>Request timeout</td><td>15 s</td><td>a failure becomes status 0 and the plan carries on</td></tr>
+        <tr><td>Body preview</td><td>300 chars</td><td>what the judge sees per step, and the cap on stored evidence</td></tr>
+        <tr><td>Token limits</td><td>20,480 · 2,048</td><td>planner reply · judge reply</td></tr>
+        <tr><td>Plans run</td><td>one after another</td><td>the config declares <code>MAX_CONCURRENT_PLANS = 3</code>, but the loop awaits each plan in turn</td></tr>
+        <tr><td>Wall clock</td><td>30 min runner timeout</td><td>the scanner stops cooperatively shortly before it</td></tr>
+        <tr><td>Reported as</td><td>category Auth weakness · source SAST-guided DAST</td><td>severity and confidence come from the judge</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<footer class="foot">
+  <span>Source: <a href="../architecture.md">docs/architecture.md</a> (Phase 9.2) · <a href="../../isitsecure/engine/scanners/llm_business_logic_scanner.py">llm_business_logic_scanner.py</a></span>
+  <span>Related: <a href="group-business-logic.html">Business logic group</a> · <a href="llm-review-and-fixes.html">LLM review and fixes</a> · <a href="race-conditions.html">Race conditions</a> · <a href="scan-pipeline.html">The scan pipeline</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+<script>
+(function () {
+  const ARROWS = { 3: "M222 78 H253", 4: "M457 78 H488", 5: "M692 78 H723", 6: "M825 258 V288" };
+  window.bizFlow = function (scene, step, el) {
+    const svg = el.querySelector("svg");
+    IsDoc.clearPackets(svg);
+    const d = ARROWS[step];
+    if (d) IsDoc.packet(svg, d, { cls: step === 3 || step === 5 ? "f-accent" : "f-info", duration: 800, hold: 300 });
+  };
+  window.bizEx = function (scene, step, el) {
+    const svg = el.querySelector("svg");
+    IsDoc.clearPackets(svg);
+    IsDoc.packet(svg, "M315 160 H 345", { cls: step === 2 ? "f-info" : "f-attacker", duration: 700, hold: 300 });
+  };
+})();
+</script>
+</body>
+</html>

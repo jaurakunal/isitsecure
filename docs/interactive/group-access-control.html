@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Access Control · isitsecure</title>
+<meta name="description" content="The six isitsecure scanners that test who may do what: IDOR, Row Level Security, route auth tracing, privilege escalation, mass assignment and the body parameter fuzzer. One shared mechanism, animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  /* card thumbnails (same classes as index.html) */
+  .thumb svg .n > rect, .thumb svg .n > circle { fill: var(--surface); stroke: var(--muted); stroke-width: 1.3; }
+  .thumb svg .w { stroke: var(--muted); stroke-width: 1.3; fill: none; }
+  .thumb svg .a { stroke: var(--accent); }
+  .thumb svg .fa { fill: var(--accent); }
+  .thumb svg .fr { fill: var(--attacker); }
+  .thumb svg .fs { fill: var(--safe); }
+  .thumb svg .fi { fill: var(--info); }
+  .thumb svg .r { stroke: var(--attacker); }
+  .thumb svg .s { stroke: var(--safe); }
+  .thumb svg .i { stroke: var(--info); }
+  /* loop scene: the exchange box sits over the wires, so a packet re-emerges on the far side */
+  #loop .exchange > rect { fill: var(--surface); }
+  #loop .principal > rect, #loop .resource > rect { transition: fill .35s, stroke .35s; }
+  #loop[data-step="2"] .pB > rect, #loop[data-step="3"] .pB > rect, #loop[data-step="4"] .pAnon > rect, #loop[data-step="5"] .pA > rect { fill: var(--attacker-soft); }
+  #loop[data-step="2"] .rTask > rect, #loop[data-step="5"] .rTask > rect, #loop[data-step="3"] .rAdmin > rect, #loop[data-step="4"] .rUsers > rect { fill: var(--accent-soft); }
+  .topbar-inner .crumb a { color: inherit; text-decoration: none; }
+  .topbar-inner .crumb a:hover { color: var(--accent); }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› Access control</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/README.md" title="The markdown scanner index">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">Scanner group</div>
+  <h1>Access control</h1>
+  <p class="lede">Every scanner in this group works from one kind of evidence: a request sent by a principal who should have been refused, and the response that came back. The principal is anonymous, a second user, a regular user instead of an admin, or a client sending a field it was never meant to control. The scanner then reads the body, because a 200 on its own proves nothing.</p>
+  <div class="meta">
+    <span class="pill"><b>6</b> scanners</span><span class="pill dast">4 DAST</span><span class="pill sast">2 SAST</span><span class="pill">+ 1 DAST/SAST pair</span><span class="pill crit">up to Critical</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#how"><span class="n">01</span>How this group works</a>
+  <a href="#scanners"><span class="n">02</span>Scanners in this group</a>
+  <a href="#glance"><span class="n">03</span>At a glance</a>
+  <a href="#why"><span class="n">04</span>Why this class matters</a>
+</nav>
+
+<section id="how">
+  <h2>How this group works</h2>
+  <p class="prose">Four principals, three resources, one loop. Each step below is one scanner from the group sending its characteristic request. Watch which principal sends it, what comes back, and what in the response turns a reply into a finding.</p>
+
+  <div class="scene" id="loop" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 330" role="img" aria-label="Three principals on the left (anonymous, User B, User A) send requests to three resources on the right; a central box shows each scanner's request, response and decision.">
+        <defs><marker id="arr-loop" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+
+        <!-- wires + packets live behind the exchange box -->
+        <g id="loop-wires">
+          <path class="wire only-2 attacker" d="M200 149 C 480 149, 480 59, 760 59" marker-end="url(#arr-loop)"/>
+          <path class="wire only-3 attacker" d="M200 149 H 760" marker-end="url(#arr-loop)"/>
+          <path class="wire only-4 attacker" d="M200 59 C 480 59, 480 239, 760 239" marker-end="url(#arr-loop)"/>
+          <path class="wire only-5 info" d="M200 239 C 480 239, 480 59, 760 59" marker-end="url(#arr-loop)"/>
+        </g>
+
+        <!-- principals -->
+        <g class="node principal pAnon" transform="translate(20 30)">
+          <rect width="180" height="58" rx="8"/>
+          <text class="ttl" x="12" y="24">Anonymous</text>
+          <text class="lbl" x="12" y="44">no token · public anon key</text>
+        </g>
+        <g class="node principal pB" transform="translate(20 120)">
+          <rect width="180" height="58" rx="8"/>
+          <text class="ttl" x="12" y="24">User B · regular</text>
+          <text class="lbl" x="12" y="44">Authorization: Bearer B</text>
+        </g>
+        <g class="node principal pA" transform="translate(20 210)">
+          <rect width="180" height="58" rx="8"/>
+          <text class="ttl" x="12" y="24">User A · admin</text>
+          <text class="lbl" x="12" y="44">Bearer A · owns tasks/42</text>
+        </g>
+
+        <!-- resources -->
+        <g class="node resource rTask" transform="translate(760 30)">
+          <rect width="180" height="58" rx="8"/>
+          <text class="ttl" x="12" y="24">/api/tasks/42</text>
+          <text class="lbl" x="12" y="44">owner: user-a</text>
+        </g>
+        <g class="node resource rAdmin" transform="translate(760 120)">
+          <rect width="180" height="58" rx="8"/>
+          <text class="ttl" x="12" y="24">/api/admin/users</text>
+          <text class="lbl" x="12" y="44">path matches /admin</text>
+        </g>
+        <g class="node resource rUsers" transform="translate(760 210)">
+          <rect width="180" height="58" rx="8"/>
+          <text class="ttl" x="12" y="24">POST /api/Users</text>
+          <text class="lbl" x="12" y="44">writes a profile row</text>
+        </g>
+
+        <!-- exchange box -->
+        <g class="node exchange" transform="translate(270 40)">
+          <rect width="420" height="210" rx="10"/>
+          <text class="ttl" x="14" y="24">Request → response → decision</text>
+          <g class="only-1">
+            <text class="lbl" x="14" y="56">the shared question</text>
+            <text x="14" y="82">A principal who should be refused sends the request</text>
+            <text x="14" y="102">that a more privileged principal is allowed to send.</text>
+            <text x="14" y="130">The scanner reads the reply: <tspan class="t-accent">status and body</tspan>.</text>
+            <text class="lbl" x="14" y="160">Two SAST scanners ask the same question of the code</text>
+            <text class="lbl" x="14" y="176">instead of the server. See step 6.</text>
+          </g>
+          <g class="only-2 mono">
+            <text class="lbl" x="14" y="56">IDOR scanner · cross-user BOLA</text>
+            <text x="14" y="82">GET /api/tasks/42   Bearer B</text>
+            <text x="14" y="104">200 {"id":42,"owner":"user-a",...}</text>
+            <text class="t-attacker" x="14" y="134">FLAG: body carries User A's data</text>
+            <text class="lbl" x="14" y="160">guard: anonymous got 401 for the same id,</text>
+            <text class="lbl" x="14" y="176">so the object is not simply public</text>
+          </g>
+          <g class="only-3 mono">
+            <text class="lbl" x="14" y="56">Privilege escalation scanner</text>
+            <text x="14" y="82">GET /api/admin/users   Bearer B</text>
+            <text x="14" y="104">200 {"data":[ ...48 users ]}</text>
+            <text class="t-attacker" x="14" y="134">FLAG: /admin path answered 200 to a regular user</text>
+            <text class="lbl" x="14" y="160">differential variant: admin 48 records vs regular 3,</text>
+            <text class="lbl" x="14" y="176">both over 50 B, admin more than 1.5x larger</text>
+          </g>
+          <g class="only-4 mono">
+            <text class="lbl" x="14" y="56">Mass assignment scanner</text>
+            <text x="14" y="82">POST /api/Users   {"role":"admin"}</text>
+            <text x="14" y="104">201 {"status":"success","data":{"role":"admin"}}</text>
+            <text class="t-attacker" x="14" y="134">FLAG: 2xx and role=admin found in the body</text>
+            <text class="lbl" x="14" y="160">searched anywhere in the JSON tree, depth 8;</text>
+            <text class="lbl" x="14" y="176">role:"customer" would not count</text>
+          </g>
+          <g class="only-5 mono">
+            <text class="lbl" x="14" y="56">Body param fuzzer · User A's own request</text>
+            <text x="14" y="82">PATCH /api/tasks/42 {"title":"' OR '1'='1' --"}</text>
+            <text x="14" y="104">500 SQLITE_ERROR: near "OR": syntax error</text>
+            <text class="t-attacker" x="14" y="134">FLAG: database error pattern in the reply</text>
+            <text class="lbl" x="14" y="160">the field came from a captured write, with the</text>
+            <text class="lbl" x="14" y="176">rest of the body left intact</text>
+          </g>
+          <g class="only-6 mono">
+            <text class="lbl" x="14" y="56">Route auth analyzer · RLS policy analyzer · RLS deep</text>
+            <text x="14" y="82">tasks/[id]/route.ts   no getUser() before the query</text>
+            <text x="14" y="104">migration.sql   tasks: no ENABLE ROW LEVEL SECURITY</text>
+            <text x="14" y="126">GET /rest/v1/tasks   apikey: anon → 200 [rows]</text>
+            <text class="t-attacker" x="14" y="156">FLAG: the guard is missing in code and live</text>
+            <text class="lbl" x="14" y="176">a DAST and a SAST finding of this pair confirm each other</text>
+          </g>
+        </g>
+
+        <!-- rule band -->
+        <g class="at-6" transform="translate(270 282)">
+          <text class="lbl" x="0" y="0">Shared rule: a 200 alone never makes a finding. The body has to show it:</text>
+          <text class="lbl" x="0" y="18">the other user's data, the reflected field, the larger record count, the error text, the missing guard.</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step" data-on="groupLoop"><span class="n">1</span>Three principals and three resources. Each scanner picks the principal that should be refused and sends the request a more privileged principal is allowed to send. <b>The decision is always made on the response body, never on the status alone.</b></p>
+      <p class="step" data-on="groupLoop"><span class="n">2</span><b>IDOR.</b> User B asks for task 42, which belongs to User A. A 200 is only a finding if the body carries User A's data, and only if an anonymous request for the same id was refused; otherwise the object is public and nothing is wrong.</p>
+      <p class="step" data-on="groupLoop"><span class="n">3</span><b>Privilege escalation.</b> The regular user requests a path that matches an admin indicator. A 200 is the finding. With two accounts the scanner also compares the admin's and the regular user's replies to the same GET, and flags only when the admin's is more than 1.5 times larger and holds more records.</p>
+      <p class="step" data-on="groupLoop"><span class="n">4</span><b>Mass assignment.</b> A bare body with one escalation field goes to every POST, PUT and PATCH endpoint. The finding needs a 2xx and the same field with the same value somewhere in the reply, however deep the envelope.</p>
+      <p class="step" data-on="groupLoop"><span class="n">5</span><b>Body param fuzzer.</b> A write that User A really sent during the crawl is replayed with one field replaced. A database error pattern, a verbatim reflection, a 5xx on a wrong type, or a <code>__proto__</code> key accepted without a 400 each make a finding.</p>
+      <p class="step" data-on="groupLoop"><span class="n">6</span><b>The static side.</b> Route auth tracing reads the handler for a guard and follows it to its definition. The RLS policy analyzer reads the migrations; the RLS deep scanner asks the live table with the public anon key. When a DAST and a SAST finding of a paired category land on the same app, correlation raises both.</p>
+    </div>
+  </div>
+</section>
+
+<section id="scanners">
+  <h2>Scanners in this group</h2>
+  <div class="cards">
+    <a class="card" href="idor-bola.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><text x="12" y="30">User B →</text><text x="76" y="30" class="fr">GET /api/tasks/42</text><text x="12" y="58">200</text><text x="40" y="58">{ owner: "user-a", …}</text><circle class="fr" cx="186" cy="54" r="5"/></svg></div>
+      <h3>IDOR and cross-user BOLA</h3><p>Why an unauthenticated swap is only a lead, harvesting User A's real ids, the two guards that kill false positives, and mutation read-back.</p>
+      <div class="foot"><span class="pill dast">DAST</span><span class="pill high">High</span><span class="pill crit">Critical</span><span class="pill">idor-scanner.md</span></div>
+    </a>
+    <a class="card" href="rls-supabase.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><g class="n"><rect x="30" y="10" width="140" height="60" rx="4"/></g><path class="w" d="M30 25H170M30 40H170M30 55H170"/><rect class="fs" x="31" y="26" width="138" height="13" opacity=".35"/><text x="100" y="22" text-anchor="middle" style="font-size:9px">rows</text><text x="100" y="36" text-anchor="middle" style="font-size:9px">auth.uid() = user_id</text></svg></div>
+      <h3>Row Level Security</h3><p>The anon key is public, so a policy is the only thing between the internet and the table. Migration parsing on one side, live anon and cross-user queries on the other.</p>
+      <div class="foot"><span class="pill sast">SAST</span><span class="pill dast">DAST</span><span class="pill crit">Critical</span><span class="pill">rls-*.md</span></div>
+    </a>
+    <a class="card" href="route-auth-lsp.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><g class="n"><rect x="8" y="14" width="80" height="18" rx="3"/></g><text x="48" y="27" text-anchor="middle">route.ts</text><path class="w a" d="M48 32 V 46 H 110"/><g class="n"><rect x="110" y="38" width="82" height="18" rx="3"/></g><text x="151" y="51" text-anchor="middle">trpc.ts:42</text><text x="151" y="72" text-anchor="middle" class="fs">auth.getUser() ✓</text></svg></div>
+      <h3>Route auth tracing</h3><p>Guard names on word boundaries, lookups that are not authentication, and a language server following the guard to its definition.</p>
+      <div class="foot"><span class="pill sast">SAST</span><span class="pill high">High</span><span class="pill">route-auth-analyzer.md</span></div>
+    </a>
+    <a class="card" href="privilege-escalation.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><g class="n"><rect x="8" y="30" width="62" height="22" rx="4"/></g><text x="39" y="45" text-anchor="middle">User B</text><path class="w r" d="M70 41 H 120"/><g class="n"><rect x="120" y="12" width="72" height="18" rx="3"/></g><text x="156" y="25" text-anchor="middle" style="font-size:9px">/api/admin</text><g class="n"><rect x="120" y="36" width="72" height="18" rx="3"/></g><text x="156" y="49" text-anchor="middle" style="font-size:9px">role=admin</text><g class="n"><rect x="120" y="60" width="72" height="18" rx="3"/></g><text x="156" y="73" text-anchor="middle" style="font-size:9px">rpc/fn</text><path class="w r" d="M120 41 C 110 41, 110 21, 120 21 M120 41 C 110 41, 110 69, 120 69"/><circle class="fr" cx="100" cy="41" r="4"/></svg></div>
+      <h3>Privilege escalation</h3><p>Eight probes from the regular user's session: admin tables and routes, role self-elevation, the admin-vs-regular differential with its 1.5x rule, replaying the admin's writes, and RPC calls.</p>
+      <div class="foot"><span class="pill dast">DAST</span><span class="pill med">Medium</span><span class="pill crit">Critical</span><span class="pill">privilege-escalation-scanner.md</span></div>
+    </a>
+    <a class="card" href="mass-assignment.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><text x="12" y="26" class="fr">POST {"role":"admin"}</text><path class="w" d="M12 36 H 188"/><text x="12" y="56">201 {"data":{</text><text x="24" y="70" class="fr">"role":"admin" }}</text><circle class="fs" cx="182" cy="62" r="5"/></svg></div>
+      <h3>Mass assignment</h3><p>One escalation field per request to every write endpoint, a reflection check that walks the whole JSON envelope, and the bare-body limit that keeps one Juice Shop challenge out of reach.</p>
+      <div class="foot"><span class="pill dast">DAST</span><span class="pill high">High</span><span class="pill">mass-assignment-scanner.md</span></div>
+    </a>
+    <a class="card" href="body-param-fuzzer.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><text x="12" y="24">{"item":"mug",</text><text x="12" y="42" class="fr"> "qty":"' OR '1'='1",</text><text x="12" y="60"> "__proto__":{…}}</text><circle class="fr" cx="182" cy="40" r="5"/><path class="w r" d="M150 40 H 176"/></svg></div>
+      <h3>Body param fuzzer</h3><p>Captured authenticated writes replayed with one JSON field swapped: SQL error patterns, verbatim reflection, 5xx on a wrong type, and a prototype-pollution key accepted without a 400.</p>
+      <div class="foot"><span class="pill dast">DAST</span><span class="pill med">Medium</span><span class="pill crit">Critical</span><span class="pill">body-param-fuzzer.md</span></div>
+    </a>
+  </div>
+</section>
+
+<section id="glance">
+  <h2>At a glance</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Scanner</th><th>What it looks at</th><th>What it reports</th><th>Severity</th><th>Needs</th></tr></thead>
+    <tbody>
+      <tr><td><a href="idor-bola.html">IDOR scanner</a></td><td>Endpoints with ids; the ids User A owns, harvested during the crawl</td><td>User B reading or mutating User A's object; unauthenticated swaps as leads only</td><td>High to Critical</td><td>URL; credentials, a second account for cross-user; <code>--probe-writes</code> for the mutation path</td></tr>
+      <tr><td><a href="rls-supabase.html">RLS policy analyzer</a></td><td>Supabase migration SQL</td><td>Tables without Row Level Security or with permissive policies</td><td>Critical</td><td>Repository</td></tr>
+      <tr><td><a href="rls-supabase.html">RLS deep scanner</a></td><td>Live Supabase REST with the anon key and both sessions</td><td>Anonymous and cross-user reads and writes the policies should block</td><td>Critical</td><td>URL; Supabase URL and anon key found in the JS; credentials</td></tr>
+      <tr><td><a href="route-auth-lsp.html">Route auth analyzer</a></td><td>Every API route file and its handler; the guard's definition via LSP</td><td>Routes missing authentication or input validation</td><td>High</td><td>Repository; a language server for guard tracing (optional)</td></tr>
+      <tr><td><a href="privilege-escalation.html">Privilege escalation scanner</a></td><td>Admin-looking tables and routes, protected endpoints, writes captured from User A, User A's owned ids, RPC names from the bundle</td><td>Regular user reaching admin data, elevating its own role, replaying admin writes, writing another user's row, calling RPC functions</td><td>Medium to Critical</td><td>URL; credentials; second account for the admin-vs-regular tests; Supabase for the table, row and RPC tests</td></tr>
+      <tr><td><a href="mass-assignment.html">Mass assignment scanner</a></td><td>Every POST, PUT and PATCH endpoint in the inventory</td><td>An escalation field accepted and reflected in the reply</td><td>High</td><td>URL only; <code>--probe-writes</code> when the bundle yields only GETs; session headers when logged in</td></tr>
+      <tr><td><a href="body-param-fuzzer.html">Body param fuzzer</a></td><td>JSON bodies of successful writes captured during the authenticated crawl</td><td>SQL error, reflected XSS, type confusion 5xx, prototype pollution key accepted</td><td>Medium to Critical</td><td>URL; credentials (the authenticated crawl supplies the requests)</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="why">
+  <h2>Why this class matters</h2>
+  <div class="grid-2">
+    <div class="callout why"><div class="label">Why it matters</div><p>Access control bugs do not need a payload. The request is well formed, the server is working as written, and the only thing wrong is who was allowed to send it. Privilege escalation turns a free account into full admin access: every record, every setting, every delete, and new admin accounts for persistence. Mass assignment lets a client promote itself, zero a price or mark an order paid by adding a field. An IDOR hands one user another user's data by changing a number. None of these show up in a crash log.</p></div>
+    <div class="callout breach"><div class="label">Real-world breaches</div><p><b>Microsoft Exchange, ProxyLogon (2021).</b> CVE-2021-26855 let attackers authenticate as the Exchange server, escalate to admin and install web shells across tens of thousands of organisations. <b>GitHub (2012).</b> Egor Homakov used a Rails mass assignment flaw to attach his SSH key to the Rails core repository by setting <code>user_id</code>, gaining commit access. <b>HackerOne (2015).</b> A mass assignment flaw allowed adding yourself as a member of any bug bounty program by manipulating group membership parameters.</p></div>
+  </div>
+</section>
+
+<footer class="foot">
+  <span>Sources: <a href="../scanners/idor-scanner.md">idor-scanner.md</a> · <a href="../scanners/rls-policy-analyzer.md">rls-policy-analyzer.md</a> · <a href="../scanners/rls-deep-scanner.md">rls-deep-scanner.md</a> · <a href="../scanners/route-auth-analyzer.md">route-auth-analyzer.md</a> · <a href="../scanners/privilege-escalation-scanner.md">privilege-escalation-scanner.md</a> · <a href="../scanners/mass-assignment-scanner.md">mass-assignment-scanner.md</a> · <a href="../scanners/body-param-fuzzer.md">body-param-fuzzer.md</a></span>
+  <span>Other groups: <a href="group-injection.html">Injection</a> · <a href="group-auth-sessions.html">Authentication and sessions</a> · <a href="group-browser-defenses.html">Browser-side defenses</a> · <a href="group-business-logic.html">Business logic</a> · <a href="group-surface.html">Attack surface and exposure</a> · <a href="group-secrets-dependencies.html">Secrets and dependencies</a> · <a href="group-infrastructure.html">Infrastructure configuration</a> · <a href="group-schema-middleware.html">Schemas and middleware</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+<script>
+(function () {
+  const PATHS = {
+    2: ["M200 149 C 480 149, 480 59, 760 59", "M760 59 C 480 59, 480 149, 200 149", "f-attacker"],
+    3: ["M200 149 H 760", "M760 149 H 200", "f-attacker"],
+    4: ["M200 59 C 480 59, 480 239, 760 239", "M760 239 C 480 239, 480 59, 200 59", "f-attacker"],
+    5: ["M200 239 C 480 239, 480 59, 760 59", "M760 59 C 480 59, 480 239, 200 239", "f-info"]
+  };
+  window.groupLoop = function (scene, step, el) {
+    const svg = el.querySelector("svg");
+    IsDoc.clearPackets(svg);
+    const p = PATHS[step];
+    if (!p) return;
+    const layer = svg.querySelector("#loop-wires");
+    IsDoc.packet(svg, p[0], { cls: p[2], duration: 1100, hold: 200, layer: layer });
+    IsDoc.packet(svg, p[1], { cls: "f-accent", r: 5, duration: 1100, delay: 1400, hold: 400, layer: layer });
+  };
+})();
+</script>
+</body>
+</html>

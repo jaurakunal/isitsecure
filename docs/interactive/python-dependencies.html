@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Python Dependency Scanner · isitsecure</title>
+<meta name="description" content="How isitsecure checks requirements.txt and pyproject.toml against a built-in table of 13 vulnerable packages: the line parser, the three-part integer compare, the operator it ignores and the unpinned check, animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  /* page-specific: highlighted rows, compare cells, file list */
+  #line .rowx > rect, #cmp .rowx > rect { fill: var(--surface); stroke: var(--line); stroke-width: 1; transition: stroke .3s; }
+  #line .rowx, #cmp .rowx, #files .fl { transition: opacity .35s; }
+  #line.s2 .rowx { opacity: .45; }
+  #line[data-step="2"] .x1, #line[data-step="3"] .x2, #line[data-step="4"] .x3, #line[data-step="5"] .x4, #line[data-step="6"] .x5 { opacity: 1; }
+  #line[data-step="2"] .x1 > rect, #line[data-step="3"] .x2 > rect, #line[data-step="4"] .x3 > rect, #line[data-step="5"] .x4 > rect, #line[data-step="6"] .x5 > rect { stroke: var(--accent); stroke-width: 2; }
+  #cmp.s2 .rowx { opacity: .45; }
+  #cmp[data-step="2"] .x1, #cmp[data-step="3"] .x2, #cmp[data-step="4"] .x3, #cmp[data-step="5"] .x4 { opacity: 1; }
+  #cmp[data-step="2"] .x1 > rect, #cmp[data-step="3"] .x2 > rect, #cmp[data-step="4"] .x3 > rect, #cmp[data-step="5"] .x4 > rect { stroke: var(--accent); stroke-width: 2; }
+  #cmp .cell > rect { fill: var(--surface-2); stroke: var(--line); stroke-width: 1; }
+  #cmp .cell.pad text { fill: var(--muted); }
+  #cmp .cell.bad > rect { stroke: var(--attacker); stroke-width: 2; }
+  #cmp .cell.bad text { fill: var(--attacker); }
+  .foot span { overflow-wrap: anywhere; }
+  .scene-steps code { white-space: normal; overflow-wrap: anywhere; }
+  #files .box > rect { fill: var(--surface); stroke: var(--line); stroke-width: 1; }
+  #files.s2 .fl { opacity: .4; }
+  #files[data-step="2"] .fa, #files[data-step="3"] .fb { opacity: 1; }
+  #files[data-step="4"] .fl { opacity: .4; }
+  #files[data-step="4"] .fc, #files[data-step="5"] .fd { opacity: 1; }
+  #files[data-step="5"] .fl { opacity: .4; }
+  #files[data-step="5"] .fd { opacity: 1; }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› <a href="group-secrets-dependencies.html">Secrets and dependencies</a> › Python dependencies</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/python-dependency-scanner.md" title="The markdown source for this page">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">SAST scanner · built-in table</div>
+  <h1>Python Dependency Scanner</h1>
+  <p class="lede">Unlike the npm scanner, this one needs no network. It reads <code>requirements*.txt</code> and <code>pyproject.toml</code>, pulls a package name and a version out of each line with one regex, and compares the version to a built-in table of 13 packages with a three-part integer compare. A line with no version at all is reported as unpinned.</p>
+  <div class="meta">
+    <span class="pill sast">SAST</span><span class="pill crit">Critical–Low</span><span class="pill">Dependency Vulnerability</span><span class="pill">13 packages</span><span class="pill">offline</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#line-sec"><span class="n">01</span>One line, one verdict</a>
+  <a href="#compare-sec"><span class="n">02</span>The version compare</a>
+  <a href="#files-sec"><span class="n">03</span>Which files are parsed</a>
+  <a href="#why"><span class="n">04</span>Why it matters</a>
+  <a href="#code"><span class="n">05</span>Vulnerable vs fixed code</a>
+  <a href="#limits"><span class="n">06</span>The table and its limits</a>
+</nav>
+
+<section id="line-sec">
+  <h2>One line, one verdict</h2>
+  <p class="prose">For every dependency line the scanner parses a name, an optional operator and an optional version. If there is no version it reports "unpinned" and stops. Otherwise it looks the normalised name up in the table and tests the version against each range for that package. The actor is the scanner reading a text file; nothing is installed and nothing is contacted.</p>
+
+  <div class="scene" id="line" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 350" role="img" aria-label="Five lines of a requirements.txt file, each with the parsed name and version and the verdict. Django 3.2.0 matches two ranges and gives two findings, PyJWT 2.3.0 gives one critical, an unpinned requests gives a low finding, flask at least 2.3.2 gives nothing, and an option line is skipped.">
+        <g>
+          <text class="lbl" x="36" y="24">requirements.txt line</text><text class="lbl" x="250" y="24">parsed</text><text class="lbl" x="500" y="24">verdict</text>
+        </g>
+        <g class="rowx x1" transform="translate(20 36)"><rect width="920" height="56" rx="8"/><text class="mono" x="16" y="33">Django==3.2.0</text><text class="mono" x="230" y="33">django · == · 3.2.0</text><text class="mono t-attacker" x="480" y="25">HIGH &lt;4.2.8</text><text class="mono t-attacker" x="480" y="44">CRITICAL &lt;3.2.23</text><text class="lbl" x="700" y="33">two ranges match, two findings, 0.85</text></g>
+        <g class="rowx x2" transform="translate(20 100)"><rect width="920" height="56" rx="8"/><text class="mono" x="16" y="33">PyJWT==2.3.0</text><text class="mono" x="230" y="33">pyjwt · == · 2.3.0</text><text class="mono t-attacker" x="480" y="33">CRITICAL &lt;2.4.0</text><text class="lbl" x="700" y="33">CVE-2022-29217, one finding</text></g>
+        <g class="rowx x3" transform="translate(20 164)"><rect width="920" height="56" rx="8"/><text class="mono" x="16" y="33">requests</text><text class="mono" x="230" y="33">requests · no version</text><text class="mono t-accent" x="480" y="33">LOW · unpinned</text><text class="lbl" x="700" y="33">confidence 0.60, table not consulted</text></g>
+        <g class="rowx x4" transform="translate(20 228)"><rect width="920" height="56" rx="8"/><text class="mono" x="16" y="33">flask&gt;=2.3.2</text><text class="mono" x="230" y="33">flask · &gt;= · 2.3.2</text><text class="mono t-safe" x="480" y="33">no finding</text><text class="lbl" x="700" y="33">2.3.2 is not below 2.3.2</text></g>
+        <g class="rowx x5" transform="translate(20 292)"><rect width="920" height="50" rx="8"/><text class="mono" x="16" y="30">-r base.txt</text><text class="mono" x="230" y="30">starts with "-"</text><text class="mono" x="480" y="30">skipped</text><text class="lbl" x="700" y="30">blank lines and # comments too</text></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Five lines of one <code>requirements.txt</code>. Each is parsed by <code>^([a-zA-Z0-9_-]+)\s*(?:([=&lt;&gt;!~]+)\s*([.\w]+))?</code>: a name, then an optional operator and version. Names are lower-cased with <code>-</code> and <code>_</code> removed before the table lookup.</p>
+      <p class="step"><span class="n">2</span><code>Django==3.2.0</code> sits below two ranges in the table, <code>&lt;4.2.8</code> (HIGH) and <code>&lt;3.2.23</code> (CRITICAL). <b>Each matching range is its own finding</b>, so one line gives two, at confidence 0.85, with the file and line number.</p>
+      <p class="step"><span class="n">3</span><code>PyJWT==2.3.0</code> is below <code>2.4.0</code>, the algorithm-confusion fix. <b>CRITICAL</b>, one finding.</p>
+      <p class="step"><span class="n">4</span>A name with no version is <b>LOW, "Unpinned Python dependency"</b>, confidence 0.60. Any release could be installed, including a vulnerable one. The table is not consulted for this line.</p>
+      <p class="step"><span class="n">5</span><code>flask&gt;=2.3.2</code> parses to version 2.3.2, which is not below the fix version, so nothing is reported. The operator is read but never used in the decision.</p>
+      <p class="step"><span class="n">6</span>Blank lines, comments and any line starting with <code>-</code> (<code>-r</code>, <code>-e</code>, <code>--index-url</code>) are skipped before parsing.</p>
+    </div>
+  </div>
+</section>
+
+<section id="compare-sec">
+  <h2>The version compare</h2>
+  <p class="prose">Every range in the table has the form <code>&lt;X.Y.Z</code>, and <code>is_version_vulnerable</code> supports nothing else. It splits both versions on dots, keeps three parts, pads with zero and compares the integer lists.</p>
+
+  <div class="scene" id="cmp" data-scene data-interval="3600">
+    <figure class="stage">
+      <svg viewBox="0 0 960 320" role="img" aria-label="Four rows, each with an installed version split into three integers, a less-than sign and the range threshold split into three integers. django 4.2 pads to 4,2,0 and is below 4,2,8. pillow 10.0.0rc1 fails integer conversion and is treated as safe. flask at least 2.0.0 is read as 2.0.0 and flagged. django below 4.2.8 reads as 4,2,8 which is not below itself.">
+        <g>
+          <text class="lbl" x="36" y="26">in the file</text><text class="lbl" x="256" y="26">installed, as three integers</text><text class="lbl" x="456" y="26">vs the range</text><text class="lbl" x="640" y="26">result</text>
+        </g>
+        <g class="rowx x1" transform="translate(20 40)"><rect width="920" height="62" rx="8"/><text class="mono" x="16" y="37">django==4.2</text><g class="cell"><rect x="236" y="17" width="44" height="28" rx="5"/><text class="mono" x="258.0" y="36" text-anchor="middle">4</text></g><g class="cell"><rect x="286" y="17" width="44" height="28" rx="5"/><text class="mono" x="308.0" y="36" text-anchor="middle">2</text></g><g class="cell pad"><rect x="336" y="17" width="44" height="28" rx="5"/><text class="mono" x="358.0" y="36" text-anchor="middle">0</text></g><text class="mono" x="414" y="37">&lt;</text><g class="cell"><rect x="436" y="17" width="44" height="28" rx="5"/><text class="mono" x="458.0" y="36" text-anchor="middle">4</text></g><g class="cell"><rect x="486" y="17" width="44" height="28" rx="5"/><text class="mono" x="508.0" y="36" text-anchor="middle">2</text></g><g class="cell"><rect x="536" y="17" width="44" height="28" rx="5"/><text class="mono" x="558.0" y="36" text-anchor="middle">8</text></g><text class="ttl t-attacker" x="620" y="28">[4,2,0] &lt; [4,2,8]: vulnerable</text><text class="lbl" x="620" y="47">missing part padded with 0; HIGH</text></g><g class="rowx x2" transform="translate(20 110)"><rect width="920" height="62" rx="8"/><text class="mono" x="16" y="37">pillow==10.0.0rc1</text><g class="cell"><rect x="236" y="17" width="44" height="28" rx="5"/><text class="mono" x="258.0" y="36" text-anchor="middle">10</text></g><g class="cell"><rect x="286" y="17" width="44" height="28" rx="5"/><text class="mono" x="308.0" y="36" text-anchor="middle">0</text></g><g class="cell bad"><rect x="336" y="17" width="58" height="28" rx="5"/><text class="mono" x="365.0" y="36" text-anchor="middle">0rc1</text></g><text class="mono" x="414" y="37">&lt;</text><g class="cell"><rect x="436" y="17" width="44" height="28" rx="5"/><text class="mono" x="458.0" y="36" text-anchor="middle">10</text></g><g class="cell"><rect x="486" y="17" width="44" height="28" rx="5"/><text class="mono" x="508.0" y="36" text-anchor="middle">0</text></g><g class="cell"><rect x="536" y="17" width="44" height="28" rx="5"/><text class="mono" x="558.0" y="36" text-anchor="middle">1</text></g><text class="ttl" x="620" y="28">int("0rc1") fails: silent</text><text class="lbl" x="620" y="47">ValueError is caught, answer is "safe"</text></g><g class="rowx x3" transform="translate(20 180)"><rect width="920" height="62" rx="8"/><text class="mono" x="16" y="37">flask&gt;=2.0.0</text><g class="cell"><rect x="236" y="17" width="44" height="28" rx="5"/><text class="mono" x="258.0" y="36" text-anchor="middle">2</text></g><g class="cell"><rect x="286" y="17" width="44" height="28" rx="5"/><text class="mono" x="308.0" y="36" text-anchor="middle">0</text></g><g class="cell"><rect x="336" y="17" width="44" height="28" rx="5"/><text class="mono" x="358.0" y="36" text-anchor="middle">0</text></g><text class="mono" x="414" y="37">&lt;</text><g class="cell"><rect x="436" y="17" width="44" height="28" rx="5"/><text class="mono" x="458.0" y="36" text-anchor="middle">2</text></g><g class="cell"><rect x="486" y="17" width="44" height="28" rx="5"/><text class="mono" x="508.0" y="36" text-anchor="middle">3</text></g><g class="cell"><rect x="536" y="17" width="44" height="28" rx="5"/><text class="mono" x="558.0" y="36" text-anchor="middle">2</text></g><text class="ttl t-accent" x="620" y="28">operator ignored: 2.0.0 flagged</text><text class="lbl" x="620" y="47">title reads flask==2.0.0; HIGH</text></g><g class="rowx x4" transform="translate(20 250)"><rect width="920" height="62" rx="8"/><text class="mono" x="16" y="37">django&lt;4.2.8</text><g class="cell"><rect x="236" y="17" width="44" height="28" rx="5"/><text class="mono" x="258.0" y="36" text-anchor="middle">4</text></g><g class="cell"><rect x="286" y="17" width="44" height="28" rx="5"/><text class="mono" x="308.0" y="36" text-anchor="middle">2</text></g><g class="cell"><rect x="336" y="17" width="44" height="28" rx="5"/><text class="mono" x="358.0" y="36" text-anchor="middle">8</text></g><text class="mono" x="414" y="37">&lt;</text><g class="cell"><rect x="436" y="17" width="44" height="28" rx="5"/><text class="mono" x="458.0" y="36" text-anchor="middle">4</text></g><g class="cell"><rect x="486" y="17" width="44" height="28" rx="5"/><text class="mono" x="508.0" y="36" text-anchor="middle">2</text></g><g class="cell"><rect x="536" y="17" width="44" height="28" rx="5"/><text class="mono" x="558.0" y="36" text-anchor="middle">8</text></g><text class="ttl" x="620" y="28">equal is not below: silent</text><text class="lbl" x="620" y="47">range still allows 4.2.7</text></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The version in the file and the range threshold are each cut at the dots to three parts. A short version gets zeros appended, then Python compares the two lists element by element.</p>
+      <p class="step"><span class="n">2</span><code>django==4.2</code> has only two parts, so it becomes <code>[4, 2, 0]</code> against the threshold <code>[4, 2, 8]</code> of the range <code>&lt;4.2.8</code>. The first two match and <b>0 is below 8, so it is vulnerable</b>. Missing parts count as zero.</p>
+      <p class="step"><span class="n">3</span><code>10.0.0rc1</code> splits into <code>10, 0, 0rc1</code> and <code>int("0rc1")</code> raises. The scanner catches that and answers "not vulnerable". <b>Pre-release and any non-numeric suffix are silently safe.</b> Four-part versions are cut to their first three.</p>
+      <p class="step"><span class="n">4</span>The operator is not part of the compare. <code>flask&gt;=2.0.0</code> is treated as the single version 2.0.0, flagged against <code>&lt;2.3.2</code>, and titled <code>flask==2.0.0</code>, although pip would install the newest release that satisfies <code>&gt;=</code>.</p>
+      <p class="step"><span class="n">5</span><code>django&lt;4.2.8</code> reads as the version 4.2.8. A version equal to the threshold is not below it, so nothing is reported, even though the written range admits vulnerable 4.2.7.</p>
+    </div>
+  </div>
+</section>
+
+<section id="files-sec">
+  <h2>Which files are parsed</h2>
+  <p class="prose">The scanner walks every file in the repository index and decides by file name alone. Two different parsers handle the two formats, and the second is deliberately simple.</p>
+
+  <div class="scene" id="files" data-scene data-interval="3600">
+    <figure class="stage">
+      <svg viewBox="0 0 960 330" role="img" aria-label="On the left, a list of repository files marked parsed or not parsed: requirements.txt, requirements-dev.txt and a nested requirements.txt are parsed, requirements/base.txt, setup.py, Pipfile and poetry.lock are not, pyproject.toml is. On the right, a pyproject.toml where the dependencies block is read for double-quoted lines and ends at the next bracket line.">
+        <g class="box" transform="translate(20 20)">
+          <rect width="430" height="290" rx="10"/>
+          <text class="ttl" x="16" y="28">File name decides</text>
+          <g class="fl fa" transform="translate(0 0)">
+            <text class="mono" x="16" y="62">requirements.txt</text><text class="mono t-safe" x="300" y="62">parsed</text>
+            <text class="mono" x="16" y="86">requirements-dev.txt</text><text class="mono t-safe" x="300" y="86">parsed</text>
+            <text class="mono" x="16" y="110">services/api/requirements.txt</text><text class="mono t-safe" x="300" y="110">parsed</text>
+          </g>
+          <g class="fl fb" transform="translate(0 0)">
+            <text class="mono" x="16" y="144">pyproject.toml</text><text class="mono t-safe" x="300" y="144">parsed</text>
+          </g>
+          <g class="fl fc" transform="translate(0 0)">
+            <text class="mono" x="16" y="178">requirements/base.txt</text><text class="mono t-attacker" x="300" y="178">not parsed</text>
+            <text class="mono" x="16" y="202">setup.py · Pipfile</text><text class="mono t-attacker" x="300" y="202">not parsed</text>
+            <text class="mono" x="16" y="226">poetry.lock · uv.lock</text><text class="mono t-attacker" x="300" y="226">not parsed</text>
+            <text class="lbl" x="16" y="256">the file name must be requirements*.txt</text>
+            <text class="lbl" x="16" y="274">so a requirements/ folder is invisible</text>
+          </g>
+        </g>
+        <g class="box" transform="translate(470 20)">
+          <rect width="470" height="290" rx="10"/>
+          <text class="ttl" x="16" y="28">pyproject.toml</text>
+          <g class="fl fd">
+            <g class="mono">
+              <text x="16" y="62">[project]</text>
+              <text x="16" y="86">dependencies = [</text><text class="lbl" x="236" y="86">block starts on this exact line</text>
+              <text x="16" y="110">  "django&gt;=3.2.0",</text><text class="t-attacker" x="236" y="110">read: two findings</text>
+              <text x="16" y="134">  'pyyaml==5.0',</text><text class="lbl" x="236" y="134">single quotes: skipped</text>
+              <text x="16" y="158">  "requests",</text><text class="lbl" x="236" y="158">read, never flagged unpinned</text>
+              <text x="16" y="182">]</text>
+              <text x="16" y="206">[tool.ruff]</text><text class="lbl" x="236" y="206">a line starting with "[" ends it</text>
+            </g>
+            <text class="lbl" x="16" y="250">also starts a block: a [project.dependencies] header</text>
+            <text class="lbl" x="16" y="268">one-line  dependencies = ["x"]  is not recognised</text>
+          </g>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Every file in the repository index is tested by name. Nothing is read from a lock file or an environment.</p>
+      <p class="step"><span class="n">2</span><b>Requirements files</b> are any file named <code>requirements.txt</code> or starting with <code>requirements</code> and ending in <code>.txt</code>, in any directory. <code>requirements-dev.txt</code> counts.</p>
+      <p class="step"><span class="n">3</span>Any file whose path ends in <code>pyproject.toml</code> is parsed by a separate, line-based reader.</p>
+      <p class="step"><span class="n">4</span><b>Not read at all</b>: files in a <code>requirements/</code> directory under other names such as <code>base.txt</code>, <code>setup.py</code>, <code>Pipfile</code>, and lock files. Dependencies declared only there are never compared.</p>
+      <p class="step"><span class="n">5</span>The pyproject reader turns a block on at <code>dependencies = [</code> or <code>[project.dependencies]</code>, reads lines that start with a double quote, and turns it off at the next line starting with <code>[</code>. <b>It never reports unpinned</b>; only a pinned version that matches the table counts.</p>
+    </div>
+  </div>
+</section>
+
+<section id="why">
+  <h2>Why it matters</h2>
+  <div class="callout why">
+    <div class="label">Why it matters</div>
+    <p>Python has the same dependency problem as npm. <b>PyJWT before 2.4.0</b> (CVE-2022-29217) allows an algorithm-confusion attack that forges tokens; <b>PyYAML before 6.0.1</b> allows arbitrary code execution through <code>yaml.load()</code>; unpatched <b>Django</b> carries denial-of-service CVEs (CVE-2023-46695, CVE-2023-41164). Unpatched dependencies are the most common attack vector across all languages.</p>
+  </div>
+  <div class="callout breach">
+    <div class="label">The Log4Shell pattern, in Python</div>
+    <p>Log4Shell was Java-specific, but the same class of flaw, remote code execution through deserialization, exists in Python packages such as PyYAML and Pickle.</p>
+  </div>
+</section>
+
+<section id="code">
+  <h2>Vulnerable vs fixed code</h2>
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true" type="button">BAD · vulnerable</button>
+      <button class="tab good" role="tab" aria-selected="false" type="button">GOOD · fixed</button>
+    </div>
+    <div role="tabpanel"><pre><code><span class="c"># requirements.txt</span>
+<span class="hl bad">Django==3.2.0</span>      <span class="c"># two CVE ranges match</span>
+<span class="hl bad">PyJWT==2.3.0</span>      <span class="c"># CVE-2022-29217, token forgery</span>
+<span class="hl bad">PyYAML==5.4</span>       <span class="c"># code execution via yaml.load()</span>
+<span class="hl bad">requests</span>           <span class="c"># unpinned: any version installs</span></code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c"># Check for vulnerabilities</span>
+pip audit
+
+<span class="c"># Upgrade to safe versions</span>
+<span class="hl good">pip install --upgrade django flask pyjwt</span>
+
+<span class="c"># Pin all dependencies</span>
+pip freeze &gt; requirements.txt
+
+<span class="c"># requirements.txt after the fix</span>
+<span class="hl good">Django==4.2.8</span>
+<span class="hl good">PyJWT==2.4.0</span>
+<span class="hl good">PyYAML==6.0.1</span>
+<span class="hl good">requests==2.31.0</span>
+
+<span class="c"># Use Dependabot or Renovate for automated updates</span></code></pre></div>
+  </div>
+</section>
+
+<section id="limits">
+  <h2>The table and its limits</h2>
+  <p class="prose">Thirteen packages, each with a single range of the form <code>&lt;X.Y.Z</code>, except Django which has two. Package names are matched after lower-casing and removing <code>-</code> and <code>_</code>.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Package</th><th>Vulnerable range</th><th>Severity</th><th>Note</th></tr></thead>
+      <tbody>
+        <tr><td>django</td><td>&lt;4.2.8</td><td>High</td><td>CVE-2023-46695, DoS via file uploads</td></tr>
+        <tr><td>django</td><td>&lt;3.2.23</td><td>Critical</td><td>CVE-2023-41164, DoS via URI validation</td></tr>
+        <tr><td>flask</td><td>&lt;2.3.2</td><td>High</td><td>CVE-2023-30861, cookie handling</td></tr>
+        <tr><td>fastapi</td><td>&lt;0.109.1</td><td>Medium</td><td>CVE-2024-24762, DoS via multipart parsing</td></tr>
+        <tr><td>requests</td><td>&lt;2.31.0</td><td>Medium</td><td>CVE-2023-32681, proxy credential leak</td></tr>
+        <tr><td>cryptography</td><td>&lt;41.0.6</td><td>High</td><td>CVE-2023-49083, NULL pointer dereference</td></tr>
+        <tr><td>pyjwt</td><td>&lt;2.4.0</td><td>Critical</td><td>CVE-2022-29217, algorithm confusion</td></tr>
+        <tr><td>sqlalchemy</td><td>&lt;1.4.49</td><td>Medium</td><td>SQL injection via textual SQL expressions</td></tr>
+        <tr><td>jinja2</td><td>&lt;3.1.3</td><td>Medium</td><td>CVE-2024-22195, XSS via xmlattr</td></tr>
+        <tr><td>werkzeug</td><td>&lt;3.0.1</td><td>High</td><td>CVE-2023-46136, DoS via multipart data</td></tr>
+        <tr><td>pillow</td><td>&lt;10.0.1</td><td>High</td><td>CVE-2023-44271, DoS via crafted images</td></tr>
+        <tr><td>urllib3</td><td>&lt;2.0.7</td><td>Medium</td><td>CVE-2023-45803, cookie leak on redirect</td></tr>
+        <tr><td>paramiko</td><td>&lt;3.4.0</td><td>Critical</td><td>CVE-2023-48795, Terrapin SSH truncation</td></tr>
+        <tr><td>pyyaml</td><td>&lt;6.0.1</td><td>Critical</td><td>arbitrary code execution via yaml.load()</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout note">
+    <div class="label">What it deliberately stays quiet about, and where it differs from the prose docs</div>
+    <p>The table is frozen in the source and was not updated against newer advisories; a package outside it is never reported, only its missing pin. Ranges with <code>&gt;=</code>, <code>~=</code> or <code>!=</code> are compared as plain versions. The scanner's own docstring lists <code>requirements/*.txt</code>, but the name test accepts only files whose name starts with <code>requirements</code>. Findings carry the file path and line number; the unpinned finding is LOW at 0.60, so the severity range is Critical to Low although the markdown says Critical to Medium. Some lines that are not plain pins also reach the unpinned branch: <code>requests[security]==2.0</code> (extras) and <code>git+https://…</code> are reported as unpinned <code>requests</code> and <code>git</code>. For broader Python coverage see <a href="osv-dependencies.html">OSV dependencies</a>, and for npm see <a href="npm-dependencies.html">npm dependencies</a>.</p>
+  </div>
+</section>
+
+<footer class="foot">
+  <span>Source: <a href="../scanners/python-dependency-scanner.md">docs/scanners/python-dependency-scanner.md</a> · isitsecure/engine/code_analysis/python_dependency_scanner.py</span>
+  <span>Group: <a href="group-secrets-dependencies.html">Secrets and dependencies</a> · Related: <a href="npm-dependencies.html">npm dependencies</a> · <a href="git-secrets.html">Git secrets</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+</body>
+</html>

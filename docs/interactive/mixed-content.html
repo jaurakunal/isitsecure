@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Mixed Content · isitsecure</title>
+<meta name="description" content="How isitsecure finds http:// scripts, stylesheets, frames and images loaded by an HTTPS page, why active and passive mixed content get different severities, and what keeps the scanner quiet — animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  /* scan: snapshot lines turn red when their regex fires, green when ignored */
+  #mc-scan text.src { transition: fill .35s; }
+  #mc-scan.s2 text.r1, #mc-scan.s3 text.r2, #mc-scan.s3 text.r3, #mc-scan.s4 text.r4 { fill: var(--attacker); }
+  #mc-scan.s5 text.r5 { fill: var(--safe); }
+  /* attack: the plain-HTTP corridor and the attacker's tap */
+  #mc-attack .corridor { stroke: var(--line); stroke-width: 1.5; fill: none; stroke-dasharray: 3 5; }
+  #mc-attack.s2 .corridor { stroke: var(--attacker); }
+  #mc-attack .tap { stroke: var(--attacker); stroke-width: 1.5; stroke-dasharray: 4 3; }
+  /* guards: verdict rows */
+  #mc-guards .verdict > rect { transition: fill .35s, stroke .35s; }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› <a href="group-browser-defenses.html">Browser-side defenses</a> › Mixed content</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../../isitsecure/engine/scanners/mixed_content_scanner.py" title="The implementation this page is built from">source .py</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">DAST scanner · passive</div>
+  <h1>Mixed Content</h1>
+  <p class="lede">An HTTPS page that pulls a script, stylesheet, frame or image over plain <code>http://</code> hands every hop on the network a chance to rewrite it. isitsecure reads the HTML and first-party JavaScript it already captured, matches four resource-loading tags against a literal <code>http://</code> URL, and grades a swapped script higher than a swapped picture. It sends no requests of its own.</p>
+  <div class="meta">
+    <span class="pill dast">DAST</span><span class="pill med">Medium</span><span class="pill">Low</span><span class="pill">Mixed content</span><span class="pill">Snapshot-based</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#scan"><span class="n">01</span>What it reads</a>
+  <a href="#attack"><span class="n">02</span>Active vs passive</a>
+  <a href="#guards"><span class="n">03</span>What stays quiet</a>
+  <a href="#fix"><span class="n">04</span>The fix</a>
+  <a href="#reference"><span class="n">05</span>Reference</a>
+</nav>
+
+<section id="scan">
+  <h2>What it reads and what it reports</h2>
+  <p class="prose">The scanner works entirely from the snapshot that URL ingestion produced: the rendered HTML plus the concatenated first-party JavaScript. Four regexes look for a resource-loading tag whose <code>src</code> or <code>href</code> starts with <code>http://</code>. Each match becomes a finding, graded by what an attacker could do with the swapped bytes.</p>
+
+  <div class="scene" id="mc-scan" data-scene data-interval="3000">
+    <figure class="stage">
+      <svg viewBox="0 0 960 330" role="img" aria-label="A snapshot of an HTTPS page passes an HTTPS gate, four tag regexes match script, link, iframe and img tags with http:// URLs, and each match becomes a finding graded medium or low.">
+        <defs><marker id="mc-arr1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+
+        <g class="node lit-1" transform="translate(20 30)">
+          <rect width="215" height="270" rx="10"/>
+          <text class="ttl" x="12" y="26">Snapshot</text>
+          <text class="mono t-safe" x="12" y="48">https://app.example</text>
+          <text class="lbl" x="12" y="66">rendered HTML + first-party JS</text>
+          <g class="mono">
+            <text class="src r1" x="12" y="98">&lt;script src="http://cdn…"&gt;</text>
+            <text class="src r2" x="12" y="122">&lt;link href="http://cdn…"&gt;</text>
+            <text class="src r3" x="12" y="146">&lt;iframe src="http://…"&gt;</text>
+            <text class="src r4" x="12" y="170">&lt;img src="http://img…"&gt;</text>
+            <text class="src r5" x="12" y="194">&lt;script src="https://…"&gt;</text>
+          </g>
+          <text class="lbl at-5" x="12" y="236">no request is ever sent;</text>
+          <text class="lbl at-5" x="12" y="252">only captured text is read</text>
+        </g>
+
+        <path class="wire" d="M235 58 H 268" marker-end="url(#mc-arr1)"/>
+        <g class="node lit-1" transform="translate(270 30)">
+          <rect width="330" height="56" rx="8"/>
+          <text class="ttl" x="12" y="22">Gate: is the page itself HTTPS?</text>
+          <text class="lbl" x="12" y="42">an http:// page cannot have mixed content → 0 findings</text>
+        </g>
+
+        <path class="wire at-2" d="M435 86 V 98" marker-end="url(#mc-arr1)"/>
+        <g class="node at-2" transform="translate(270 100)">
+          <rect width="330" height="200" rx="10"/>
+          <text class="ttl" x="12" y="24">Four tag regexes</text>
+          <g class="node row lit-2" transform="translate(12 40)"><rect width="306" height="28" rx="6"/><text class="mono" x="10" y="18">script[src]</text><text class="lbl" x="150" y="18">active</text><text class="t-attacker" x="220" y="18">MEDIUM</text></g>
+          <g class="node row lit-3" transform="translate(12 76)"><rect width="306" height="28" rx="6"/><text class="mono" x="10" y="18">link[href]</text><text class="lbl" x="150" y="18">active</text><text class="t-attacker" x="220" y="18">MEDIUM</text></g>
+          <g class="node row lit-3" transform="translate(12 112)"><rect width="306" height="28" rx="6"/><text class="mono" x="10" y="18">iframe[src]</text><text class="lbl" x="150" y="18">active</text><text class="t-attacker" x="220" y="18">MEDIUM</text></g>
+          <g class="node row lit-4" transform="translate(12 148)"><rect width="306" height="28" rx="6"/><text class="mono" x="10" y="18">img[src]</text><text class="lbl" x="150" y="18">passive</text><text class="t-accent" x="220" y="18">LOW</text></g>
+          <text class="lbl" x="12" y="192">value must start with the literal text http://</text>
+        </g>
+
+        <path class="wire at-2 accent" d="M600 200 H 638" marker-end="url(#mc-arr1)"/>
+        <g class="node at-2 lit-5" transform="translate(640 30)">
+          <rect width="300" height="270" rx="10"/>
+          <text class="ttl" x="12" y="26">Findings</text>
+          <g class="at-2"><text x="12" y="56">Active mixed content (script[src])</text><text class="lbl" x="12" y="72">MEDIUM · http://cdn.example/app.js</text></g>
+          <g class="at-3"><text x="12" y="100">Active mixed content (link[href])</text><text class="lbl" x="12" y="116">MEDIUM · http://cdn.example/site.css</text></g>
+          <g class="at-3"><text x="12" y="144">Active mixed content (iframe[src])</text><text class="lbl" x="12" y="160">MEDIUM · http://widget.example/</text></g>
+          <g class="at-4"><text x="12" y="188">Passive mixed content (img[src])</text><text class="lbl" x="12" y="204">LOW · http://img.example/logo.png</text></g>
+          <text class="lbl at-5" x="12" y="240">deduped by tag + URL · max 10 per tag</text>
+          <text class="lbl at-5" x="12" y="256">confidence 0.9 · source DAST_URL</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>URL ingestion already rendered the page with Playwright and kept its HTML and every first-party JavaScript file. The scanner joins those into one string. <b>If the scanned URL is not https:// it returns before running a single regex</b>: an HTTP page has no secure context to break.</p>
+      <p class="step"><span class="n">2</span>The first regex finds a <code>&lt;script&gt;</code> whose <code>src</code> starts with <code>http://</code>. A script is active content: whoever controls those bytes controls the page. <b>Active → MEDIUM.</b></p>
+      <p class="step"><span class="n">3</span><code>&lt;link href="http://…"&gt;</code> and <code>&lt;iframe src="http://…"&gt;</code> are treated the same way. A stylesheet can restyle a login form and a frame can show one; both are active and both are MEDIUM.</p>
+      <p class="step"><span class="n">4</span><code>&lt;img src="http://…"&gt;</code> is passive: a swapped picture cannot run code, but the request leaks the page the user is on and the image can be replaced. <b>Passive → LOW.</b></p>
+      <p class="step"><span class="n">5</span>The same tag and URL pair is reported once, and each tag type stops after ten matches. Every finding carries the page URL, the resource URL and the tag, with confidence 0.9. The <code>https://</code> script was never a match: the pattern needs the literal text <code>http://</code>.</p>
+    </div>
+  </div>
+
+  <div class="callout note">
+    <div class="label">Built from the code, not a markdown doc</div>
+    <p>This scanner has no page under <code>docs/scanners/</code>. Everything here is taken from <code>isitsecure/engine/scanners/mixed_content_scanner.py</code> and the README scanner-table row ("<code>http://</code> resources loaded on an HTTPS page"). The regexes, severities, the HTTPS gate and the per-tag cap of 10 are read directly from that file.</p>
+  </div>
+</section>
+
+<section id="attack">
+  <h2>Why a script and an image get different grades</h2>
+  <p class="prose">The page itself is protected by TLS, but a sub-resource fetched over <code>http://</code> travels in the clear and without any proof of who sent it. Anyone on the path can read it and rewrite the reply. What that buys the attacker depends on the tag.</p>
+
+  <div class="scene" id="mc-attack" data-scene data-interval="3000">
+    <figure class="stage">
+      <svg viewBox="0 0 960 300" role="img" aria-label="A browser on an HTTPS page fetches a script from an http host; a network attacker between them rewrites the reply and the altered script runs inside the HTTPS origin. An image swap only changes a picture.">
+        <defs><marker id="mc-arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+
+        <text class="only-1 t-safe" x="480" y="40" text-anchor="middle">Address bar shows a lock: the page document came over TLS.</text>
+        <text class="only-2 t-attacker" x="480" y="40" text-anchor="middle">GET http://cdn.example/app.js leaves the page in the clear.</text>
+        <text class="only-3 t-attacker" x="480" y="40" text-anchor="middle">The reply is rewritten on its way back. The browser cannot tell.</text>
+        <text class="only-4 t-attacker" x="480" y="40" text-anchor="middle">script[src] → active mixed content → MEDIUM</text>
+        <text class="only-5 t-accent" x="480" y="40" text-anchor="middle">img[src] → passive mixed content → LOW</text>
+
+        <g class="node lit-1" transform="translate(20 90)">
+          <rect width="190" height="120" rx="10"/>
+          <text class="ttl" x="12" y="24">Browser</text>
+          <text class="mono t-safe" x="12" y="46">https://app.example</text>
+          <text class="lbl" x="12" y="64">TLS to app.example</text>
+          <g class="only-4"><text class="t-attacker" x="12" y="92">payload runs as</text><text class="mono" x="12" y="108">app.example origin</text></g>
+          <g class="only-5"><text class="t-accent" x="12" y="92">picture swapped,</text><text class="lbl" x="12" y="108">page URL leaked</text></g>
+        </g>
+
+        <path class="corridor" d="M210 150 H 748"/>
+        <text class="lbl at-2" x="480" y="138" text-anchor="middle">plain HTTP: readable and writable by every hop</text>
+        <path class="wire" d="M210 150 H 748" style="stroke:transparent" marker-end="url(#mc-arr2)"/>
+
+        <g class="node at-3 lit-3" transform="translate(385 200)">
+          <rect width="190" height="80" rx="10"/>
+          <text class="ttl" x="12" y="24">Network attacker</text>
+          <text class="lbl" x="12" y="44">shared Wi-Fi, an ISP, a proxy:</text>
+          <text class="lbl" x="12" y="60">any hop on the path</text>
+        </g>
+        <line class="tap at-3" x1="480" y1="198" x2="480" y2="152"/>
+
+        <g class="node lit-2" transform="translate(750 90)">
+          <rect width="190" height="120" rx="10"/>
+          <text class="ttl" x="12" y="24">Resource host</text>
+          <text class="mono t-attacker" x="12" y="46">http://cdn.example</text>
+          <text class="lbl" x="12" y="64">no TLS, no identity</text>
+          <text class="mono" x="12" y="88">/app.js</text>
+          <text class="mono" x="12" y="104">/logo.png</text>
+        </g>
+        <g class="packets"></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step" data-on="mcClear"><span class="n">1</span>The user opens <code>https://app.example</code>. The document arrives over TLS, so the browser shows a lock and the app's cookies and tokens live in that origin.</p>
+      <p class="step" data-on="mcAttackReq"><span class="n">2</span>The page contains <code>&lt;script src="http://cdn.example/app.js"&gt;</code>. The browser fetches it over plain HTTP: no encryption, no certificate, nothing that says which server answered.</p>
+      <p class="step" data-on="mcAttackSwap"><span class="n">3</span>A network attacker sitting on the path reads the reply and replaces it with <code>app.js</code> plus a payload. The bytes arrive looking exactly like a normal response.</p>
+      <p class="step" data-on="mcClear"><span class="n">4</span>The altered script executes inside the HTTPS origin, with the page's DOM, storage and session. That is why script, stylesheet and frame tags are graded <b>MEDIUM</b>: the attacker gets code execution in the page.</p>
+      <p class="step" data-on="mcAttackImg"><span class="n">5</span>For <code>&lt;img src="http://img.example/logo.png"&gt;</code> the same hop can only swap the picture and see which page requested it. No code runs, so the tag is graded <b>LOW</b>.</p>
+    </div>
+  </div>
+
+  <div class="callout why">
+    <div class="label">Why it matters</div>
+    <p>Every tag the scanner flags is a place where the page's own TLS guarantee is quietly undone. The finding text says it plainly: active mixed content "can be intercepted and modified by a network attacker to execute arbitrary code in the page context", and passive mixed content "leaks the request and can be swapped". The fix in both cases is the same word: HTTPS.</p>
+  </div>
+</section>
+
+<section id="guards">
+  <h2>What stays quiet</h2>
+  <p class="prose">Three guards keep the finding list honest. The page must be HTTPS, the URL in the tag must literally begin with <code>http://</code>, and the same tag-and-URL pair is counted once. The rows below are four pages carrying the same kind of tag.</p>
+
+  <div class="scene" id="mc-guards" data-scene data-interval="2800">
+    <figure class="stage">
+      <svg viewBox="0 0 960 270" role="img" aria-label="Four page-and-tag combinations and the verdict each gets: an HTTP page is skipped, an https:// resource is quiet, a protocol-relative resource is quiet, and an http:// resource on an HTTPS page is flagged.">
+        <defs><marker id="mc-arr3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <text class="lbl" x="20" y="22">page · tag</text>
+        <text class="lbl" x="520" y="22">verdict</text>
+
+        <g class="node lit-2" transform="translate(20 32)"><rect width="440" height="46" rx="8"/><text class="mono" x="12" y="20">http://app.example</text><text class="mono" x="12" y="37">&lt;script src="http://cdn.example/a.js"&gt;</text></g>
+        <path class="wire at-2" d="M460 55 H 508" marker-end="url(#mc-arr3)"/>
+        <g class="node verdict at-2 lit-2" transform="translate(510 32)"><rect width="430" height="46" rx="8" class="soft-safe"/><text class="t-safe" x="12" y="20">quiet · the page is HTTP</text><text class="lbl" x="12" y="37">scanner returns before any regex runs</text></g>
+
+        <g class="node lit-3" transform="translate(20 90)"><rect width="440" height="46" rx="8"/><text class="mono" x="12" y="20">https://app.example</text><text class="mono" x="12" y="37">&lt;script src="https://cdn.example/a.js"&gt;</text></g>
+        <path class="wire at-3" d="M460 113 H 508" marker-end="url(#mc-arr3)"/>
+        <g class="node verdict at-3 lit-3" transform="translate(510 90)"><rect width="430" height="46" rx="8" class="soft-safe"/><text class="t-safe" x="12" y="20">quiet · scheme matches the page</text><text class="lbl" x="12" y="37">the regex needs the literal text http://</text></g>
+
+        <g class="node lit-4" transform="translate(20 148)"><rect width="440" height="46" rx="8"/><text class="mono" x="12" y="20">https://app.example</text><text class="mono" x="12" y="37">&lt;script src="//cdn.example/a.js"&gt;</text></g>
+        <path class="wire at-4" d="M460 171 H 508" marker-end="url(#mc-arr3)"/>
+        <g class="node verdict at-4 lit-4" transform="translate(510 148)"><rect width="430" height="46" rx="8" class="soft-safe"/><text class="t-safe" x="12" y="20">quiet · protocol-relative inherits https</text><text class="lbl" x="12" y="37">no http:// prefix, so no match</text></g>
+
+        <g class="node lit-5" transform="translate(20 206)"><rect width="440" height="46" rx="8"/><text class="mono" x="12" y="20">https://app.example</text><text class="mono" x="12" y="37">&lt;script src="http://cdn.example/a.js"&gt;</text></g>
+        <path class="wire at-5 attacker" d="M460 229 H 508" marker-end="url(#mc-arr3)"/>
+        <g class="node verdict at-5 lit-5" transform="translate(510 206)"><rect width="430" height="46" rx="8" class="soft-attacker"/><text class="t-attacker" x="12" y="20">flagged · active mixed content · MEDIUM</text><text class="lbl" x="12" y="37">HTTPS page + http:// script, reported once per tag + URL</text></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Four pages, each loading the same script tag in a slightly different way. Only one of them is a problem, and the scanner has to tell them apart from text alone.</p>
+      <p class="step"><span class="n">2</span>The page at <code>http://app.example</code> is itself plain HTTP. There is no secure context to downgrade, so <b>the scanner returns an empty list before running any regex</b>.</p>
+      <p class="step"><span class="n">3</span>An <code>https://</code> resource on an HTTPS page is exactly what should happen. The pattern only matches when the captured value starts with <code>http://</code>, so this line never fires.</p>
+      <p class="step"><span class="n">4</span>A protocol-relative <code>//cdn.example/a.js</code> inherits the page's scheme and loads over HTTPS. It has no <code>http://</code> prefix, so it is quiet too.</p>
+      <p class="step"><span class="n">5</span>An HTTPS page loading <code>http://cdn.example/a.js</code> is the real case. It is reported as <b>Active mixed content (script[src]), MEDIUM</b>, once, even if the tag appears several times in the HTML and in the bundles.</p>
+    </div>
+  </div>
+</section>
+
+<section id="fix">
+  <h2>Vulnerable vs fixed markup</h2>
+  <p class="prose">The finding's own advice is one line: load it over HTTPS. The GOOD tab shows the same page with the resource moved to a TLS origin.</p>
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true">BAD · http:// sub-resources</button>
+      <button class="tab good" role="tab" aria-selected="false">GOOD · everything over https://</button>
+    </div>
+    <div role="tabpanel"><pre><code><span class="c">&lt;!-- served from https://app.example --&gt;</span>
+&lt;head&gt;
+<span class="hl bad">  &lt;script src="<span class="k">http://</span>cdn.example/app.js"&gt;&lt;/script&gt;       <span class="c">&lt;!-- active: MEDIUM --&gt;</span></span>
+<span class="hl bad">  &lt;link rel="stylesheet" href="<span class="k">http://</span>cdn.example/site.css"&gt; <span class="c">&lt;!-- active: MEDIUM --&gt;</span></span>
+&lt;/head&gt;
+&lt;body&gt;
+<span class="hl bad">  &lt;iframe src="<span class="k">http://</span>widget.example/"&gt;&lt;/iframe&gt;           <span class="c">&lt;!-- active: MEDIUM --&gt;</span></span>
+<span class="hl bad">  &lt;img src="<span class="k">http://</span>img.example/logo.png" alt=""&gt;            <span class="c">&lt;!-- passive: LOW --&gt;</span></span>
+&lt;/body&gt;</code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c">&lt;!-- served from https://app.example --&gt;</span>
+&lt;head&gt;
+<span class="hl good">  &lt;script src="<span class="s">https://</span>cdn.example/app.js"&gt;&lt;/script&gt;</span>
+<span class="hl good">  &lt;link rel="stylesheet" href="<span class="s">https://</span>cdn.example/site.css"&gt;</span>
+&lt;/head&gt;
+&lt;body&gt;
+<span class="hl good">  &lt;iframe src="<span class="s">https://</span>widget.example/"&gt;&lt;/iframe&gt;</span>
+<span class="hl good">  &lt;img src="<span class="s">https://</span>img.example/logo.png" alt=""&gt;</span>
+&lt;/body&gt;
+<span class="c">// Every resource host must serve TLS. A protocol-relative "//cdn.example/…"
+// also resolves to https on an HTTPS page and is not flagged.</span></code></pre></div>
+  </div>
+</section>
+
+<section id="reference">
+  <h2>Reference: what the code does</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Item</th><th>Value</th><th>Where it comes from</th></tr></thead>
+      <tbody>
+        <tr><td>Input</td><td>snapshot HTML + first-party JS, joined with a newline</td><td><code>html_content</code>, <code>first_party_js_content</code></td></tr>
+        <tr><td>Precondition</td><td>scanned URL scheme is <code>https</code>; otherwise no findings</td><td><code>urlparse(snapshot.url).scheme</code></td></tr>
+        <tr><td>Active tags</td><td><code>script[src]</code>, <code>link[href]</code>, <code>iframe[src]</code> → MEDIUM</td><td><code>_ACTIVE_PATTERNS</code></td></tr>
+        <tr><td>Passive tags</td><td><code>img[src]</code> → LOW</td><td><code>_PASSIVE_PATTERNS</code></td></tr>
+        <tr><td>Match rule</td><td>attribute value starts with the literal <code>http://</code>, case-insensitive tag names</td><td>the four regexes</td></tr>
+        <tr><td>Dedup / cap</td><td>one finding per tag + URL; at most 10 per tag type</td><td><code>seen</code>, <code>_MAX_FINDINGS_PER_KIND</code></td></tr>
+        <tr><td>Finding</td><td>category MIXED_CONTENT, source DAST_URL, confidence 0.9, method GET, endpoint = page URL</td><td><code>_build_finding</code></td></tr>
+        <tr><td>Network</td><td>none: the scanner never fetches the resource</td><td>module docstring</td></tr>
+        <tr><td>Scan depth</td><td>runs at both <code>quick</code> and <code>deep</code></td><td><code>factory.py</code> DAST list</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout note">
+    <div class="label">Things it does not do</div>
+    <p>It does not fetch the resource, so it cannot tell whether the <code>http://</code> host would have redirected to HTTPS. It does not read CSS <code>url()</code> values, <code>&lt;video&gt;</code>, <code>&lt;audio&gt;</code>, <code>&lt;object&gt;</code> or <code>fetch()</code> calls, and it does not evaluate a <code>Content-Security-Policy: upgrade-insecure-requests</code> header that would have fixed the problem at the browser.</p>
+  </div>
+</section>
+
+<footer class="foot">
+  <span>Source: <a href="../../isitsecure/engine/scanners/mixed_content_scanner.py">mixed_content_scanner.py</a> · <a href="../../README.md">README scanner table</a></span>
+  <span>Group: <a href="group-browser-defenses.html">Browser-side defenses</a> · Related: <a href="sri.html">Subresource Integrity</a> · <a href="security-headers.html">Security headers</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+<script>
+(function () {
+  const REQ = "M210 150 H 748", BACK_TO_TAP = "M750 150 H 480", TAP_TO_BROWSER = "M480 150 H 212";
+  function svgOf(el) { return el.querySelector("svg"); }
+  function layer(el) { return el.querySelector(".packets"); }
+  window.mcClear = function (scene, step, el) { IsDoc.clearPackets(svgOf(el)); };
+  window.mcAttackReq = function (scene, step, el) {
+    const svg = svgOf(el); IsDoc.clearPackets(svg);
+    IsDoc.packet(svg, REQ, { cls: "f-info", label: "GET /app.js", duration: 1100, hold: 600, layer: layer(el) });
+  };
+  window.mcAttackSwap = function (scene, step, el) {
+    const svg = svgOf(el); IsDoc.clearPackets(svg);
+    IsDoc.packet(svg, BACK_TO_TAP, { cls: "f-muted", label: "app.js", duration: 800, hold: 100, layer: layer(el) });
+    IsDoc.packet(svg, TAP_TO_BROWSER, { cls: "f-attacker", label: "app.js + payload", duration: 900, delay: 900, hold: 900, layer: layer(el) });
+  };
+  window.mcAttackImg = function (scene, step, el) {
+    const svg = svgOf(el); IsDoc.clearPackets(svg);
+    IsDoc.packet(svg, REQ, { cls: "f-info", label: "GET /logo.png", duration: 900, hold: 100, layer: layer(el) });
+    IsDoc.packet(svg, BACK_TO_TAP, { cls: "f-muted", label: "logo.png", duration: 600, delay: 1000, hold: 100, layer: layer(el) });
+    IsDoc.packet(svg, TAP_TO_BROWSER, { cls: "f-accent", label: "swapped image", duration: 700, delay: 1600, hold: 900, layer: layer(el) });
+  };
+})();
+</script>
+</body>
+</html>

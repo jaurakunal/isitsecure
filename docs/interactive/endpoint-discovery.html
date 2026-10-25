@@ -1,0 +1,771 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Endpoint Discovery · isitsecure</title>
+<meta name="description" content="How isitsecure builds the endpoint inventory a scan tests: code-split bundles, routes vs endpoints, seven regex families, OpenAPI, HTML forms, active probing, the authenticated crawl, ranking, and --probe-writes. Animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  /* scene 1: files fetched vs missed */
+  #spa .file > rect { fill: var(--surface); stroke: var(--line); stroke-dasharray: 4 3; stroke-width: 1.5; transition: stroke .35s, fill .35s; }
+  #spa .file > text { font-size: 10.5px; }
+  #spa.s2 .file.scr > rect { fill: var(--accent-soft); stroke: var(--accent); stroke-dasharray: none; }
+  #spa[data-step="3"] .file.lnk > rect { stroke: var(--attacker); }
+  #spa[data-step="3"] .file.lnk > text { fill: var(--attacker); }
+  #spa.s4 .file.lnk > rect { fill: var(--safe-soft); stroke: var(--safe); stroke-dasharray: none; }
+  #spa .html text { transition: fill .35s; }
+  #spa.s2 .html .scr { fill: var(--accent); }
+  #spa[data-step="3"] .html .lnk { fill: var(--attacker); }
+  #spa.s4 .html .lnk { fill: var(--safe); }
+  #spa .big { font-family: var(--font-display); font-weight: 700; font-size: 40px; }
+
+  /* scene 2: look-back window and match */
+  #routes .win { fill: var(--info-soft); stroke: var(--info); stroke-dasharray: 4 3; }
+  #routes .hit { fill: var(--accent-soft); stroke: var(--accent); }
+  #routes .tok { transition: fill .3s; }
+  #routes.s3 .tok { fill: var(--safe); font-weight: 600; }
+  #routes .strike { stroke: var(--attacker); stroke-width: 2; }
+
+  /* scene 3: regex rows */
+  #regex .row > rect { fill: var(--surface-2); stroke: transparent; stroke-width: 1.5; transition: stroke .3s; }
+  #regex .row:nth-child(even) > rect { fill: var(--surface); }
+
+  /* scene 5: login-form detection */
+  #authcrawl .field > rect { fill: var(--surface); stroke: var(--line); transition: stroke .35s, stroke-width .35s, fill .35s; }
+  #authcrawl .form > rect { fill: none; stroke: var(--line); stroke-dasharray: 5 4; transition: stroke .35s, stroke-width .35s; }
+  #authcrawl.s2 .pw > rect { stroke: var(--accent); stroke-width: 2.5; }
+  #authcrawl.s2 .form > rect { stroke: var(--info); stroke-width: 2; }
+  #authcrawl.s2 .idf > rect { stroke: var(--safe); stroke-width: 2.5; }
+  #authcrawl.s2 .search { opacity: .35; }
+  #authcrawl .big { font-family: var(--font-display); font-weight: 700; font-size: 20px; }
+
+  /* scene 6: category pills + score chips */
+  #rank .pill-svg > rect { fill: var(--info-soft); stroke: none; }
+  #rank .pill-svg.file > rect { fill: var(--accent-soft); }
+  #rank .pill-svg.none > rect { fill: var(--surface); stroke: var(--line); }
+  #rank .pill-svg > text { font-family: var(--font-mono); font-size: 9.5px; fill: var(--fg); }
+  #rank .chip { font-family: var(--font-mono); font-size: 10.5px; fill: var(--muted); }
+  #rank .score { font-family: var(--font-display); font-weight: 700; font-size: 16px; }
+
+  /* scene 7: struck DELETE + big counter */
+  #writes .big { font-family: var(--font-display); font-weight: 700; font-size: 40px; }
+  #writes .strike { stroke: var(--attacker); stroke-width: 2; }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› Endpoint Discovery</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../architecture.md" title="The markdown source for this page">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">Architecture · phases 1 to 3</div>
+  <h1>Endpoint Discovery</h1>
+  <p class="lede">A scanner can only test an endpoint it knows about. This page follows one target from its first HTML response to a ranked inventory: which files get read, which paths count as attack surface, where methods and parameters come from, and what an authenticated crawl adds.</p>
+  <div class="meta">
+    <span class="pill dast">DAST input</span><span class="pill">4 sources</span><span class="pill">7 regex families</span><span class="pill">5 ranking dimensions</span><span class="pill high">--probe-writes</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#spa-section"><span class="n">01</span>Code-split SPA</a>
+  <a href="#routes-section"><span class="n">02</span>Routes vs endpoints</a>
+  <a href="#regex-section"><span class="n">03</span>Seven regex families</a>
+  <a href="#others-section"><span class="n">04</span>Spec, forms, probing</a>
+  <a href="#auth-section"><span class="n">05</span>Authenticated crawl</a>
+  <a href="#rank-section"><span class="n">06</span>Categorise and rank</a>
+  <a href="#writes-section"><span class="n">07</span>--probe-writes</a>
+  <a href="#limits-section"><span class="n">08</span>Coverage limits</a>
+</nav>
+
+<section id="spa-section">
+  <h2>Reading a code-split single-page app</h2>
+  <p class="prose">The served HTML of a single-page app is a shell. The routes and the API calls live in JavaScript, and a bundler splits that JavaScript into an entry bundle plus lazy chunks. Which of those files the scanner fetches decides what the rest of discovery can see.</p>
+
+  <div class="scene" id="spa" data-scene data-interval="3200">
+    <figure class="stage">
+      <svg viewBox="0 0 960 330" role="img" aria-label="A shell HTML page references three script files and ten link-preloaded chunks. A script-only sweep fetches three of thirteen files; matching link hrefs ending in .js fetches all thirteen and the inventory grows from 61 to 123 endpoints.">
+        <defs><marker id="arr-spa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+
+        <g class="node lit-1 html" transform="translate(20 20)">
+          <rect width="310" height="216" rx="10"/>
+          <text class="ttl" x="14" y="24">Shell HTML, as rendered</text>
+          <g class="mono">
+            <text x="14" y="50">&lt;!doctype html&gt;</text>
+            <text class="scr" x="14" y="66">&lt;script src=main.js&gt;</text>
+            <text class="scr" x="14" y="82">&lt;script src=runtime.js&gt;</text>
+            <text class="scr" x="14" y="98">&lt;script src=polyfills.js&gt;</text>
+            <text class="lnk" x="14" y="118">&lt;link rel=modulepreload href=c1.js&gt;</text>
+            <text class="lnk" x="14" y="134">&lt;link rel=preload href=c2.js&gt;</text>
+            <text class="lnk" x="14" y="150">&lt;link rel=prefetch href=c3.js&gt;</text>
+            <text class="lnk" x="14" y="166">… 7 more &lt;link … href=cN.js&gt;</text>
+            <text x="14" y="190">&lt;div id=app&gt;&lt;/div&gt;</text>
+          </g>
+          <text class="lbl" x="14" y="206">empty shell: no routes, no API calls here</text>
+        </g>
+
+        <!-- 13 files -->
+        <g transform="translate(370 20)">
+          <text class="ttl" x="0" y="16">13 JavaScript files</text>
+          <text class="lbl" x="0" y="34">3 named by &lt;script src&gt;</text>
+          <g class="file scr" transform="translate(0 42)"><rect width="78" height="26" rx="5"/><text x="39" y="17" text-anchor="middle">main.js</text></g>
+          <g class="file scr" transform="translate(88 42)"><rect width="78" height="26" rx="5"/><text x="39" y="17" text-anchor="middle">runtime.js</text></g>
+          <g class="file scr" transform="translate(176 42)"><rect width="78" height="26" rx="5"/><text x="39" y="17" text-anchor="middle">polyfills.js</text></g>
+          <text class="lbl" x="0" y="94">10 named only by &lt;link href=….js&gt;</text>
+          <g class="file lnk" transform="translate(0 102)"><rect width="46" height="24" rx="5"/><text x="23" y="16" text-anchor="middle">c1</text></g>
+          <g class="file lnk" transform="translate(52 102)"><rect width="46" height="24" rx="5"/><text x="23" y="16" text-anchor="middle">c2</text></g>
+          <g class="file lnk" transform="translate(104 102)"><rect width="46" height="24" rx="5"/><text x="23" y="16" text-anchor="middle">c3</text></g>
+          <g class="file lnk" transform="translate(156 102)"><rect width="46" height="24" rx="5"/><text x="23" y="16" text-anchor="middle">c4</text></g>
+          <g class="file lnk" transform="translate(208 102)"><rect width="46" height="24" rx="5"/><text x="23" y="16" text-anchor="middle">c5</text></g>
+          <g class="file lnk" transform="translate(0 134)"><rect width="46" height="24" rx="5"/><text x="23" y="16" text-anchor="middle">c6</text></g>
+          <g class="file lnk" transform="translate(52 134)"><rect width="46" height="24" rx="5"/><text x="23" y="16" text-anchor="middle">c7</text></g>
+          <g class="file lnk" transform="translate(104 134)"><rect width="46" height="24" rx="5"/><text x="23" y="16" text-anchor="middle">c8</text></g>
+          <g class="file lnk" transform="translate(156 134)"><rect width="46" height="24" rx="5"/><text x="23" y="16" text-anchor="middle">c9</text></g>
+          <g class="file lnk" transform="translate(208 134)"><rect width="46" height="24" rx="5"/><text x="23" y="16" text-anchor="middle">c10</text></g>
+          <text class="lbl only-1" x="0" y="184">not fetched yet</text>
+          <text class="only-2 t-accent" x="0" y="184">fetched: 3 of 13</text>
+          <text class="only-3 t-attacker" x="0" y="184">unseen: 10 of 13</text>
+          <text class="at-4 t-safe" x="0" y="184">fetched: 13 of 13, in document order</text>
+        </g>
+        <!-- middle annotations, own band -->
+        <g class="only-3" transform="translate(370 236)">
+          <text class="t-attacker" x="0" y="0">/api/Users and /api/Feedbacks are called</text>
+          <text class="t-attacker" x="0" y="17">only from these chunks: no regex sees them.</text>
+        </g>
+        <g class="only-4" transform="translate(370 236)">
+          <text class="t-safe" x="0" y="0">match &lt;link href="….js"&gt; on the href,</text>
+          <text class="t-safe" x="0" y="17">whatever the rel: it exists to load that JS.</text>
+        </g>
+
+        <!-- wires html -> files -->
+        <path class="wire at-2 accent" d="M330 82 C 350 82, 350 75, 368 75" marker-end="url(#arr-spa)"/>
+        <path class="wire at-4 safe" d="M330 142 C 350 142, 350 135, 368 135" marker-end="url(#arr-spa)"/>
+        <!-- wire files -> inventory -->
+        <path class="wire at-2 accent" d="M624 75 C 650 75, 650 120, 678 120" marker-end="url(#arr-spa)"/>
+        <path class="wire at-4 safe" d="M624 140 C 650 140, 650 130, 678 130" marker-end="url(#arr-spa)"/>
+
+        <!-- inventory -->
+        <g class="node at-2 lit-5" transform="translate(680 20)">
+          <rect width="260" height="216" rx="10"/>
+          <text class="ttl" x="14" y="24">Url-only inventory</text>
+          <text class="big until-5 t-accent" x="14" y="76">61</text>
+          <text class="big at-5 t-safe" x="14" y="76" id="spa-n">123</text>
+          <text class="lbl" x="14" y="96">endpoints on Juice Shop</text>
+          <g class="mono at-5">
+            <text class="t-safe" x="14" y="128">GET /api/Users</text>
+            <text class="t-safe" x="14" y="146">GET /api/Feedbacks</text>
+            <text x="14" y="164">+ 60 more from the chunks</text>
+          </g>
+          <text class="lbl at-5" x="14" y="196">same regexes, twice the input</text>
+        </g>
+
+        <!-- bottom band -->
+        <g class="only-1" transform="translate(20 282)"><text class="lbl">Playwright renders the page; the HTML and every JavaScript URL it references are kept for the next steps.</text></g>
+        <g class="only-2" transform="translate(20 282)"><text class="lbl">Script-only sweep: SCRIPT_SRC_PATTERN finds the three &lt;script src&gt; files. The ten &lt;link&gt; chunks are never requested.</text></g>
+        <g class="only-3" transform="translate(20 282)"><text class="lbl">A scanner cannot test an endpoint nothing told it about: the users and feedback APIs are simply absent from the scan.</text></g>
+        <g class="only-4" transform="translate(20 282)"><text class="lbl">JAVASCRIPT_REF_PATTERN walks the document once, scripts and chunks interleaved, so a script-heavy page cannot starve the chunks out of the asset cap.</text></g>
+        <g class="only-5" transform="translate(20 282)"><text class="lbl">Measured on Juice Shop, url-only, same regexes: 61 endpoints before, 123 after. Every later phase tests what this inventory contains.</text></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Playwright renders the target and keeps the HTML. For a single-page app that HTML is a shell: an empty <code>&lt;div id=app&gt;</code>, a few <code>&lt;script src&gt;</code> tags, and a list of <code>&lt;link&gt;</code> tags that preload the lazy route chunks.</p>
+      <p class="step"><span class="n">2</span>A script-only sweep fetches what <code>&lt;script src&gt;</code> names: on Juice Shop, three files. The route chunks are referenced only by <code>&lt;link rel="modulepreload|preload|prefetch"&gt;</code>, so nothing fetches them.</p>
+      <p class="step"><span class="n">3</span>The gap: 10 of Juice Shop's 13 JavaScript files never reached the regexes, and with them <code>/api/Users</code> and <code>/api/Feedbacks</code>. <b>A scanner cannot test an endpoint nothing told it about.</b></p>
+      <p class="step"><span class="n">4</span>The fix matches on the <b>href</b> rather than on a list of rel values: a <code>&lt;link&gt;</code> whose href ends in <code>.js</code> or <code>.mjs</code> exists to load that JavaScript. Scripts and chunks are collected in document order, de-duplicated, so the asset cap truncates the tail of the page rather than all of the chunks.</p>
+      <p class="step" data-on="spaCount"><span class="n">5</span>Url-only discovery on Juice Shop went from <b>61 endpoints to 123</b>, with no change to the regexes themselves.</p>
+    </div>
+  </div>
+</section>
+
+<section id="routes-section">
+  <h2>Routes vs endpoints inside a bundle</h2>
+  <p class="prose">A bundle names two kinds of path. The ones the app's own router renders are pages; the ones the app sends requests to are endpoints. Only the second is attack surface, and the difference is visible in how each is written.</p>
+
+  <div class="scene" id="routes" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 330" role="img" aria-label="Two lines of minified JavaScript. A quoted path preceded by path: is a router route and is dropped; a quoted path preceded by url: and hostServer is an endpoint and is kept. The old name-list filter kept 11 of 55 paths and dropped /file-upload.">
+        <g class="node lit-1" transform="translate(20 14)">
+          <rect width="920" height="92" rx="10"/>
+          <!-- windows and hits sit behind the text -->
+          <rect class="win only-2" x="10" y="24" width="118" height="21" rx="4"/>
+          <rect class="hit only-2" x="122" y="24" width="60" height="21" rx="4"/>
+          <rect class="win only-3" x="10" y="60" width="312" height="21" rx="4"/>
+          <rect class="hit only-3" x="316" y="60" width="102" height="21" rx="4"/>
+          <g class="mono">
+            <text x="14" y="39" textLength="110" lengthAdjust="spacingAndGlyphs" style="white-space:pre">routes: [{path: </text>
+            <text x="124" y="39" textLength="55" lengthAdjust="spacingAndGlyphs" style="white-space:pre">"/about"</text>
+            <text x="179" y="39" textLength="414" lengthAdjust="spacingAndGlyphs" style="white-space:pre">, component: About}, {path: "/contact", component: Contact}]</text>
+
+            <text x="14" y="75" textLength="166" lengthAdjust="spacingAndGlyphs" style="white-space:pre">this.uploader = new Es({</text>
+            <text class="tok" x="180" y="75" textLength="34" lengthAdjust="spacingAndGlyphs" style="white-space:pre">url: </text>
+            <text x="214" y="75" textLength="14" lengthAdjust="spacingAndGlyphs" style="white-space:pre">Z.</text>
+            <text class="tok" x="228" y="75" textLength="69" lengthAdjust="spacingAndGlyphs" style="white-space:pre">hostServer</text>
+            <text x="297" y="75" textLength="21" lengthAdjust="spacingAndGlyphs" style="white-space:pre"> + </text>
+            <text x="318" y="75" textLength="97" lengthAdjust="spacingAndGlyphs" style="white-space:pre">"/file-upload"</text>
+            <text x="415" y="75" textLength="152" lengthAdjust="spacingAndGlyphs" style="white-space:pre">, maxFileSize: 1e5, …})</text>
+          </g>
+          <text class="only-2 t-attacker" x="650" y="39">← no request token: dropped</text>
+          <text class="only-3 t-safe" x="650" y="75">← url: and hostServer: kept</text>
+        </g>
+
+        <g class="only-1" transform="translate(20 140)">
+          <text class="ttl" x="0" y="0">Which quoted path is attack surface?</text>
+          <text class="lbl" x="0" y="20">The route regex matches both. What decides is the 60 characters before each match: a request-making token</text>
+          <text class="lbl" x="0" y="36">keeps the path as an endpoint, anything else drops it as a page. No vocabulary of interesting names is involved.</text>
+        </g>
+        <g class="node at-2 lit-2" transform="translate(20 124)">
+          <rect width="290" height="92" rx="10"/>
+          <text class="ttl" x="12" y="22">Router route</text>
+          <text class="mono" x="12" y="46">/about</text>
+          <text class="lbl" x="12" y="66">the app's router renders it; nothing is</text>
+          <text class="lbl" x="12" y="80">requested from the server at that path</text>
+        </g>
+        <g class="node at-3 lit-3" transform="translate(330 124)">
+          <rect width="290" height="92" rx="10"/>
+          <text class="ttl" x="12" y="22">Endpoint, kept</text>
+          <text class="mono" x="12" y="46">GET /file-upload   · requested_path</text>
+          <text class="lbl" x="12" y="66">the app makes a request to it; method</text>
+          <text class="lbl" x="12" y="80">unknown from a bundle, so GET for now</text>
+        </g>
+
+        <g class="node at-4 lit-4" transform="translate(640 124)">
+          <rect width="300" height="192" rx="10"/>
+          <text class="ttl" x="12" y="22">The old filter: a name list</text>
+          <text class="mono lbl" x="12" y="44">/dashboard /api /apps /admin /account</text>
+          <text x="12" y="68">kept <tspan class="t-attacker" font-weight="600">11 of 55</tspan> Juice Shop paths</text>
+          <text class="lbl" x="12" y="88">and discarded, among 44 others:</text>
+          <g class="mono">
+            <text class="t-attacker" x="12" y="110">/file-upload   /dataerasure</text>
+            <text class="t-attacker" x="12" y="128">/profile       /data-export</text>
+          </g>
+          <text class="lbl" x="12" y="156">a name list only recognises vocabulary</text>
+          <text class="lbl" x="12" y="170">someone thought of in advance</text>
+        </g>
+
+        <g class="at-5" transform="translate(20 232)">
+          <g class="node lit-5"><rect width="600" height="84" rx="10"/>
+            <text class="ttl" x="12" y="22">Four file-upload vulnerabilities sit behind /file-upload</text>
+            <text class="t-attacker" x="12" y="46">dropped: unreachable, however good the file-upload scanner was</text>
+            <text class="t-safe" x="12" y="68">kept: in the inventory, categorised FILE_ACCESS, ranked, tested</text>
+          </g>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Two lines from a minified bundle. <code>{path: "/about", component: About}</code> is a route the app's own router renders. <code>new Es({url: Z.hostServer + "/file-upload"})</code> is an endpoint the app sends a request to.</p>
+      <p class="step"><span class="n">2</span>The route regex matches any quoted path of three or more characters. For each match the scanner looks back <b>60 characters</b> for a request-making token: <code>fetch</code>, <code>axios</code>, <code>XMLHttpRequest</code>, <code>.open</code>, <code>.get/.post/.put/.patch/.delete</code>, <code>url:</code>, <code>baseURL</code>, <code>hostServer</code>, <code>apiUrl</code>, <code>endpoint</code>. Before <code>"/about"</code> there is only <code>{path:</code>, so it is dropped.</p>
+      <p class="step"><span class="n">3</span>Before <code>"/file-upload"</code> sit <code>url:</code> and <code>hostServer</code>. <b>Kept</b>, as <code>GET /file-upload</code> with source <code>requested_path</code>. The window is deliberately short: widening it starts catching the previous statement's call.</p>
+      <p class="step"><span class="n">4</span>This replaced a list of interesting-looking directory names. On Juice Shop that list kept 11 of 55 paths and discarded <code>/file-upload</code>, <code>/dataerasure</code>, <code>/profile</code> and <code>/data-export</code>. The filter now reads how a path is used, which needs no vocabulary.</p>
+      <p class="step"><span class="n">5</span>Four file-upload vulnerabilities sit behind <code>/file-upload</code>. With the path dropped they were unreachable no matter how good the file-upload scanner was; with it kept, it enters the inventory and the ranking in section 06.</p>
+    </div>
+  </div>
+
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true">BEFORE · name list</button>
+      <button class="tab good" role="tab" aria-selected="false">AFTER · request context</button>
+    </div>
+    <div role="tabpanel"><pre><code><span class="c"># a path was kept if it started with a word someone thought of</span>
+INTERESTING = (<span class="s">"/dashboard"</span>, <span class="s">"/api"</span>, <span class="s">"/apps"</span>, <span class="s">"/admin"</span>, <span class="s">"/account"</span>)
+<span class="k">for</span> route <span class="k">in</span> re.findall(ROUTE_PATH_PATTERN, content):
+<span class="hl bad">    <span class="k">if</span> <span class="k">not</span> route.startswith(INTERESTING):   <span class="c"># /file-upload: dropped</span></span>
+        <span class="k">continue</span>
+    add(route)</code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c"># constants.py: a path is worth probing when the bundle makes a request to it</span>
+REQUEST_CONTEXT_PATTERN = (
+    <span class="s">r"(?:fetch|axios|XMLHttpRequest|\.open|\.get|\.post|\.put|\.patch"</span>
+    <span class="s">r"|\.delete|url\s*:|baseURL|hostServer|apiUrl|endpoint)"</span>
+)
+REQUEST_CONTEXT_WINDOW = <span class="k">60</span>   <span class="c"># wider starts catching the previous statement's call</span>
+
+<span class="c"># endpoint_discovery.py</span>
+<span class="k">for</span> match <span class="k">in</span> re.finditer(ROUTE_PATH_PATTERN, content):
+    preceding = content[max(<span class="k">0</span>, match.start() - window):match.start()]
+<span class="hl good">    <span class="k">if</span> context.search(preceding):            <span class="c"># url: Z.hostServer + "/file-upload"</span></span>
+        add(route, source=<span class="s">"requested_path"</span>)</code></pre></div>
+  </div>
+</section>
+
+<section id="regex-section">
+  <h2>Seven regex families over the bundle</h2>
+  <p class="prose">The HTML and every fetched JavaScript file are concatenated and run through seven families of patterns. Each match is resolved against the target, filtered, and stored under a <code>METHOD:url</code> key so the same endpoint found twice is kept once.</p>
+
+  <div class="scene" id="regex" data-scene data-interval="2800">
+    <figure class="stage">
+      <svg viewBox="0 0 960 330" role="img" aria-label="Seven rows, one per regex family: fetch, axios, XMLHttpRequest, API path literals, Supabase, parameterised paths, and route definitions in request context. Each row shows the bundle text it matches and the endpoint it adds.">
+        <text class="lbl" x="20" y="22">family</text>
+        <text class="lbl" x="170" y="22">what it matches in the bundle</text>
+        <text class="lbl" x="560" y="22">endpoint added</text>
+        <text class="lbl" x="800" y="22">source_pattern</text>
+
+        <g class="row lit-1" transform="translate(0 30)"><rect x="12" y="0" width="936" height="38" rx="6"/>
+          <text class="ttl" x="20" y="24">fetch()</text>
+          <g class="mono"><text x="170" y="16">fetch("/api/Users")</text><text x="170" y="31">fetch("/api/Feedbacks", {method: "POST"})</text></g>
+          <g class="mono at-1"><text x="560" y="16">GET  /api/Users</text><text x="560" y="31">POST /api/Feedbacks</text></g>
+          <g class="mono at-1"><text class="lbl" x="800" y="16">fetch</text><text class="lbl" x="800" y="31">fetch_with_method</text></g>
+        </g>
+        <g class="row lit-2" transform="translate(0 70)"><rect x="12" y="0" width="936" height="38" rx="6"/>
+          <text class="ttl" x="20" y="24">axios</text>
+          <g class="mono"><text x="170" y="24">axios.post("/rest/user/login", body)</text></g>
+          <g class="mono at-2"><text x="560" y="24">POST /rest/user/login</text><text class="lbl" x="800" y="24">axios</text></g>
+        </g>
+        <g class="row lit-3" transform="translate(0 110)"><rect x="12" y="0" width="936" height="38" rx="6"/>
+          <text class="ttl" x="20" y="24">XMLHttpRequest</text>
+          <g class="mono"><text x="170" y="24">xhr.open("PUT", "/api/Users/1")</text></g>
+          <g class="mono at-3"><text x="560" y="24">PUT  /api/Users/1</text><text class="lbl" x="800" y="24">xhr</text></g>
+        </g>
+        <g class="row lit-4" transform="translate(0 150)"><rect x="12" y="0" width="936" height="38" rx="6"/>
+          <text class="ttl" x="20" y="24">API path literals</text>
+          <g class="mono"><text x="170" y="16">"/rest/products/search"</text><text x="170" y="31">`${server}/rest/basket`</text></g>
+          <g class="mono at-4"><text x="560" y="16">GET  /rest/products/search</text><text x="560" y="31">GET  /rest/basket</text></g>
+          <g class="mono at-4"><text class="lbl" x="800" y="16">api_path</text><text class="lbl" x="800" y="31">template_api_path</text></g>
+        </g>
+        <g class="row lit-5" transform="translate(0 190)"><rect x="12" y="0" width="936" height="38" rx="6"/>
+          <text class="ttl" x="20" y="24">Supabase</text>
+          <g class="mono"><text x="170" y="16">supabase.from("profiles").select()</text><text x="170" y="31">supabase.rpc("get_me")</text></g>
+          <g class="mono at-5"><text x="560" y="16">GET  /rest/v1/profiles</text><text x="560" y="31">POST /rest/v1/rpc/get_me</text></g>
+          <g class="mono at-5"><text class="lbl" x="800" y="16">supabase_from</text><text class="lbl" x="800" y="31">supabase_rpc</text></g>
+        </g>
+        <g class="row lit-6" transform="translate(0 230)"><rect x="12" y="0" width="936" height="38" rx="6"/>
+          <text class="ttl" x="20" y="24">Parameterised paths</text>
+          <g class="mono"><text x="170" y="16">"/users/:id"</text><text x="170" y="31">"/items/{id}"</text></g>
+          <g class="mono at-6"><text x="560" y="16">GET  /users/:id      path: id</text><text x="560" y="31">GET  /items/{id}     path: id</text></g>
+          <g class="mono at-6"><text class="lbl" x="800" y="16">parameterized_path</text></g>
+        </g>
+        <g class="row lit-7" transform="translate(0 270)"><rect x="12" y="0" width="936" height="38" rx="6"/>
+          <text class="ttl" x="20" y="17">Route definitions</text>
+          <text class="lbl" x="20" y="31">in request context</text>
+          <g class="mono"><text x="170" y="24">new Es({url: Z.hostServer + "/file-upload"})</text></g>
+          <g class="mono at-7"><text x="560" y="24">GET  /file-upload</text><text class="lbl" x="800" y="24">requested_path</text></g>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span><b>fetch.</b> <code>fetch("url")</code> is a GET. <code>fetch("url", {method: "POST"})</code> carries its method, which is the only place a bundle states one explicitly. A method the map does not know falls back to GET.</p>
+      <p class="step"><span class="n">2</span><b>axios.</b> <code>axios.get/post/put/patch/delete("url")</code>: the method is the function name.</p>
+      <p class="step"><span class="n">3</span><b>XMLHttpRequest.</b> <code>.open("METHOD", "url")</code> gives both the method and the path.</p>
+      <p class="step"><span class="n">4</span><b>API path literals.</b> Any quoted path under <code>/api</code>, <code>/rest</code>, <code>/graphql</code> or <code>/v1</code>, plus the same shapes inside a template literal after a <code>${…}</code> interpolation. Both become GET for now.</p>
+      <p class="step"><span class="n">5</span><b>Supabase.</b> <code>.from("table")</code> becomes <code>GET /rest/v1/table</code>, <code>.rpc("fn")</code> becomes <code>POST /rest/v1/rpc/fn</code>. The project URL and anon key found in the same bundle are used later to read the project's own OpenAPI listing of tables.</p>
+      <p class="step"><span class="n">6</span><b>Parameterised paths.</b> <code>/users/:id</code> and <code>/items/{id}</code> declare a path parameter, so the endpoint is created with <code>has_path_params</code> set and the parameter named. IDOR and per-parameter injection need exactly that.</p>
+      <p class="step"><span class="n">7</span><b>Route definitions in request context</b>, the pass from section 02. Every match goes through the same gate: <code>_resolve_url</code> drops unresolved template literals and resolves relative <code>api/</code>, <code>rest/</code>, <code>graphql/</code>, <code>v1/</code> paths against the target; <code>_should_include</code> drops static assets, <code>/_next/</code>-style prefixes and known third-party hosts.</p>
+    </div>
+  </div>
+</section>
+
+<section id="others-section">
+  <h2>Spec, forms and probing: the three other sources</h2>
+  <p class="prose">Regexes over a bundle find what a JavaScript frontend calls. A REST API with no frontend, a server-rendered app with no bundle, and an API base no bundle mentions each need their own source. All four feed the same inventory.</p>
+
+  <div class="scene" id="others" data-scene data-interval="3200">
+    <figure class="stage">
+      <svg viewBox="0 0 960 300" role="img" aria-label="Three columns: an OpenAPI spec probed at well-known paths yields methods and parameters; HTML forms and links parsed with the standard-library parser yield form actions with field names; active probing of /api, /graphql and /rest/v1/ keeps JSON responses. All merge into one inventory.">
+        <defs><marker id="arr-oth" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+
+        <g class="node lit-1" transform="translate(20 14)">
+          <rect width="295" height="236" rx="10"/>
+          <text class="ttl" x="12" y="22">OpenAPI / Swagger spec</text>
+          <text class="lbl" x="12" y="42">13 well-known paths, per API base:</text>
+          <g class="mono"><text class="lbl" x="12" y="58">/openapi.json  /swagger.json</text><text class="lbl" x="12" y="72">/v3/api-docs  /v2/api-docs</text><text class="lbl" x="12" y="86">/swagger/v1/swagger.json  …</text></g>
+          <text class="lbl at-1" x="12" y="110">200 with a paths object, parsed:</text>
+          <g class="mono at-1">
+            <text x="12" y="130">GET  /users/{id}   path: id</text>
+            <text x="12" y="146">GET  /items        query: q</text>
+            <text x="12" y="162">POST /orders</text>
+            <text x="12" y="178">PUT  /orders/{id}</text>
+          </g>
+          <text class="lbl at-1" x="12" y="204">real methods, {templated} ids, query</text>
+          <text class="lbl at-1" x="12" y="218">params · first spec per host wins</text>
+        </g>
+
+        <g class="node at-2 lit-2" transform="translate(333 14)">
+          <rect width="295" height="236" rx="10"/>
+          <text class="ttl" x="12" y="22">HTML forms and links</text>
+          <g class="mono">
+            <text class="lbl" x="12" y="44">&lt;form action="/search" method="get"&gt;</text>
+            <text class="lbl" x="12" y="58">  &lt;input name="q"&gt;</text>
+            <text class="lbl" x="12" y="72">&lt;a href="/items?sort=price"&gt;</text>
+            <text class="lbl" x="12" y="86">&lt;form action="/login" method="post"&gt;</text>
+            <text class="lbl" x="12" y="100">  email · password · hidden csrf</text>
+          </g>
+          <g class="mono at-2">
+            <text x="12" y="130">GET  /search      [q]</text>
+            <text x="12" y="146">GET  /items       [sort]</text>
+            <text x="12" y="162">POST /login       [email, password]</text>
+          </g>
+          <text class="lbl at-2" x="12" y="190">stdlib HTMLParser · hidden and submit</text>
+          <text class="lbl at-2" x="12" y="204">inputs skipped · links without ?params</text>
+          <text class="lbl at-2" x="12" y="218">are pages, not endpoints</text>
+        </g>
+
+        <g class="node at-3 lit-3" transform="translate(646 14)">
+          <rect width="294" height="236" rx="10"/>
+          <text class="ttl" x="12" y="22">Active probing</text>
+          <text class="lbl" x="12" y="42">on the target and any api./backend.</text>
+          <text class="lbl" x="12" y="56">host named in the bundle:</text>
+          <g class="mono at-3">
+            <text x="12" y="84">GET /api       200 json   kept</text>
+            <text x="12" y="100">GET /graphql   200 json   kept</text>
+            <text x="12" y="116">GET /users     404 html   dropped</text>
+            <text x="12" y="132">GET /me        200 html   dropped</text>
+            <text x="12" y="156">GET /rest/v1/  on a Supabase project:</text>
+            <text x="12" y="172">its OpenAPI lists every table</text>
+          </g>
+          <text class="lbl at-3" x="12" y="204">kept only when status &lt; 400 and the</text>
+          <text class="lbl at-3" x="12" y="218">body is JSON: an HTML 200 is a page</text>
+        </g>
+
+        <path class="wire at-4 accent" d="M167 250 V 266" marker-end="url(#arr-oth)"/>
+        <path class="wire at-4 accent" d="M480 250 V 266" marker-end="url(#arr-oth)"/>
+        <path class="wire at-4 accent" d="M793 250 V 266" marker-end="url(#arr-oth)"/>
+        <g class="at-4" transform="translate(20 268)">
+          <text class="ttl" x="0" y="20">One inventory, keyed METHOD:url</text>
+          <text class="lbl" x="250" y="20">then /collection/1 twins for each REST collection, so IDOR and per-parameter injection have an object-level target</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span><b>OpenAPI.</b> For each API base the scanner tries the well-known spec locations (13 per the architecture doc). A 200 whose body parses as JSON with a <code>paths</code> object yields every declared operation with its real method, path parameters including <code>{templated}</code> segments, and query parameters. This is how a REST API with no browsable frontend becomes testable.</p>
+      <p class="step"><span class="n">2</span><b>HTML forms and links.</b> A standard-library <code>HTMLParser</code> turns each <code>&lt;form action&gt;</code> into an endpoint at its resolved action, GET or POST by the form's method, with its named <code>input</code>/<code>select</code>/<code>textarea</code> fields as parameters; submit, button and hidden inputs are skipped. An <code>&lt;a href&gt;</code> counts only when it carries query parameters. If JS and spec discovery found fewer than 10 endpoints, a bounded same-origin crawl of up to 15 pages follows links to more forms.</p>
+      <p class="step"><span class="n">3</span><b>Active probing.</b> Common API paths such as <code>/api</code> and <code>/graphql</code> are requested on the target origin and on any <code>api.</code>/<code>backend.</code> host found in the bundle. A probe is kept when the status is below 400 and the body is JSON by content type or by its first character. A Supabase project URL is probed at <code>/rest/v1/</code>, whose OpenAPI listing names every exposed table.</p>
+      <p class="step"><span class="n">4</span>Everything merges under a <code>METHOD:url</code> key. Then each GET collection such as <code>/api/Products</code> gets an object-level twin <code>/api/Products/1</code> with a path parameter named <code>id</code>. Only after that are parameters detected and categories assigned.</p>
+    </div>
+  </div>
+</section>
+
+<section id="auth-section">
+  <h2>The authenticated crawl</h2>
+  <p class="prose">With credentials, a headless browser logs in through the real login form and walks the app behind it. This adds the endpoints that only appear after login, the session every later scanner reuses, and the ids the authenticated user owns.</p>
+
+  <div class="scene" id="authcrawl" data-scene data-interval="3300">
+    <figure class="stage">
+      <svg viewBox="0 0 960 340" role="img" aria-label="A login page with a header search box and a form. The password field is located, its enclosing form becomes the scope, and the identity field is picked inside that form. Then network responses are intercepted, pages are crawled breadth-first, and the owned resource ids are aggregated.">
+        <defs><marker id="arr-auth" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+
+        <!-- login page mock -->
+        <g class="node lit-1" transform="translate(20 14)">
+          <rect width="300" height="236" rx="10"/>
+          <text class="ttl" x="12" y="22">Login page</text>
+          <g class="field search" transform="translate(12 32)"><rect width="276" height="24" rx="4"/><text class="mono lbl" x="8" y="16">&lt;input name="q" type="text"&gt;  search</text></g>
+          <g class="form" transform="translate(12 70)">
+            <rect width="276" height="152" rx="6"/>
+            <text class="mono lbl" x="8" y="16">&lt;form action="/login"&gt;</text>
+            <g class="field idf" transform="translate(12 26)"><rect width="252" height="26" rx="4"/><text class="mono lbl until-3" x="8" y="17">&lt;input name="userName" type="text"&gt;</text><text class="mono at-3" x="8" y="17">alice@example.com</text></g>
+            <g class="field pw" transform="translate(12 64)"><rect width="252" height="26" rx="4"/><text class="mono lbl until-3" x="8" y="17">&lt;input name="pw" type="password"&gt;</text><text class="mono at-3" x="8" y="17">••••••••••••</text></g>
+            <g class="node" transform="translate(12 104)"><rect width="100" height="28" rx="6" class="soft-accent"/><text x="50" y="18" text-anchor="middle">Sign in</text></g>
+          </g>
+        </g>
+        <g class="only-2" transform="translate(20 266)">
+          <text class="t-accent" x="0" y="0">1  the visible password field</text>
+          <text class="t-info" x="0" y="17">2  its closest("form") is the scope</text>
+          <text class="t-safe" x="0" y="34">3  first visible text/email/tel input in it</text>
+          <text class="lbl" x="0" y="51">the header search box is outside the form: ignored</text>
+        </g>
+        <g class="only-3" transform="translate(20 266)">
+          <text class="lbl" x="0" y="0">real input events, so framework-controlled fields register</text>
+          <text class="lbl" x="0" y="17">session read back: token from localStorage/sessionStorage,</text>
+          <text class="lbl" x="0" y="34">or the Authorization/cookie headers of intercepted calls</text>
+        </g>
+        <path id="auth-login-path" class="wire at-3 accent" d="M320 190 C 335 190, 335 120, 348 120" marker-end="url(#arr-auth)"/>
+
+        <g class="only-1" transform="translate(350 40)">
+          <text class="lbl" x="0" y="0">What the crawl adds after login:</text>
+          <text class="lbl" x="0" y="18">endpoints only visible when logged in, the session every scanner reuses,</text>
+          <text class="lbl" x="0" y="36">and the ids this user owns for the IDOR pass.</text>
+        </g>
+        <!-- interception -->
+        <g class="node at-4 lit-4" transform="translate(350 14)">
+          <rect width="280" height="236" rx="10"/>
+          <text class="ttl" x="12" y="22">Network interception</text>
+          <text class="lbl" x="12" y="40">page.on("response"): API-looking URLs</text>
+          <text class="lbl" x="12" y="54">/api/ /rest/v1/ /rpc/ /graphql /trpc/ …</text>
+          <g class="mono">
+            <text x="12" y="82">GET  /api/me          200</text>
+            <text x="12" y="100">GET  /api/tasks       200  ids 42,43</text>
+            <text x="12" y="118">POST /api/tasks       201  id 44</text>
+            <text x="12" y="136">GET  /rest/v1/profiles 200 7f3a…</text>
+            <text x="12" y="154">GET  /api/orders?user=7 200 id 9</text>
+          </g>
+          <text class="lbl" x="12" y="184">request headers + body, response status,</text>
+          <text class="lbl" x="12" y="198">2000-char preview, ids pulled from JSON</text>
+          <text class="lbl" x="12" y="212">keys named id / *_id (up to 500 calls)</text>
+        </g>
+
+        <!-- BFS -->
+        <g class="node at-5 lit-5" transform="translate(660 14)">
+          <rect width="280" height="236" rx="10"/>
+          <text class="ttl" x="12" y="22">BFS over pages</text>
+          <text class="lbl" x="12" y="40">queue: app routes + common auth paths</text>
+          <text class="lbl" x="12" y="54">(/dashboard /profile /settings /billing …)</text>
+          <g class="mono">
+            <text class="t-safe" x="12" y="82">✓ /dashboard</text>
+            <text class="t-safe" x="12" y="100">✓ /settings</text>
+            <text class="t-accent" x="12" y="118">→ /orders</text>
+            <text class="lbl" x="12" y="136">  /tasks/42</text>
+            <text class="lbl" x="12" y="154">  /account/billing</text>
+          </g>
+          <text class="lbl" x="12" y="184">≤ 50 pages · ≤ 30 links per page · forms</text>
+          <text class="lbl" x="12" y="198">and ?links read from each page's HTML ·</text>
+          <text class="lbl" x="12" y="212">new API calls land in the column to the left</text>
+        </g>
+
+        <!-- owned ids -->
+        <g class="node at-6 lit-6" transform="translate(350 262)">
+          <rect width="590" height="66" rx="10"/>
+          <text class="ttl" x="12" y="20">Owned resource ids</text>
+          <text class="mono" x="12" y="40">owned_resource_ids = {"/api/tasks": ["42","43","44"], "profiles": ["7f3a…"], …}</text>
+          <text class="lbl" x="12" y="56">grouped by path or Supabase table · IDOR later asks: can User B fetch User A's 42?</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>With credentials, Playwright opens the login page. It has more than one text input: a search box in the header and the login form itself. A hardcoded selector such as <code>input[name=email]</code> finds nothing here, because the identity field is called <code>userName</code>.</p>
+      <p class="step"><span class="n">2</span>Form-scoped detection: <b>find the visible password field, scope to its enclosing <code>&lt;form&gt;</code>, and take the first visible text/email/tel input in that same form as the identity field</b>, whatever it is named: <code>email</code>, <code>userName</code>, <code>login</code>, <code>handle</code>. The search box sits outside the form, so it is never grabbed.</p>
+      <p class="step" data-on="authLogin"><span class="n">3</span>Both fields are filled through real input events so framework-controlled inputs register, the submit button is clicked, and the session is read back: a token from browser storage, or the auth headers seen on intercepted calls. That session is handed to every auth-aware DAST scanner afterwards.</p>
+      <p class="step"><span class="n">4</span>Every response is intercepted. URLs that look like API calls are kept with their request headers and body, status, a 2000-character response preview, and the ids found in the body: UUIDs anywhere, plus JSON keys named <code>id</code> or ending in <code>_id</code>.</p>
+      <p class="step"><span class="n">5</span>The crawler walks pages breadth-first from a queue seeded with the app's own routes and common authenticated paths, up to 50 pages and 30 links per page. The HTML form extractor from section 04 runs after each page load, because a server-rendered form makes no network call to intercept.</p>
+      <p class="step"><span class="n">6</span>Ids are aggregated per path, or per Supabase table, as the authenticated user's <b>owned resource ids</b>. The IDOR scanner later asks whether User B can fetch User A's.</p>
+    </div>
+  </div>
+</section>
+
+<section id="rank-section">
+  <h2>Categorise, then rank per attack dimension</h2>
+  <p class="prose">Every endpoint gets a semantic category from its path. Before the scanners run, a shared prioritizer scores the inventory for the vulnerability class each scanner cares about, so what a time budget reaches first is the endpoint most likely to carry that bug.</p>
+
+  <div class="scene" id="rank" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 352" role="img" aria-label="Left: eight endpoints each receive a category from a path rule. Right: the INJECTION score of four of them from generic signals; /file-upload scores zero and ranks 73rd of 77 until the FILE_ACCESS rule adds 3 and moves it to 6th. A table lists the signals of the other four dimensions.">
+        <g class="node lit-1" transform="translate(20 14)">
+          <rect width="430" height="312" rx="10"/>
+          <text class="ttl" x="12" y="22">Category: first path rule that matches</text>
+          <g class="mono">
+            <text x="12" y="52">POST /rest/user/login</text>
+            <text x="12" y="84">GET  /api/admin/users</text>
+            <text x="12" y="116">GET  /profile</text>
+            <text x="12" y="148">GET  /file-upload</text>
+            <text x="12" y="180">GET  /api/payment</text>
+            <text x="12" y="212">GET  /api/Products/1</text>
+            <text x="12" y="244">GET  /health</text>
+            <text x="12" y="276">GET  /rest/products/search?q=</text>
+          </g>
+          <g class="at-1">
+            <g class="pill-svg" transform="translate(300 39)"><rect width="118" height="18" rx="9"/><text x="59" y="12.5" text-anchor="middle">AUTH · /login</text></g>
+            <g class="pill-svg" transform="translate(300 71)"><rect width="118" height="18" rx="9"/><text x="59" y="12.5" text-anchor="middle">ADMIN · /admin</text></g>
+            <g class="pill-svg" transform="translate(300 103)"><rect width="118" height="18" rx="9"/><text x="59" y="12.5" text-anchor="middle">USER_DATA · /profile</text></g>
+            <g class="pill-svg file" transform="translate(300 135)"><rect width="118" height="18" rx="9"/><text x="59" y="12.5" text-anchor="middle">FILE_ACCESS · /upload</text></g>
+            <g class="pill-svg" transform="translate(300 167)"><rect width="118" height="18" rx="9"/><text x="59" y="12.5" text-anchor="middle">PAYMENT · /payment</text></g>
+            <g class="pill-svg" transform="translate(300 199)"><rect width="118" height="18" rx="9"/><text x="59" y="12.5" text-anchor="middle">RESOURCE_CRUD · id</text></g>
+            <g class="pill-svg" transform="translate(300 231)"><rect width="118" height="18" rx="9"/><text x="59" y="12.5" text-anchor="middle">PUBLIC · /health</text></g>
+            <g class="pill-svg none" transform="translate(300 263)"><rect width="118" height="18" rx="9"/><text x="59" y="12.5" text-anchor="middle">UNKNOWN</text></g>
+          </g>
+          <text class="lbl" x="12" y="302">rule order matters: /api/admin/users is ADMIN, not USER_DATA</text>
+        </g>
+
+        <g class="node at-2 lit-2" transform="translate(470 14)">
+          <rect width="470" height="324" rx="10"/>
+          <text class="ttl" x="12" y="22">INJECTION score</text>
+          <text class="lbl" x="12" y="40">?query +3 · {id} +2 · search/query/find/filter/lookup/list word +3 · body method +1</text>
+          <g class="mono">
+            <text x="12" y="66">/rest/products/search?q=</text>
+            <text x="12" y="94">/api/Products/1</text>
+            <text x="12" y="122">POST /rest/user/login</text>
+            <text x="12" y="150">/file-upload</text>
+          </g>
+          <g class="at-2">
+            <text class="chip" x="210" y="66">?q +3 · "search" +3</text>
+            <text class="chip" x="210" y="94">{id} +2</text>
+            <text class="chip" x="210" y="122">POST body +1</text>
+            <text class="score" x="420" y="66" text-anchor="end">6</text>
+            <text class="score" x="420" y="94" text-anchor="end">2</text>
+            <text class="score" x="420" y="122" text-anchor="end">1</text>
+          </g>
+          <text class="chip at-2 until-4" x="210" y="150">no query, no {id}, no body</text>
+          <text class="score at-2 until-4 t-attacker" x="420" y="150" text-anchor="end">0</text>
+          <text class="chip at-4" x="210" y="150">FILE_ACCESS → INJECTION +3</text>
+          <text class="score at-4 t-safe" x="420" y="150" text-anchor="end">3</text>
+
+          <g class="only-3">
+            <text class="t-attacker" x="12" y="182">/file-upload: 0 points → 73rd of 77 on Juice Shop</text>
+            <text class="t-attacker" x="12" y="200">under the old cap of 30, never tested: two XXE bugs unreachable</text>
+          </g>
+          <g class="at-4">
+            <text class="t-safe" x="12" y="182">/file-upload: 3 points → 6th of 77</text>
+            <text class="lbl" x="12" y="200">its payload is the file itself, so a parameter-shaped signal never fires</text>
+          </g>
+
+          <g class="at-5">
+            <line x1="12" y1="214" x2="458" y2="214" class="wire"/>
+            <text class="lbl" x="12" y="234">dimension</text><text class="lbl" x="110" y="234">signals (generic REST conventions only)</text>
+            <g class="mono">
+              <text x="12" y="256">IDOR</text><text class="chip" x="110" y="256">id param +4 · high-value category +3 · requires auth +2</text>
+              <text x="12" y="274">XSS</text><text class="chip" x="110" y="274">?query +3 · search word +2 · GET or POST/PUT +1</text>
+              <text x="12" y="292">CSRF</text><text class="chip" x="110" y="292">POST/PUT/PATCH/DELETE +4 · auth +2 · high-value +1</text>
+              <text x="12" y="310">AUTH</text><text class="chip" x="110" y="310">auth word in path +4 · AUTH category +3</text>
+            </g>
+          </g>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>One category per endpoint, first matching rule wins: <code>/auth /login /signup /oauth</code> → AUTH, <code>/admin</code> → ADMIN, <code>/user /profile /account /me</code> → USER_DATA, <code>/file /upload /download /media</code> → FILE_ACCESS, <code>/payment /invoice /billing /charge</code> → PAYMENT, an id parameter → RESOURCE_CRUD, <code>/health /status /version /ping</code> → PUBLIC, otherwise UNKNOWN.</p>
+      <p class="step"><span class="n">2</span>Before the scanners run, <code>endpoint_prioritizer.rank()</code> scores each endpoint for one dimension. For INJECTION: a query string +3, a path parameter +2, a search/query/find/filter/lookup/list word in the path +3, a body-carrying method +1. The sort is stable, so ties keep discovery order.</p>
+      <p class="step"><span class="n">3</span>A file upload takes no query string, no path parameter and no body field; its payload is the file. Every parameter-shaped signal scored it zero. On Juice Shop <code>/file-upload</code> ranked <b>73rd of 77</b>, below the old cap of 30, so the two XXE bugs behind it were unreachable however good the probe was.</p>
+      <p class="step"><span class="n">4</span>The rule: <b>FILE_ACCESS counts +3 toward INJECTION</b>. <code>/file-upload</code> moved to <b>6th of 77</b>. No app-specific string is involved; the category came from the path word <code>/upload</code>.</p>
+      <p class="step"><span class="n">5</span>The other dimensions use the same kind of generic signal. The injection, XSS, IDOR, CSRF, auth-bypass and HTTP-probe scanners all take their order from this one function, and that order decides what a time budget reaches first.</p>
+    </div>
+  </div>
+</section>
+
+<section id="writes-section">
+  <h2>--probe-writes: reaching the mutation surface</h2>
+  <p class="prose">A path in a bundle carries no HTTP method, so everything the regexes find is a GET. Any scanner that tests a POST or PUT then has nothing to work on. <code>--probe-writes</code> derives the state-changing methods from REST shape, at the cost of writing to the target.</p>
+
+  <div class="scene" id="writes" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 340" role="img" aria-label="An inventory of GET endpoints leaves the body-testing scanners with zero targets. Deriving POST for collections and PUT for items gives them four; DELETE is derived but struck out. A results panel shows Juice Shop recall before and after, and a band explains the first measurement's false wash.">
+        <g class="node lit-1" transform="translate(20 14)">
+          <rect width="330" height="250" rx="10"/>
+          <text class="ttl" x="12" y="22">Inventory</text>
+          <g class="mono">
+            <text x="12" y="46">GET  /api/Feedbacks       <tspan class="lbl">collection</tspan></text>
+            <text x="12" y="68">GET  /api/Products        <tspan class="lbl">collection</tspan></text>
+            <text x="12" y="90">GET  /api/Products/1      <tspan class="lbl">id variant</tspan></text>
+            <text x="12" y="112">GET  /profile</text>
+            <text class="at-2 t-safe" x="12" y="140">POST /api/Feedbacks       <tspan class="lbl">rest_method</tspan></text>
+            <text class="at-2 t-safe" x="12" y="162">POST /api/Products        <tspan class="lbl">rest_method</tspan></text>
+            <text class="at-2 t-safe" x="12" y="184">PUT  /api/Products/1      <tspan class="lbl">rest_method</tspan></text>
+            <text class="at-2 t-safe" x="12" y="206">POST /profile             <tspan class="lbl">rest_method</tspan></text>
+            <text class="at-2 t-attacker" x="12" y="232">DELETE /api/Products/1    <tspan class="lbl">never emitted</tspan></text>
+          </g>
+          <line class="strike at-2" x1="12" y1="228" x2="166" y2="228"/>
+        </g>
+
+        <g class="node lit-2" transform="translate(370 14)">
+          <rect width="250" height="250" rx="10"/>
+          <text class="ttl" x="12" y="22">Scanners that need a body</text>
+          <text class="lbl" x="12" y="42">stored XSS · mass assignment</text>
+          <text class="lbl" x="12" y="56">CSRF · SSTI</text>
+          <text class="mono" x="12" y="82">filter: method in {POST, PUT}</text>
+          <text class="big until-2 t-attacker" x="12" y="140">0</text>
+          <text class="big at-2 t-safe" x="12" y="140">4</text>
+          <text class="lbl" x="12" y="160">endpoints to test</text>
+          <text class="lbl only-1" x="12" y="190">a bundle states no method,</text>
+          <text class="lbl only-1" x="12" y="204">so every path arrived as GET</text>
+          <text class="lbl at-2" x="12" y="190">collection → POST · item → PUT</text>
+          <text class="lbl at-2" x="12" y="204">the same shape /collection/1 reads</text>
+          <text class="lbl at-2" x="12" y="218">inventory roughly doubles</text>
+        </g>
+
+        <g class="node at-4 lit-4" transform="translate(640 14)">
+          <rect width="300" height="250" rx="10"/>
+          <text class="ttl" x="12" y="22">Juice Shop v20.1.1, url-only</text>
+          <g class="mono">
+            <text class="lbl" x="12" y="46">recall       without → with</text>
+            <text x="12" y="64">README table 22/45  → 28/45</text>
+            <text x="12" y="80">architecture 24/45  → 30/45</text>
+            <text x="12" y="104">CSRF          0/1   → 1/1</text>
+            <text x="12" y="120">XSS           1/7   → 4/7</text>
+            <text x="12" y="136">IDOR          0/6   → 1/6</text>
+            <text x="12" y="152">mass assign.  0/1   → 1/1</text>
+            <text x="12" y="176">time    27 min → ~48 (architecture)</text>
+            <text x="12" y="192">                 ~72 (README)</text>
+          </g>
+          <text class="lbl" x="12" y="218">lost nothing · the two docs disagree on</text>
+          <text class="lbl" x="12" y="232">the exact figures; both are cited</text>
+        </g>
+
+        <g class="node only-3" transform="translate(20 276)">
+          <rect width="920" height="52" rx="10" class="soft-attacker"/>
+          <text class="t-attacker" x="12" y="22">Off by default, and it should stay off for anything you do not own: the scan writes to the target.</text>
+          <text class="t-attacker" x="12" y="42">It creates records; an endpoint that sends email or charges a card will do so. DELETE would destroy a record to prove it could, so it is never sent.</text>
+        </g>
+        <g class="node only-5" transform="translate(20 276)">
+          <rect width="920" height="52" rx="10" class="soft-attacker"/>
+          <text class="t-attacker" x="12" y="22">The first measurement read as a wash: six gained, six lost. The six lost were exposed_data and info_disclosure, both scored off http_probe.</text>
+          <text class="t-attacker" x="12" y="42">http_probe was running 901 s against a 900 s timeout; the hard cancel discarded every finding it held. The doubled inventory pushed it over.</text>
+        </g>
+        <g class="node at-6" transform="translate(20 276)">
+          <rect width="920" height="52" rx="10" class="soft-safe"/>
+          <text class="t-safe" x="12" y="22">One bug wearing the costume of a trade-off. With the cooperative TimeBudget the scanner returns its findings itself: six gained, nothing lost.</text>
+          <text class="t-safe" x="12" y="42">Worth remembering when a measurement shows a suspiciously tidy wash.</text>
+        </g>
+        <g class="only-1" transform="translate(20 276)"><text class="lbl" x="0" y="22">Everything the regexes find is a GET, and the id variant /api/Products/1 is a GET too. Stored XSS, mass assignment, CSRF and SSTI all live behind a state-changing request.</text></g>
+        <g class="only-2" transform="translate(20 276)"><text class="lbl" x="0" y="22">REST says which methods a shape accepts: POST to a collection, PUT and DELETE to an item. No list of paths is involved, only the shape already used for /collection/1.</text></g>
+        <g class="only-4" transform="translate(20 276)"><text class="lbl" x="0" y="22">Gains: CSRF, three of the five XSS challenges, one IDOR (an unauthenticated PUT accepted on /api/Products and /api/Hints), mass assignment. Nothing lost. Time roughly doubles with the inventory.</text></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Url-only discovery produces GET endpoints only, because a path in a bundle carries no method. The scanners for stored XSS, mass assignment, CSRF and SSTI filter on POST/PUT and find <b>nothing to test</b>.</p>
+      <p class="step"><span class="n">2</span><code>--probe-writes</code> derives state-changing twins from REST shape: <b>POST to a collection, PUT to an item</b>, the same convention that already produced <code>/api/Products/1</code>. DELETE is derived too and deliberately never emitted. Each twin carries source <code>rest_method</code>; the inventory roughly doubles.</p>
+      <p class="step"><span class="n">3</span>It is off by default. The scan now writes to whatever it is pointed at: it creates records, and an endpoint that sends email or charges a card will do so. A scanner that deletes a customer's record to prove it could is not worth the finding.</p>
+      <p class="step"><span class="n">4</span>Measured on Juice Shop v20.1.1, url-only. The README table reports 22/45 → 28/45 and ~72 minutes against 27; the architecture doc reports 24/45 → 30/45 and ~48 minutes against 27. Both agree on what was gained (CSRF, three of five XSS, one IDOR, mass assignment) and that nothing was lost.</p>
+      <p class="step"><span class="n">5</span>The first measurement did not look like that. It read six gained, six lost, and the six lost were <code>exposed_data</code> and <code>info_disclosure</code>, both scored off <code>http_probe</code>. That scanner was running <b>901 s against a 900 s timeout</b>, and the hard cancel discarded every finding it held. The doubled inventory had pushed it over.</p>
+      <p class="step"><span class="n">6</span>One bug wearing the costume of a trade-off. With scanners checking <code>budget.expired()</code> in their per-endpoint loop and returning early, the measurement reads six gained, nothing lost. The mechanism is animated on <a href="scan-pipeline.html#parallel-dast">the scan pipeline page</a>.</p>
+    </div>
+  </div>
+</section>
+
+<section id="limits-section">
+  <h2>Coverage limits: time is the bound, not a count</h2>
+  <p class="prose">Scanners used to stop after a fixed number of endpoints. Against an app with 77 endpoints those caps decided which quarter got examined, in ranked order, and nothing said so.</p>
+
+  <div class="grid-2">
+    <div class="callout why"><div class="label">Why the endpoint caps are gone</div><p>Probing costs HTTP requests rather than tokens. Measured over nine scans, a DAST run cost <b>$0.12 to $0.18 whether it covered 59 endpoints or 154</b>, while a SAST run is a flat ~$1.28 because its cost is the LLM reading files. The endpoint was never the scarce thing, so the caps of 20 for XSS, 30 for injection and 5 for CORS were removed. <code>MAX_ENDPOINTS_TO_DISCOVER</code> is now unbounded.</p></div>
+    <div class="callout note"><div class="label">What bounds a scan now</div><p>Time, per scanner, through <code>TimeBudget</code>, with the per-scanner timeouts raised so that timing out means something is wrong rather than that the app was large. Every scanner that walks endpoints emits per-endpoint progress, so a long run is legible rather than silent. A scan that takes half an hour and finishes beats one that takes ten minutes having skipped two thirds of the surface.</p></div>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>cap</th><th>bounded</th><th>status</th><th>why</th></tr></thead>
+      <tbody>
+        <tr><td><code>XSS: 20 endpoints</code></td><td>which endpoints got tested</td><td>removed</td><td>HTTP requests are not scarce; ranking plus time decides coverage</td></tr>
+        <tr><td><code>injection: 30 endpoints</code></td><td>which endpoints got tested</td><td>removed</td><td>this cap is what hid <code>/file-upload</code> at 73rd of 77</td></tr>
+        <tr><td><code>CORS: 5 endpoints</code></td><td>which endpoints got tested</td><td>removed</td><td>same</td></tr>
+        <tr><td><code>MAX_ENDPOINTS_IN_PROMPT = 50</code></td><td>endpoints listed in the business-logic LLM prompt</td><td>kept</td><td>LLM tokens are genuinely scarce</td></tr>
+        <tr><td><code>MAX_OOB_POST_ENDPOINTS = 10</code></td><td>POST endpoints registered for out-of-band callbacks</td><td>kept</td><td>registrations against an external callback service are genuinely scarce</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout note">
+    <div class="label">When a scanner runs out of time</div>
+    <p><code>run_scanner_safe</code> cancels a scanner at its hard timeout, and a cancelled coroutine cannot hand anything back. Scanners therefore stop themselves: the runner publishes its deadline, a <code>TimeBudget()</code> with no argument inherits it, and the check sits in the per-endpoint loop rather than between phases, because one phase can walk the whole inventory. <code>http_probe</code> runs its fixed-cost checks before the ones that scale with the inventory, so a large app cannot spend its whole budget on method tampering and never reach the check that finds an exposed <code>.env</code>. The lane-by-lane animation is on the <a href="scan-pipeline.html#parallel-dast">scan pipeline page</a>.</p>
+  </div>
+</section>
+
+<footer class="foot">
+  <span>Source: <a href="../architecture.md">docs/architecture.md</a> · <a href="../../README.md">README.md</a> (Testing the Mutation Surface)</span>
+  <span>Related: <a href="scan-pipeline.html">The scan pipeline</a> · <a href="sast-dast-correlation.html">Correlation</a> · <a href="triage-and-grading.html">Triage</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+<script>
+(function () {
+  // scene 1, step 5: count the inventory up from 61 to 123
+  window.spaCount = function (scene, step, el) {
+    const n = el.querySelector("#spa-n");
+    if (!n) return;
+    n.textContent = "61";
+    IsDoc.count(n, 123, 1100);
+  };
+  // scene 5, step 3: the login POST travels from the form to the interception column
+  window.authLogin = function (scene, step, el) {
+    const svg = el.querySelector("svg");
+    IsDoc.clearPackets(svg);
+    const path = svg.querySelector("#auth-login-path");
+    if (!path) return;
+    IsDoc.packet(svg, path, { r: 5, cls: "f-accent", label: "POST /login", duration: 1000, hold: 600 });
+  };
+})();
+</script>
+</body>
+</html>

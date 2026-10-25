@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Middleware Analyzer · isitsecure</title>
+<meta name="description" content="How isitsecure compares a Next.js middleware matcher with the real API routes to find the ones outside its coverage, and what else it checks in middleware.ts. Animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  .code text { white-space: pre; }
+  #coverage .panel > rect, #shapes .panel > rect, #flow .panel > rect { fill: var(--surface); }
+  #coverage .route .rv, #coverage .route .rv2 { transition: opacity .4s; }
+  .topbar-inner .crumb a { color: inherit; text-decoration: none; }
+  .topbar-inner .crumb a:hover { color: var(--accent); }
+  footer.foot span { min-width: 0; overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› <a href="group-schema-middleware.html">Schemas and middleware</a> › Next.js middleware</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/middleware-analyzer.md" title="The markdown source for this page">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">SAST scanner · reads middleware.ts</div>
+  <h1>Middleware Analyzer</h1>
+  <p class="lede">Next.js middleware only runs on the paths its <code>matcher</code> names. This analyzer lays that list over the API routes found in the repository and reports each route left outside, then checks whether the middleware really verifies a token and whether its matcher can be sidestepped.</p>
+  <div class="meta">
+    <span class="pill sast">SAST</span><span class="pill high">up to High</span><span class="pill">Auth Weakness</span><span class="pill">4 checks</span><span class="pill">Next.js</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#coverage"><span class="n">01</span>Matcher vs route tree</a>
+  <a href="#shapes"><span class="n">02</span>Matcher shapes</a>
+  <a href="#flow"><span class="n">03</span>What it reports</a>
+  <a href="#why"><span class="n">04</span>Why it matters</a>
+  <a href="#code"><span class="n">05</span>Vulnerable vs fixed code</a>
+  <a href="#limits"><span class="n">06</span>Limits and scope</a>
+</nav>
+<section id="coverage">
+  <h2>Matcher vs route tree</h2>
+  <p class="prose">The scanner holds two lists and finds the difference. On the left is what the middleware says it covers. On the right is what the repository actually exposes.</p>
+  <div class="scene" id="coverage" data-scene data-interval="3800">
+    <figure class="stage">
+      <svg viewBox="0 0 960 296" role="img" aria-label="A middleware matcher config on the left and a list of five API routes on the right; routes that match none of the matcher patterns are marked not covered.">
+
+
+        <g class="node panel"><rect x="20" y="14" width="340" height="268" rx="10"/></g>
+        <text class="lbl" x="36" y="34">middleware.ts</text>
+        <rect class="only-1 soft-info" x="26" y="70" width="328" height="20" rx="4"/><rect class="only-1 soft-info" x="26" y="92" width="328" height="20" rx="4"/><rect class="only-2 soft-accent" x="26" y="70" width="328" height="20" rx="4"/><rect class="only-2 soft-accent" x="26" y="92" width="328" height="20" rx="4"/><rect class="only-5 soft-safe" x="26" y="114" width="328" height="20" rx="4"/>
+        <g class="mono code" style="white-space:pre">
+          <text x="36" y="62">export const config = {</text>
+          <text x="36" y="84">  matcher: ["/dashboard/:path*",</text>
+          <text x="36" y="106">            "/api/tasks/:path*",</text>
+          <text class="at-5" x="36" y="128">            "/api/:path*"],</text>
+          <text class="until-5" x="36" y="128">           ],</text>
+          <text x="36" y="150">}</text>
+        </g>
+        <line class="wire at-2" x1="34" x2="346" y1="170" y2="170"/>
+        <g class="at-2">
+          <text class="lbl" x="36" y="192">each string becomes a regular expression</text>
+          <text class="mono" x="36" y="214">^/dashboard(/.*)?$</text>
+          <text class="mono" x="36" y="234">^/api/tasks(/.*)?$</text>
+          <g class="at-5"><text class="mono" x="36" y="254">^/api(/.*)?$</text></g>
+        </g>
+        <g class="node panel"><rect x="380" y="14" width="560" height="268" rx="10"/></g>
+        <text class="lbl" x="396" y="34">route_map: every API route in the repository</text>
+        <g class="node route lit-3" transform="translate(396 46)"><rect width="530" height="40" rx="6"/>
+          <text class="mono" x="12" y="17">/api/tasks</text><text class="lbl" x="12" y="32">app/api/tasks/route.ts</text><text class="at-3 t-safe" x="516" y="23" text-anchor="end" style="font-weight:600">covered</text>
+        </g>
+        <g class="node route lit-3" transform="translate(396 92)"><rect width="530" height="40" rx="6"/>
+          <text class="mono" x="12" y="17">/api/tasks/:id</text><text class="lbl" x="12" y="32">app/api/tasks/[id]/route.ts</text><text class="at-3 t-safe" x="516" y="23" text-anchor="end" style="font-weight:600">covered</text>
+        </g>
+        <g class="node route lit-4" transform="translate(396 138)"><rect width="530" height="40" rx="6"/>
+          <text class="mono" x="12" y="17">/api/admin/users</text><text class="lbl" x="12" y="32">app/api/admin/users/route.ts</text><text class="at-4 until-5 t-attacker" x="516" y="23" text-anchor="end" style="font-weight:600">not covered · Medium 0.85</text><text class="at-5 t-safe" x="516" y="23" text-anchor="end" style="font-weight:600">covered by /api/:path*</text>
+        </g>
+        <g class="node route lit-4" transform="translate(396 184)"><rect width="530" height="40" rx="6"/>
+          <text class="mono" x="12" y="17">/api/auth/login</text><text class="lbl" x="12" y="32">app/api/auth/login/route.ts</text><text class="at-4 until-5 t-attacker" x="516" y="23" text-anchor="end" style="font-weight:600">not covered · Medium 0.85</text><text class="at-5 t-safe" x="516" y="23" text-anchor="end" style="font-weight:600">covered by /api/:path*</text>
+        </g>
+        <g class="node route lit-4" transform="translate(396 230)"><rect width="530" height="40" rx="6"/>
+          <text class="mono" x="12" y="17">/api/health</text><text class="lbl" x="12" y="32">app/api/health/route.ts</text><text class="at-4 until-5 t-attacker" x="516" y="23" text-anchor="end" style="font-weight:600">not covered · Medium 0.85</text><text class="at-5 t-safe" x="516" y="23" text-anchor="end" style="font-weight:600">covered by /api/:path*</text>
+        </g>
+
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>A Next.js <code>middleware.ts</code> runs only on the paths its <code>matcher</code> lists. The scanner holds two things: that list, and the API routes found under <code>app/api</code> and <code>pages/api</code>. The question is which routes the list leaves out.</p>
+      <p class="step"><span class="n">2</span>Each matcher string is converted to a regular expression. <code>:path*</code> becomes an optional slash followed by anything, so <code>/api/tasks/:path*</code> reads as <code>^/api/tasks(/.*)?$</code>.</p>
+      <p class="step"><span class="n">3</span><code>/api/tasks</code> and <code>/api/tasks/:id</code> both match the second pattern. <b>They are covered</b>, and the middleware's auth check runs for them.</p>
+      <p class="step"><span class="n">4</span><code>/api/admin/users</code>, <code>/api/auth/login</code> and <code>/api/health</code> match none of the patterns. <b>Each uncovered route is its own Medium finding, 0.85.</b> The scanner has no public-path list, so the intentionally public login and health routes are reported as well.</p>
+      <p class="step"><span class="n">5</span>Add <code>/api/:path*</code> and every route is covered. The public ones are then excluded inside the middleware function with an explicit allow-list, which is the shape the markdown recommends.</p>
+    </div>
+  </div>
+</section>
+
+<section id="shapes">
+  <h2>Matcher shapes</h2>
+  <p class="prose">The same file can name its matcher in three styles. Each one changes what is covered and which extra findings appear.</p>
+  <div class="scene" id="shapes" data-scene data-interval="3600">
+    <figure class="stage">
+      <svg viewBox="0 0 960 344" role="img" aria-label="Three matcher styles, a wildcard, a literal path and a regular expression, each with how the scanner reads it and what it reports.">
+
+
+        <g class="node panel"><rect x="20" y="14" width="920" height="316" rx="10"/></g>
+        <text class="lbl" x="34" y="38">matcher string</text><text class="lbl" x="284" y="38">how it is read</text><text class="lbl" x="594" y="38">what comes out</text>
+        <g class="node lit-2" transform="translate(34 48)"><rect width="892" height="82" rx="8"/>
+          <text class="mono" x="14" y="46">"/api/:path*"</text>
+          <text class="mono" x="250" y="34">^/api(/.*)?$</text><text class="lbl" x="250" y="54">regular expression, tried on /api/tasks</text>
+          <g class="at-2"><text x="560" y="30" style="font-weight:600">covers /api and everything below it</text><text class="lbl" x="560" y="50">no bypass findings: it ends in *</text></g>
+        </g>
+        <g class="node lit-3" transform="translate(34 140)"><rect width="892" height="82" rx="8"/>
+          <text class="mono" x="14" y="46">"/admin"</text>
+          <text class="mono" x="250" y="34">^/admin$</text><text class="lbl" x="250" y="54">literal path, matches /admin only</text>
+          <g class="at-3"><text x="560" y="30" style="font-weight:600">covers exactly /admin</text><text class="lbl" x="560" y="50">Low 0.70: /admin/ is not mentioned</text><text class="lbl" x="560" y="66">Low 0.70: mixed case may slip past</text></g>
+        </g>
+        <g class="node lit-4" transform="translate(34 232)"><rect width="892" height="82" rx="8"/>
+          <text class="mono" x="14" y="46">"/((?!api|_next/static).*)"</text>
+          <text class="mono" x="250" y="34">((?!api|_next/static).*)</text><text class="lbl" x="250" y="54">tried on the route without its first slash</text>
+          <g class="at-4"><text x="560" y="30" style="font-weight:600">/api/tasks is tested as api/tasks</text><text class="lbl" x="560" y="50">the lookahead rejects it: not covered, Medium</text><text class="lbl" x="560" y="66">regex matchers get no bypass checks</text></g>
+        </g>
+
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>A matcher can be written three ways, and each is read differently. The same conversion applies to the config of any Next.js app.</p>
+      <p class="step"><span class="n">2</span>The common <code>:path*</code> form becomes a prefix pattern. <b>It covers the path itself and everything below it</b>, and its trailing <code>*</code> exempts it from the bypass checks.</p>
+      <p class="step"><span class="n">3</span>A literal path matches that path only. The scanner adds <b>two Low findings</b>, because a matcher with no <code>*</code> and no trailing slash may miss <code>/admin/</code>, and a literal lowercase path may miss a differently cased request.</p>
+      <p class="step"><span class="n">4</span>A regular-expression matcher is run on the route without its leading slash. The popular <code>(?!api|_next/static)</code> form <b>excludes <code>/api</code> on purpose</b>, so every API route lands outside the middleware. That is the pattern the markdown warns about.</p>
+    </div>
+  </div>
+</section>
+
+<section id="flow">
+  <h2>What it reports</h2>
+  <p class="prose">Four stages run in order on the middleware file. Each has its own severity, so the report separates a missing file from a leaky matcher.</p>
+  <div class="scene" id="flow" data-scene data-interval="3600">
+    <figure class="stage">
+      <svg viewBox="0 0 960 352" role="img" aria-label="Four analyzer stages left to right, find the file, compare matcher and routes, read the token check and test matcher shapes, each with the finding it can produce.">
+
+
+        <g class="node panel"><rect x="20" y="256" width="920" height="84" rx="10"/></g>
+        <g class="node lit-1" transform="translate(20 24)"><rect width="215" height="96" rx="8"/>
+          <text class="ttl" x="14" y="26">1  Find the file</text><text class="lbl" x="14" y="52">middleware.ts, middleware.js,</text><text class="lbl" x="14" y="68">src/middleware.ts, src/middleware.js</text>
+        </g>
+        <g class="node at-1" transform="translate(20 140)"><rect width="215" height="102" rx="8"/>
+          <text class="t-attacker" x="14" y="26" style="font-weight:600">HIGH · 0.90</text>
+          <text x="14" y="50">No auth middleware found</text><text class="lbl" x="14" y="72">needs API routes, not Express</text>
+        </g>
+        <path class="wire" d="M235 72 H 255"/>
+        <g class="node lit-2" transform="translate(255 24)"><rect width="215" height="96" rx="8"/>
+          <text class="ttl" x="14" y="26">2  Matcher vs routes</text><text class="lbl" x="14" y="52">matcher regexes against every</text><text class="lbl" x="14" y="68">API route in route_map</text>
+        </g>
+        <g class="node at-2" transform="translate(255 140)"><rect width="215" height="102" rx="8"/>
+          <text class="t-accent" x="14" y="26" style="font-weight:600">MEDIUM · 0.85</text>
+          <text x="14" y="50">API route not covered</text><text class="lbl" x="14" y="72">one finding per uncovered route</text>
+        </g>
+        <path class="wire" d="M470 72 H 490"/>
+        <g class="node lit-3" transform="translate(490 24)"><rect width="215" height="96" rx="8"/>
+          <text class="ttl" x="14" y="26">3  Read the token check</text><text class="lbl" x="14" y="52">weak: the cookie exists</text><text class="lbl" x="14" y="68">strong: a token is verified</text>
+        </g>
+        <g class="node at-3" transform="translate(490 140)"><rect width="215" height="102" rx="8"/>
+          <text class="t-accent" x="14" y="26" style="font-weight:600">MEDIUM · 0.75</text>
+          <text x="14" y="50">Weak authentication check</text><text class="lbl" x="14" y="72">weak present and no strong</text>
+        </g>
+        <path class="wire" d="M705 72 H 725"/>
+        <g class="node lit-4" transform="translate(725 24)"><rect width="215" height="96" rx="8"/>
+          <text class="ttl" x="14" y="26">4  Test matcher shapes</text><text class="lbl" x="14" y="52">no trailing slash, case</text><text class="lbl" x="14" y="68">skips regex matchers</text>
+        </g>
+        <g class="node at-4" transform="translate(725 140)"><rect width="215" height="102" rx="8"/>
+          <text class="t-info" x="14" y="26" style="font-weight:600">LOW · 0.70</text>
+          <text x="14" y="50">Matcher may be bypassable</text><text class="lbl" x="14" y="72">per literal matcher</text>
+        </g>
+        <g class="only-1"><text class="lbl" x="36" y="282">If no file is found the scan ends with one High finding, provided the repository has API routes.</text>
+          <text class="lbl" x="36" y="302">An Express backend (a middleware/ directory using express or req, res, next) suppresses it: the Express analyzer owns that case.</text></g>
+        <g class="only-2"><text class="lbl" x="36" y="282">Matcher strings are read from export const config = { matcher: [...] }. A route is covered if any pattern matches it.</text>
+          <text class="lbl" x="36" y="302">With no matcher found there is nothing to compare, so this stage is skipped.</text></g>
+        <g class="only-3"><text class="lbl" x="36" y="280">weak patterns:  request.cookies.has(   cookies().has(   a request.cookies.get(...) at the end of a line</text>
+          <text class="lbl" x="36" y="298">strong patterns:  getUser(  getSession(  auth()  verifyToken(  getToken(  createServerClient  updateSession  and more</text>
+          <text class="lbl" x="36" y="316">A finding needs a weak pattern and no strong one anywhere in the file, so one real verification clears it.</text></g>
+        <g class="only-4"><text class="lbl" x="36" y="282">A literal matcher such as "/admin" gets two Low findings: no trailing-slash handling, and a case-sensitive path.</text>
+          <text class="lbl" x="36" y="302">Matchers ending in * or containing :path* are not flagged for the trailing slash; regex-style matchers are skipped.</text></g>
+
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>No middleware file in the repository is the broadest gap. <b>High, 0.90</b>, but only when there are API routes to protect and the repo is not an Express app.</p>
+      <p class="step"><span class="n">2</span>The coverage comparison from the first figure. <b>Medium, 0.85 per route</b>, so a matcher that misses ten routes produces ten findings.</p>
+      <p class="step"><span class="n">3</span>The middleware body is read for a token check. <b>A check that only asks whether a cookie exists is Medium, 0.75</b>: an attacker can send any cookie value. Any strong pattern in the file clears it.</p>
+      <p class="step"><span class="n">4</span>Last, the shape of each literal matcher. <b>Low, 0.70</b>, as a prompt to confirm that slashes and case are handled. These are the weakest findings in the group.</p>
+    </div>
+  </div>
+</section>
+
+<section id="why">
+  <h2>Why it matters</h2>
+  <div class="grid-2">
+    <div class="callout why"><div class="label">Why it matters</div><p>Middleware is often the first line of defence, and a matcher decides where that line stands. If it protects page routes but not API routes, <b>an attacker skips the pages and calls the API directly</b>: the browser reaches <code>/dashboard</code> through the check, <code>curl</code> reaches <code>/api/tasks</code> without it.</p></div>
+    <div class="callout breach"><div class="label">Real-world breach</div><p><b>Optus (2022).</b> A breach that exposed 9.8 million records was caused by an API endpoint with no authentication. The markdown notes that the middleware, or its equivalent, protected user-facing pages but not the API, which is the pattern this scanner looks for.</p></div>
+  </div>
+</section>
+
+<section id="code">
+  <h2>Vulnerable vs fixed code</h2>
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true" type="button">BAD · flagged</button>
+      <button class="tab good" role="tab" aria-selected="false" type="button">GOOD · clean</button>
+    </div>
+    <div role="tabpanel"><pre><code><span class="c">// BAD: pages are covered, API routes are not</span>
+export const config = {
+  <span class="hl bad">matcher: [<span class="s">"/dashboard/:path*"</span>]</span>
+}
+
+export function middleware(request: NextRequest) {
+  <span class="c">// weak: only asks whether a cookie exists</span>
+  <span class="hl bad">if (request.cookies.has(<span class="s">"session"</span>)) return NextResponse.next()</span>
+  return NextResponse.redirect(new URL(<span class="s">"/login"</span>, request.url))
+}</code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c">// GOOD: protect both pages and API routes</span>
+export const config = {
+  <span class="hl good">matcher: [<span class="s">"/dashboard/:path*"</span>, <span class="s">"/api/:path*"</span>]</span>
+}
+
+export async function middleware(request: NextRequest) {
+  <span class="c">// exclude public API routes explicitly</span>
+  const publicPaths = [<span class="s">"/api/auth/login"</span>, <span class="s">"/api/auth/register"</span>, <span class="s">"/api/health"</span>]
+  if (publicPaths.some(p =&gt; request.nextUrl.pathname.startsWith(p))) {
+    return NextResponse.next()
+  }
+  <span class="c">// strong: the token is verified, not just present</span>
+  <span class="hl good">const { data: { user } } = await supabase.auth.getUser()</span>
+  if (!user) return NextResponse.json({ error: <span class="s">"Unauthorized"</span> }, { status: 401 })
+}</code></pre></div>
+  </div>
+  <div class="callout note"><div class="label">Scope note</div><p>The markdown example reads the <code>Authorization</code> header and rejects a request that has none. That proves a header exists, not that its token is valid. The analyzer does not recognise that form as a strong check, because its header pattern is lowercase and case-sensitive. Use a verification call such as <code>getUser</code>, <code>getToken</code> or <code>verifyToken</code>.</p></div>
+</section>
+
+<section id="limits">
+  <h2>Limits and scope</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Behaviour</th><th>Detail</th></tr></thead>
+    <tbody>
+      <tr><td>Input</td><td><code>middleware.ts</code> or <code>.js</code>, at the repo root or in <code>src/</code>, plus the route map. No network.</td></tr>
+      <tr><td>Routes compared</td><td>API routes only (<code>app/api/**/route.ts</code> and <code>pages/api/**</code>). A page such as <code>/dashboard</code> is never in the list, so a matcher that misses a page is not reported.</td></tr>
+      <tr><td>Severity and confidence</td><td>No middleware: High 0.90. Uncovered route: Medium 0.85 each. Weak token check: Medium 0.75. Matcher bypass: Low 0.70 each. The markdown's single High rating describes the missing-file case.</td></tr>
+      <tr><td>Wildcards understood</td><td>Only the <code>/:name*</code> form. A <code>:path+</code> or <code>:path?</code> segment is compared as literal text.</td></tr>
+      <tr><td>Public routes</td><td>No allow-list. Login, register and health routes outside the matcher are reported like any other.</td></tr>
+      <tr><td>Strong token check</td><td>Any of <code>getUser(</code>, <code>getSession(</code>, <code>auth()</code>, <code>verifyToken(</code>, <code>cookies().get</code>, <code>getToken(</code>, <code>createServerClient</code> and a few others. Note that <code>cookies().get</code> reads a cookie and counts as strong.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<footer class="foot">
+  <span>Source: <a href="../scanners/middleware-analyzer.md">docs/scanners/middleware-analyzer.md</a> · <a href="https://github.com/jaurakunal/isitsecure/blob/main/isitsecure/engine/code_analysis/middleware_analyzer.py">isitsecure/engine/code_analysis/middleware_analyzer.py</a></span>
+  <span>Group: <a href="group-schema-middleware.html">Schemas and middleware</a> · Related: <a href="express-middleware.html">Express middleware</a> · <a href="route-auth-lsp.html">Route auth tracing</a> · <a href="endpoint-discovery.html">Endpoint discovery</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+</body>
+</html>

@@ -1,0 +1,528 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Row Level Security · isitsecure</title>
+<meta name="description" content="Why a Supabase table without Row Level Security is public, how the RLS Policy Analyzer reads migrations and the RLS Deep Scanner probes the live REST API, and how the two sides confirm each other, animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  /* policies scene: table rows light up according to the policy in force */
+  #policies .row > rect { fill: var(--surface); stroke: var(--line); stroke-width: 1; transition: fill .35s, stroke .35s; }
+  #policies .row { transition: opacity .35s; }
+  #policies[data-step="2"] .row > rect, #policies[data-step="4"] .row > rect { fill: var(--attacker-soft); stroke: var(--attacker); }
+  #policies[data-step="3"] .row { opacity: .3; }
+  #policies[data-step="5"] .row.uA > rect { fill: var(--safe-soft); stroke: var(--safe); }
+  #policies[data-step="5"] .row:not(.uA) { opacity: .3; }
+  #policies .thead text { fill: var(--muted); }
+
+  /* sast scene: the SQL lines being parsed at each step turn accent */
+  #sast .sql text { transition: fill .3s; }
+  #sast[data-step="2"] .l2, #sast[data-step="3"] .l3, #sast[data-step="4"] .l4 { fill: var(--accent); }
+  #sast[data-step="5"] .l5 { fill: var(--attacker); }
+  #sast .cell { transition: opacity .35s; }
+
+  /* dast scene: findings accumulate */
+  #dast .finding { transition: opacity .35s; }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› Row Level Security</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/rls-policy-analyzer.md" title="The markdown source for this page">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">SAST + DAST scanners · Supabase</div>
+  <h1>Row Level Security</h1>
+  <p class="lede">In a Supabase app the anon key ships inside the frontend JavaScript, so anyone can talk to the database directly. Row Level Security is the only thing standing between that key and every row in every table. Two scanners check it: one reads the migrations, one asks the live database.</p>
+  <div class="meta">
+    <span class="pill sast">RLS Policy Analyzer</span><span class="pill dast">RLS Deep Scanner</span><span class="pill crit">Critical</span><span class="pill">RLS Misconfiguration</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#why"><span class="n">01</span>Why it matters</a>
+  <a href="#sast"><span class="n">02</span>Reading the migrations</a>
+  <a href="#dast"><span class="n">03</span>Asking the live database</a>
+  <a href="#xref"><span class="n">04</span>Both sides together</a>
+  <a href="#context"><span class="n">05</span>Real-world context</a>
+  <a href="#code"><span class="n">06</span>Vulnerable vs fixed SQL</a>
+  <a href="#limits"><span class="n">07</span>Limits</a>
+</nav>
+
+<section id="why">
+  <h2>Why it matters: the anon key is public</h2>
+  <p class="prose">Every Supabase frontend embeds the project URL and the anon key, and PostgREST answers any request that carries that key. The policy on each table decides which rows that request may see. The same request below is answered four different ways.</p>
+
+  <div class="scene" id="policies" data-scene data-interval="3200">
+    <figure class="stage">
+      <svg viewBox="0 0 960 330" role="img" aria-label="A browser holding the public anon key sends GET /rest/v1/tasks to PostgREST. A six-row tasks table on the right shows which rows come back under four policy states: RLS off, RLS on with no policy, USING (true), and USING (auth.uid() = user_id).">
+        <defs><marker id="arrR1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <!-- policy strip -->
+        <text class="lbl" x="20" y="24">policy on tasks:</text>
+        <g transform="translate(118 24)">
+          <text class="only-1 mono">(whatever the migrations say; the request below is identical in every case)</text>
+          <text class="only-2 mono t-attacker">no ALTER TABLE tasks ENABLE ROW LEVEL SECURITY;   -- RLS off</text>
+          <text class="only-3 mono">ALTER TABLE tasks ENABLE ROW LEVEL SECURITY;   -- and no CREATE POLICY</text>
+          <text class="only-4 mono t-attacker">CREATE POLICY "read" ON tasks FOR SELECT USING (true);</text>
+          <text class="only-5 mono t-safe">CREATE POLICY "own" ON tasks FOR SELECT USING (auth.uid() = user_id);</text>
+        </g>
+        <!-- browser -->
+        <g class="node lit-1" transform="translate(20 60)">
+          <rect width="210" height="120" rx="10"/>
+          <text class="ttl" x="12" y="22">Any browser</text>
+          <text class="lbl" x="12" y="40">not your app: curl works too</text>
+          <text class="mono" x="12" y="64">apikey: eyJhbGciOi…</text>
+          <text class="lbl" x="12" y="82">the anon key, copied from</text>
+          <text class="lbl" x="12" y="96">the public JS bundle</text>
+          <text class="mono at-5 t-safe" x="12" y="112">+ Bearer &lt;User A JWT&gt;</text>
+        </g>
+        <path class="wire at-2" d="M230 120 H 288" marker-end="url(#arrR1)"/>
+        <!-- postgrest -->
+        <g class="node lit-2 lit-3 lit-4 lit-5" transform="translate(290 60)">
+          <rect width="220" height="120" rx="10"/>
+          <text class="ttl" x="12" y="22">PostgREST</text>
+          <text class="mono" x="12" y="46">GET /rest/v1/tasks</text>
+          <text class="lbl" x="12" y="64">Postgres runs the query as</text>
+          <text class="lbl" x="12" y="78">role anon, RLS applied</text>
+          <g transform="translate(12 104)">
+            <text class="only-1 lbl">response: see the table</text>
+            <text class="only-2 mono t-attacker">→ 200, 6 rows</text>
+            <text class="only-3 mono">→ 200, []  (0 rows)</text>
+            <text class="only-4 mono t-attacker">→ 200, 6 rows</text>
+            <text class="only-5 mono t-safe">→ 200, 2 rows (User A's)</text>
+          </g>
+        </g>
+        <path class="wire at-2" d="M510 120 H 548" marker-end="url(#arrR1)"/>
+        <!-- table -->
+        <g transform="translate(550 44)">
+          <text class="ttl" y="14">tasks</text>
+          <text class="lbl" x="60" y="14">6 rows, 3 users</text>
+          <g class="thead mono"><text x="10" y="34">id</text><text x="60" y="34">user_id</text><text x="160" y="34">title</text></g>
+          <g class="row uA" transform="translate(0 42)"><rect width="380" height="24" rx="4"/><g class="mono"><text x="10" y="16">1</text><text x="60" y="16">user A</text><text x="160" y="16">Pay rent</text></g></g>
+          <g class="row uA" transform="translate(0 70)"><rect width="380" height="24" rx="4"/><g class="mono"><text x="10" y="16">2</text><text x="60" y="16">user A</text><text x="160" y="16">Dentist, Tuesday</text></g></g>
+          <g class="row uB" transform="translate(0 98)"><rect width="380" height="24" rx="4"/><g class="mono"><text x="10" y="16">3</text><text x="60" y="16">user B</text><text x="160" y="16">Ship order #88</text></g></g>
+          <g class="row uB" transform="translate(0 126)"><rect width="380" height="24" rx="4"/><g class="mono"><text x="10" y="16">4</text><text x="60" y="16">user B</text><text x="160" y="16">Call the bank</text></g></g>
+          <g class="row uC" transform="translate(0 154)"><rect width="380" height="24" rx="4"/><g class="mono"><text x="10" y="16">5</text><text x="60" y="16">user C</text><text x="160" y="16">Tax return</text></g></g>
+          <g class="row uC" transform="translate(0 182)"><rect width="380" height="24" rx="4"/><g class="mono"><text x="10" y="16">6</text><text x="60" y="16">user C</text><text x="160" y="16">Renew passport</text></g></g>
+          <text class="lbl only-2 t-attacker" y="230">every row returned to an anonymous caller</text>
+          <text class="lbl only-3" y="230">no policy allows anything, so nothing is returned</text>
+          <text class="lbl only-4 t-attacker" y="230">a policy exists, and it says yes to everyone</text>
+          <text class="lbl only-5 t-safe" y="230">only rows whose user_id equals the caller's auth.uid()</text>
+        </g>
+        <!-- annotations -->
+        <g transform="translate(20 304)">
+          <text class="only-1 lbl">The key is meant to be public; it only identifies the project. What the request is allowed to see is decided entirely by RLS.</text>
+          <text class="only-2 lbl">RLS off: Postgres filters nothing. Every row of every user, readable and writable with the key from the bundle.</text>
+          <text class="only-3 lbl">RLS on with no policy: the default is deny. Nothing comes back for anonymous callers, and nothing for the app's own users either, so the app is broken rather than safe.</text>
+          <text class="only-4 lbl">USING (true) is a policy in name only. It passes every row to every caller, so RLS is effectively disabled for that operation.</text>
+          <text class="only-5 lbl">auth.uid() is the sub claim of the caller's JWT. With a real policy, the only rows that exist for this request are the ones the caller owns.</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The anon key is in the public JavaScript bundle, so <b>any browser, script or curl command can send requests straight to PostgREST</b> with it, bypassing the app entirely. The request is always the same; only the table's policy changes.</p>
+      <p class="step" data-on="rlsSend"><span class="n">2 · RLS OFF</span>A table created without <code>ENABLE ROW LEVEL SECURITY</code> has no filter. The anonymous request gets all six rows, and <code>INSERT</code>, <code>UPDATE</code> and <code>DELETE</code> work the same way.</p>
+      <p class="step" data-on="rlsSend"><span class="n">3 · RLS ON, NO POLICY</span>Turning RLS on with no <code>CREATE POLICY</code> denies everything: the response is <code>[]</code>. The data is hidden from attackers and from the app's own users alike.</p>
+      <p class="step" data-on="rlsSend"><span class="n">4 · USING (true)</span>A policy whose condition is always true hands back every row again. RLS is on, the dashboard shows a policy, and the table is still public.</p>
+      <p class="step" data-on="rlsSend"><span class="n">5 · USING (auth.uid() = user_id)</span>Now the request carries User A's JWT as well as the anon key. <code>auth.uid()</code> is read from that JWT, and <b>only the two rows whose <code>user_id</code> matches come back</b>. An anonymous caller matches nothing.</p>
+    </div>
+  </div>
+</section>
+
+<section id="sast">
+  <h2>Reading the migrations: RLS Policy Analyzer</h2>
+  <p class="prose">The static side never connects to a database. It reads every SQL file under <code>supabase/migrations/</code>, extracts three sets (tables, tables with RLS enabled, policies per table) and compares them.</p>
+
+  <div class="scene" id="sast" data-scene data-interval="3000">
+    <figure class="stage">
+      <svg viewBox="0 0 960 330" role="img" aria-label="A migration SQL file on the left is parsed into a per-table summary in the middle (table, RLS enabled, policies); three findings appear on the right: profiles without RLS, orders with RLS but no policy, tasks with a USING (true) policy.">
+        <defs><marker id="arrR2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <!-- migration file -->
+        <g class="node lit-1" transform="translate(20 20)">
+          <rect width="320" height="290" rx="10"/>
+          <text class="ttl" x="12" y="22">supabase/migrations/0001_init.sql</text>
+          <g class="sql mono">
+            <text x="12" y="48" class="l2">CREATE TABLE profiles (</text>
+            <text x="12" y="64">  id uuid primary key, email text);</text>
+            <text x="12" y="80" class="l2">CREATE TABLE tasks (</text>
+            <text x="12" y="96">  id uuid, user_id uuid, title text);</text>
+            <text x="12" y="112" class="l2">CREATE TABLE orders (</text>
+            <text x="12" y="128">  id uuid, user_id uuid, total int);</text>
+            <text x="12" y="160" class="l3">ALTER TABLE tasks</text>
+            <text x="12" y="176" class="l3">  ENABLE ROW LEVEL SECURITY;</text>
+            <text x="12" y="192" class="l3">ALTER TABLE orders</text>
+            <text x="12" y="208" class="l3">  ENABLE ROW LEVEL SECURITY;</text>
+            <text x="12" y="240" class="l4">CREATE POLICY "read" ON tasks</text>
+            <text x="12" y="256" class="l4 l5">  FOR SELECT USING (true);</text>
+          </g>
+          <text class="lbl" x="12" y="286">every *.sql in the directory, read in order</text>
+        </g>
+        <!-- per-table summary -->
+        <g transform="translate(370 20)">
+          <text class="ttl" y="14">Per table</text>
+          <g class="mono"><text class="lbl" x="10" y="36">table</text><text class="lbl" x="110" y="36">RLS</text><text class="lbl" x="165" y="36">policies</text></g>
+          <g class="node at-2" transform="translate(0 44)">
+            <rect width="250" height="34" rx="6"/>
+            <g class="mono">
+              <text x="10" y="22">profiles</text>
+              <text x="110" y="22" class="cell at-3 t-attacker">off</text>
+              <text x="165" y="22" class="cell at-3 lbl">not checked</text>
+            </g>
+          </g>
+          <g class="node at-2" transform="translate(0 86)">
+            <rect width="250" height="34" rx="6"/>
+            <g class="mono">
+              <text x="10" y="22">tasks</text>
+              <text x="110" y="22" class="cell at-3 t-safe">on</text>
+              <text x="165" y="22" class="cell at-4 until-5">1</text>
+              <text x="165" y="22" class="cell at-5 t-attacker">USING (true)</text>
+            </g>
+          </g>
+          <g class="node at-2" transform="translate(0 128)">
+            <rect width="250" height="34" rx="6"/>
+            <g class="mono">
+              <text x="10" y="22">orders</text>
+              <text x="110" y="22" class="cell at-3 t-safe">on</text>
+              <text x="165" y="22" class="cell at-4 t-attacker">0</text>
+            </g>
+          </g>
+          <g transform="translate(0 196)">
+            <text class="lbl at-2">tables = CREATE TABLE names</text>
+            <text class="lbl at-3" y="16">rls = ALTER TABLE … ENABLE ROW LEVEL SECURITY</text>
+            <text class="lbl at-4" y="32">policies = CREATE POLICY blocks, per table</text>
+          </g>
+        </g>
+        <!-- findings -->
+        <g class="until-3" transform="translate(660 20)">
+          <text class="ttl" y="14">Findings</text>
+          <text class="lbl" y="34">none yet: each check below adds one</text>
+          <text class="lbl" y="50">as the three sets are compared</text>
+        </g>
+        <path class="wire at-3 attacker" d="M620 81 H 658" marker-end="url(#arrR2)"/>
+        <g class="node at-3 lit-3" transform="translate(660 20)">
+          <rect width="280" height="64" rx="8" class="soft-attacker"/>
+          <text class="eyebrow" x="12" y="20" style="font-size:10px;fill:var(--attacker)">CRITICAL</text>
+          <text class="ttl" x="12" y="40">profiles: RLS not enabled</text>
+          <text class="lbl" x="12" y="56">anon key reads and writes every row</text>
+        </g>
+        <path class="wire at-4 attacker" d="M620 165 C 640 165, 640 132, 658 132" marker-end="url(#arrR2)"/>
+        <g class="node at-4 lit-4" transform="translate(660 100)">
+          <rect width="280" height="64" rx="8"/>
+          <text class="eyebrow" x="12" y="20" style="font-size:10px;fill:var(--accent)">HIGH</text>
+          <text class="ttl" x="12" y="40">orders: RLS on, no policies</text>
+          <text class="lbl" x="12" y="56">nobody can read it, which is still a bug</text>
+        </g>
+        <path class="wire at-5 attacker" d="M620 123 C 640 123, 640 212, 658 212" marker-end="url(#arrR2)"/>
+        <g class="node at-5 lit-5" transform="translate(660 180)">
+          <rect width="280" height="64" rx="8"/>
+          <text class="eyebrow" x="12" y="20" style="font-size:10px;fill:var(--accent)">HIGH</text>
+          <text class="ttl" x="12" y="40">tasks: permissive policy</text>
+          <text class="lbl" x="12" y="56">USING (true) filters nothing for SELECT</text>
+        </g>
+        <!-- annotations -->
+        <g transform="translate(370 290)">
+          <text class="only-1 lbl">The analyzer parses SQL text. It never needs a database connection or the anon key.</text>
+          <text class="only-2 lbl">Three CREATE TABLE statements give the set of tables: profiles, tasks, orders.</text>
+          <text class="only-3 lbl">profiles is not in the RLS set: CRITICAL, and no further checks run on it.</text>
+          <text class="only-4 lbl">orders has RLS but zero CREATE POLICY blocks: HIGH.</text>
+          <text class="only-5 lbl">USING (true) or 1=1 is HIGH; a policy that never mentions auth.uid() is MEDIUM.</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Every <code>.sql</code> file under <code>supabase/migrations/</code> is collected and read as text. The analyzer understands Supabase's policy syntax, including multi-line <code>CREATE POLICY</code> statements.</p>
+      <p class="step"><span class="n">2</span><code>CREATE TABLE</code> statements give the set of tables. Here: <code>profiles</code>, <code>tasks</code>, <code>orders</code>.</p>
+      <p class="step"><span class="n">3</span><code>ALTER TABLE … ENABLE ROW LEVEL SECURITY</code> statements give the RLS set. <b>A table missing from it is CRITICAL</b>: the anon key grants read and write access to every row. That table gets no further checks, because policies are irrelevant while RLS is off.</p>
+      <p class="step"><span class="n">4</span><code>CREATE POLICY</code> blocks are split and grouped per table. <b>RLS enabled with no policy is HIGH</b>: RLS without policies blocks all access, so the table is unusable rather than protected.</p>
+      <p class="step"><span class="n">5</span>Each policy's <code>USING</code> and <code>WITH CHECK</code> expressions are inspected. <b><code>USING (true)</code> or <code>1=1</code> is HIGH</b>: it disables RLS for that operation. A policy whose expressions never reference <code>auth.uid()</code> is reported at MEDIUM.</p>
+    </div>
+  </div>
+</section>
+
+<section id="dast">
+  <h2>Asking the live database: RLS Deep Scanner</h2>
+  <p class="prose">The dynamic side needs two things that endpoint discovery already pulled out of the JavaScript bundles: the Supabase project URL and the anon key. With those it sends real requests to the REST API, one tier at a time, and reports only when data actually comes back.</p>
+
+  <div class="scene" id="dast" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 340" role="img" aria-label="Values discovered from the JS bundles (Supabase URL, anon key, table names, RPC names) feed a request box that sends anon-read, anon-write, cross-user and RPC probes to the Supabase REST API; findings accumulate in a band below.">
+        <defs><marker id="arrR3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <!-- discovery -->
+        <g class="node lit-1" transform="translate(20 20)">
+          <rect width="300" height="130" rx="10"/>
+          <text class="ttl" x="12" y="22">From the JS bundles</text>
+          <g class="mono">
+            <text x="12" y="46">url  https://xyz.supabase.co</text>
+            <text x="12" y="62">key  eyJhbGciOi….eyJpc3Mi….Ab12…</text>
+            <text x="12" y="78">.from("profiles")  .from("tasks")</text>
+            <text x="12" y="94">.rpc("get_stats")</text>
+          </g>
+          <text class="lbl" x="12" y="116">+ GET /rest/v1/ (OpenAPI) lists every table</text>
+        </g>
+        <path class="wire at-2" d="M320 85 H 358" marker-end="url(#arrR3)"/>
+        <!-- request -->
+        <g class="node lit-2 lit-3 lit-4 lit-5" transform="translate(360 20)">
+          <rect width="280" height="130" rx="10"/>
+          <text class="ttl" x="12" y="22">Request</text>
+          <g class="only-1"><text class="lbl" x="12" y="50">one request per table per tier,</text><text class="lbl" x="12" y="66">one per RPC function, all through</text><text class="lbl" x="12" y="82">the rate-limited client</text></g>
+          <g class="only-2">
+            <text class="mono" x="12" y="46">GET /rest/v1/profiles</text>
+            <text class="mono" x="12" y="62">    ?select=*&amp;limit=1</text>
+            <text class="mono" x="12" y="78">apikey: &lt;anon&gt;</text>
+            <text class="mono t-attacker" x="12" y="94">(no Authorization header)</text>
+            <text class="lbl" x="12" y="116">Tier 1 · anonymous read</text>
+          </g>
+          <g class="only-3">
+            <text class="mono" x="12" y="46">POST /rest/v1/profiles</text>
+            <text class="mono" x="12" y="62">{}   (a safe, empty body)</text>
+            <text class="mono" x="12" y="78">apikey: &lt;anon&gt;</text>
+            <text class="mono t-attacker" x="12" y="94">(no Authorization header)</text>
+            <text class="lbl" x="12" y="116">Tier 1 · anonymous write</text>
+          </g>
+          <g class="only-4">
+            <text class="mono" x="12" y="46">GET /rest/v1/tasks</text>
+            <text class="mono" x="12" y="62">    ?select=id&amp;limit=1</text>
+            <text class="mono" x="12" y="78">1st: Bearer &lt;User A JWT&gt;</text>
+            <text class="mono t-attacker" x="12" y="94">2nd: Bearer &lt;User B JWT&gt;</text>
+            <text class="lbl" x="12" y="116">Tier 3 · cross-user read</text>
+          </g>
+          <g class="only-5">
+            <text class="mono" x="12" y="46">POST /rest/v1/rpc/get_stats</text>
+            <text class="mono" x="12" y="62">{}</text>
+            <text class="mono t-attacker" x="12" y="78">(no Authorization header)</text>
+            <text class="lbl" x="12" y="116">RPC function, found via .rpc()</text>
+          </g>
+        </g>
+        <path class="wire at-2" d="M640 85 H 678" marker-end="url(#arrR3)"/>
+        <!-- target -->
+        <g class="node lit-2 lit-3 lit-4 lit-5" transform="translate(680 20)">
+          <rect width="260" height="130" rx="10"/>
+          <text class="ttl" x="12" y="22">Supabase REST (PostgREST)</text>
+          <g class="only-1"><text class="lbl" x="12" y="50">responses decide everything;</text><text class="lbl" x="12" y="66">a 4xx or an empty list is never</text><text class="lbl" x="12" y="82">a finding</text></g>
+          <g class="only-2">
+            <text class="mono t-attacker" x="12" y="46">200  [{id, email, role}]</text>
+            <text class="lbl" x="12" y="66">rows came back: publicly readable</text>
+            <text class="lbl" x="12" y="82">email is a sensitive column: CRITICAL</text>
+            <text class="lbl" x="12" y="98">otherwise HIGH · values never stored</text>
+          </g>
+          <g class="only-3">
+            <text class="mono t-attacker" x="12" y="46">201 Created</text>
+            <text class="lbl" x="12" y="62">a row was written: CRITICAL</text>
+            <text class="mono t-attacker" x="12" y="84">400 column constraint</text>
+            <text class="lbl" x="12" y="100">cleared RLS, failed the schema: inferred</text>
+            <text class="lbl" x="12" y="116">401 / 403: nothing</text>
+          </g>
+          <g class="only-4">
+            <text class="mono" x="12" y="46">A: 200  [{id: "a1"}]</text>
+            <text class="mono t-attacker" x="12" y="62">B: 200  [{id: "a1"}]</text>
+            <text class="lbl" x="12" y="82">same id in both lists: CRITICAL</text>
+            <text class="lbl" x="12" y="98">B gets [] or a 4xx: nothing</text>
+          </g>
+          <g class="only-5">
+            <text class="mono t-attacker" x="12" y="46">200  {"users": 1532, …}</text>
+            <text class="lbl" x="12" y="66">callable with no token: HIGH</text>
+            <text class="lbl" x="12" y="82">anything but 200: nothing</text>
+          </g>
+        </g>
+        <!-- findings band -->
+        <g class="node" transform="translate(20 176)">
+          <rect width="920" height="116" rx="10"/>
+          <text class="ttl" x="12" y="22">Findings</text>
+          <text class="lbl only-1" x="12" y="46">none yet</text>
+          <g class="mono">
+            <text class="finding at-2" x="12" y="46"><tspan class="t-attacker">CRITICAL</tspan>  profiles readable by anyone · columns: id, email, role · 1 row sampled</text>
+            <text class="finding at-3" x="12" y="64"><tspan class="t-attacker">CRITICAL</tspan>  profiles writable with the anon key</text>
+            <text class="finding at-4" x="12" y="82"><tspan class="t-attacker">CRITICAL</tspan>  tasks: User B read User A's rows · overlapping ids: a1</text>
+            <text class="finding at-5" x="12" y="100"><tspan class="t-accent">HIGH</tspan>      rpc/get_stats callable without authentication</text>
+          </g>
+        </g>
+        <!-- annotations -->
+        <g transform="translate(20 318)">
+          <text class="only-1 lbl">The anon key is itself a JWT (eyJ….eyJ….), found by regex in the bundle. Tables come from .from() calls and the /rest/v1/ OpenAPI spec; functions from .rpc() calls.</text>
+          <text class="only-2 lbl">Rule: status 200 and a body other than []. The finding records column names only; row values are never written to the report.</text>
+          <text class="only-3 lbl">A 400 whose error is a column constraint means the row passed RLS and failed the schema: the table is still writable, reported at lower confidence.</text>
+          <text class="only-4 lbl">Guard: User A must get rows first; User B must get a 200 with a non-empty list; the id sets must overlap. Anything else is not a finding.</text>
+          <text class="only-5 lbl">Every function discovered through .rpc() is posted to /rest/v1/rpc/{name} with no token. A 200 means anyone on the internet can call it.</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1 · DISCOVERY</span>Endpoint discovery finds the Supabase project URL in the bundles, and the anon key by its shape: a JWT, <code>eyJ….eyJ….</code>. Table names come from <code>.from("…")</code> calls and from the <code>/rest/v1/</code> OpenAPI spec, which lists every exposed table; function names come from <code>.rpc("…")</code>.</p>
+      <p class="step" data-on="rlsProbe"><span class="n">2 · TIER 1 READ</span>Each table is queried with the anon key and no user token: <code>select=*&amp;limit=1</code>. <b>A 200 with a non-empty body means the table is publicly readable.</b> If a returned column name looks sensitive (email, phone, password, token, …) the finding is CRITICAL, otherwise HIGH. Only column names go in the report.</p>
+      <p class="step" data-on="rlsProbe"><span class="n">3 · TIER 1 WRITE</span>A safe empty row is POSTed with the anon key. A 200 or 201 means a row was created: CRITICAL. A 400 whose error is a column constraint means the insert passed RLS and only the schema stopped it, so it is reported as inferred, at lower confidence.</p>
+      <p class="step" data-on="rlsProbe"><span class="n">4 · TIER 3 CROSS-USER</span>With two sessions, the table is read as User A to collect ids, then as User B. <b>An id that appears in both lists means User B can see User A's row: CRITICAL.</b> If A gets nothing, or B gets a 4xx or an empty list, nothing is reported.</p>
+      <p class="step" data-on="rlsProbe"><span class="n">5 · RPC</span>Each discovered function is called at <code>/rest/v1/rpc/{name}</code> with no token. A 200 means it is callable by anyone: HIGH.</p>
+    </div>
+  </div>
+</section>
+
+<section id="xref">
+  <h2>Both sides together</h2>
+  <p class="prose">A static finding says the migrations never enabled RLS. A dynamic finding says the live table answered an anonymous request. On the same table they confirm each other. And when only the static side knows about a table, it tells the dynamic side where to look.</p>
+
+  <div class="scene" id="xref" data-scene data-interval="3000">
+    <figure class="stage">
+      <svg viewBox="0 0 960 240" role="img" aria-label="A DAST anonymous-read finding and a SAST missing-RLS finding on the profiles table merge into a confirmed RLS gap; separately a SAST-only finding on the orders table generates a targeted anon-key query against it.">
+        <defs><marker id="arrR4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g class="node lit-1" transform="translate(20 30)"><rect width="270" height="64" rx="8"/><text class="eyebrow" x="12" y="20" style="font-size:10px;fill:var(--attacker)">DAST · RLS Deep Scanner</text><text class="ttl" x="12" y="40">profiles readable with anon key</text><text class="lbl mono" x="12" y="56">GET /rest/v1/profiles → 200, rows</text></g>
+        <g class="node lit-1" transform="translate(20 140)"><rect width="270" height="64" rx="8"/><text class="eyebrow" x="12" y="20" style="font-size:10px;fill:var(--info)">SAST · RLS Policy Analyzer</text><text class="ttl" x="12" y="40">profiles: RLS not enabled</text><text class="lbl mono" x="12" y="56">supabase/migrations/0001_init.sql</text></g>
+        <path class="wire at-2 accent" d="M290 62 C 340 62, 340 117, 378 117" marker-end="url(#arrR4)"/>
+        <path class="wire at-2 accent" d="M290 172 C 340 172, 340 117, 378 117" marker-end="url(#arrR4)"/>
+        <g class="node at-2 lit-2" transform="translate(380 80)"><rect width="200" height="74" rx="8" class="soft-accent"/><text class="ttl" x="12" y="24">CONFIRMED RLS GAP</text><text class="lbl" x="12" y="44">same table, both sides</text><text class="lbl" x="12" y="60">confidence ↑ · severity boosted</text></g>
+
+        <g class="node at-3 lit-3" transform="translate(620 30)"><rect width="320" height="64" rx="8"/><text class="eyebrow" x="12" y="20" style="font-size:10px;fill:var(--info)">SAST ONLY</text><text class="ttl" x="12" y="40">orders: RLS not enabled</text><text class="lbl" x="12" y="56">no .from("orders") in any bundle, so DAST never asked</text></g>
+        <path class="wire at-4 accent dashed" d="M780 94 V 138" marker-end="url(#arrR4)"/>
+        <g class="node at-4 lit-4" transform="translate(620 140)"><rect width="320" height="64" rx="8"/><text class="eyebrow" x="12" y="20" style="font-size:10px;fill:var(--accent)">GENERATED DAST TEST · rls_bypass</text><text class="ttl mono" x="12" y="40">GET /rest/v1/orders?select=*</text><text class="lbl" x="12" y="56">apikey from the repo's SUPABASE_ANON_KEY setting</text></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Two findings land on the same table from different directions: the deep scanner read <code>profiles</code> anonymously at runtime, and the policy analyzer found no <code>ENABLE ROW LEVEL SECURITY</code> for it in the migrations.</p>
+      <p class="step"><span class="n">2</span>The cross-referencer pairs them: <b>RLS bypass (DAST) + Missing RLS (SAST) = confirmed RLS gap</b>. Proven in the code and against the live database, the finding gets higher confidence and boosted severity.</p>
+      <p class="step"><span class="n">3</span>Some static findings have no runtime counterpart because discovery never saw the table: <code>orders</code> appears in the migrations but in no bundle, so no dynamic scanner queried it.</p>
+      <p class="step"><span class="n">4</span>SAST-guided DAST turns the static finding into a test. The <code>rls_bypass</code> strategy takes the Supabase URL from the discovered endpoints and the anon key from the repository's configuration (<code>NEXT_PUBLIC_SUPABASE_ANON_KEY</code> and similar), then queries <code>/rest/v1/orders?select=*</code> with it. A table missing an RLS policy becomes a live query that would not otherwise have run.</p>
+    </div>
+  </div>
+</section>
+
+<section id="context">
+  <h2>Real-world context</h2>
+  <div class="callout why">
+    <div class="label">Why it matters</div>
+    <p>RLS is the <b>only</b> access control between the public internet and a Supabase database. Without it on a table, anyone can read all of its data (<code>SELECT * FROM users</code> via the anon key returns everything), anyone can write to it (<code>INSERT</code>, <code>UPDATE</code>, <code>DELETE</code> all work without authentication), and users can see each other's private data. Using the service-role key server-side does not help: the client-side anon key is still a backdoor into any table where RLS was forgotten.</p>
+  </div>
+  <div class="grid-2">
+    <div class="callout breach">
+      <div class="label">Supabase's own warning</div>
+      <p>"If you have RLS disabled on any table, the anon key gives full read/write access to that table." This is the most common security issue in Supabase apps: developers create tables and forget to enable RLS.</p>
+    </div>
+    <div class="callout breach">
+      <div class="label">Clubhouse (2021)</div>
+      <p>Broken access controls, functionally equivalent to missing RLS, allowed bulk scraping of 1.3 million user profiles. In Supabase apps, missing RLS is the most common path to the same outcome: the anon key is public, and without policies the entire database is exposed.</p>
+    </div>
+    <div class="callout breach">
+      <div class="label">Facebook (2013)</div>
+      <p>Not Supabase, but the same pattern: a broken access control bug let any user delete any photo by changing the photo id in the Graph API. The server did not verify ownership, which is exactly the check a missing RLS policy leaves out.</p>
+    </div>
+  </div>
+</section>
+
+<section id="code">
+  <h2>Vulnerable vs fixed SQL</h2>
+  <p class="prose">The fix is a policy per operation, each one tied to <code>auth.uid()</code>. Deny by default, then allow exactly what the owner may do.</p>
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true" type="button">BAD · vulnerable</button>
+      <button class="tab good" role="tab" aria-selected="false" type="button">GOOD · fixed</button>
+    </div>
+    <div role="tabpanel"><pre><code><span class="c">-- BAD: No RLS on a table with sensitive data</span>
+<span class="hl bad">CREATE TABLE profiles (</span>
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  email TEXT NOT NULL,
+  role TEXT DEFAULT <span class="s">'user'</span>
+);
+<span class="c">-- Missing: ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;</span>
+<span class="c">-- Missing: CREATE POLICY ...</span>
+
+<span class="c">-- BAD: RLS enabled but policy is too permissive</span>
+ALTER TABLE tasks ENABLE ROW LEVEL SECURITY;
+<span class="hl bad">CREATE POLICY <span class="s">"Anyone can read"</span> ON tasks FOR SELECT USING (<span class="k">true</span>);</span></code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c">-- GOOD: Enable RLS and create proper policies</span>
+<span class="hl good">ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;</span>
+
+<span class="c">-- Users can only read their own profile</span>
+CREATE POLICY <span class="s">"Users view own profile"</span> ON profiles
+  FOR SELECT USING (<span class="k">auth.uid()</span> = id);
+
+<span class="c">-- Users can only update their own profile</span>
+CREATE POLICY <span class="s">"Users update own profile"</span> ON profiles
+  FOR UPDATE USING (<span class="k">auth.uid()</span> = id);
+
+<span class="c">-- GOOD: Deny all by default, allow specific operations</span>
+ALTER TABLE tasks ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY <span class="s">"Users view own tasks"</span> ON tasks
+  FOR SELECT USING (<span class="k">auth.uid()</span> = user_id);
+
+CREATE POLICY <span class="s">"Users create own tasks"</span> ON tasks
+<span class="hl good">  FOR INSERT WITH CHECK (<span class="k">auth.uid()</span> = user_id);</span>
+
+CREATE POLICY <span class="s">"Users update own tasks"</span> ON tasks
+  FOR UPDATE USING (<span class="k">auth.uid()</span> = user_id);
+
+CREATE POLICY <span class="s">"Users delete own tasks"</span> ON tasks
+  FOR DELETE USING (<span class="k">auth.uid()</span> = user_id);</code></pre></div>
+  </div>
+</section>
+
+<section id="limits">
+  <h2>Limits and what each side needs</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Check</th><th>Side</th><th>Needs</th><th>Reports when</th><th>Severity</th></tr></thead>
+      <tbody>
+        <tr><td>Missing RLS</td><td>SAST</td><td><code>supabase/migrations/*.sql</code> in the repo</td><td><code>CREATE TABLE</code> with no <code>ENABLE ROW LEVEL SECURITY</code></td><td>Critical</td></tr>
+        <tr><td>No policies</td><td>SAST</td><td>same</td><td>RLS enabled, zero <code>CREATE POLICY</code></td><td>High</td></tr>
+        <tr><td>Permissive policy</td><td>SAST</td><td>same</td><td><code>USING (true)</code>, <code>WITH CHECK (true)</code> or <code>1=1</code></td><td>High</td></tr>
+        <tr><td>Tier 1 anon read / write</td><td>DAST</td><td>Supabase URL + anon key from the bundles</td><td>200 with rows · 200/201 on insert, or a 400 constraint error (inferred)</td><td>Critical (High if no sensitive column)</td></tr>
+        <tr><td>Tier 3 cross-user</td><td>DAST</td><td>two authenticated sessions (User A, User B)</td><td>an id User A owns appears in User B's result</td><td>Critical</td></tr>
+        <tr><td>RPC</td><td>DAST</td><td>function names from <code>.rpc()</code> calls</td><td>200 from <code>/rest/v1/rpc/{name}</code> with no token</td><td>High</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout note">
+    <div class="label">What it stays quiet about</div>
+    <p>The static analyzer only sees migrations: policies created in the Supabase dashboard and never exported leave it reporting a gap that the live scanner will not reproduce, and the two disagreeing is itself useful. The dynamic scanner skips entirely without a Supabase URL and anon key, skips Tier 3 without two sessions, and only ever tests tables and functions that discovery named. Empty lists and 4xx responses are never findings, so a correctly locked-down project produces nothing from either side.</p>
+  </div>
+</section>
+
+<footer class="foot">
+  <span>Source: <a href="../scanners/rls-policy-analyzer.md">rls-policy-analyzer.md</a> · <a href="../scanners/rls-deep-scanner.md">rls-deep-scanner.md</a> · <a href="../architecture.md">architecture.md</a></span>
+  <span>Related: <a href="jwt-attacks.html">JWT attacks</a> · <a href="scan-pipeline.html">The scan pipeline</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+<script>
+(function () {
+  function later(el, ms, fn) {
+    if (el._replyTimer) { clearTimeout(el._replyTimer); el._replyTimer = null; }
+    el._replyTimer = setTimeout(fn, IsDoc.reduced ? 0 : ms);
+  }
+  // scene 1: the same request travels browser → PostgREST → table on every policy step
+  window.rlsSend = function (scene, step, el) {
+    const svg = el.querySelector("svg");
+    IsDoc.clearPackets(svg);
+    if (el._replyTimer) { clearTimeout(el._replyTimer); el._replyTimer = null; }
+    if (step < 2) return;
+    IsDoc.packet(svg, "M230 120 H 288", { cls: step === 5 ? "f-safe" : "f-attacker", label: step === 5 ? "apikey + JWT" : "apikey", duration: 700, hold: 100 });
+    later(el, 800, () => {
+      if (el.dataset.step !== String(step)) return;
+      IsDoc.packet(svg, "M510 120 H 548", { cls: step === 5 ? "f-safe" : "f-attacker", duration: 600, hold: 200 });
+    });
+  };
+  // scene 3: request → Supabase REST, then the response comes back
+  const LABELS = { 2: "anon read", 3: "anon write", 4: "as User B", 5: "no token" };
+  window.rlsProbe = function (scene, step, el) {
+    const svg = el.querySelector("svg");
+    IsDoc.clearPackets(svg);
+    if (el._replyTimer) { clearTimeout(el._replyTimer); el._replyTimer = null; }
+    if (step < 2 || step > 5) return;
+    IsDoc.packet(svg, "M640 85 H 678", { cls: "f-attacker", label: LABELS[step], duration: 700, hold: 100 });
+    later(el, 1000, () => {
+      if (el.dataset.step !== String(step)) return;
+      IsDoc.packet(svg, "M678 110 H 640", { cls: "f-attacker", label: step === 3 ? "201" : "200", duration: 600, hold: 500 });
+    });
+  };
+})();
+</script>
+</body>
+</html>

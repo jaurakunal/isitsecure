@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>npm Dependency Scanner · isitsecure</title>
+<meta name="description" content="How isitsecure turns package.json lines into OSV.dev queries: merging workspaces, stripping version prefixes, batching 100 at a time, and mapping a vulnerability record to a severity, animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  /* page-specific: finding cards, rows revealed step by step */
+  .finding > rect { stroke: var(--line); stroke-width: 1; }
+  #pipe .dim { transition: opacity .35s; }
+  #pipe[data-step="2"] .m-lodash-b { opacity: .4; }
+  #pipe.s3 .m-lodash-b { opacity: .4; }
+  #sev .row > rect { stroke: var(--line); stroke-width: 1; fill: var(--surface); transition: stroke .3s, fill .3s; }
+  #sev[data-step="2"] .r1 > rect, #sev[data-step="3"] .r2 > rect, #sev[data-step="4"] .r3 > rect { stroke: var(--accent); stroke-width: 2; }
+  #sev .row { transition: opacity .35s; }
+  #sev.s2 .row { opacity: .45; }
+  #sev[data-step="2"] .r1, #sev[data-step="3"] .r2, #sev[data-step="4"] .r3 { opacity: 1; }
+  #spec .rowx > rect { fill: var(--surface); stroke: var(--line); stroke-width: 1; }
+  #spec[data-step="2"] .x1 > rect, #spec[data-step="3"] .x2 > rect, #spec[data-step="4"] .x3 > rect, #spec[data-step="5"] .x4 > rect { stroke: var(--accent); stroke-width: 2; }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› <a href="group-secrets-dependencies.html">Secrets and dependencies</a> › npm dependencies</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/dependency-scanner.md" title="The markdown source for this page">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">SAST scanner · asks OSV.dev</div>
+  <h1>npm Dependency Scanner</h1>
+  <p class="lede">Your application is mostly other people's code. This scanner reads <code>package.json</code> from the repository root and every workspace, strips each version down to a bare number, and asks the OSV.dev vulnerability database whether that package at that version has a published advisory. It reads no lock file, and one advisory becomes one finding.</p>
+  <div class="meta">
+    <span class="pill sast">SAST</span><span class="pill high">High–Critical</span><span class="pill">Dependency Vulnerability</span><span class="pill">needs api.osv.dev</span><span class="pill">200 packages max</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#pipeline"><span class="n">01</span>From manifest line to OSV query</a>
+  <a href="#severity"><span class="n">02</span>How a severity is chosen</a>
+  <a href="#specs"><span class="n">03</span>Odd version strings</a>
+  <a href="#why"><span class="n">04</span>Why it matters</a>
+  <a href="#code"><span class="n">05</span>Vulnerable vs fixed code</a>
+  <a href="#limits"><span class="n">06</span>Limits and what it needs</a>
+</nav>
+
+<section id="pipeline">
+  <h2>From manifest line to OSV query</h2>
+  <p class="prose">The scanner has no vulnerability table of its own. Everything it knows comes back from <code>api.osv.dev</code>, so the work here is turning a manifest into the right questions. The actor is the scanner; the only other party is OSV.</p>
+
+  <div class="scene" id="pipe" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 330" role="img" aria-label="Two package.json files on the left, a root manifest and a workspace manifest, merge into one list of name and cleaned version, which is posted to OSV.dev in a batch; the response comes back as findings on the right, one per vulnerability.">
+        <defs><marker id="arrNp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g class="node lit-1" transform="translate(20 20)">
+          <rect width="230" height="140" rx="10"/>
+          <text class="ttl" x="14" y="26">package.json (root)</text>
+          <g class="mono">
+            <text class="lbl" x="14" y="48">dependencies</text>
+            <text x="14" y="66">"next": "^13.0.0"</text>
+            <text x="14" y="84">"lodash": "~4.17.15"</text>
+            <text class="lbl" x="14" y="104">devDependencies</text>
+            <text x="14" y="122">"jest": "^29.0.0"</text>
+          </g>
+        </g>
+        <g class="node lit-1" transform="translate(20 176)">
+          <rect width="230" height="134" rx="10"/>
+          <text class="ttl" x="14" y="26">packages/web/package.json</text>
+          <g class="mono">
+            <text class="m-lodash-b" x="14" y="58">"lodash": "4.17.21"</text>
+            <text x="14" y="82">"axios": "&gt;=0.21.0"</text>
+          </g>
+          <text class="lbl" x="14" y="112">workspace manifest</text>
+        </g>
+        <path class="wire at-2" d="M250 90 H278" marker-end="url(#arrNp)"/>
+        <path class="wire at-2" d="M250 240 H264 V160 H278" marker-end="url(#arrNp)"/>
+        <g class="node lit-2 lit-3" transform="translate(280 20)">
+          <rect width="236" height="290" rx="10"/>
+          <text class="ttl" x="14" y="26">One name, one version</text>
+          <text class="lbl only-1" x="14" y="46">built in the next step</text>
+          <g class="mono at-2">
+            <text x="14" y="76">next</text><text class="at-3 t-accent" x="100" y="76">13.0.0</text><text class="until-3 lbl" x="100" y="76">^13.0.0</text>
+            <text x="14" y="102">lodash</text><text class="at-3 t-accent" x="100" y="102">4.17.15</text><text class="until-3 lbl" x="100" y="102">~4.17.15</text>
+            <text x="14" y="128">jest</text><text class="at-3 t-accent" x="100" y="128">29.0.0</text><text class="until-3 lbl" x="100" y="128">^29.0.0</text>
+            <text x="14" y="154">axios</text><text class="at-3 t-accent" x="100" y="154">0.21.0</text><text class="until-3 lbl" x="100" y="154">&gt;=0.21.0</text>
+          </g>
+          <g class="at-2">
+            <text class="lbl" x="14" y="196">root wins: workspace lodash</text>
+            <text class="lbl" x="14" y="212">4.17.21 is dropped, never queried</text>
+            <text class="lbl" x="14" y="238">list is cut at 200 packages</text>
+          </g>
+          <text class="lbl at-3" x="14" y="272">prefix ^ ~ &gt; = &lt; stripped</text>
+        </g>
+        <path class="wire at-4" d="M516 165 H544" marker-end="url(#arrNp)"/>
+        <g class="node lit-4 lit-5" transform="translate(546 20)">
+          <rect width="190" height="290" rx="10"/>
+          <text class="ttl" x="14" y="26">api.osv.dev</text>
+          <text class="lbl" x="14" y="46">POST /v1/querybatch</text>
+          <g class="mono at-4">
+            <text x="14" y="76">{"package":</text>
+            <text x="14" y="94">  {"name":"lodash",</text>
+            <text x="14" y="112">   "ecosystem":"npm"},</text>
+            <text x="14" y="130"> "version":"4.17.15"}</text>
+          </g>
+          <text class="lbl at-4" x="14" y="162">one query per package</text>
+          <text class="lbl at-4" x="14" y="178">100 queries per request</text>
+          <g class="at-5">
+            <text class="lbl" x="14" y="214">results[i] answers query i</text>
+            <text class="mono t-attacker" x="14" y="236">results[1].vulns</text>
+            <text class="lbl" x="14" y="254">two advisories for lodash</text>
+          </g>
+        </g>
+        <path class="wire at-5" d="M736 165 H764" marker-end="url(#arrNp)"/>
+        <g class="node" transform="translate(766 20)">
+          <rect width="174" height="290" rx="10"/>
+          <text class="ttl" x="14" y="26">Findings</text>
+          <text class="lbl until-5" x="14" y="46">none yet</text>
+          <g class="finding at-5" transform="translate(12 58)"><rect width="150" height="78" rx="6" class="soft-attacker"/><text class="mono t-attacker" x="8" y="18">HIGH · 0.95</text><text class="lbl" x="8" y="36">lodash@4.17.15</text><text class="lbl" x="8" y="52">advisory 1 summary</text><text class="lbl" x="8" y="68">file: package.json</text></g>
+          <g class="finding at-5" transform="translate(12 146)"><rect width="150" height="78" rx="6" class="soft-attacker"/><text class="mono t-attacker" x="8" y="18">HIGH · 0.95</text><text class="lbl" x="8" y="36">lodash@4.17.15</text><text class="lbl" x="8" y="52">advisory 2 summary</text><text class="lbl" x="8" y="68">file: package.json</text></g>
+          <text class="lbl at-5" x="14" y="254">one finding per advisory</text>
+          <text class="lbl at-5" x="14" y="270">(illustrative response)</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The scanner starts from <code>package.json</code> in the repository root and from the <code>package.json</code> of every workspace the repository snapshot lists. Both <code>dependencies</code> and <code>devDependencies</code> count.</p>
+      <p class="step"><span class="n">2</span>Names are merged into one map. The root is read first and <b>wins on a clash</b>, then each workspace adds only names not yet seen; a name in both sections of one file takes the <code>devDependencies</code> value. Only the first 200 entries are queried.</p>
+      <p class="step"><span class="n">3</span>Each version string is <b>cleaned by stripping leading <code>^ ~ &gt; = &lt;</code> and spaces</b>. <code>^13.0.0</code> becomes <code>13.0.0</code>. The result is the version written in the manifest, not the one a lock file resolved, because no lock file is read.</p>
+      <p class="step"><span class="n">4</span>Queries go to <code>/v1/querybatch</code> in batches of 100 with a 30 second timeout. Each query names the package, the <code>npm</code> ecosystem and the cleaned version. An HTTP error loses that batch (a warning is logged) and the scan carries on.</p>
+      <p class="step"><span class="n">5</span>OSV answers with a <code>results</code> array in query order. <b>Every advisory in a result becomes its own finding</b> at confidence 0.95, so a package with two advisories yields two findings. The finding's file is the manifest the name came from, root or workspace.</p>
+    </div>
+  </div>
+</section>
+
+<section id="severity">
+  <h2>How a severity is chosen</h2>
+  <p class="prose">An OSV record can describe severity two ways, and the scanner's rule for choosing is short. Whichever way the record goes, an unreadable severity falls back to <b>High</b>, so a finding is never silently low.</p>
+
+  <div class="scene" id="sev" data-scene data-interval="3600">
+    <figure class="stage">
+      <svg viewBox="0 0 960 312" role="img" aria-label="Three rows show three record shapes. A bare numeric score is mapped by thresholds 9, 7 and 4 to Critical, High, Medium or Low. A CVSS vector string is not decoded and gives High. With no score, the database_specific label is mapped: MODERATE gives Medium, and an unknown or missing label gives High.">
+        <defs><marker id="arrSv" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g class="row r1" transform="translate(20 16)">
+          <rect width="920" height="88" rx="10"/>
+          <text class="lbl" x="16" y="24">record carries a bare number</text>
+          <text class="mono" x="16" y="50">"severity": [{"score": "9.8"}]</text>
+          <path class="wire" d="M300 46 H340" marker-end="url(#arrSv)"/>
+          <text class="ttl" x="356" y="30">float(score), then thresholds</text>
+          <g class="mono">
+            <text x="356" y="56">&lt;4 LOW</text><text x="436" y="56">≥4 MEDIUM</text><text x="540" y="56">≥7 HIGH</text><text class="t-attacker" x="624" y="56">≥9 CRITICAL</text>
+          </g>
+          <text class="lbl" x="356" y="76">9.8 is above 9.0</text>
+          <rect x="770" y="22" width="130" height="44" rx="6" class="soft-attacker"/><text class="ttl t-attacker" x="788" y="50">CRITICAL</text>
+        </g>
+        <g class="row r2" transform="translate(20 112)">
+          <rect width="920" height="88" rx="10"/>
+          <text class="lbl" x="16" y="24">record carries a CVSS vector</text>
+          <text class="mono" x="16" y="50">"score": "CVSS:3.1/AV:N/AC:L/…"</text>
+          <path class="wire" d="M300 46 H340" marker-end="url(#arrSv)"/>
+          <text class="ttl" x="356" y="30">float() fails, so the vector is not decoded</text>
+          <text class="lbl" x="356" y="52">OSV defines score as a vector string for CVSS entries</text>
+          <text class="lbl" x="356" y="70">the first entry with any score decides; no label lookup after it</text>
+          <rect x="770" y="22" width="130" height="44" rx="6" class="soft-accent"/><text class="ttl t-accent" x="808" y="50">HIGH</text>
+        </g>
+        <g class="row r3" transform="translate(20 208)">
+          <rect width="920" height="88" rx="10"/>
+          <text class="lbl" x="16" y="24">record has no score at all</text>
+          <text class="mono" x="16" y="50">database_specific.severity</text>
+          <path class="wire" d="M300 46 H340" marker-end="url(#arrSv)"/>
+          <text class="ttl" x="356" y="30">label, case-insensitive, mapped by name</text>
+          <g class="mono">
+            <text x="356" y="56">CRITICAL, HIGH</text><text x="476" y="56">MODERATE, MEDIUM → MEDIUM</text><text x="676" y="56">LOW</text>
+          </g>
+          <text class="lbl" x="356" y="76">a missing or unknown label falls back to HIGH</text>
+          <rect x="770" y="22" width="130" height="44" rx="6" class="soft-info"/><text class="ttl t-info" x="796" y="50">as labelled</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Three record shapes, each handled by a different branch of <code>_extract_severity</code>. The next steps highlight each in turn.</p>
+      <p class="step"><span class="n">2</span><b>A bare number is thresholded</b>: 9.0 and above is CRITICAL, 7.0 HIGH, 4.0 MEDIUM, anything lower LOW. A score of 9.8 is Critical.</p>
+      <p class="step"><span class="n">3</span><b>A CVSS vector string is not decoded.</b> The scanner does not compute a base score from the metrics; if <code>float()</code> fails it returns HIGH. Because the first entry with a score ends the search, a record whose severity list holds a vector never reaches the label lookup.</p>
+      <p class="step"><span class="n">4</span>With no score, <code>database_specific.severity</code> is mapped by name: CRITICAL, HIGH, MODERATE (as Medium), MEDIUM and LOW. <b>MODERATE is how GitHub advisories spell Medium.</b> A missing or unrecognised label becomes HIGH.</p>
+    </div>
+  </div>
+  <div class="callout note">
+    <div class="label">What this means in practice</div>
+    <p>The numeric branch fires only when a record stores a plain number. OSV's schema stores CVSS entries as vector strings, so a record with a vector in its severity list reports as High regardless of its real score. Medium and Low can come only from a bare numeric score or from a record with no score and a <code>database_specific</code> label. Treat the severity as a floor on urgency rather than a CVSS score.</p>
+  </div>
+</section>
+
+<section id="specs">
+  <h2>Odd version strings</h2>
+  <p class="prose">Cleaning is a plain left-strip of <code>^ ~ &gt; = &lt;</code> and spaces. It handles the common prefixes and nothing else; whatever remains is sent to OSV exactly as written.</p>
+
+  <div class="scene" id="spec" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 300" role="img" aria-label="Four version strings from a manifest, what is left after the prefix strip, and what that means: a clean exact version, a floor that may differ from the installed one, a leftover upper bound that is sent unchanged, and non-version strings such as latest or workspace:* that are sent unchanged.">
+        <g class="mono">
+          <text class="lbl" x="40" y="26">manifest says</text><text class="lbl" x="250" y="26">sent to OSV as version</text><text class="lbl" x="520" y="26">what that means</text>
+        </g>
+        <g class="rowx x1" transform="translate(20 40)"><rect width="920" height="52" rx="8"/><text class="mono" x="20" y="31">^4.17.15</text><text class="mono t-accent" x="230" y="31">4.17.15</text><text class="lbl" x="500" y="31">a clean version: the normal case</text></g>
+        <g class="rowx x2" transform="translate(20 100)"><rect width="920" height="52" rx="8"/><text class="mono" x="20" y="31">~1.2.3</text><text class="mono t-accent" x="230" y="31">1.2.3</text><text class="lbl" x="500" y="31">the written floor, not the version npm installed</text></g>
+        <g class="rowx x3" transform="translate(20 160)"><rect width="920" height="52" rx="8"/><text class="mono" x="20" y="31">&gt;=1.0.0 &lt;2</text><text class="mono t-attacker" x="230" y="31">1.0.0 &lt;2</text><text class="lbl" x="500" y="31">text after the first version survives the strip</text></g>
+        <g class="rowx x4" transform="translate(20 220)"><rect width="920" height="52" rx="8"/><text class="mono" x="20" y="31">latest · * · workspace:*</text><text class="mono t-attacker" x="230" y="31">unchanged</text><text class="lbl" x="500" y="31">not versions at all; no resolution is attempted</text></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Four kinds of version string a manifest can hold, and what the strip leaves behind.</p>
+      <p class="step"><span class="n">2</span><code>^4.17.15</code> loses its caret and is queried as <code>4.17.15</code>. This is the common case and it works as intended.</p>
+      <p class="step"><span class="n">3</span><code>~1.2.3</code> becomes <code>1.2.3</code>. A range allows newer versions, and the lock file may have installed one, but the scanner asks about the floor only. <b>A newly patched install can still be reported</b>, and a newer vulnerable one is not.</p>
+      <p class="step"><span class="n">4</span>A compound range such as <code>&gt;=1.0.0 &lt;2</code> keeps everything after the first version. The query version is <code>1.0.0 &lt;2</code>; what OSV does with it is OSV's decision.</p>
+      <p class="step"><span class="n">5</span><code>latest</code>, <code>*</code> and <code>workspace:*</code> pass through unchanged. If OSV answers a batch with an HTTP error, <b>all up to 100 packages in that batch are dropped</b> with a logged warning; the scan reports nothing for them.</p>
+    </div>
+  </div>
+</section>
+
+<section id="why">
+  <h2>Why it matters</h2>
+  <div class="callout why">
+    <div class="label">Why it matters</div>
+    <p>A typical Next.js app has 500 to 1000 transitive dependencies, and one vulnerable package can allow <b>remote code execution</b>, <b>bypass authentication</b> (a JWT library bug means forged tokens work), crash the application through crafted input, or leak data through error handling. You do not need a bug in your own code: the bug in a dependency is your bug too.</p>
+  </div>
+  <div class="callout breach">
+    <div class="label">Equifax (2017) and Log4Shell (2021)</div>
+    <p>147 million records were stolen from Equifax through an unpatched Apache Struts dependency (CVE-2017-5638). The patch had been available for two months, and Equifax paid $700 million in settlements. CVE-2021-44228 in Log4j allowed remote code execution through crafted log messages and affected hundreds of thousands of applications, including services from Apple, Amazon, Cloudflare and Steam.</p>
+  </div>
+</section>
+
+<section id="code">
+  <h2>Vulnerable vs fixed code</h2>
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true" type="button">BAD · vulnerable</button>
+      <button class="tab good" role="tab" aria-selected="false" type="button">GOOD · fixed</button>
+    </div>
+    <div role="tabpanel"><pre><code>{
+  <span class="k">"dependencies"</span>: {
+    <span class="hl bad"><span class="s">"next"</span>: <span class="s">"13.0.0"</span>,</span>        <span class="c">// multiple critical CVEs</span>
+    <span class="hl bad"><span class="s">"jsonwebtoken"</span>: <span class="s">"8.5.1"</span>,</span> <span class="c">// algorithm confusion attack</span>
+    <span class="hl bad"><span class="s">"lodash"</span>: <span class="s">"4.17.15"</span>,</span>      <span class="c">// prototype pollution</span>
+    <span class="hl bad"><span class="s">"axios"</span>: <span class="s">"0.21.0"</span></span>         <span class="c">// ReDoS</span>
+  }
+}</code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c"># Check for vulnerabilities</span>
+npm audit
+
+<span class="c"># Update to patched versions</span>
+<span class="hl good">npm update</span>
+
+<span class="c"># Major version updates (breaking changes)</span>
+npx npm-check-updates -u
+npm install
+
+<span class="c"># Automate with Dependabot or Renovate in CI</span>
+<span class="c"># .github/dependabot.yml</span>
+<span class="c"># version: 2</span>
+<span class="c"># updates:</span>
+<span class="c">#   - package-ecosystem: npm</span>
+<span class="c">#     directory: /</span>
+<span class="c">#     schedule: { interval: weekly }</span></code></pre></div>
+  </div>
+</section>
+
+<section id="limits">
+  <h2>Limits and what it needs</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Item</th><th>Value</th><th>Effect</th></tr></thead>
+      <tbody>
+        <tr><td>Files read</td><td><code>package.json</code> at the root and in each workspace</td><td>No <code>package-lock.json</code>, <code>yarn.lock</code> or <code>pnpm-lock.yaml</code>; transitive packages are never queried</td></tr>
+        <tr><td>Sections</td><td><code>dependencies</code> and <code>devDependencies</code></td><td><code>peerDependencies</code> and <code>optionalDependencies</code> are ignored</td></tr>
+        <tr><td>Package cap</td><td>200 after merging</td><td>The rest are not checked</td></tr>
+        <tr><td>Batch</td><td>100 queries per request, 30 s timeout</td><td>An HTTP error drops that batch and logs a warning</td></tr>
+        <tr><td>Finding</td><td>one per advisory, confidence 0.95</td><td>Title <code>Vulnerable dependency: name@version</code></td></tr>
+        <tr><td>Severity</td><td>numeric score thresholds, label map, default High</td><td>Range Low to Critical</td></tr>
+        <tr><td>Needs</td><td>outbound HTTPS to <code>api.osv.dev</code>, no API key</td><td>Offline, the scan returns no findings from this scanner</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout note">
+    <div class="label">Where the code differs from the prose docs</div>
+    <p>The markdown describes "npm audit advisories". The scanner does not run <code>npm audit</code>; it queries OSV.dev, and the configuration holds an "outdated package" title, a confidence of 0.50 and a lock-file error message that the scanner never uses. The file attached to a finding is found by checking which package name appears in the finding's title, so a short name that is contained in a longer one (<code>react</code> inside <code>react-dom</code>) can be attributed to the wrong manifest. The related <a href="java-dependencies.html">Java</a>, <a href="python-dependencies.html">Python</a> and <a href="osv-dependencies.html">OSV</a> scanners cover other ecosystems.</p>
+  </div>
+</section>
+
+<footer class="foot">
+  <span>Source: <a href="../scanners/dependency-scanner.md">docs/scanners/dependency-scanner.md</a> · isitsecure/engine/code_analysis/dependency_scanner.py</span>
+  <span>Group: <a href="group-secrets-dependencies.html">Secrets and dependencies</a> · Related: <a href="python-dependencies.html">Python dependencies</a> · <a href="git-secrets.html">Git secrets</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+</body>
+</html>

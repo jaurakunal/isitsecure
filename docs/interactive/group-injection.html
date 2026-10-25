@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Injection · isitsecure</title>
+<meta name="description" content="The six isitsecure injection scanners share one shape: put a marker where outside data enters, read one specific signal back, and report only when the signal is specific to the marker. Animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  /* shared shape: columns switch on per step, the rule column lights on the last step */
+  #shape .hdr { transition: opacity .4s; }
+  #shape.s6 .lane-1 .rule > rect, #shape.s6 .lane-6 .rule > rect { stroke: var(--accent); stroke-width: 2.5; }
+  #shape.s6 .pair { stroke: var(--accent); stroke-dasharray: 5 5; }
+  #shape .pair { stroke: transparent; fill: none; stroke-width: 1.5; transition: stroke .4s; }
+  #shape .target > rect { fill: var(--surface-2); stroke: var(--line); stroke-width: 1.5; transition: stroke .35s, stroke-width .35s; }
+  #shape.s3 .target > rect { stroke: var(--attacker); stroke-width: 2.5; }
+  #shape[data-step="5"] .rule > rect { stroke: var(--accent); stroke-width: 2; }
+
+  /* card thumbs, same rules as index.html */
+  .thumb svg .n > rect, .thumb svg .n > circle { fill: var(--surface); stroke: var(--muted); stroke-width: 1.3; }
+  .thumb svg .w { stroke: var(--muted); stroke-width: 1.3; fill: none; }
+  .thumb svg .a { stroke: var(--accent); }
+  .thumb svg .fa { fill: var(--accent); }
+  .thumb svg .fr { fill: var(--attacker); }
+  .thumb svg .fs { fill: var(--safe); }
+  .thumb svg .fi { fill: var(--info); }
+  .thumb svg .r { stroke: var(--attacker); }
+  .thumb svg .s { stroke: var(--safe); }
+  .thumb svg .i { stroke: var(--info); }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› Injection</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/README.md" title="The markdown scanner index">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">Scanner group</div>
+  <h1>Injection</h1>
+  <p class="lede">Six scanners, one mechanism. Each finds a place where outside data enters the app, puts a marker there that it can recognise later, and reads one specific signal back: a database error, a callback, a canary with its angle brackets intact, a hooked browser sink, an accepted upload, or a source-to-sink path in the code. A finding is reported only when the signal is specific to the marker.</p>
+  <div class="meta">
+    <span class="pill">6 scanners</span><span class="pill dast">5 DAST</span><span class="pill sast">1 SAST</span><span class="pill crit">Critical</span><span class="pill high">High</span><span class="pill">Injection Risk</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#how"><span class="n">01</span>How this group works</a>
+  <a href="#scanners"><span class="n">02</span>Scanners in this group</a>
+  <a href="#glance"><span class="n">03</span>At a glance</a>
+  <a href="#why"><span class="n">04</span>Why this class matters</a>
+  <a href="#breach"><span class="n">05</span>Breaches</a>
+</nav>
+
+<section id="how">
+  <h2>How this group works</h2>
+  <p class="prose">Every injection scanner is a marker and an oracle. The marker is what the scanner puts into the app; the oracle is the one signal it reads back. The lanes below are the six scanners in this group, one per row, and the columns switch on in the order the scanner moves through them.</p>
+
+  <div class="scene" id="shape" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 330" role="img" aria-label="Six lanes, one per injection scanner. Each lane shows where data enters, the marker the scanner sends, the target in the middle, the signal the scanner reads back and the rule that turns the signal into a finding.">
+        <defs><marker id="arrG1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+
+        <!-- column headers -->
+        <text class="lbl hdr" x="16" y="24">scanner</text>
+        <text class="lbl hdr" x="140" y="24">where data enters</text>
+        <text class="lbl hdr at-2" x="310" y="24">the marker it sends</text>
+        <text class="lbl hdr at-4" x="582" y="24">the signal it reads</text>
+        <text class="lbl hdr at-5 until-6" x="772" y="24">the rule</text>
+        <text class="lbl hdr only-6 t-accent" x="772" y="24">finding · Injection Risk</text>
+
+        <!-- target column -->
+        <g class="target" transform="translate(506 40)">
+          <rect width="60" height="224" rx="8"/>
+          <text class="ttl" x="30" y="118" text-anchor="middle" transform="rotate(-90 30 118)">Target app</text>
+        </g>
+        <g class="target" transform="translate(506 270)">
+          <rect width="60" height="40" rx="8"/>
+          <text class="ttl" x="30" y="25" text-anchor="middle">Repo</text>
+        </g>
+
+        <!-- packet paths (invisible) -->
+        <path id="gp1" d="M490 60 H 582" fill="none" stroke="none"/>
+        <path id="gp2" d="M490 106 H 582" fill="none" stroke="none"/>
+        <path id="gp3" d="M490 152 H 582" fill="none" stroke="none"/>
+        <path id="gp4" d="M490 198 H 582" fill="none" stroke="none"/>
+        <path id="gp5" d="M490 244 H 582" fill="none" stroke="none"/>
+        <path id="gp6" d="M490 290 H 582" fill="none" stroke="none"/>
+
+        <!-- lane 1: active injection -->
+        <g class="lane lane-1" transform="translate(0 40)">
+          <text x="16" y="24">Active injection</text>
+          <g class="node"><rect x="140" y="0" width="160" height="40" rx="6"/><text class="lbl" x="150" y="17">query · body · path params</text><text class="lbl" x="150" y="31">every endpoint, 5 params</text></g>
+          <g class="node at-2"><rect x="310" y="0" width="180" height="40" rx="6"/><text class="mono t-attacker" x="320" y="24">' · SLEEP(5) · {{7*7}}</text></g>
+          <path class="wire at-3 attacker" d="M490 20 H 504" marker-end="url(#arrG1)"/>
+          <path class="wire at-4" d="M566 20 H 580" marker-end="url(#arrG1)"/>
+          <g class="node at-4"><rect x="582" y="0" width="180" height="40" rx="6"/><text class="lbl" x="592" y="17">ORA-01756 in the body,</text><text class="lbl" x="592" y="31">or +5 s, measured twice</text></g>
+          <g class="node rule at-5"><rect x="772" y="0" width="172" height="40" rx="6"/><text class="lbl" x="782" y="17">error pattern, or the</text><text class="lbl" x="782" y="31">delay reproduces</text></g>
+        </g>
+
+        <!-- lane 2: ssrf -->
+        <g class="lane lane-2" transform="translate(0 86)">
+          <text x="16" y="24">SSRF</text>
+          <g class="node"><rect x="140" y="0" width="160" height="40" rx="6"/><text class="lbl" x="150" y="17">URL-shaped params</text><text class="lbl" x="150" y="31">?url= ?next= ?webhook=</text></g>
+          <g class="node at-2"><rect x="310" y="0" width="180" height="40" rx="6"/><text class="mono t-attacker" x="320" y="24">169.254.169.254/latest/…</text></g>
+          <path class="wire at-3 attacker" d="M490 20 H 504" marker-end="url(#arrG1)"/>
+          <path class="wire at-4" d="M566 20 H 580" marker-end="url(#arrG1)"/>
+          <g class="node at-4"><rect x="582" y="0" width="180" height="40" rx="6"/><text class="lbl" x="592" y="17">metadata text in the reply,</text><text class="lbl" x="592" y="31">or an OOB callback hit</text></g>
+          <g class="node rule at-5"><rect x="772" y="0" width="172" height="40" rx="6"/><text class="lbl" x="782" y="17">the server fetched it:</text><text class="lbl" x="782" y="31">body or callback proves it</text></g>
+        </g>
+
+        <!-- lane 3: xss -->
+        <g class="lane lane-3" transform="translate(0 132)">
+          <text x="16" y="24">XSS</text>
+          <g class="node"><rect x="140" y="0" width="160" height="40" rx="6"/><text class="lbl" x="150" y="17">GET params · form fields</text><text class="lbl" x="150" y="31">discovered names first</text></g>
+          <g class="node at-2"><rect x="310" y="0" width="180" height="40" rx="6"/><text class="mono t-attacker" x="320" y="24">&lt;canary_xss_8f3a&gt;</text></g>
+          <path class="wire at-3 attacker" d="M490 20 H 504" marker-end="url(#arrG1)"/>
+          <path class="wire at-4" d="M566 20 H 580" marker-end="url(#arrG1)"/>
+          <g class="node at-4"><rect x="582" y="0" width="180" height="40" rx="6"/><text class="lbl" x="592" y="17">canary back with &lt; &gt; intact</text><text class="lbl" x="592" y="31">in a text/html response</text></g>
+          <g class="node rule at-5"><rect x="772" y="0" width="172" height="40" rx="6"/><text class="lbl" x="782" y="17">unescaped AND text/html;</text><text class="lbl" x="782" y="31">encoded → context breakout</text></g>
+        </g>
+
+        <!-- lane 4: dom xss -->
+        <g class="lane lane-4" transform="translate(0 178)">
+          <text x="16" y="24">DOM XSS</text>
+          <g class="node"><rect x="140" y="0" width="160" height="40" rx="6"/><text class="lbl" x="150" y="17">?q= · #hash · postMessage</text><text class="lbl" x="150" y="31">typed into inputs</text></g>
+          <g class="node at-2"><rect x="310" y="0" width="180" height="40" rx="6"/><text class="mono t-attacker" x="320" y="24">DOMXSS_CANARY_8f3a</text></g>
+          <path class="wire at-3 attacker" d="M490 20 H 504" marker-end="url(#arrG1)"/>
+          <path class="wire at-4" d="M566 20 H 580" marker-end="url(#arrG1)"/>
+          <g class="node at-4"><rect x="582" y="0" width="180" height="40" rx="6"/><text class="lbl" x="592" y="17">hooked innerHTML setter</text><text class="lbl" x="592" y="31">records the canary</text></g>
+          <g class="node rule at-5"><rect x="772" y="0" width="172" height="40" rx="6"/><text class="lbl" x="782" y="17">canary reached a sink</text><text class="lbl" x="782" y="31">inside real Chromium</text></g>
+        </g>
+
+        <!-- lane 5: file upload -->
+        <g class="lane lane-5" transform="translate(0 224)">
+          <text x="16" y="24">File upload</text>
+          <g class="node"><rect x="140" y="0" width="160" height="40" rx="6"/><text class="lbl" x="150" y="17">paths with /upload /file</text><text class="lbl" x="150" y="31">/media /avatar /import …</text></g>
+          <g class="node at-2"><rect x="310" y="0" width="180" height="40" rx="6"/><text class="mono t-attacker" x="320" y="16">test.html · test.svg</text><text class="mono t-attacker" x="320" y="31">../../../etc/passwd</text></g>
+          <path class="wire at-3 attacker" d="M490 20 H 504" marker-end="url(#arrG1)"/>
+          <path class="wire at-4" d="M566 20 H 580" marker-end="url(#arrG1)"/>
+          <g class="node at-4"><rect x="582" y="0" width="180" height="40" rx="6"/><text class="lbl" x="592" y="17">HTTP 2xx</text><text class="lbl" x="592" y="31">(nothing is fetched back)</text></g>
+          <g class="node rule at-5"><rect x="772" y="0" width="172" height="40" rx="6"/><text class="lbl" x="782" y="17">accepted = reported;</text><text class="lbl" x="782" y="31">the weakest oracle here</text></g>
+        </g>
+
+        <!-- lane 6: taint (SAST) -->
+        <g class="lane lane-6" transform="translate(0 270)">
+          <text x="16" y="24">Taint (SAST)</text>
+          <g class="node"><rect x="140" y="0" width="160" height="40" rx="6"/><text class="lbl" x="150" y="17">source: req.query.q</text><text class="lbl" x="150" y="31">req.body · params · argv</text></g>
+          <g class="node at-2"><rect x="310" y="0" width="180" height="40" rx="6"/><text class="lbl" x="320" y="17">tainted variable</text><text class="lbl" x="320" y="31">nothing is sent</text></g>
+          <path class="wire at-3 info" d="M490 20 H 504" marker-end="url(#arrG1)"/>
+          <path class="wire at-4" d="M566 20 H 580" marker-end="url(#arrG1)"/>
+          <g class="node at-4"><rect x="582" y="0" width="180" height="40" rx="6"/><text class="lbl" x="592" y="17">reaches db.query(…)</text><text class="lbl" x="592" y="31">exec · innerHTML · fetch</text></g>
+          <g class="node rule at-5"><rect x="772" y="0" width="172" height="40" rx="6"/><text class="lbl" x="782" y="17">no sanitizer on the path</text><text class="lbl" x="782" y="31">Semgrep, deterministic</text></g>
+        </g>
+
+        <!-- correlation pair on the last step -->
+        <path class="pair" d="M944 60 C 956 60, 956 290, 944 290"/>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Six scanners, one shape. Each starts from a place where outside data enters: a query, body or path parameter, a form field, a filename, a URL the server will fetch, or, for the static analyzer, a request object in the code.</p>
+      <p class="step"><span class="n">2</span>Each sends a <b>marker it can recognise later</b>: a quote that breaks SQL, the cloud metadata address, a canary wrapped in angle brackets, a traversal filename. Taint analysis sends nothing; it marks the variable that holds request data and follows it.</p>
+      <p class="step" data-on="shapeFlow"><span class="n">3</span>The target processes the marker. Everything goes through one rate-limited client, read-only payloads only, and every scanner checks its time budget per endpoint so it returns what it has instead of being cancelled.</p>
+      <p class="step"><span class="n">4</span>Each scanner reads <b>one specific signal</b>: a database error string or a delay, metadata text or an out-of-band callback, the canary with its brackets intact, a hooked browser sink, a 2xx, a sink call in code.</p>
+      <p class="step"><span class="n">5</span><b>The rule: report only when the signal is specific to the marker.</b> Canary text alone is not enough, the brackets must survive; a one-off delay is not enough, it must reproduce; a sink name in a bundle is not enough, the canary must arrive in a real browser. File upload's 2xx is the loosest rule in the group, and its page says so.</p>
+      <p class="step"><span class="n">6</span>Every finding lands in one category, Injection Risk. That is what lets the correlator pair a dynamic hit with a static taint path on the same route and raise both to a confirmed finding.</p>
+    </div>
+  </div>
+</section>
+
+<section id="scanners">
+  <h2>Scanners in this group</h2>
+  <div class="cards">
+    <a class="card" href="active-injection.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><text x="12" y="30" class="fr">' OR '1'='1' --</text><path class="w" d="M12 40 H 188"/><text x="12" y="62">response: ORA-01756</text><circle class="fs" cx="180" cy="58" r="5"/></svg></div>
+      <h3>Active injection</h3><p>Six oracles for SQLi, command, NoSQL, XXE and SSTI, the re-measure rule for time-based blind SQLi, and the LLM adjudicator that drops heuristic false positives.</p>
+      <div class="foot"><span class="pill dast">DAST</span><span class="pill crit">Critical</span><span class="pill">active-injection-scanner.md</span></div>
+    </a>
+    <a class="card" href="ssrf.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><g class="n"><circle cx="24" cy="40" r="12"/></g><g class="n"><rect x="76" y="26" width="48" height="28" rx="4"/></g><text x="100" y="44" text-anchor="middle">server</text><g class="n"><rect x="148" y="26" width="44" height="28" rx="4"/></g><text x="170" y="44" text-anchor="middle" style="font-size:9px">169.254…</text><path class="w r" d="M36 40H76"/><path class="w r" d="M124 40H148"/><circle class="fr" cx="136" cy="40" r="4"/></svg></div>
+      <h3>Server-side request forgery</h3><p>Your server as the attacker's proxy to cloud metadata, URL sinks hiding in form fields, and out-of-band callbacks that prove a blind fetch.</p>
+      <div class="foot"><span class="pill dast">DAST</span><span class="pill high">High–Critical</span><span class="pill">ssrf-scanner.md</span></div>
+    </a>
+    <a class="card" href="taint-analysis.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><g class="n"><rect x="8" y="30" width="48" height="20" rx="4"/></g><text x="32" y="44" text-anchor="middle">source</text><g class="n"><rect x="76" y="30" width="48" height="20" rx="4"/></g><text x="100" y="44" text-anchor="middle">sanitize</text><g class="n"><rect x="144" y="30" width="48" height="20" rx="4"/></g><text x="168" y="44" text-anchor="middle">sink</text><path class="w r" d="M56 40H76"/><path class="w s" d="M124 40H144"/><circle class="fr" cx="66" cy="40" r="4"/></svg></div>
+      <h3>Taint analysis</h3><p>Source to sink, with and without a sanitizer. Why fifty lines of stack-tuned Semgrep rules beat the stock packs, and where the LLM still earns its keep.</p>
+      <div class="foot"><span class="pill sast">SAST</span><span class="pill high">High–Critical</span><span class="pill">semgrep-taint.md</span></div>
+    </a>
+    <a class="card" href="xss.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><text x="12" y="26" class="fr">?q=&lt;canary_xss_8f3a&gt;</text><path class="w" d="M12 36 H 188"/><text x="12" y="58">&lt;h1&gt;Results for: &lt;canary_xss_8f3a&gt;</text><circle class="fr" cx="186" cy="54" r="5"/></svg></div>
+      <h3>Cross-site scripting</h3><p>A canary with angle brackets, the text/html gate, seven injection contexts with their breakout payloads, POST bodies with the form's real field names, and the stored read-back.</p>
+      <div class="foot"><span class="pill dast">DAST</span><span class="pill high">High–Critical</span><span class="pill">xss-scanner.md</span></div>
+    </a>
+    <a class="card" href="dom-xss.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><g class="n"><rect x="8" y="12" width="120" height="56" rx="4"/></g><text x="16" y="30">el.innerHTML = q</text><text x="16" y="50" class="fr">hook: canary seen</text><path class="w a" d="M128 40 H 150"/><g class="n"><rect x="150" y="28" width="42" height="24" rx="4"/></g><text x="171" y="44" text-anchor="middle" class="fs">HIGH</text></svg></div>
+      <h3>DOM XSS in a real browser</h3><p>Twelve sinks hooked before the app's JavaScript runs, four injection vectors in order, and an interactive oracle that types into search boxes and watches the DOM.</p>
+      <div class="foot"><span class="pill dast">DAST</span><span class="pill high">High</span><span class="pill">dom-xss-scanner.md</span></div>
+    </a>
+    <a class="card" href="file-upload.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><g class="n"><rect x="8" y="14" width="88" height="22" rx="4"/></g><text x="52" y="29" text-anchor="middle">test.svg</text><g class="n"><rect x="8" y="44" width="88" height="22" rx="4"/></g><text x="52" y="59" text-anchor="middle" class="fr">../../etc/passwd</text><path class="w r" d="M96 25 H 140 M96 55 H 140"/><g class="n"><rect x="140" y="28" width="52" height="24" rx="4"/></g><text x="166" y="44" text-anchor="middle">2xx</text></svg></div>
+      <h3>File upload</h3><p>Upload endpoints found by path, an HTML and an SVG file posted as multipart, three traversal filenames, and the one rule that decides: did the server say 2xx.</p>
+      <div class="foot"><span class="pill dast">DAST</span><span class="pill crit">High–Critical</span><span class="pill">file-upload-scanner.md</span></div>
+    </a>
+  </div>
+</section>
+
+<section id="glance">
+  <h2>At a glance</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Scanner</th><th>What it looks at</th><th>What it reports</th><th>Severity</th><th>Needs</th></tr></thead>
+      <tbody>
+        <tr><td><a href="active-injection.html">Active injection</a><br><code>active_injection_scanner</code></td><td>Query, body and path parameters on every endpoint, up to 5 params each</td><td>Error-based and time-based SQLi, command injection, NoSQL, XXE, SSTI</td><td>Critical</td><td>Target URL. Time-based SQLi only at <code>--depth deep</code>. LLM key for the adjudication pass.</td></tr>
+        <tr><td><a href="ssrf.html">SSRF</a><br><code>ssrf_scanner</code></td><td>URL-shaped parameters, including ones hiding in form fields</td><td>Internal IP and cloud-metadata fetches; blind SSRF via out-of-band callbacks</td><td>High–Critical</td><td>Target URL. OOB callback server for the blind cases.</td></tr>
+        <tr><td><a href="taint-analysis.html">Semgrep taint</a><br><code>semgrep_taint</code></td><td>Cloned repo: JS/TS, Python, Java, Kotlin rule packs</td><td>Source-to-sink paths without a sanitizer: SQLi, XSS, SSRF, path traversal, command injection, SSTI</td><td>High–Critical</td><td>Repository. The <code>[taint]</code> extra and the <code>semgrep</code> binary; no-ops without it.</td></tr>
+        <tr><td><a href="xss.html">XSS</a><br><code>xss_scanner</code></td><td>GET query params (URL, discovered, then a capped fallback list) and POST/PUT/PATCH bodies using the form's discovered field names</td><td>Confirmed reflected XSS (GET and POST body), context-aware breakouts, stored XSS on read-back, possible XSS when encoded, static DOM sinks</td><td>Low–Critical</td><td>Target URL. Auth headers when a session exists. Static DOM sink pass only at <code>--depth deep</code>.</td></tr>
+        <tr><td><a href="dom-xss.html">DOM XSS</a><br><code>dom_xss_scanner</code></td><td>Page URLs in a headless Chromium: query params, hash, postMessage, typed inputs</td><td>Confirmed DOM XSS with the exact sink and source</td><td>High</td><td>Target URL and Playwright. Runs on crawled pages with the session when credentials exist, otherwise on page-like URLs from discovery.</td></tr>
+        <tr><td><a href="file-upload.html">File upload</a><br><code>file_upload_scanner</code></td><td>Endpoints whose path contains an upload indicator (/upload, /file, /media, /attachment, /image, /avatar, /document, /import)</td><td>Dangerous file types accepted (.html, .svg); path traversal filename accepted</td><td>High (type) · Critical (traversal)</td><td>Target URL. Auth headers when a session exists.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="why">
+  <h2>Why this class matters</h2>
+  <div class="callout why">
+    <div class="label">Why injection</div>
+    <p>Injection is the attacker's input being interpreted as code or as a command by something on your side: the database, the shell, the XML parser, the template engine, the browser, the filesystem. The impact is whatever that interpreter can do. SQL injection reads or rewrites the whole table. XSS runs JavaScript as your users, which means their tokens, their actions and any form on the page. SSRF turns the server into a proxy to the cloud metadata service that hands out IAM credentials. An accepted <code>.svg</code> upload is stored XSS on your own domain, and an accepted traversal filename is a write anywhere on the filesystem.</p>
+  </div>
+</section>
+
+<section id="breach">
+  <h2>Real-world breaches</h2>
+  <div class="grid-2">
+    <div class="callout breach"><div class="label">Heartland Payment Systems, 2008</div><p>SQL injection led to the theft of 130 million credit and debit card numbers, one of the largest breaches in history at the time.</p></div>
+    <div class="callout breach"><div class="label">Capital One, 2019</div><p>An SSRF vulnerability in a WAF configuration reached the AWS metadata endpoint (IMDSv1), yielded IAM credentials, and exposed 100+ million customer records from S3. Capital One was fined $80 million.</p></div>
+    <div class="callout breach"><div class="label">British Airways, 2018</div><p>The Magecart group injected malicious JavaScript into the payment page and skimmed 380,000 customers' card details. The ICO fined BA $26 million. There was no Content Security Policy and user input was rendered without sanitization.</p></div>
+    <div class="callout breach"><div class="label">ImageTragick, 2016</div><p>CVE-2016-3714 in ImageMagick allowed remote code execution via crafted image files. Any service that accepted user-uploaded images and processed them with ImageMagick was vulnerable.</p></div>
+  </div>
+</section>
+
+<footer class="foot">
+  <span>Sources: <a href="../scanners/README.md">docs/scanners/README.md</a> · <a href="../scanners/active-injection-scanner.md">active-injection</a> · <a href="../scanners/ssrf-scanner.md">ssrf</a> · <a href="../scanners/semgrep-taint.md">semgrep-taint</a> · <a href="../scanners/xss-scanner.md">xss</a> · <a href="../scanners/dom-xss-scanner.md">dom-xss</a> · <a href="../scanners/file-upload-scanner.md">file-upload</a></span>
+  <span>Other groups: <a href="group-access-control.html">Access control</a> · <a href="group-auth-sessions.html">Authentication and sessions</a> · <a href="group-browser-defenses.html">Browser-side defenses</a> · <a href="group-business-logic.html">Business logic</a> · <a href="group-surface.html">Attack surface</a> · <a href="group-secrets-dependencies.html">Secrets and dependencies</a> · <a href="group-infrastructure.html">Infrastructure</a> · <a href="group-schema-middleware.html">Schemas and middleware</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+<script>
+  // step 3 of the shared-shape figure: one marker per lane crosses the target
+  window.shapeFlow = function (scene, step, el) {
+    const svg = el.querySelector("svg");
+    IsDoc.clearPackets(svg);
+    for (let i = 1; i <= 6; i++) {
+      const p = svg.querySelector("#gp" + i);
+      IsDoc.packet(svg, p, { r: 5, cls: i === 6 ? "f-info" : "f-attacker", duration: 1100, delay: (i - 1) * 120, hold: 600 });
+    }
+  };
+</script>
+</body>
+</html>

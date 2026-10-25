@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Session Scanner · isitsecure</title>
+<meta name="description" content="How isitsecure checks session handling without sending a request: tokens written to localStorage, auth cookies missing HttpOnly or Secure, and JWTs that live longer than 24 hours, animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  /* page-specific: finding cards and the snapshot lines that each check reads */
+  #snapshot .finding > rect, #expiry .finding > rect, #fixcookie .finding > rect { stroke: var(--line); stroke-width: 1; }
+  #snapshot .src { transition: fill .35s; }
+  #snapshot.s2 .js, #snapshot.s3 .ck { fill: var(--fg); }
+  #snapshot[data-step="2"] .js, #snapshot[data-step="3"] .ck, #snapshot[data-step="4"] .ck { fill: var(--accent); }
+  /* expiry bar fills on step 2 */
+  #expiry .track { fill: var(--surface-2); stroke: var(--line); }
+  #expiry .fill { fill: var(--accent); transform-box: fill-box; transform-origin: left center; transform: scaleX(0); transition: transform 1.2s cubic-bezier(.4,0,.2,1); }
+  #expiry.s2 .fill { transform: scaleX(1); }
+  #expiry .mark { stroke: var(--attacker); stroke-width: 1.5; stroke-dasharray: 3 3; }
+  /* fix scene: findings are struck out as the header gains flags */
+  #fixcookie .finding { transition: opacity .35s; }
+  #fixcookie .finding text { transition: text-decoration-color .3s; }
+  #fixcookie.s2 .f1, #fixcookie.s2 .f0, #fixcookie.s3 .f2, #fixcookie.s4 .f3 { opacity: .35; }
+  #fixcookie.s2 .f1 text, #fixcookie.s2 .f0 text, #fixcookie.s3 .f2 text, #fixcookie.s4 .f3 text { text-decoration: line-through; }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› <a href="group-auth-sessions.html">Authentication and sessions</a> › Session</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/session-scanner.md" title="The markdown source for this page">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">DAST scanner · reads the snapshot</div>
+  <h1>Session Scanner</h1>
+  <p class="lede">A stolen session is as good as a password. This scanner never sends a request: it reads the page snapshot that discovery already captured and looks for the three ways a session token gets stolen or stays valid too long: a token written to localStorage, an auth cookie without HttpOnly or Secure, and a JWT that expires more than a day out.</p>
+  <div class="meta">
+    <span class="pill dast">DAST</span><span class="pill high">High</span><span class="pill">Auth Weakness</span><span class="pill">3 checks</span><span class="pill">quick depth</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#snapshot-walk"><span class="n">01</span>Reading the snapshot</a>
+  <a href="#token-expiry"><span class="n">02</span>Token lifetime</a>
+  <a href="#fix"><span class="n">03</span>The fix, flag by flag</a>
+  <a href="#why"><span class="n">04</span>Why it matters</a>
+  <a href="#code"><span class="n">05</span>Vulnerable vs fixed code</a>
+  <a href="#limits"><span class="n">06</span>Limits and what it needs</a>
+</nav>
+
+<section id="snapshot-walk">
+  <h2>Reading the snapshot</h2>
+  <p class="prose">Phase 1 rendered the target with Playwright and kept the HTML, every JavaScript file it loaded and the response headers. Two of the three checks run entirely over that material. The actor here is the scanner alone; the target is never contacted again.</p>
+
+  <div class="scene" id="snapshot" data-scene data-interval="3200">
+    <figure class="stage">
+      <svg viewBox="0 0 960 330" role="img" aria-label="The captured snapshot on the left feeds two checks: a regex over the JavaScript for localStorage token writes, and a flag check on cookies whose name looks like an auth cookie. Findings accumulate on the right.">
+        <defs><marker id="arrSs" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <!-- snapshot -->
+        <g class="node lit-1" transform="translate(20 20)">
+          <rect width="240" height="290" rx="10"/>
+          <text class="ttl" x="14" y="26">Snapshot from phase 1</text>
+          <text class="lbl" x="14" y="44">captured once, before any scanner</text>
+          <g class="mono">
+            <text class="src" x="14" y="74">index.html</text>
+            <text class="src js" x="14" y="94">app.3f2c.js</text>
+            <text class="src js" x="14" y="110">vendor.9a1.js</text>
+            <text class="src js" x="14" y="126">chunk-7.js</text>
+            <text class="src ck" x="14" y="158">Set-Cookie: sid=…</text>
+            <text class="src ck" x="14" y="174">Set-Cookie: theme=dark</text>
+            <text class="src ck" x="14" y="190">Set-Cookie: sb-access-token=…</text>
+            
+          </g>
+          <text class="lbl" x="14" y="258">No request leaves this scanner.</text>
+          <text class="lbl" x="14" y="274">It only reads what is already here.</text>
+        </g>
+        <!-- wires -->
+        <path class="wire at-2" d="M260 112 C 282 112, 282 80, 298 80" marker-end="url(#arrSs)"/>
+        <path class="wire at-3" d="M260 176 C 282 176, 282 235, 298 235" marker-end="url(#arrSs)"/>
+        <path class="wire at-2" d="M660 80 C 672 80, 672 104, 678 104" marker-end="url(#arrSs)"/>
+        <path class="wire at-4" d="M660 235 C 672 235, 672 190, 678 190" marker-end="url(#arrSs)"/>
+        <!-- check 1 -->
+        <g class="node at-2 lit-2" transform="translate(300 20)">
+          <rect width="360" height="120" rx="10"/>
+          <text class="ttl" x="14" y="26">1 · Token storage regex over all JS</text>
+          <text class="lbl" x="14" y="46">keys: token · access_token · auth_token · jwt</text>
+          <g class="mono">
+            <text class="t-attacker" x="14" y="74">localStorage.setItem("token", res.jwt)</text>
+            <text class="lbl" x="14" y="92">in app.3f2c.js · first match wins, then stop</text>
+          </g>
+          <text class="lbl at-5" x="14" y="110">chunk-7.js matches too: not reported again</text>
+        </g>
+        <!-- check 2 -->
+        <g class="node at-3 lit-3" transform="translate(300 160)">
+          <rect width="360" height="150" rx="10"/>
+          <text class="ttl" x="14" y="26">2 · Auth cookie flags</text>
+          <text class="lbl" x="14" y="44">name must contain one of 10 auth names</text>
+          <g class="mono">
+            <text x="14" y="70">sid</text><text class="t-safe" x="128" y="70">auth name</text><text class="at-4 t-attacker" x="212" y="70">HttpOnly ✗ Secure ✗</text>
+            <text x="14" y="92">theme</text><text class="lbl" x="128" y="92">not auth · skipped</text>
+            <text x="14" y="114">sb-access-token</text><text class="t-safe" x="128" y="114">auth name</text><text class="at-4 t-safe" x="212" y="114">HttpOnly ✓ Secure ✓</text>
+          </g>
+          <text class="lbl at-4" x="14" y="138">each missing flag is its own finding</text>
+        </g>
+        <!-- findings -->
+        <g class="node" transform="translate(680 20)">
+          <rect width="260" height="290" rx="10"/>
+          <text class="ttl" x="14" y="26">Findings</text>
+          <text class="lbl only-1" x="14" y="46">none yet</text>
+          <g class="finding at-2" transform="translate(14 58)"><rect width="232" height="52" rx="6" class="soft-attacker"/><text class="mono t-attacker" x="10" y="19">HIGH · 0.80</text><text class="lbl" x="10" y="38">Auth token stored in localStorage</text></g>
+          <g class="finding at-4" transform="translate(14 120)"><rect width="232" height="52" rx="6" class="soft-attacker"/><text class="mono t-attacker" x="10" y="19">HIGH · 0.85</text><text class="lbl" x="10" y="38">Cookie 'sid' missing HttpOnly</text></g>
+          <g class="finding at-4" transform="translate(14 182)"><rect width="232" height="52" rx="6" class="soft-accent"/><text class="mono t-accent" x="10" y="19">MEDIUM · 0.85</text><text class="lbl" x="10" y="38">Cookie 'sid' missing Secure</text></g>
+          <text class="lbl at-5" x="14" y="258">theme · sb-access-token: nothing</text>
+          <text class="lbl at-5" x="14" y="274">JS: one finding, however many hits</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Phase 1 rendered the page and kept the HTML, every JavaScript file it loaded, and the response headers with their cookies. The session scanner sends nothing; it reads this snapshot.</p>
+      <p class="step"><span class="n">2</span>Two regexes run over the concatenated JavaScript, looking for <code>localStorage.setItem(</code> or <code>localStorage[</code> with a key of <code>token</code>, <code>access_token</code>, <code>auth_token</code> or <code>jwt</code>. <b>The first match is reported as HIGH, confidence 0.80</b>, and the search stops.</p>
+      <p class="step"><span class="n">3</span>Cookies are filtered by name first. Only a name containing one of ten auth names (token, session, sid, jwt, sb-access-token, sb-refresh-token, __session, connect.sid …) is examined. <code>theme</code> is skipped without a look at its flags.</p>
+      <p class="step"><span class="n">4</span>Each auth cookie is checked twice. <b>No HttpOnly → HIGH, 0.85</b>: <code>document.cookie</code> can read it, so any XSS steals the session. <b>No Secure → MEDIUM, 0.85</b>: it travels over plain HTTP. <code>sid</code> yields two findings; <code>sb-access-token</code> has both flags and yields none.</p>
+      <p class="step"><span class="n">5</span>The guards: a cookie that is not an auth cookie never counts, a cookie with both flags is silent, and the JavaScript check reports once per app no matter how many files write the token.</p>
+    </div>
+  </div>
+</section>
+
+<section id="token-expiry">
+  <h2>Token lifetime</h2>
+  <p class="prose">The third check needs a real session token. It decodes the JWT's payload without verifying the signature, because only one claim matters here: how far away <code>exp</code> is.</p>
+
+  <div class="scene" id="expiry" data-scene data-interval="3000">
+    <figure class="stage">
+      <svg viewBox="0 0 960 250" role="img" aria-label="A session JWT is decoded on the left; on the right a lifetime bar runs from now to the exp claim, with the 24 hour limit marked close to the start. A token with 30 days left is flagged.">
+        <g class="node lit-1" transform="translate(20 20)">
+          <rect width="300" height="210" rx="10"/>
+          <text class="ttl" x="14" y="26">Session token</text>
+          <text class="lbl" x="14" y="44">from the authenticated crawl</text>
+          <g class="mono">
+            <text x="14" y="72"><tspan class="t-info">eyJhbGciOi…</tspan>.<tspan class="t-accent">eyJzdWIiOi…</tspan>.<tspan class="t-safe">SflKxw…</tspan></text>
+            <text class="lbl" x="14" y="92">payload, base64-decoded, not verified:</text>
+            <text x="14" y="114">{ "sub": "u_42",</text>
+            <text x="14" y="132">  "iat": 1792886400,</text>
+            <text class="t-attacker" x="14" y="150">  "exp": 1795478400 }</text>
+          </g>
+          <text class="lbl at-2" x="14" y="180">exp − now = 2 592 000 s</text>
+          <text class="lbl at-2" x="14" y="196">= 720 h = 30 days</text>
+        </g>
+        <g transform="translate(350 40)">
+          <text class="ttl" x="0" y="0">Remaining lifetime</text>
+          <text class="lbl" x="0" y="22">now</text>
+          <text class="lbl" x="590" y="22" text-anchor="end">exp · 30 days out</text>
+          <rect class="track" x="0" y="30" width="590" height="16" rx="8"/>
+          <rect class="fill" x="0" y="30" width="590" height="16" rx="8"/>
+          <line class="mark" x1="20" y1="24" x2="20" y2="56"/>
+          <text class="lbl t-attacker" x="26" y="66">24 h limit</text>
+          <g class="finding at-3" transform="translate(0 86)"><rect width="590" height="50" rx="6" class="soft-accent"/><text class="mono t-accent" x="12" y="20">MEDIUM · 0.60</text><text x="12" y="39">Session token has very long expiration: expires in 720 hours (30 days)</text></g>
+          <g class="at-4">
+            <text class="lbl" x="0" y="160">Quiet cases:</text>
+            <text class="mono" x="0" y="180">no "exp" claim</text><text class="lbl" x="150" y="180">left to the JWT scanner, not duplicated here</text>
+            <text class="mono" x="0" y="198">exp already passed</text><text class="lbl" x="150" y="198">nothing: an expired token is not a long-lived one</text>
+          </g>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The token is the one the crawler logged in with. Its middle segment is base64-decoded and parsed; the signature is not checked, because only the claims matter for this test.</p>
+      <p class="step"><span class="n">2</span><code>remaining = exp − now</code>, in seconds, then hours. Here the token has 30 days left.</p>
+      <p class="step"><span class="n">3</span><b>More than 24 hours remaining → MEDIUM, confidence 0.60</b>, with the hours and days in the description. A stolen token keeps working for all of that time.</p>
+      <p class="step"><span class="n">4</span>Three cases stay quiet: no <code>exp</code> claim at all (the JWT scanner reports that, so it is not duplicated), a token that has already expired, and anything at 24 hours or under.</p>
+    </div>
+  </div>
+
+  <div class="callout note">
+    <div class="label">Needs a session it is not given</div>
+    <p>The lifetime check only runs when the scanner holds an auth session with an access token. In <code>engine/factory.py</code> the standard DAST list constructs <code>SessionScanner()</code> with no session, so in the normal pipeline only the localStorage and cookie checks fire. The <a href="jwt-attacks.html">JWT scanner</a> reports a token with no <code>exp</code> at all, but nothing else in the pipeline measures a token that expires far in the future, so this check is currently dormant.</p>
+  </div>
+</section>
+
+<section id="fix">
+  <h2>The fix, flag by flag</h2>
+  <p class="prose">One <code>Set-Cookie</code> header, written correctly, clears every finding this scanner makes. Each attribute closes one theft path.</p>
+
+  <div class="scene" id="fixcookie" data-scene data-interval="3000">
+    <figure class="stage">
+      <svg viewBox="0 0 960 250" role="img" aria-label="On the left the Set-Cookie header gains HttpOnly, Secure, SameSite and Max-Age one step at a time; on the right the four open findings are struck out as each attribute arrives.">
+        <g class="node lit-1" transform="translate(20 20)">
+          <rect width="560" height="210" rx="10"/>
+          <text class="ttl" x="14" y="26">What the app sends</text>
+          <g class="mono">
+            <text x="14" y="54">Set-Cookie: session=eyJhbGciOi…;</text>
+            <text x="14" y="76">  Path=/;</text>
+            <text class="until-2 lbl" x="14" y="98">  (no HttpOnly)</text><text class="at-2 t-safe" x="14" y="98">  HttpOnly;</text>
+            <text class="until-3 lbl" x="14" y="120">  (no Secure, no SameSite)</text><text class="at-3 t-safe" x="14" y="120">  Secure; SameSite=Lax;</text>
+            <text class="until-4 lbl" x="14" y="142">  (no Max-Age: the JWT inside lasts 30 days)</text><text class="at-4 t-safe" x="14" y="142">  Max-Age=3600   + expiresIn: "15m", refresh 7d</text>
+            <text class="lbl" x="14" y="172">and in the bundle:</text>
+            <text class="until-2 t-attacker" x="14" y="194">localStorage.setItem("token", res.jwt)</text>
+            <text class="at-2 t-safe" x="14" y="194">// removed: the cookie carries the session</text>
+          </g>
+        </g>
+        <g class="node" transform="translate(610 20)">
+          <rect width="330" height="210" rx="10"/>
+          <text class="ttl" x="14" y="26">Open findings</text>
+          <g class="finding f0" transform="translate(14 40)"><rect width="302" height="36" rx="6" class="soft-attacker"/><text class="mono" x="10" y="23"><tspan class="t-attacker">HIGH</tspan>  token in localStorage</text></g>
+          <g class="finding f1" transform="translate(14 84)"><rect width="302" height="36" rx="6" class="soft-attacker"/><text class="mono" x="10" y="23"><tspan class="t-attacker">HIGH</tspan>  'session' missing HttpOnly</text></g>
+          <g class="finding f2" transform="translate(14 128)"><rect width="302" height="36" rx="6" class="soft-accent"/><text class="mono" x="10" y="23"><tspan class="t-accent">MEDIUM</tspan>  'session' missing Secure</text></g>
+          <g class="finding f3" transform="translate(14 172)"><rect width="302" height="36" rx="6" class="soft-accent"/><text class="mono" x="10" y="23"><tspan class="t-accent">MEDIUM</tspan>  very long expiration</text></g>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The app as found: a session cookie with only a path, a JWT inside it that lasts 30 days, and a bundle that copies the token into localStorage for its API calls.</p>
+      <p class="step"><span class="n">2</span><code>httpOnly: true</code>, and the localStorage copy is dropped. JavaScript, including an injected script, can no longer read the session at all. Two findings clear at once.</p>
+      <p class="step"><span class="n">3</span><code>secure: true</code> keeps the cookie off plain HTTP, so it cannot be read on a shared network. <code>sameSite: "lax"</code> is not something this scanner checks, but it comes free in the same call and blocks CSRF.</p>
+      <p class="step"><span class="n">4</span><code>maxAge: 3600</code> on the cookie, a 15-minute access token and a 7-day refresh token. A stolen token is now worth minutes rather than a month.</p>
+    </div>
+  </div>
+</section>
+
+<section id="why">
+  <h2>Why it matters</h2>
+  <div class="callout why">
+    <div class="label">Why it matters</div>
+    <p><b>localStorage + XSS = game over.</b> Any script running on the page can read localStorage, so even a minor reflected XSS hands over the auth token. A cookie without <b>HttpOnly</b> is the same exposure through <code>document.cookie</code>; without <b>Secure</b> it is sent in the clear and readable on public Wi-Fi. And a <b>long-lived token</b> turns a momentary theft into days or weeks of access.</p>
+  </div>
+  <div class="callout breach">
+    <div class="label">British Airways (2018)</div>
+    <p>Injected JavaScript on the payment pages could access client-side storage, enabling exfiltration of payment data and session tokens. Token theft via XSS remains one of the most common attack chains in modern web apps; a token kept out of JavaScript's reach is what stops the chain.</p>
+  </div>
+</section>
+
+<section id="code">
+  <h2>Vulnerable vs fixed code</h2>
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true" type="button">BAD · vulnerable</button>
+      <button class="tab good" role="tab" aria-selected="false" type="button">GOOD · fixed</button>
+    </div>
+    <div role="tabpanel"><pre><code><span class="c">// BAD: token readable by any script on the page</span>
+<span class="hl bad">localStorage.setItem(<span class="s">"token"</span>, data.token)</span>
+
+<span class="c">// BAD: cookie without flags: JS can read it, HTTP can carry it</span>
+<span class="hl bad">response.cookies.set(<span class="s">"session"</span>, token)</span>
+
+<span class="c">// BAD: a stolen token works for a month</span>
+<span class="hl bad">const token = jwt.sign(payload, SECRET, { expiresIn: <span class="s">"30d"</span> })</span></code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c">// GOOD: Use httpOnly cookies instead of localStorage</span>
+<span class="hl good">response.cookies.set(<span class="s">"session"</span>, token, {</span>
+  <span class="k">httpOnly</span>: true,   <span class="c">// JS can't read it</span>
+  <span class="k">secure</span>: true,     <span class="c">// HTTPS only</span>
+  <span class="k">sameSite</span>: <span class="s">"lax"</span>,  <span class="c">// CSRF protection</span>
+  <span class="k">maxAge</span>: 3600      <span class="c">// 1 hour expiration</span>
+})
+
+<span class="c">// GOOD: Short-lived JWTs with refresh tokens</span>
+<span class="hl good">const token = jwt.sign(payload, SECRET, { <span class="k">expiresIn</span>: <span class="s">"15m"</span> })</span>
+const refreshToken = jwt.sign({ userId }, REFRESH_SECRET, { expiresIn: <span class="s">"7d"</span> })</code></pre></div>
+  </div>
+</section>
+
+<section id="limits">
+  <h2>Limits and what it needs</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Check</th><th>Reads</th><th>Reports when</th><th>Severity · confidence</th></tr></thead>
+      <tbody>
+        <tr><td>Token in localStorage</td><td>all captured JavaScript</td><td>a <code>localStorage.setItem</code> or <code>localStorage[…]</code> with key token, access_token, auth_token or jwt; one finding per app</td><td>High · 0.80</td></tr>
+        <tr><td>Cookie flags</td><td>cookies in the snapshot's response headers</td><td>a cookie whose name contains one of 10 auth names lacks HttpOnly (High) or Secure (Medium); one finding per missing flag</td><td>High · 0.85 / Medium · 0.85</td></tr>
+        <tr><td>Token lifetime</td><td>the session JWT's <code>exp</code> claim</td><td>more than 24 hours remain; no exp or already expired is silent</td><td>Medium · 0.60</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout note">
+    <div class="label">What it deliberately stays quiet about</div>
+    <p>It sends no request of its own, so it only sees cookies and scripts present in the captured snapshot; a cookie set later by an XHR login is out of view. Cookie names outside the ten auth names are never examined, and the JavaScript regexes match only the four listed keys, so <code>localStorage.setItem("userSession", …)</code> is not reported. It runs at quick depth with a 600 s timeout and finishes in seconds.</p>
+  </div>
+</section>
+
+<footer class="foot">
+  <span>Source: <a href="../scanners/session-scanner.md">docs/scanners/session-scanner.md</a> · <a href="../../isitsecure/engine/scanners/session_scanner.py">session_scanner.py</a></span>
+  <span>Group: <a href="group-auth-sessions.html">Authentication and sessions</a> · Related: <a href="jwt-attacks.html">JWT attacks</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+</body>
+</html>

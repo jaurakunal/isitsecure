@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Semantic Rule Verifier · isitsecure</title>
+<meta name="description" content="How the semantic rule verifier sends Supabase RLS migrations and Firebase rules to a model to find logical flaws such as a policy that compares auth.uid() to the wrong column, and how its output is parsed and bounded.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  .topbar-inner .crumb a { color: inherit; text-decoration: none; }
+  .topbar-inner .crumb a:hover { color: var(--accent); }
+  #flow .panel > rect, #example .panel > rect { fill: var(--surface-2); }
+  #flow .model > rect { fill: var(--accent-soft); }
+  #flow .file > rect { transition: fill .35s, stroke .35s; }
+  #flow.s1 .file.pick > rect { fill: var(--accent-soft); stroke: var(--accent); }
+  #flow .file.skip { opacity: .6; }
+  #example .mono text, #example text.mono { white-space: pre; }
+  #example .hlbad { fill: var(--attacker-soft); }
+  #example .hlinfo { fill: var(--info-soft); }
+  #example .card-find > rect { fill: var(--attacker-soft); stroke: var(--attacker); }
+  #example .card-ok > rect { fill: var(--safe-soft); stroke: var(--safe); }
+  #guards .gate > rect { transition: fill .35s, stroke .35s; }
+  #guards .open > rect { fill: var(--attacker-soft); stroke: var(--attacker); }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› <a href="group-business-logic.html">Business logic</a> › Semantic rule verifier</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/semantic-rule-verifier.md" title="The markdown source for this page">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">LLM-powered · SAST</div>
+  <h1>Semantic Rule Verifier</h1>
+  <p class="lede">The structural analyzers can tell you that a table has a policy. They cannot tell you the policy compares the user's id to the task's own primary key. This scanner gives each RLS migration and Firebase rules file to a model and asks only one question: is the logic of these rules wrong?</p>
+  <div class="meta">
+    <span class="pill llm">LLM</span><span class="pill sast">SAST</span><span class="pill crit">Critical</span><span class="pill high">High</span><span class="pill">RLS misconfiguration</span><span class="pill">needs an API key</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#flow-sec"><span class="n">01</span>What is sent, what comes back</a>
+  <a href="#example-sec"><span class="n">02</span>A policy that looks right</a>
+  <a href="#guards-sec"><span class="n">03</span>What guards the output</a>
+  <a href="#why"><span class="n">04</span>Why it matters</a>
+  <a href="#code"><span class="n">05</span>Vulnerable vs fixed rules</a>
+  <a href="#limits"><span class="n">06</span>Limits</a>
+</nav>
+
+<section id="flow-sec">
+  <h2>What is sent, what comes back</h2>
+  <p class="prose">One model call per file. The scanner decides which files qualify with plain string matching, so the model never sees a file that is not about access rules.</p>
+
+  <div class="scene" id="flow" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 366" role="img" aria-label="Four columns: repository files where two qualify, the prompt the scanner builds, the model's JSON reply, and the parser that turns items into findings.">
+        <defs><marker id="arr-sv" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+
+        <g class="node lit-1" transform="translate(20 20)"><rect width="215" height="50" rx="8"/><text class="ttl" x="12" y="22">Repository files</text><text class="lbl" x="12" y="40">the scan's file index</text></g>
+        <g class="node lit-2" transform="translate(265 20)"><rect width="200" height="50" rx="8"/><text class="ttl" x="12" y="22">Build the prompt</text><text class="lbl" x="12" y="40">scanner code</text></g>
+        <g class="node model lit-3" transform="translate(495 20)"><rect width="200" height="50" rx="8"/><text class="ttl" x="12" y="22">Model</text><text class="lbl" x="12" y="40">the scan's LLM client</text></g>
+        <g class="node lit-4" transform="translate(725 20)"><rect width="215" height="50" rx="8"/><text class="ttl" x="12" y="22">Parse the reply</text><text class="lbl" x="12" y="40">scanner code</text></g>
+
+        <path class="wire at-2" d="M237 45 H263" marker-end="url(#arr-sv)"/>
+        <path class="wire at-3" d="M467 45 H493" marker-end="url(#arr-sv)"/>
+        <path class="wire at-4" d="M697 45 H723" marker-end="url(#arr-sv)"/>
+
+        <g transform="translate(20 84)">
+          <g class="node file pick"><rect width="215" height="46" rx="6"/><text class="mono" x="12" y="19">0001_tasks.sql</text><text class="lbl" x="12" y="36">has CREATE POLICY: review</text></g>
+          <g class="node file skip" transform="translate(0 54)"><rect width="215" height="46" rx="6"/><text class="mono" x="12" y="19">0002_seed.sql</text><text class="lbl" x="12" y="36">no policy text: skipped</text></g>
+          <g class="node file pick" transform="translate(0 108)"><rect width="215" height="46" rx="6"/><text class="mono" x="12" y="19">firestore.rules</text><text class="lbl" x="12" y="36">rules file name: review</text></g>
+          <g class="node file skip" transform="translate(0 162)"><rect width="215" height="46" rx="6"/><text class="mono" x="12" y="19">README.md</text><text class="lbl" x="12" y="36">not .sql, not a rules file</text></g>
+        </g>
+
+        <g class="at-2" transform="translate(265 84)"><g class="node panel"><rect width="200" height="208" rx="8"/></g>
+          <text class="lbl t-info" x="12" y="24">SYSTEM</text><text class="lbl" x="68" y="24">RLS or Firebase</text>
+          <text class="lbl" x="12" y="42">expert, flaws to look for,</text>
+          <text class="lbl" x="12" y="60">and a severity rubric</text>
+          <text class="lbl t-info" x="12" y="88">USER</text><text class="lbl" x="56" y="88">file path plus the</text>
+          <text class="lbl" x="12" y="106">first 50,000 characters</text>
+          <text class="lbl" x="12" y="124">of the file</text>
+          <text class="lbl t-info" x="12" y="152">FORMAT</text><text class="lbl" x="68" y="152">a JSON array,</text>
+          <text class="lbl" x="12" y="170">or [] if nothing is wrong</text>
+          <text class="lbl" x="12" y="194">max 4,096 tokens back</text></g>
+        <g class="at-3" transform="translate(495 84)"><g class="node panel"><rect width="200" height="208" rx="8"/></g>
+          <text class="lbl t-accent" x="12" y="24">REPLY, one item per flaw</text>
+          <text class="mono" x="12" y="50">severity</text>
+          <text class="mono" x="12" y="70">title</text>
+          <text class="mono" x="12" y="90">description</text>
+          <text class="mono" x="12" y="110">line_number</text>
+          <text class="mono" x="12" y="130">remediation_guidance</text>
+          <text class="lbl" x="12" y="164">Told to skip structural</text>
+          <text class="lbl" x="12" y="182">issues: other scanners</text>
+          <text class="lbl" x="12" y="200">already report those.</text></g>
+        <g class="at-4" transform="translate(725 84)"><g class="node panel"><rect width="215" height="208" rx="8"/></g>
+          <text class="lbl" x="12" y="24">first [ to last ] of the reply</text>
+          <text class="lbl" x="12" y="42">must be valid JSON</text>
+          <text class="lbl" x="12" y="60">keep only objects, max 7</text>
+          <text class="lbl" x="12" y="84">severity: model's, else</text>
+          <text class="lbl" x="12" y="102">MEDIUM if unknown</text>
+          <text class="lbl" x="12" y="126">confidence: 0.70, fixed</text>
+          <text class="lbl" x="12" y="144">category: RLS misconfig.</text>
+          <text class="lbl t-accent" x="12" y="172">remediation_guidance is</text>
+          <text class="lbl t-accent" x="12" y="190">not kept in the finding</text></g>
+
+        <g class="at-5" transform="translate(20 324)">
+          <text class="lbl" x="0" y="0">No API key: the verifier is never added to the SAST list. A model call that fails or returns junk gives no findings for that file.</text>
+          <text class="lbl" x="0" y="18">The other files and the rest of the scan carry on.</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span><b>Collect.</b> A <code>.sql</code> file is sent if its text contains <code>CREATE POLICY</code> or <code>ENABLE ROW LEVEL SECURITY</code>. A file is sent as Firebase rules if its name ends in <code>firestore.rules</code>, <code>storage.rules</code> or <code>database.rules.json</code>. Everything else stays local.</p>
+      <p class="step"><span class="n">2</span><b>Send.</b> Each qualifying file becomes one prompt: a system message naming the flaws to look for, and the file path plus its first 50,000 characters. The model is asked for a JSON array.</p>
+      <p class="step"><span class="n">3</span><b>Reply.</b> Each flaw comes back as severity, title, description, line number and remediation guidance. The prompt tells the model to ignore missing policies and open rules, which the structural analyzers already report.</p>
+      <p class="step"><span class="n">4</span><b>Parse.</b> The scanner takes everything from the first <code>[</code> to the last <code>]</code>, parses it, keeps at most seven objects, and builds each finding with its own fixed confidence of 0.70.</p>
+      <p class="step"><span class="n">5</span><b>Absent or failing.</b> Without an API key the scanner is not registered at all. If a call errors or the reply is not JSON, that file yields nothing and the scan continues.</p>
+    </div>
+  </div>
+</section>
+
+<section id="example-sec">
+  <h2>A policy that looks right</h2>
+  <p class="prose">The example from the scanner doc. A regex scanner sees <code>ENABLE ROW LEVEL SECURITY</code> and a <code>CREATE POLICY</code> and is satisfied. The mistake is in one comparison.</p>
+
+  <div class="scene" id="example" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 340" role="img" aria-label="A migration file on the left with the policy comparing auth.uid() to id. On the right, the structural analyzer finds nothing, then the model flags the wrong column and a finding is produced.">
+        <g class="node panel" transform="translate(20 20)"><rect width="440" height="300" rx="8"/></g>
+        <rect class="hlinfo at-3" x="21" y="71" width="438" height="22"/>
+        <rect class="hlinfo at-3" x="21" y="93" width="438" height="22"/>
+        <rect class="hlbad at-3" x="21" y="180" width="438" height="22"/>
+        <g class="mono">
+          <text class="lbl" x="32" y="40">0001_tasks.sql</text>
+          <text x="32" y="64">CREATE TABLE tasks (</text>
+          <text x="32" y="86">  id uuid PRIMARY KEY,</text>
+          <text x="32" y="108">  user_id uuid REFERENCES profiles(id),</text>
+          <text x="32" y="130">  title text );</text>
+          <text x="32" y="152">ALTER TABLE tasks ENABLE ROW LEVEL SECURITY;</text>
+          <text x="32" y="174">CREATE POLICY "Users view own tasks" ON tasks</text>
+          <text x="32" y="196">  FOR SELECT USING (auth.uid() = id);</text>
+          <text class="lbl t-info at-3" x="32" y="226">id is this row's primary key</text>
+          <text class="lbl t-info at-3" x="32" y="244">user_id is the owner column</text>
+          <text class="lbl at-5" x="32" y="278">The prompt holds this one file, up to 50,000</text>
+          <text class="lbl at-5" x="32" y="296">characters. Schema in another file is not in view.</text>
+        </g>
+
+        <g class="at-2" transform="translate(490 20)"><g class="node card-ok"><rect width="450" height="84" rx="8"/></g>
+          <text class="ttl" x="14" y="26">Structural analyzer</text>
+          <text class="lbl" x="14" y="48">RLS enabled. A policy exists on tasks. Nothing to report.</text>
+          <text class="lbl" x="14" y="66">It checks that rules exist, not what they compare.</text></g>
+
+        <g class="at-3 until-4" transform="translate(490 120)"><g class="node panel"><rect width="450" height="200" rx="8"/></g>
+          <text class="ttl" x="14" y="26">Model reads the file</text>
+          <text class="lbl" x="14" y="52">The policy compares the caller's uuid to the task's own</text>
+          <text class="lbl" x="14" y="70">primary key. The owner column is user_id.</text>
+          <text class="lbl" x="14" y="98">The doc's reading: the check never matches, so the owner</text>
+          <text class="lbl" x="14" y="116">cannot see their own tasks, and the rule gives false</text>
+          <text class="lbl" x="14" y="134">confidence while looking correct.</text></g>
+
+        <g class="at-4" transform="translate(490 120)"><g class="node card-find"><rect width="450" height="200" rx="8"/></g>
+          <text class="lbl" x="14" y="22">finding · SAST · RLS misconfiguration</text>
+          <text class="ttl" x="14" y="46">Policy compares auth.uid() to id</text>
+          <text class="mono" x="14" y="72">file        0001_tasks.sql</text>
+          <text class="mono" x="14" y="92">line_number 7  (as the model said)</text>
+          <text class="mono" x="14" y="112">severity    chosen by the model</text>
+          <text class="mono" x="14" y="132">confidence  0.70</text>
+          <text class="lbl" x="14" y="162">description is the model's text. A fix such as</text>
+          <text class="lbl" x="14" y="180">auth.uid() = user_id comes from later fix generation.</text></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>A migration with RLS switched on and one SELECT policy. Both structural checks pass: the table is protected and a policy exists. The comparison on the last line is the question.</p>
+      <p class="step"><span class="n">2</span>The structural RLS analyzer finds nothing here. <b>It answers whether policies exist, and they do.</b></p>
+      <p class="step"><span class="n">3</span>The model reads the whole file. It can see <code>id</code> is the primary key and <code>user_id</code> is the owner column, so it knows <code>auth.uid() = id</code> compares the wrong things.</p>
+      <p class="step"><span class="n">4</span>The reply becomes a finding with the model's title, description, severity and line number, and a fixed confidence of 0.70. The other flaw classes it looks for are privilege escalation paths, uneven operation coverage and tenant isolation errors.</p>
+      <p class="step"><span class="n">5</span>The limit of this approach: the prompt holds only the one file. If the table and its columns were created in an earlier migration, the model sees the policy without the schema and has less to judge with.</p>
+    </div>
+  </div>
+</section>
+
+<section id="guards-sec">
+  <h2>What guards the output</h2>
+  <p class="prose">Model text is never used as a finding as it arrives. It passes four checks, and what the code does not check is listed last.</p>
+
+  <div class="scene" id="guards" data-scene data-interval="3600">
+    <figure class="stage">
+      <svg viewBox="0 0 960 300" role="img" aria-label="Five boxes: before the call, extracting the JSON, per item checks, what the finding is given, and what is not checked.">
+        <text class="lbl" x="12" y="20">before the call</text>
+        <text class="lbl" x="202" y="20">extract</text>
+        <text class="lbl" x="392" y="20">per item</text>
+        <text class="lbl" x="582" y="20">the finding</text>
+        <text class="lbl" x="772" y="20">left open</text>
+
+        <g class="node gate lit-1" transform="translate(12 30)"><rect width="176" height="190" rx="8"/>
+          <text class="ttl" x="12" y="24">Registration</text>
+          <text class="lbl" x="12" y="50">added to the SAST list</text>
+          <text class="lbl" x="12" y="68">only if an LLM client</text>
+          <text class="lbl" x="12" y="86">exists</text>
+          <text class="lbl t-accent" x="12" y="114">no API key: no scanner,</text>
+          <text class="lbl" x="12" y="132">no model call, no cost</text>
+          <text class="lbl" x="12" y="156">files need policy text or</text>
+          <text class="lbl" x="12" y="174">a rules file name</text></g>
+        <g class="node gate lit-2" transform="translate(202 30)"><rect width="176" height="190" rx="8"/>
+          <text class="ttl" x="12" y="24">Extract</text>
+          <text class="lbl" x="12" y="50">first [ to last ] of the</text>
+          <text class="lbl" x="12" y="68">reply, code fence or not</text>
+          <text class="lbl t-accent" x="12" y="96">no array: no finding</text>
+          <text class="lbl t-accent" x="12" y="114">invalid JSON: no finding</text>
+          <text class="lbl" x="12" y="142">a call that raises is</text>
+          <text class="lbl" x="12" y="160">logged as a warning and</text>
+          <text class="lbl" x="12" y="178">that file is skipped</text></g>
+        <g class="node gate lit-3" transform="translate(392 30)"><rect width="176" height="190" rx="8"/>
+          <text class="ttl" x="12" y="24">Per item</text>
+          <text class="lbl" x="12" y="50">only the first 7 items</text>
+          <text class="lbl" x="12" y="68">per file are used</text>
+          <text class="lbl" x="12" y="96">an item that is not an</text>
+          <text class="lbl" x="12" y="114">object is skipped</text>
+          <text class="lbl t-accent" x="12" y="142">unknown or missing</text>
+          <text class="lbl t-accent" x="12" y="160">severity becomes MEDIUM</text></g>
+        <g class="node gate lit-4" transform="translate(582 30)"><rect width="176" height="190" rx="8"/>
+          <text class="ttl" x="12" y="24">The finding</text>
+          <text class="lbl" x="12" y="50">confidence 0.70, fixed:</text>
+          <text class="lbl" x="12" y="68">the model's own is not</text>
+          <text class="lbl" x="12" y="86">read</text>
+          <text class="lbl" x="12" y="114">category always RLS</text>
+          <text class="lbl" x="12" y="132">misconfiguration</text>
+          <text class="lbl" x="12" y="160">title falls back to a</text>
+          <text class="lbl" x="12" y="178">generic text if missing</text></g>
+        <g class="node gate open lit-5" transform="translate(772 30)"><rect width="176" height="190" rx="8"/>
+          <text class="ttl t-attacker" x="12" y="24">Not checked</text>
+          <text class="lbl" x="12" y="50">the claim is not tested:</text>
+          <text class="lbl" x="12" y="68">no live query confirms it</text>
+          <text class="lbl" x="12" y="96">line_number is taken as</text>
+          <text class="lbl" x="12" y="114">given, not matched to</text>
+          <text class="lbl" x="12" y="132">the file</text>
+          <text class="lbl" x="12" y="160">remediation_guidance is</text>
+          <text class="lbl" x="12" y="178">asked for, then dropped</text></g>
+
+        <text class="lbl" x="12" y="252">Net effect: a model claim enters the report as a medium-confidence SAST finding, never as a proven one.</text>
+        <text class="lbl at-5" x="12" y="272">The RLS deep scanner is the one that asks the live database with the anon key.</text>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span><b>No key, no call.</b> The verifier is registered only when an LLM client exists. Without one the scan runs every rule-based scanner and none of this.</p>
+      <p class="step"><span class="n">2</span><b>Extract.</b> The reply is searched for a JSON array. Missing or malformed gives an empty result for that file. An exception from the call is logged and swallowed.</p>
+      <p class="step"><span class="n">3</span><b>Per item.</b> At most seven items per file. Non-objects are skipped. A severity the code does not recognise is treated as MEDIUM.</p>
+      <p class="step"><span class="n">4</span><b>Confidence is not the model's to set.</b> Every finding gets 0.70 and the fixed RLS misconfiguration category, so triage treats all of them alike.</p>
+      <p class="step"><span class="n">5</span><b>Never auto-trusted.</b> Nothing re-tests the claim, and the line number is not checked against the file. The doc says the model supplies fix suggestions per finding, but the code requests them and does not store them.</p>
+    </div>
+  </div>
+</section>
+
+<section id="why">
+  <h2>Why it matters</h2>
+  <div class="grid-2">
+    <div class="callout why"><div class="label">Why it matters</div><p>A policy that looks correct but references the wrong column is worse than no policy: it gives false confidence while being bypassable or broken. The scanner looks for four kinds of logic error: a wrong column in the <code>auth.uid()</code> check, a combination of policies that allows escalation (for example a user updating their own role), a SELECT policy with no matching UPDATE or DELETE policy, and multi-tenant policies that do not scope to the tenant. For Firebase rules it looks for auth checked on the wrong path, writes protected while reads leak, custom claims checked loosely, and rules that let one user overwrite another's document by predictable id.</p></div>
+    <div class="callout breach"><div class="label">Real-world context</div><p><b>Facebook (2013).</b> The ability to delete any photo was caused by the API checking whether the photo id existed rather than whether the requester owned it. An RLS policy checking <code>auth.uid() = id</code> instead of <code>auth.uid() = user_id</code> is the same class of bug: the check runs, it just asks the wrong question.</p></div>
+  </div>
+</section>
+
+<section id="code">
+  <h2>Vulnerable vs fixed rules</h2>
+  <p class="prose">The same pairs the scanner doc lists. The fix is a different comparison or fuller operation coverage, not more policies.</p>
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true">BAD · wrong column</button>
+      <button class="tab good" role="tab" aria-selected="false">GOOD · owner column</button>
+      <button class="tab good" role="tab" aria-selected="false">GOOD · all operations</button>
+    </div>
+    <div role="tabpanel"><pre><code><span class="c">-- LOOKS correct but IS wrong:</span>
+<span class="k">CREATE POLICY</span> <span class="s">"Users view own tasks"</span> <span class="k">ON</span> tasks
+<span class="hl bad">  <span class="k">FOR SELECT USING</span> (auth.uid() = id);</span>
+<span class="c">-- id is the TASK's primary key, not the owner's id</span></code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c">-- CORRECT: compare to the foreign key column</span>
+<span class="k">CREATE POLICY</span> <span class="s">"view own"</span> <span class="k">ON</span> tasks
+<span class="hl good">  <span class="k">USING</span> (auth.uid() = user_id);</span></code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c">-- WRONG: SELECT only, no INSERT/UPDATE/DELETE policy</span>
+<span class="c">-- CORRECT: cover every operation</span>
+<span class="k">CREATE POLICY</span> <span class="s">"crud own"</span> <span class="k">ON</span> tasks
+<span class="hl good">  <span class="k">FOR ALL USING</span> (auth.uid() = user_id)
+  <span class="k">WITH CHECK</span> (auth.uid() = user_id);</span></code></pre></div>
+  </div>
+</section>
+
+<section id="limits">
+  <h2>Limits and configuration</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Setting</th><th>Value</th><th>Note</th></tr></thead>
+      <tbody>
+        <tr><td>Needs</td><td>an LLM API key</td><td>runs in the SAST phase when a policy file or rules file is present</td></tr>
+        <tr><td>SQL files reviewed</td><td>contain <code>CREATE POLICY</code> or <code>ENABLE ROW LEVEL SECURITY</code></td><td>case-insensitive text match on .sql files</td></tr>
+        <tr><td>Firebase files reviewed</td><td>firestore.rules · storage.rules · database.rules.json</td><td>the md names Firebase rules; this list is from the code</td></tr>
+        <tr><td>Sent per file</td><td>first 50,000 characters</td><td>one model call per file</td></tr>
+        <tr><td>Reply limit</td><td>4,096 tokens</td><td>findings per file capped at 7</td></tr>
+        <tr><td>Confidence</td><td>0.70, fixed</td><td>the same for every finding</td></tr>
+        <tr><td>Severity</td><td>CRITICAL, HIGH, MEDIUM or LOW from the model</td><td>unknown values become MEDIUM; the scanner doc lists Critical to High</td></tr>
+        <tr><td>Category</td><td>RLS misconfiguration</td><td>fixed, including for Firebase rule findings</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<footer class="foot">
+  <span>Source: <a href="../scanners/semantic-rule-verifier.md">docs/scanners/semantic-rule-verifier.md</a> · <a href="../../isitsecure/engine/code_analysis/semantic_rule_verifier.py">semantic_rule_verifier.py</a></span>
+  <span>Related: <a href="group-business-logic.html">Business logic group</a> · <a href="rls-supabase.html">Row Level Security</a> · <a href="llm-review-and-fixes.html">LLM review and fixes</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+</body>
+</html>
