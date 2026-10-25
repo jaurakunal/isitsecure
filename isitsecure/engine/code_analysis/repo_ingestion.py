@@ -29,6 +29,10 @@ from isitsecure.engine.code_analysis.protocols import (
     RepoSnapshot,
     RouteMapperProtocol,
 )
+from isitsecure.engine.code_analysis.shared_utils import (
+    is_plain_in_root,
+    kill_and_reap,
+)
 from isitsecure.engine.constants import RepoIngestionConfig
 
 if TYPE_CHECKING:
@@ -305,7 +309,7 @@ class RepoIngestionService:
                 if not migrations_dir.is_dir():
                     continue
                 for f in sorted(migrations_dir.rglob("*.sql")):
-                    if f.is_file():
+                    if f.is_file() and is_plain_in_root(root, f):
                         relative = str(f.relative_to(root))
                         if relative not in seen:
                             seen.add(relative)
@@ -315,7 +319,7 @@ class RepoIngestionService:
         legacy_dir = root / "supabase" / "migrations"
         if legacy_dir.is_dir():
             for f in sorted(legacy_dir.rglob("*.sql")):
-                if f.is_file():
+                if f.is_file() and is_plain_in_root(root, f):
                     relative = str(f.relative_to(root))
                     if relative not in seen:
                         seen.add(relative)
@@ -380,10 +384,12 @@ class RepoIngestionService:
         self._validate_remote(repo_url, branch)
 
         url = repo_url
-        if github_token and url.startswith("https://"):
-            # Inject token for private repository access
+        if github_token and self._is_strict_github_https(url):
+            # Inject token for private repository access. Only for a URL whose
+            # strictly parsed host is github.com: a token must never be sent
+            # to a look-alike host (https://evil.com#@github.com/o/r, ...).
             url = url.replace(
-                "https://", f"https://x-access-token:{github_token}@"
+                "https://", f"https://x-access-token:{github_token}@", 1
             )
 
         cmd = ["git", "clone"]
@@ -434,11 +440,25 @@ class RepoIngestionService:
                     )
                 )
         except asyncio.TimeoutError:
+            await kill_and_reap(process)
             raise RuntimeError(
                 RepoIngestionConfig.ERROR_CLONE_TIMEOUT.format(
                     timeout=RepoIngestionConfig.CLONE_TIMEOUT_SECONDS
                 )
             )
+
+    @staticmethod
+    def _is_strict_github_https(url: str) -> bool:
+        """True only for ``https://github.com/owner/repo[.git]`` (no userinfo,
+        query or fragment), judged by a real URL parse, not string matching."""
+        from isitsecure.engine.fixes.pr_flow import parse_github_url
+
+        if not url.lower().startswith("https://"):
+            return False
+        try:
+            return parse_github_url(url).is_github
+        except ValueError:
+            return False
 
     @staticmethod
     def _resolve_local_path(repo_url: str) -> str | None:
@@ -469,9 +489,13 @@ class RepoIngestionService:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, _ = await asyncio.wait_for(
-                process.communicate(), timeout=5
-            )
+            try:
+                stdout, _ = await asyncio.wait_for(
+                    process.communicate(), timeout=5
+                )
+            except asyncio.TimeoutError:
+                await kill_and_reap(process)
+                raise
             if process.returncode == 0:
                 return stdout.decode().strip()
         except Exception:
@@ -492,9 +516,13 @@ class RepoIngestionService:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, _ = await asyncio.wait_for(
-                process.communicate(), timeout=5
-            )
+            try:
+                stdout, _ = await asyncio.wait_for(
+                    process.communicate(), timeout=5
+                )
+            except asyncio.TimeoutError:
+                await kill_and_reap(process)
+                raise
             if process.returncode == 0:
                 name = stdout.decode().strip()
                 return "" if name == "HEAD" else name
@@ -528,7 +556,10 @@ class RepoIngestionService:
         root = Path(clone_path)
 
         for path in root.rglob("*"):
-            if not path.is_file():
+            # Never follow symlinks (a scanned repo can point them anywhere,
+            # e.g. at /etc or ~/.ssh): skip symlinked files and anything
+            # reached through a symlinked directory.
+            if not path.is_file() or not is_plain_in_root(root, path):
                 continue
 
             # Check if any parent directory should be skipped
@@ -571,6 +602,10 @@ class RepoIngestionService:
         root = Path(clone_path)
         env_files: list[str] = []
         for path in root.iterdir():
-            if path.is_file() and path.name.startswith(".env"):
+            if (
+                path.is_file()
+                and path.name.startswith(".env")
+                and is_plain_in_root(root, path)
+            ):
                 env_files.append(path.name)
         return sorted(env_files)

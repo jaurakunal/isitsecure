@@ -23,6 +23,7 @@ from pathlib import Path
 
 from isitsecure.engine.code_analysis.models import CodeFinding
 from isitsecure.engine.code_analysis.protocols import RepoSnapshot
+from isitsecure.engine.code_analysis.shared_utils import iter_repo_files, read_repo_file
 from isitsecure.engine.constants import K8sScannerConfig
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
 
@@ -125,17 +126,17 @@ class K8sScanner:
                 if not k8s_dir.is_dir():
                     continue
                 for ext in K8sScannerConfig.K8S_EXTENSIONS:
-                    for yaml_file in k8s_dir.rglob(f"*{ext}"):
+                    for yaml_file in iter_repo_files(
+                        clone_root, [f"*{ext}"], base=k8s_dir
+                    ):
                         rel_path = str(yaml_file.relative_to(clone_root))
                         if rel_path in k8s_files:
                             continue
-                        try:
-                            content = yaml_file.read_text(
-                                encoding="utf-8", errors="ignore"
-                            )
+                        content = read_repo_file(
+                            clone_root, yaml_file, errors="ignore"
+                        )
+                        if content is not None:
                             k8s_files[rel_path] = content
-                        except OSError:
-                            continue
 
         return k8s_files
 

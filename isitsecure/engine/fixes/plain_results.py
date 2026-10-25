@@ -34,6 +34,8 @@ class VerifyCounts:
     fixed: int = 0
     needs_review: int = 0
     couldnt_fix: int = 0
+    # True when the re-check itself did not run (not part of the partition).
+    check_did_not_run: bool = False
 
     @property
     def total(self) -> int:
@@ -66,10 +68,15 @@ def classify_verification(
     # Findings whose fix WAS written but that we can't confirm as resolved:
     # still-present after re-scan, plus those that aren't auto-verifiable.
     fixed_but_unconfirmed = max(0, attempted - fix_failed - resolved)
+    if v.get("could_not_verify"):
+        # The re-check did not run: nothing can be claimed as confirmed.
+        resolved = 0
+        fixed_but_unconfirmed = max(0, attempted - fix_failed)
     return VerifyCounts(
         fixed=resolved,
         needs_review=fixed_but_unconfirmed,
         couldnt_fix=max(0, fix_failed),
+        check_did_not_run=bool(v.get("could_not_verify")),
     )
 
 
@@ -97,6 +104,17 @@ def summarize(counts: VerifyCounts) -> str:
             f"Couldn't automatically fix "
             f"{'the issue' if total == 1 else f'any of the {total} issues'} — "
             f"{'it needs' if total == 1 else 'they need'} a closer look."
+        )
+
+    if counts.check_did_not_run:
+        tail = (
+            f" ({counts.couldnt_fix} couldn't be fixed automatically.)"
+            if counts.couldnt_fix else ""
+        )
+        return (
+            f"Applied fixes for {handled} {_plural(handled, 'issue')}, but the re-check "
+            "did not run, so none of them are confirmed fixed — please review the changes."
+            + tail
         )
 
     lead = (
@@ -131,7 +149,12 @@ def next_step_hint(counts: VerifyCounts, *, saved_hint: str = "") -> str:
     if counts.total == 0:
         return ""
     lines: list[str] = []
-    if counts.needs_review:
+    if counts.check_did_not_run:
+        lines.append(
+            "The re-check did not run, so these fixes are unconfirmed — "
+            "run the scan again to check them."
+        )
+    elif counts.needs_review:
         lines.append(
             f"{counts.needs_review} {_plural(counts.needs_review, 'change')} "
             f"{_plural(counts.needs_review, 'wants', 'want')} a human eye — "

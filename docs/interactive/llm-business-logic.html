@@ -126,7 +126,7 @@
       <p class="step" data-on="bizFlow"><span class="n">3</span><b>Plan.</b> One call. The model gets the file contents, up to 50 discovered endpoints and a framework guess, and must answer with JSON: attack plans, each a list of HTTP steps plus a success criterion. The prompt tells it to use real endpoint URLs from the list.</p>
       <p class="step" data-on="bizFlow"><span class="n">4</span><b>Execute.</b> The scanner, not the model, sends each step, with the bearer token of the user the plan names. For every step it records the status and the first 300 characters of the body.</p>
       <p class="step" data-on="bizFlow"><span class="n">5</span><b>Judge.</b> A second call, on the cheaper judgment client when one is configured, receives the plan and what actually came back. It answers confirmed or not, with evidence, severity and a fix.</p>
-      <p class="step" data-on="bizFlow"><span class="n">6</span>Only <code>confirmed: true</code> becomes a finding. A plan that errors, parses badly or is judged not confirmed leaves no trace in the report.</p>
+      <p class="step" data-on="bizFlow"><span class="n">6</span>Only <code>confirmed: true</code> becomes a finding. A plan that errors, parses badly or is judged not confirmed leaves no finding in the report; refused steps and failed plans are logged, emitted as progress messages and kept in the scanner's <code>skipped_steps</code>.</p>
     </div>
   </div>
 </section>
@@ -270,10 +270,10 @@
           <text class="ttl t-attacker" x="12" y="24">Not guarded</text>
           <text class="lbl" x="12" y="50">the verdict is the proof;</text>
           <text class="lbl" x="12" y="68">no code re-reads the body</text>
-          <text class="lbl" x="12" y="86">step URL is not checked</text>
-          <text class="lbl" x="12" y="104">against the target URL</text>
+          <text class="lbl" x="12" y="86">off-origin step URLs are</text>
+          <text class="lbl" x="12" y="104">refused, never sent</text>
           <text class="lbl" x="12" y="130">DELETE can be sent, with</text>
-          <text class="lbl" x="12" y="148">real session tokens</text></g>
+          <text class="lbl" x="12" y="148">real tokens (target only)</text></g>
 
         <text class="lbl" x="12" y="236">No API key: the primary LLM client is missing, no code reviewer exists, and this phase never starts.</text>
         <text class="lbl" x="12" y="254">Rule-based scanners are unaffected.</text>
@@ -282,10 +282,10 @@
     </figure>
     <div class="scene-steps">
       <p class="step"><span class="n">1</span><b>Before any call.</b> All preconditions must hold: scan mode, both logins, endpoints, target URL, repository and an LLM client. Without an API key the phase is simply absent.</p>
-      <p class="step"><span class="n">2</span><b>The plan reply.</b> Parsed as JSON, with code fences stripped and a fallback that hunts for the first <code>{...}</code> block. A plan that is not an object or has no steps is dropped. If nothing parses, no request is sent.</p>
+      <p class="step"><span class="n">2</span><b>The plan reply.</b> Parsed as JSON, with code fences stripped and a fallback that hunts for the first <code>{...}</code> block. A plan that is not an object or has no steps is dropped, and a malformed step inside a plan is skipped. If nothing parses, no request is sent.</p>
       <p class="step"><span class="n">3</span><b>While executing.</b> Hard caps on files, endpoints, plans and steps. A request that fails is recorded as status 0 and the plan continues. A cooperative time budget stops the loop before the runner's 30 minute cancel would discard everything.</p>
       <p class="step"><span class="n">4</span><b>The verdict.</b> Only <code>confirmed: true</code> passes. Anything else, including an exception, gives no finding. Evidence and response preview are cut to 300 characters.</p>
-      <p class="step"><span class="n">5</span><b>What the code does not check.</b> The judge's word is final: no code re-reads the body. The executor sends the plan's URL as written without comparing its host to the target, so the prompt rule "use a real endpoint from the list" is the only constraint. Read confirmed findings as strong leads.</p>
+      <p class="step"><span class="n">5</span><b>What the code does not check.</b> The judge's word is final: no code re-reads the body. Every step URL is resolved against the target and refused (logged, counted, no request, no token) if its scheme, host or port differs; redirects off the target origin are not followed, and a malformed step is skipped without aborting the scan. Methods are not restricted, so DELETE against the target itself is still possible. Read confirmed findings as strong leads.</p>
     </div>
   </div>
 </section>
@@ -331,6 +331,7 @@ export async function POST(request: Request) {
         <tr><td>Files sent to the planner</td><td>30</td><td>path must contain a business-logic word; extensions .ts .tsx .js .jsx .py .go .rs; whole file, no truncation</td></tr>
         <tr><td>Endpoints in the prompt</td><td>50</td><td>as <code>METHOD url</code> lines</td></tr>
         <tr><td>Plans · steps</td><td>10 · 8</td><td>asked for in the prompt and enforced by slicing in code</td></tr>
+        <tr><td>Step URLs</td><td>resolved against the target; scheme, host and port must match</td><td>off-origin steps are refused with no request and no token; up to 5 same-origin redirect hops are followed and re-checked, and a redirect that leaves the origin is not followed</td></tr>
         <tr><td>Request timeout</td><td>15 s</td><td>a failure becomes status 0 and the plan carries on</td></tr>
         <tr><td>Body preview</td><td>300 chars</td><td>what the judge sees per step, and the cap on stored evidence</td></tr>
         <tr><td>Token limits</td><td>20,480 · 2,048</td><td>planner reply · judge reply</td></tr>

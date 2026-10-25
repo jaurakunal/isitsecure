@@ -1137,6 +1137,9 @@ class GradeResult:
     grade: str
     label: str
     legend: str = GRADE_LEGEND
+    # True when part of the scan did not run: the letter only reflects what
+    # was checked and is not a clean bill of health.
+    provisional: bool = False
 
 
 def calculate_grade(
@@ -1146,6 +1149,7 @@ def calculate_grade(
     low: int,
     *,
     hardened: bool = False,
+    provisional: bool = False,
 ) -> GradeResult:
     """Compute the granular A+/A/A-/B+/B/C+/C/D/F grade (first match wins).
 
@@ -1186,10 +1190,17 @@ def calculate_grade(
     else:
         grade = "A+" if hardened else "A"
 
+    label = GRADE_LADDER_LABELS.get(grade, "")
+    if provisional:
+        label = (
+            f"Provisional (scan incomplete) — {label}"
+            if label else "Provisional (scan incomplete)"
+        )
     return GradeResult(
         grade=grade,
-        label=GRADE_LADDER_LABELS.get(grade, ""),
+        label=label,
         legend=GRADE_LEGEND,
+        provisional=provisional,
     )
 
 
@@ -1262,6 +1273,8 @@ class LaunchVerdict:
     ready: bool
     headline: str  # includes a leading status emoji
     detail: str    # short supporting sentence (may be empty)
+    # True when ingestion or a scanner failed, so "ready" cannot be claimed.
+    incomplete: bool = False
 
     def as_line(self) -> str:
         """Single-line rendering: headline plus detail."""
@@ -1274,10 +1287,19 @@ def _plural(n: int, word: str) -> str:
     return f"{n} {word}" if n == 1 else f"{n} {word}s"
 
 
-def launch_verdict(critical: int, high: int, medium: int = 0) -> LaunchVerdict:
+def launch_verdict(
+    critical: int,
+    high: int,
+    medium: int = 0,
+    *,
+    incomplete: bool = False,
+) -> LaunchVerdict:
     """Derive the go/no-go launch verdict from severity counts (#57).
 
     Rule-based and LLM-free. Leads with the consequence to the owner.
+    ``incomplete`` (ingestion failed or a scanner timed out/crashed) turns a
+    would-be "safe to launch" into an explicit "incomplete" state; critical
+    and high findings still win because they are real regardless.
     """
     if critical > 0:
         return LaunchVerdict(
@@ -1297,6 +1319,20 @@ def launch_verdict(critical: int, high: int, medium: int = 0) -> LaunchVerdict:
                 f"{_plural(high, 'high-risk issue')} should be fixed first."
             ),
             detail="No critical issues, but these are serious.",
+        )
+    if incomplete:
+        return LaunchVerdict(
+            ready=False,
+            headline=(
+                "⚠️ Scan incomplete — can't confirm it's safe to launch."
+            ),
+            detail=(
+                "Part of the scan did not run, so the absence of critical "
+                "or high-risk issues only covers what was checked."
+                + (f" {_plural(medium, 'medium-risk issue')} to clean up."
+                   if medium > 0 else "")
+            ),
+            incomplete=True,
         )
     if medium > 0:
         return LaunchVerdict(

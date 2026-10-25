@@ -34,9 +34,16 @@ import tempfile
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
-from isitsecure.engine.fixes.fix_generator import FixGenerator, FixResult
+from isitsecure.engine.fixes.fix_generator import (
+    FixGenerator,
+    FixResult,
+    read_source_file,
+    resolve_fix_target,
+    write_source_file,
+)
 from isitsecure.engine.models import DeepFinding
 
 if TYPE_CHECKING:
@@ -133,44 +140,89 @@ def is_remote_url(target: str | None) -> bool:
     return False
 
 
-def parse_github_url(url: str) -> RepoRef:
-    """Parse owner/repo/host from a git URL.
+def normalize_repo_scheme(url: str) -> str:
+    """Lowercase only the ``scheme://`` prefix (URL schemes are case-insensitive).
 
-    Accepts ``https://github.com/owner/repo(.git)``, ``http://…``,
-    ``ssh://git@github.com/owner/repo``, ``git@github.com:owner/repo.git``, and
-    a bare ``github.com/owner/repo``. Raises ``ValueError`` for anything that
-    doesn't yield a host + owner + repo.
+    ``HTTPS://github.com/o/r`` parses as GitHub; downstream code that matches
+    ``https://`` literally (token injection, ``remote set-url``) must see the
+    same spelling the parser accepted.
+    """
+    m = re.match(r"^\s*([A-Za-z][A-Za-z0-9+.-]*)://", url or "")
+    if not m:
+        return url
+    return url.strip()[: len(m.group(1))].lower() + url.strip()[len(m.group(1)):]
+
+
+def parse_github_url(url: str) -> RepoRef:
+    """Parse owner/repo/host from a git URL, strictly.
+
+    Accepts ``https://github.com/owner/repo(.git)``, ``ssh://git@github.com/
+    owner/repo``, ``git@github.com:owner/repo.git`` and a bare
+    ``github.com/owner/repo``. For github.com the path must be exactly
+    ``owner/repo`` and the URL may carry no userinfo, query or fragment, so
+    look-alikes such as ``https://evil.com#@github.com/o/r`` can never be
+    mistaken for GitHub. Other hosts (http(s)/ssh/git) parse to their own host
+    with ``is_github`` False. Raises ``ValueError`` for anything that doesn't
+    yield a host + owner + repo.
     """
     if not url or not url.strip():
         raise ValueError("Empty repository URL")
+    # Control characters (trailing newline, embedded tab, NUL ...) are never
+    # part of a real repo URL; urlsplit would silently strip some of them.
+    if any(ord(c) < 32 or ord(c) == 127 for c in url):
+        raise ValueError(f"Control characters in repository URL: {url!r}")
     raw = url.strip()
 
     # scp-like: git@host:owner/repo(.git)
+    port: int | None = None
     scp = re.match(r"^[\w.-]+@([\w.-]+):(.+)$", raw)
     if scp and "://" not in raw:
-        host = scp.group(1)
+        host = scp.group(1).lower()
         path = scp.group(2)
+        scheme = "ssh"
     else:
-        # Strip scheme (or supply a placeholder for bare host/owner/repo).
-        m = re.match(r"^(?:[a-zA-Z][a-zA-Z0-9+.-]*://)?(.+)$", raw)
-        rest = m.group(1) if m else raw
-        # Drop optional userinfo (e.g. git@ or x-access-token:tok@).
-        rest = re.sub(r"^[^/@]*@", "", rest)
-        parts = rest.split("/", 1)
-        if len(parts) != 2:
+        try:
+            parts = urlsplit(raw if "://" in raw else f"https://{raw}")
+            host = (parts.hostname or "").lower()
+            username, password = parts.username, parts.password
+        except ValueError as exc:
+            raise ValueError(f"Cannot parse owner/repo from URL: {url}") from exc
+        scheme = parts.scheme.lower()
+        path = parts.path
+        try:
+            port = parts.port
+        except ValueError as exc:  # non-numeric or out of range
+            raise ValueError(f"Invalid port in repository URL: {url}") from exc
+        if scheme not in ("https", "http", "ssh", "git"):
+            raise ValueError(f"Unsupported URL scheme in: {url}")
+        if parts.query or parts.fragment or password is not None:
             raise ValueError(f"Cannot parse owner/repo from URL: {url}")
-        host = parts[0]
-        path = parts[1]
+        # Userinfo is only legitimate as the ssh login user ``git``.
+        if username and not (scheme == "ssh" and username == "git"):
+            raise ValueError(f"Unexpected credentials in repository URL: {url}")
 
     # path is "owner/repo(/...)(.git)"
-    path = path.strip("/")
-    segments = [s for s in path.split("/") if s]
+    segments = [s for s in path.strip("/").split("/") if s]
     if len(segments) < 2:
         raise ValueError(f"Cannot parse owner/repo from URL: {url}")
+    if any(s in (".", "..") for s in segments):
+        raise ValueError(f"Dot segments in repository URL: {url}")
     owner = segments[0]
     repo = segments[1]
     if repo.endswith(".git"):
         repo = repo[: -len(".git")]
+
+    if host == "github.com":
+        # Exactly github.com, default port only: ``github.com:8443`` is another
+        # service and must not receive a GitHub token.
+        if port not in (None, 443):
+            raise ValueError(f"Unexpected port for github.com: {url}")
+        if repo.endswith(".git"):
+            raise ValueError(f"Cannot parse owner/repo from URL: {url}")
+        if len(segments) != 2 or scheme == "http" or scheme == "git":
+            raise ValueError(f"Not a plain https/ssh GitHub repo URL: {url}")
+        if not re.fullmatch(r"[\w.-]+", owner) or not re.fullmatch(r"[\w.-]+", repo):
+            raise ValueError(f"Cannot parse owner/repo from URL: {url}")
 
     if not host or not owner or not repo:
         raise ValueError(f"Cannot parse owner/repo from URL: {url}")
@@ -671,6 +723,7 @@ class PRFlow:
         Raises ``ValueError`` for a non-GitHub host (caller should fall back to
         the fix-plan behavior). The temp clone is always cleaned up.
         """
+        repo_url = normalize_repo_scheme(repo_url)
         ref = parse_github_url(repo_url)
         if not ref.is_github:
             raise ValueError(
@@ -832,19 +885,23 @@ class PRFlow:
     ) -> bool:
         """Generate a fix for one finding, write it, and commit it atomically."""
         rel_path = finding.code_location.file_path
-        full_path = os.path.join(clone_dir, rel_path)
-        # Guard against path traversal from a malicious finding.
-        if not os.path.realpath(full_path).startswith(os.path.realpath(clone_dir) + os.sep):
+        # Guard against path traversal / .git metadata from a malicious finding.
+        try:
+            full_path = resolve_fix_target(clone_dir, rel_path)
+        except ValueError:
             result.skipped.append(f"{finding.title} — path escapes repo, skipped")
             return False
         if not os.path.isfile(full_path):
             result.skipped.append(f"{finding.title} — {rel_path} not found in repo")
             return False
 
-        try:
-            content = open(full_path, encoding="utf-8", errors="replace").read()
-        except OSError as e:
-            result.skipped.append(f"{finding.title} — could not read {rel_path}: {e}")
+        # Strict UTF-8, newlines untouched: a lossy decode would corrupt the
+        # file when the fix is written back.
+        content = read_source_file(clone_dir, rel_path)
+        if content is None:
+            result.skipped.append(
+                f"{finding.title} — {rel_path} is not valid UTF-8 text, skipped"
+            )
             return False
 
         fix: FixResult = await self._generator.generate_fix(finding, content)
@@ -856,8 +913,7 @@ class PRFlow:
             return False
 
         try:
-            with open(full_path, "w", encoding="utf-8") as fh:
-                fh.write(fix.fixed_code)
+            write_source_file(clone_dir, rel_path, fix.fixed_code)
             await git.run(clone_dir, "add", "--", rel_path)
             await git.run(clone_dir, "commit", "-m", _commit_message(finding))
         except (OSError, GitError) as e:
@@ -905,6 +961,7 @@ class PRFlow:
             repo_url, branch, clone_dir, github_token, full_history=True
         )
         # Ensure 'origin' carries the token so the later push authenticates.
+        repo_url = normalize_repo_scheme(repo_url)
         if github_token and repo_url.startswith("https://"):
             authed = repo_url.replace(
                 "https://", f"https://x-access-token:{github_token}@"

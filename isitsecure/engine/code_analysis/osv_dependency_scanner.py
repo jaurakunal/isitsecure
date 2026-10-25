@@ -24,6 +24,12 @@ from pathlib import Path
 import httpx
 
 from isitsecure.engine.code_analysis.models import CodeFinding
+from isitsecure.engine.code_analysis.osv_enrichment import (
+    fetch_vuln_details,
+    fixed_version_from_osv,
+    severity_from_osv,
+    unenriched_message,
+)
 from isitsecure.engine.code_analysis.protocols import RepoSnapshot
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
 from isitsecure.engine.shared.progress import emit
@@ -68,12 +74,18 @@ class OSVDependencyScanner:
 
     DEFAULT_SEVERITY = SeverityLevel.MEDIUM
 
+    def __init__(self) -> None:
+        # Packages whose OSV batch query failed in the current scan (not checked);
+        # reset at the start of every scan. Read by the orchestrator.
+        self.unchecked_packages = 0
+
     @property
     def scanner_name(self) -> str:
         return self.SCANNER_NAME
 
     async def scan(self, repo: RepoSnapshot) -> list[CodeFinding]:
         """Scan all dependency files against OSV."""
+        self.unchecked_packages = 0
         deps = self._extract_all_dependencies(repo)
 
         if not deps:
@@ -91,6 +103,14 @@ class OSVDependencyScanner:
         )
 
         vulns = await self._query_osv_batch(deps)
+        if self.unchecked_packages:
+            msg = (
+                f"OSV: {self.unchecked_packages} of {len(deps)} package(s) "
+                f"could not be checked (OSV unreachable or rate limited)"
+            )
+            logger.warning(msg)
+            emit(msg)
+        vulns = await self._enrich_vulns(vulns)
         findings = self._build_findings(vulns)
 
         logger.info("OSV scanner found %d vulnerabilities", len(findings))
@@ -284,6 +304,29 @@ class OSVDependencyScanner:
 
         return results
 
+    async def _enrich_vulns(
+        self, vulns: list[tuple[ParsedDependency, list[dict]]]
+    ) -> list[tuple[ParsedDependency, list[dict]]]:
+        """Replace batch stubs ({id, modified}) with full OSV records."""
+        ids = [v.get("id", "") for _, vl in vulns for v in vl]
+        if not ids:
+            return vulns
+        try:
+            async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+                records, failed = await fetch_vuln_details(client, ids)
+        except Exception as e:
+            logger.warning("OSV detail fetch failed: %s", e)
+            emit(unenriched_message(len(set(ids))))
+            return vulns
+        if failed:
+            msg = unenriched_message(failed)
+            logger.warning(msg)
+            emit(msg)
+        return [
+            (dep, [{**v, **records.get(v.get("id", ""), {})} for v in vl])
+            for dep, vl in vulns
+        ]
+
     async def _query_batch(
         self, deps: list[ParsedDependency]
     ) -> list[tuple[ParsedDependency, list[dict]]]:
@@ -298,6 +341,7 @@ class OSVDependencyScanner:
                 resp = await client.post(OSV_API_URL, json={"queries": queries})
                 if resp.status_code != 200:
                     logger.warning("OSV batch query failed: %d", resp.status_code)
+                    self.unchecked_packages += len(deps)
                     return []
 
                 data = resp.json()
@@ -312,6 +356,7 @@ class OSVDependencyScanner:
 
         except Exception as e:
             logger.warning("OSV query failed: %s", e)
+            self.unchecked_packages += len(deps)
             return []
 
     # ------------------------------------------------------------------
@@ -336,7 +381,7 @@ class OSVDependencyScanner:
                 severity = self._extract_severity(vuln)
                 aliases = vuln.get("aliases", [])
                 cve_ids = [a for a in aliases if a.startswith("CVE-")]
-                summary = vuln.get("summary", vuln.get("details", ""))[:200]
+                summary = (vuln.get("summary") or vuln.get("details") or "")[:200]
 
                 title = f"Vulnerable dependency: {dep.name}@{dep.version}"
                 if cve_ids:
@@ -365,51 +410,12 @@ class OSVDependencyScanner:
 
     def _extract_severity(self, vuln: dict) -> SeverityLevel:
         """Extract severity from OSV vulnerability data."""
-        # Try CVSS score first
-        for severity_entry in vuln.get("severity", []):
-            score_str = severity_entry.get("score", "")
-            try:
-                # CVSS vector string — extract base score
-                if "CVSS:" in score_str:
-                    # Parse from vector like "CVSS:3.1/AV:N/AC:L/..."
-                    # The score is often not directly in the vector, use database_specific
-                    pass
-            except Exception:
-                pass
-
-        # Try database_specific severity
-        db_specific = vuln.get("database_specific", {})
-        severity_str = db_specific.get("severity", "").upper()
-        if severity_str == "CRITICAL":
-            return SeverityLevel.CRITICAL
-        if severity_str == "HIGH":
-            return SeverityLevel.HIGH
-        if severity_str == "MODERATE" or severity_str == "MEDIUM":
-            return SeverityLevel.MEDIUM
-        if severity_str == "LOW":
-            return SeverityLevel.LOW
-
-        # Try ecosystem_specific
-        for affected in vuln.get("affected", []):
-            eco_sev = affected.get("ecosystem_specific", {}).get("severity", "").upper()
-            if eco_sev in ("CRITICAL", "HIGH", "MODERATE", "MEDIUM", "LOW"):
-                return {
-                    "CRITICAL": SeverityLevel.CRITICAL,
-                    "HIGH": SeverityLevel.HIGH,
-                    "MODERATE": SeverityLevel.MEDIUM,
-                    "MEDIUM": SeverityLevel.MEDIUM,
-                    "LOW": SeverityLevel.LOW,
-                }[eco_sev]
-
-        return self.DEFAULT_SEVERITY
+        return severity_from_osv(vuln)
 
     @staticmethod
     def _extract_fix(vuln: dict, dep: ParsedDependency) -> str:
         """Extract the fixed version from OSV data."""
-        for affected in vuln.get("affected", []):
-            for rng in affected.get("ranges", []):
-                for event in rng.get("events", []):
-                    fixed = event.get("fixed")
-                    if fixed:
-                        return f"Upgrade {dep.name} to {fixed} or later"
+        fixed = fixed_version_from_osv(vuln, dep.name, dep.ecosystem, dep.version)
+        if fixed:
+            return f"Upgrade {dep.name} to {fixed} or later"
         return f"Upgrade {dep.name} to the latest version"

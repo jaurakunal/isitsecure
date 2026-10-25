@@ -18,10 +18,13 @@ DIP: Depends on ``LLMClientProtocol`` (abstraction) for LLM calls,
 
 from __future__ import annotations
 
-import json
 import logging
-import re
 
+from isitsecure.engine.code_analysis.llm_parsing import (
+    extract_json_array,
+    parse_finding_fields,
+    record_skip,
+)
 from isitsecure.engine.code_analysis.models import CodeFinding
 from isitsecure.engine.code_analysis.protocols import RepoSnapshot
 from isitsecure.engine.constants import SemanticRuleVerifierConfig
@@ -48,6 +51,14 @@ class SemanticRuleVerifier:
     def __init__(self, llm_client: LLMClientProtocol) -> None:
         self._llm = llm_client
         self._total_tokens_used = 0
+        # (file, reason) for every review that could not complete.
+        self.skipped_files: list[tuple[str, str]] = []
+
+    def _record_skip(self, name: str, reason: str) -> None:
+        """Make an incomplete review visible (list, log, progress)."""
+        record_skip(
+            self.skipped_files, "Semantic rule review incomplete for", name, reason
+        )
 
     @property
     def scanner_name(self) -> str:
@@ -67,6 +78,7 @@ class SemanticRuleVerifier:
             List of code findings for logical rule flaws.
         """
         findings: list[CodeFinding] = []
+        self.skipped_files = []
 
         # Phase 1: Firebase rules
         firebase_rules = self._collect_firebase_rules(repo)
@@ -201,6 +213,7 @@ class SemanticRuleVerifier:
                     file=file_path, error=str(e)
                 )
             )
+            self._record_skip(file_path, f"LLM error: {e}")
             return []
 
     # ------------------------------------------------------------------
@@ -213,46 +226,35 @@ class SemanticRuleVerifier:
         """Parse LLM JSON response into CodeFinding objects."""
         findings: list[CodeFinding] = []
 
-        # Extract JSON array from response (may be wrapped in code block)
-        json_match = re.search(r"\[.*\]", response, re.DOTALL)
-        if not json_match:
-            return findings
-
-        try:
-            items = json.loads(json_match.group(0))
-        except json.JSONDecodeError as e:
-            logger.debug(
-                SemanticRuleVerifierConfig.ERROR_PARSE_RESPONSE.format(
-                    error=str(e)
-                )
-            )
+        items = extract_json_array(response)
+        if items is None:
+            self._record_skip(file_path, "unparseable model reply (no JSON array)")
             return findings
 
         for item in items[: SemanticRuleVerifierConfig.MAX_FINDINGS_PER_FILE]:
             if not isinstance(item, dict):
                 continue
-
-            severity_str = item.get("severity", "MEDIUM").upper()
-            severity = self.SEVERITY_MAP.get(
-                severity_str, SeverityLevel.MEDIUM
-            )
-
-            line_number = item.get("line_number")
-
-            findings.append(
-                CodeFinding(
-                    scanner_name=self.scanner_name,
-                    severity=severity,
-                    category=FindingCategory.RLS_MISCONFIGURATION,
-                    title=item.get(
-                        "title",
-                        SemanticRuleVerifierConfig.FALLBACK_FINDING_TITLE,
-                    ),
-                    description=item.get("description", ""),
-                    file_path=file_path,
-                    line_number=line_number,
-                    confidence=SemanticRuleVerifierConfig.CONFIDENCE_LLM_FINDING,
+            try:
+                fields = parse_finding_fields(
+                    item,
+                    self.SEVERITY_MAP,
+                    SemanticRuleVerifierConfig.FALLBACK_FINDING_TITLE,
                 )
-            )
+                findings.append(
+                    CodeFinding(
+                        scanner_name=self.scanner_name,
+                        severity=fields.severity,
+                        category=FindingCategory.RLS_MISCONFIGURATION,
+                        title=fields.title,
+                        description=fields.description,
+                        file_path=file_path,
+                        line_number=fields.line_number,
+                        confidence=SemanticRuleVerifierConfig.CONFIDENCE_LLM_FINDING,
+                    )
+                )
+            except Exception as exc:  # one bad item must not lose the rest
+                logger.warning(
+                    "Skipping malformed LLM finding for %s: %s", file_path, exc
+                )
 
         return findings

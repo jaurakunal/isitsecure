@@ -25,7 +25,12 @@ from dataclasses import dataclass
 from enum import StrEnum
 from urllib.parse import urlparse
 
-from isitsecure.engine.fixes.verifier import LLM_SCANNERS
+from isitsecure.engine.fixes.verifier import (
+    LLM_SCANNERS,
+    RescanFailed,
+    failed_scanner_names,
+    failure_blocks,
+)
 from isitsecure.engine.identity import finding_fingerprint
 from isitsecure.engine.models import DeepFinding
 
@@ -63,6 +68,9 @@ class VerifyStatus(StrEnum):
     STILL_PRESENT = "still_present"
     UNVERIFIABLE = "unverifiable"
     ERROR = "error"
+    # The check did not run (target unreachable / re-scan could not ingest the
+    # repo). Never a pass: distinct from FIXED and from UNVERIFIABLE.
+    COULD_NOT_VERIFY = "could_not_verify"
 
 
 @dataclass
@@ -125,11 +133,36 @@ def _endpoint_for(finding: DeepFinding, target_url: str, params: list[str]):
     return DiscoveredEndpoint(url=url, method=method, query_param_names=params)
 
 
+async def _target_reachable(url: str) -> bool:
+    """True when ``url`` answers with any HTTP response at all.
+
+    Scanners swallow connection errors and return no findings, so an empty
+    result is only evidence of a fix if the target was actually reachable.
+    """
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0, verify=False, follow_redirects=False) as client:
+            await client.get(url)
+        return True
+    except Exception as exc:  # noqa: BLE001 — any failure means we could not check
+        logger.warning("Re-verify target %s unreachable: %s", url, exc)
+        return False
+
+
+class _PresentFingerprints(set):
+    """Fingerprints still raised, plus the re-scan's ``scanner_errors``."""
+
+    scanner_errors: list[str]
+
+
 async def _sast_present_fingerprints(repo_path: str) -> set[str]:
     """Fingerprints still raised by a code-only re-scan of ``repo_path``."""
     from isitsecure.engine.fixes.verifier import _rescan_sast_findings
     rescan = await _rescan_sast_findings(repo_path)
-    return {d["fingerprint"] for d in rescan if d.get("fingerprint")}
+    present = _PresentFingerprints(d["fingerprint"] for d in rescan if d.get("fingerprint"))
+    present.scanner_errors = list(getattr(rescan, "scanner_errors", []))
+    return present
 
 
 def _dast_scanners_by_name() -> dict:
@@ -189,19 +222,34 @@ async def reverify_findings(
                 present = await _sast_present_fingerprints(repo_path)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("SAST re-verify re-scan failed: %s", exc)
+                status = (VerifyStatus.COULD_NOT_VERIFY if isinstance(exc, RescanFailed)
+                          else VerifyStatus.ERROR)
                 for f in sast:
-                    verdict_by_id[f.id] = Verdict(f, VerifyStatus.ERROR, str(exc))
+                    verdict_by_id[f.id] = Verdict(f, status, str(exc))
             else:
+                failed, unmapped = failed_scanner_names(getattr(present, "scanner_errors", []))
                 for f in sast:
-                    status = (VerifyStatus.STILL_PRESENT
-                              if finding_fingerprint(f) in present else VerifyStatus.FIXED)
-                    verdict_by_id[f.id] = Verdict(f, status)
+                    if finding_fingerprint(f) in present:
+                        verdict_by_id[f.id] = Verdict(f, VerifyStatus.STILL_PRESENT)
+                    elif failure_blocks(f.scanner_name, failed, unmapped):
+                        # Its scanner failed/timed out in the re-scan: absence is not a fix.
+                        verdict_by_id[f.id] = Verdict(
+                            f, VerifyStatus.COULD_NOT_VERIFY,
+                            f"scanner {f.scanner_name} failed or timed out during the re-scan",
+                        )
+                    else:
+                        verdict_by_id[f.id] = Verdict(f, VerifyStatus.FIXED)
 
     # DAST — re-probe each finding's endpoint.
     if dast:
         if not target_url:
             for f in dast:
                 verdict_by_id[f.id] = Verdict(f, VerifyStatus.UNVERIFIABLE, "no target URL given")
+        elif not await _target_reachable(target_url):
+            for f in dast:
+                verdict_by_id[f.id] = Verdict(
+                    f, VerifyStatus.COULD_NOT_VERIFY, f"target {target_url} is unreachable"
+                )
         else:
             scanners = _dast_scanners_by_name()
             for f in dast:

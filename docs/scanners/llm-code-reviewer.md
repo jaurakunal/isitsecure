@@ -24,6 +24,8 @@ Uses Claude or Gemini to analyze code for **business logic vulnerabilities** tha
 | Import Graph Centrality | 4 | Non-route files imported by at least 2 already-selected routes (up to 10 files) |
 | Injection Pattern | 5 | Non-route files with SQL template literals, `innerHTML` assignments, `exec`/`spawn` calls or `fs` calls with variable paths (up to 15 files) |
 
+A review that cannot complete (model error or refusal, unparseable reply, route file over 50,000 characters that is not selected, migration SQL truncated) is logged, emitted as a progress message and recorded in the scanner's `skipped_files` list rather than passing silently. Replies are parsed tolerantly: the first valid JSON array is used, and one malformed item (for example a null severity, defaulted to Medium) no longer discards the rest of the file's findings.
+
 Financial, State Mutation, Import Graph Centrality and Injection Pattern selections get a **specialized system prompt** tuned for that vulnerability class; the other triggers use the general route-review prompt.
 
 ## Why It Matters

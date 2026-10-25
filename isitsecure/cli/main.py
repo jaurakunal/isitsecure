@@ -577,7 +577,9 @@ def verify(
     still = [v for v in verdicts if v.status == VerifyStatus.STILL_PRESENT]
     fixed = [v for v in verdicts if v.status == VerifyStatus.FIXED]
     inconclusive = [v for v in verdicts
-                    if v.status in (VerifyStatus.UNVERIFIABLE, VerifyStatus.ERROR)]
+                    if v.status in (VerifyStatus.UNVERIFIABLE, VerifyStatus.ERROR,
+                                    VerifyStatus.COULD_NOT_VERIFY)]
+    could_not = [v for v in verdicts if v.status == VerifyStatus.COULD_NOT_VERIFY]
 
     if output == "json":
         sys.stdout.write(json.dumps({
@@ -587,6 +589,7 @@ def verify(
                 for v in verdicts
             ],
             "fixed": len(fixed), "still_present": len(still),
+            "could_not_verify": len(could_not),
         }, indent=2) + "\n")
     else:
         _status_style = {
@@ -594,6 +597,7 @@ def verify(
             VerifyStatus.STILL_PRESENT: "[red]STILL PRESENT[/red]",
             VerifyStatus.UNVERIFIABLE: "[dim]unverifiable[/dim]",
             VerifyStatus.ERROR: "[yellow]error[/yellow]",
+            VerifyStatus.COULD_NOT_VERIFY: "[yellow]COULD NOT CHECK[/yellow]",
         }
         table = Table(title="Re-verification", show_lines=False)
         table.add_column("Status", width=16)
@@ -607,6 +611,11 @@ def verify(
             f"[red]{len(still)} still present[/red] · "
             f"[dim]{len(inconclusive)} unverifiable/error[/dim]"
         )
+        if could_not:
+            console.print(
+                f"[yellow]{len(could_not)} finding(s) could not be checked "
+                f"(the check did not run): {could_not[0].detail}[/yellow]"
+            )
 
     # Exit codes for CI: 1 = a regression is still present; 2 = inconclusive
     # (something couldn't be verified, or a requested fingerprint wasn't found) —
@@ -625,7 +634,9 @@ def verify(
 @app.command()
 def launch(
     port: int = typer.Option(3000, "--port", "-p", help="Port for the web UI"),
-    host: str = typer.Option("127.0.0.1", "--host", help="Host to bind to"),
+    host: str = typer.Option("127.0.0.1", "--host",
+        help="Host to bind to; binding elsewhere prints a warning and only allow-listed Host names are served (see ISITSECURE_ALLOWED_HOSTS)",
+    ),
 ) -> None:
     """Launch the isitsecure web UI in your browser."""
     import webbrowser
@@ -640,6 +651,21 @@ def launch(
     from isitsecure.cli.setup_lsp import _lsp_offer
 
     _lsp_offer()
+
+    import os
+
+    os.environ["ISITSECURE_BIND_HOST"] = host
+    if host.strip().lower() not in ("127.0.0.1", "localhost", "::1", "[::1]"):
+        console.print(Panel(
+            "[bold yellow]Warning:[/bold yellow] the web UI server has NO "
+            f"authentication and you are binding to {host!r}. Anyone who can "
+            "reach this port can start scans, read reports and use your LLM "
+            "key. Requests are only accepted for Host names on an allow-list "
+            "(loopback plus the bind host); extend it deliberately with "
+            "ISITSECURE_ALLOWED_HOSTS=name1,name2. Prefer 127.0.0.1.",
+            title="Not loopback",
+            border_style="yellow",
+        ))
 
     console.print(Panel(
         f"[bold]isitsecure v{__version__}[/bold]\n"
@@ -703,11 +729,20 @@ def badge(
     gen = ReportGenerator()
     grade = gen._calculate_grade(report)
 
-    svg = _generate_badge_svg(grade, report.critical_count, report.high_count, len(report.findings))
+    gaps = list(getattr(report, "coverage_gaps", None) or [])
+    svg = _generate_badge_svg(
+        grade, report.critical_count, report.high_count, len(report.findings),
+        incomplete=bool(gaps),
+    )
     Path(output_file).write_text(svg)
 
     console.print(f"[green]Badge written to {output_file}[/green]")
     console.print(f"Grade: [bold]{grade}[/bold]  |  {len(report.findings)} findings")
+    if gaps:
+        console.print(
+            "[yellow]Scan incomplete, grade is provisional. Did not run: "
+            + "; ".join(gaps) + "[/yellow]"
+        )
     console.print(f"\nAdd to your README:")
     # Only prefix "./" for relative paths; an absolute -o path would otherwise
     # render as ".//abs/path".

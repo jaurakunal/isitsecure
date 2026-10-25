@@ -301,11 +301,21 @@ class DeepScanReport(BaseModel):
     # rather than "we never saw your code" (issue #147).
     ingestion_errors: list[str] = Field(default_factory=list)
 
+    # Scanners that timed out or crashed ("name: timed out" / "name: failed").
+    # A whole class of checks did not run, so a clean result is not proof of
+    # safety; the launch verdict and grade report this as incomplete.
+    scanner_errors: list[str] = Field(default_factory=list)
+
     # Thematic grouping of findings
     themes: list[SecurityTheme] = Field(default_factory=list)
 
     # Token usage tracking
     token_usage: ScanTokenUsage | None = None
+
+    @property
+    def coverage_gaps(self) -> list[str]:
+        """Everything that did not run: ingestion errors plus scanner failures."""
+        return [*self.ingestion_errors, *self.scanner_errors]
 
     @property
     def critical_count(self) -> int:

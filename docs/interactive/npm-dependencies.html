@@ -141,11 +141,11 @@
 
 <section id="severity">
   <h2>How a severity is chosen</h2>
-  <p class="prose">An OSV record can describe severity two ways, and the scanner's rule for choosing is short. Whichever way the record goes, an unreadable severity falls back to <b>High</b>, so a finding is never silently low.</p>
+  <p class="prose">An OSV record can describe severity two ways, and the scanner's rule for choosing is short. Whichever way the record goes, an unreadable severity now falls back to <b>Medium</b>. The batch response is first enriched with the full record from <code>/v1/vulns/{id}</code>, and <code>database_specific.severity</code> is read before the score.</p>
 
   <div class="scene" id="sev" data-scene data-interval="3600">
     <figure class="stage">
-      <svg viewBox="0 0 960 312" role="img" aria-label="Three rows show three record shapes. A bare numeric score is mapped by thresholds 9, 7 and 4 to Critical, High, Medium or Low. A CVSS vector string is not decoded and gives High. With no score, the database_specific label is mapped: MODERATE gives Medium, and an unknown or missing label gives High.">
+      <svg viewBox="0 0 960 312" role="img" aria-label="Three rows show three record shapes. A bare numeric score is mapped by thresholds 9, 7 and 4 to Critical, High, Medium or Low. A CVSS v3.x vector string has its base score computed and the same thresholds applied. With a database_specific label, the label is mapped by name: MODERATE gives Medium, and an unknown or missing label gives Medium.">
         <defs><marker id="arrSv" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
         <g class="row r1" transform="translate(20 16)">
           <rect width="920" height="88" rx="10"/>
@@ -164,35 +164,35 @@
           <text class="lbl" x="16" y="24">record carries a CVSS vector</text>
           <text class="mono" x="16" y="50">"score": "CVSS:3.1/AV:N/AC:L/…"</text>
           <path class="wire" d="M300 46 H340" marker-end="url(#arrSv)"/>
-          <text class="ttl" x="356" y="30">float() fails, so the vector is not decoded</text>
+          <text class="ttl" x="356" y="30">CVSS v3.x vector: base score computed, same thresholds</text>
           <text class="lbl" x="356" y="52">OSV defines score as a vector string for CVSS entries</text>
-          <text class="lbl" x="356" y="70">the first entry with any score decides; no label lookup after it</text>
+          <text class="lbl" x="356" y="70">used only when no recognised label is present; first usable score wins</text>
           <rect x="770" y="22" width="130" height="44" rx="6" class="soft-accent"/><text class="ttl t-accent" x="808" y="50">HIGH</text>
         </g>
         <g class="row r3" transform="translate(20 208)">
           <rect width="920" height="88" rx="10"/>
-          <text class="lbl" x="16" y="24">record has no score at all</text>
+          <text class="lbl" x="16" y="24">record has a recognised label</text>
           <text class="mono" x="16" y="50">database_specific.severity</text>
           <path class="wire" d="M300 46 H340" marker-end="url(#arrSv)"/>
           <text class="ttl" x="356" y="30">label, case-insensitive, mapped by name</text>
           <g class="mono">
             <text x="356" y="56">CRITICAL, HIGH</text><text x="476" y="56">MODERATE, MEDIUM → MEDIUM</text><text x="676" y="56">LOW</text>
           </g>
-          <text class="lbl" x="356" y="76">a missing or unknown label falls back to HIGH</text>
+          <text class="lbl" x="356" y="76">a missing or unknown label falls back to MEDIUM</text>
           <rect x="770" y="22" width="130" height="44" rx="6" class="soft-info"/><text class="ttl t-info" x="796" y="50">as labelled</text>
         </g>
       </svg>
     </figure>
     <div class="scene-steps">
       <p class="step"><span class="n">1</span>Three record shapes, each handled by a different branch of <code>_extract_severity</code>. The next steps highlight each in turn.</p>
-      <p class="step"><span class="n">2</span><b>A bare number is thresholded</b>: 9.0 and above is CRITICAL, 7.0 HIGH, 4.0 MEDIUM, anything lower LOW. A score of 9.8 is Critical.</p>
-      <p class="step"><span class="n">3</span><b>A CVSS vector string is not decoded.</b> The scanner does not compute a base score from the metrics; if <code>float()</code> fails it returns HIGH. Because the first entry with a score ends the search, a record whose severity list holds a vector never reaches the label lookup.</p>
-      <p class="step"><span class="n">4</span>With no score, <code>database_specific.severity</code> is mapped by name: CRITICAL, HIGH, MODERATE (as Medium), MEDIUM and LOW. <b>MODERATE is how GitHub advisories spell Medium.</b> A missing or unrecognised label becomes HIGH.</p>
+      <p class="step"><span class="n">2</span><b>A bare number is thresholded</b> when the record has no recognised label: 9.0 and above is CRITICAL, 7.0 HIGH, 4.0 MEDIUM, anything lower LOW. A score of 9.8 is Critical.</p>
+      <p class="step"><span class="n">3</span><b>A CVSS v3.x vector string is decoded.</b> The shared helper computes the base score from the metrics and applies the same thresholds.</p>
+      <p class="step"><span class="n">4</span><code>database_specific.severity</code> is checked first and mapped by name: CRITICAL, HIGH, MODERATE (as Medium), MEDIUM and LOW. <b>MODERATE is how GitHub advisories spell Medium.</b> A missing or unrecognised label becomes MEDIUM.</p>
     </div>
   </div>
   <div class="callout note">
     <div class="label">What this means in practice</div>
-    <p>The numeric branch fires only when a record stores a plain number. OSV's schema stores CVSS entries as vector strings, so a record with a vector in its severity list reports as High regardless of its real score. Medium and Low can come only from a bare numeric score or from a record with no score and a <code>database_specific</code> label. Treat the severity as a floor on urgency rather than a CVSS score.</p>
+    <p>OSV's schema stores CVSS entries as vector strings; the scanner now computes the CVSS v3.x base score from them, so Low, Medium, High and Critical all follow the real score.</p>
   </div>
 </section>
 
@@ -217,7 +217,7 @@
       <p class="step"><span class="n">2</span><code>^4.17.15</code> loses its caret and is queried as <code>4.17.15</code>. This is the common case and it works as intended.</p>
       <p class="step"><span class="n">3</span><code>~1.2.3</code> becomes <code>1.2.3</code>. A range allows newer versions, and the lock file may have installed one, but the scanner asks about the floor only. <b>A newly patched install can still be reported</b>, and a newer vulnerable one is not.</p>
       <p class="step"><span class="n">4</span>A compound range such as <code>&gt;=1.0.0 &lt;2</code> keeps everything after the first version. The query version is <code>1.0.0 &lt;2</code>; what OSV does with it is OSV's decision.</p>
-      <p class="step"><span class="n">5</span><code>latest</code>, <code>*</code> and <code>workspace:*</code> pass through unchanged. If OSV answers a batch with an HTTP error, <b>all up to 100 packages in that batch are dropped</b> with a logged warning; the scan reports nothing for them.</p>
+      <p class="step"><span class="n">5</span><code>latest</code>, <code>*</code> and <code>workspace:*</code> pass through unchanged. If OSV answers a batch with an HTTP error, <b>all up to 100 packages in that batch are dropped</b> with a logged warning and a progress message that N packages could not be checked; the scan reports no findings for them.</p>
     </div>
   </div>
 </section>
@@ -280,14 +280,14 @@ npm install
         <tr><td>Package cap</td><td>200 after merging</td><td>The rest are not checked</td></tr>
         <tr><td>Batch</td><td>100 queries per request, 30 s timeout</td><td>An HTTP error drops that batch and logs a warning</td></tr>
         <tr><td>Finding</td><td>one per advisory, confidence 0.95</td><td>Title <code>Vulnerable dependency: name@version</code></td></tr>
-        <tr><td>Severity</td><td>numeric score thresholds, label map, default High</td><td>Range Low to Critical</td></tr>
-        <tr><td>Needs</td><td>outbound HTTPS to <code>api.osv.dev</code>, no API key</td><td>Offline, the scan returns no findings from this scanner</td></tr>
+        <tr><td>Severity</td><td>numeric score or CVSS v3 vector thresholds, label map, default Medium</td><td>Range Low to Critical</td></tr>
+        <tr><td>Needs</td><td>outbound HTTPS to <code>api.osv.dev</code>, no API key</td><td>Offline, the scan returns no findings from this scanner, logs a warning and emits a progress message (&quot;N of M package(s) could not be checked&quot;)</td></tr>
       </tbody>
     </table>
   </div>
   <div class="callout note">
     <div class="label">Scope note</div>
-    <p>The scanner does not run <code>npm audit</code>; it queries OSV.dev, and the configuration holds an "outdated package" title, a confidence of 0.50 and a lock-file error message that the scanner never uses. The file attached to a finding is found by checking which package name appears in the finding's title, so a short name that is contained in a longer one (<code>react</code> inside <code>react-dom</code>) can be attributed to the wrong manifest. The batch endpoint normally returns only advisory ids, so the severity and summary fields the parser reads are usually absent and findings tend to land on the High default. The related <a href="java-dependencies.html">Java</a>, <a href="python-dependencies.html">Python</a> and <a href="osv-dependencies.html">OSV</a> scanners cover other ecosystems.</p>
+    <p>The scanner does not run <code>npm audit</code>; it queries OSV.dev, and the configuration holds an "outdated package" title, a confidence of 0.50 and a lock-file error message that the scanner never uses. The file attached to a finding is found by checking which package name appears in the finding's title, so a short name that is contained in a longer one (<code>react</code> inside <code>react-dom</code>) can be attributed to the wrong manifest. The batch endpoint returns only advisory ids, so the scanner fetches the full record for each unique id (capped at 100) before reading severity, summary and fixed version; if that fetch fails the finding falls back to Medium. A failed batch query is logged and reported as packages that could not be checked. The related <a href="java-dependencies.html">Java</a>, <a href="python-dependencies.html">Python</a> and <a href="osv-dependencies.html">OSV</a> scanners cover other ecosystems.</p>
   </div>
 </section>
 

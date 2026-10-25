@@ -35,7 +35,11 @@ from isitsecure.engine.models import (
 )
 from isitsecure.engine.shared.scanner_runner import (
     ScannerTimeouts,
+    record_scanner_failure,
+    reset_failure_log,
     run_scanner_safe,
+    record_skipped_work,
+    use_failure_log,
 )
 from isitsecure.engine.enums import SeverityLevel
 
@@ -231,14 +235,63 @@ class DeepSecurityScanAgent:
 
         ``repo_branch`` defaults to the repository's own default branch.
         """
-        start_time = time.monotonic()
-        # Install an ambient progress reporter so scanners can narrate their
-        # work (see engine/shared/progress.py). Tasks spawned below inherit it.
         from isitsecure.engine.shared.progress import (
             ProgressReporter, use_reporter, reset_reporter,
         )
+        # Install an ambient progress reporter so scanners can narrate their
+        # work (see engine/shared/progress.py). Tasks spawned below inherit it.
         self._reporter = ProgressReporter()
+        self._scanner_errors: list[str] = []
+        self._lsp_started = False
         _progress_token = use_reporter(self._reporter)
+        _failure_token = use_failure_log(self._scanner_errors)
+        inner = self._scan_impl(
+            target_url, repo_url, github_token, credentials_a,
+            credentials_b, scan_mode, repo_branch,
+        )
+        try:
+            async for event in inner:
+                yield event
+        finally:
+            # Runs when the consumer stops early, a phase raises, or after
+            # COMPLETE: never leak the LSP subprocess or the ambient reporter.
+            try:
+                await inner.aclose()
+            except Exception as e:
+                logger.debug("scan cleanup: closing inner generator: %s", e)
+            if self._lsp_client and self._lsp_started:
+                try:
+                    await self._lsp_client.shutdown()
+                except Exception as e:
+                    logger.debug("LSP shutdown error: %s", e)
+            try:
+                reset_reporter(_progress_token)
+            except ValueError:
+                pass
+            reset_failure_log(_failure_token)
+
+    async def _scan_impl(
+        self,
+        target_url: str | None = None,
+        repo_url: str | None = None,
+        github_token: str | None = None,
+        credentials_a: AuthCredentials | None = None,
+        credentials_b: AuthCredentials | None = None,
+        scan_mode: ScanMode | None = None,
+        repo_branch: str | None = None,
+    ) -> AsyncGenerator[DeepScanEvent, None]:
+        """Run a full deep security scan.
+
+        Auto-detects scan mode if not specified:
+        - URL + credentials + repo -> FULL
+        - URL + credentials       -> AUTHENTICATED
+        - URL only                -> URL_ONLY
+        - Repo only               -> CODE_ONLY
+
+        ``repo_branch`` defaults to the repository's own default branch.
+        :meth:`scan` wraps this body with guaranteed cleanup.
+        """
+        start_time = time.monotonic()
         mode = scan_mode or self._detect_scan_mode(target_url, repo_url, credentials_a)
 
         # Auto-upgrade: if credentials were provided but mode doesn't include auth
@@ -348,6 +401,7 @@ class DeepSecurityScanAgent:
             scan_duration_seconds=round(duration, 2),
             scanners_run=ctx.scanners_run,
             ingestion_errors=ctx.ingestion_errors,
+            scanner_errors=list(self._scanner_errors),
             themes=ctx.themes,
             token_usage=self._collect_token_usage(),
         )
@@ -364,16 +418,6 @@ class DeepSecurityScanAgent:
             {"report": report.model_dump(mode="json")},
         )
 
-        # ==============================================================
-        # Cleanup: Shutdown LSP
-        # ==============================================================
-        if self._lsp_client and ctx.lsp_initialized:
-            try:
-                await self._lsp_client.shutdown()
-            except Exception as e:
-                logger.debug("LSP shutdown error: %s", e)
-
-        reset_reporter(_progress_token)
 
     async def _phase_url_ingestion(
         self, ctx: ScanContext
@@ -502,6 +546,9 @@ class DeepSecurityScanAgent:
                     SharedPatterns.HEADER_AUTHORIZATION
                 )
                 if auth_header:
+                    # Runtime import: the module-level one is TYPE_CHECKING only.
+                    from isitsecure.engine.auth.protocols import AuthSession
+
                     token = auth_header.removeprefix(SharedPatterns.BEARER_PREFIX)
                     ctx.session_a = AuthSession(
                         user_id=(
@@ -513,10 +560,7 @@ class DeepSecurityScanAgent:
                         user_email=ctx.credentials_a.email,
                         provider=ctx.credentials_a.provider,
                     )
-                    logger.info(
-                        "Extracted auth session from crawl (token=%s...)",
-                        token[:20],
-                    )
+                    logger.info("Extracted auth session from crawl (token captured)")
 
                     # Wire auth session into JWT scanner so it can test the token
                     if self._jwt_scanner:
@@ -846,7 +890,7 @@ class DeepSecurityScanAgent:
                         data={"error": True},
                     )
                     ctx.aborted = True
-                return
+                    return
                 # Full scan: the live-site half is still real, so finish it —
                 # but the report has to say the code was never scanned.
                 yield DeepScanEvent(
@@ -891,6 +935,7 @@ class DeepSecurityScanAgent:
                         timeout=LSPConfig.INIT_TIMEOUT_SECONDS,
                     )
                     if ctx.lsp_initialized:
+                        self._lsp_started = True
                         _lsp_duration = _time.monotonic() - _lsp_start
                         logger.info(
                             LSPConfig.MSG_INIT_SUCCESS.format(
@@ -945,6 +990,8 @@ class DeepSecurityScanAgent:
                     sast_findings, sast_names, ctx.sast_code_findings = _payload
             ctx.all_findings.extend(sast_findings)
             ctx.scanners_run.extend(sast_names)
+            for _s in self._sast_scanners:
+                record_skipped_work(_s.scanner_name, _s)
 
     async def _phase_lsp_validation(
         self, ctx: ScanContext
@@ -1030,6 +1077,7 @@ class DeepSecurityScanAgent:
             for cf in llm_code_findings:
                 ctx.all_findings.append(self._code_finding_to_deep_finding(cf))
             ctx.scanners_run.append("llm_review")
+            record_skipped_work("llm_code_reviewer", self._llm_code_reviewer)
 
     async def _phase_cross_reference(
         self, ctx: ScanContext
@@ -1137,6 +1185,9 @@ class DeepSecurityScanAgent:
                 )
                 ctx.all_findings.extend(biz_findings)
                 ctx.scanners_run.append(LLMBusinessLogicConfig.SCANNER_NAME)
+                record_skipped_work(
+                    LLMBusinessLogicConfig.SCANNER_NAME, biz_logic_scanner
+                )
 
                 yield DeepScanEvent(
                     DeepScanPhase.LLM_BUSINESS_LOGIC,
@@ -1318,14 +1369,21 @@ class DeepSecurityScanAgent:
         _DONE = "__scanner_done__"
 
         async def _run(name: str, coro) -> None:
+            findings = []
             try:
                 findings = await coro
-            except Exception as exc:  # keep the drain loop from hanging
+            except BaseException as exc:  # record, post the marker (finally), then re-raise below
                 logger.debug("DAST scanner %s failed: %s", name, exc)
+                record_scanner_failure(name, "failed")
                 findings = []
-            results[name] = findings
-            reporter.post(_DONE, {"scanner": name, "findings": len(findings),
-                                  "_scanner_done": True})
+                if not isinstance(exc, Exception):
+                    # CancelledError / KeyboardInterrupt / SystemExit must
+                    # still cancel the scan; only ordinary errors are absorbed.
+                    raise
+            finally:
+                results[name] = findings
+                reporter.post(_DONE, {"scanner": name, "findings": len(findings),
+                                      "_scanner_done": True})
 
         # Announce each scanner as it launches (they run concurrently); their
         # own emit() sub-events and completions then flow through the reporter
@@ -1348,27 +1406,33 @@ class DeepSecurityScanAgent:
                 ),
             )))
 
-        done = 0
-        while done < total:
-            message, data = await reporter.queue.get()
-            if data.get("_scanner_done"):
-                done += 1
-                count = data["findings"]
-                detail = f"{count} finding(s)" if count else "clean"
-                yield ("event", DeepScanEvent(
-                    DeepScanPhase.DAST_SCANNING,
-                    f"{data['scanner']}: {detail} ({done}/{total})",
-                    base + int(band * done / total),
-                    {"scanner": data["scanner"], "findings": count,
-                     "done": done, "total": total, "status": "done"},
-                ))
-            else:
-                # A scanner's own progress message (via emit()).
-                yield ("event", DeepScanEvent(
-                    DeepScanPhase.DAST_SCANNING, message, base, data,
-                ))
+        try:
+            done = 0
+            while done < total:
+                message, data = await reporter.queue.get()
+                if data.get("_scanner_done"):
+                    done += 1
+                    count = data["findings"]
+                    detail = f"{count} finding(s)" if count else "clean"
+                    yield ("event", DeepScanEvent(
+                        DeepScanPhase.DAST_SCANNING,
+                        f"{data['scanner']}: {detail} ({done}/{total})",
+                        base + int(band * done / total),
+                        {"scanner": data["scanner"], "findings": count,
+                         "done": done, "total": total, "status": "done"},
+                    ))
+                else:
+                    # A scanner's own progress message (via emit()).
+                    yield ("event", DeepScanEvent(
+                        DeepScanPhase.DAST_SCANNING, message, base, data,
+                    ))
 
-        await asyncio.gather(*tasks, return_exceptions=True)
+            await asyncio.gather(*tasks, return_exceptions=True)
+        finally:
+            # If the consumer is cancelled mid-drain, don't leak the workers.
+            for t in tasks:
+                if not t.done():
+                    t.cancel()
         all_findings: list[DeepFinding] = []
         names: list[str] = []
         for s in self._dast_scanners:
@@ -1646,14 +1710,21 @@ class DeepSecurityScanAgent:
         _DONE = "__scanner_done__"
 
         async def _run(name: str, coro) -> None:
+            code_findings = []
             try:
                 code_findings = await coro
-            except Exception as exc:
+            except BaseException as exc:  # record, post the marker (finally), then re-raise below
                 logger.debug("SAST scanner %s failed: %s", name, exc)
+                record_scanner_failure(name, "failed")
                 code_findings = []
-            results[name] = code_findings
-            reporter.post(_DONE, {"scanner": name, "findings": len(code_findings),
-                                  "_scanner_done": True})
+                if not isinstance(exc, Exception):
+                    # CancelledError / KeyboardInterrupt / SystemExit must
+                    # still cancel the scan; only ordinary errors are absorbed.
+                    raise
+            finally:
+                results[name] = code_findings
+                reporter.post(_DONE, {"scanner": name, "findings": len(code_findings),
+                                      "_scanner_done": True})
 
         tasks = []
         for s in self._sast_scanners:
@@ -1672,26 +1743,32 @@ class DeepSecurityScanAgent:
                 ),
             )))
 
-        done = 0
-        while done < total:
-            message, data = await reporter.queue.get()
-            if data.get("_scanner_done"):
-                done += 1
-                count = data["findings"]
-                detail = f"{count} finding(s)" if count else "clean"
-                yield ("event", DeepScanEvent(
-                    DeepScanPhase.SAST_SCANNING,
-                    f"{data['scanner']}: {detail} ({done}/{total})",
-                    base + int(band * done / total),
-                    {"scanner": data["scanner"], "findings": count,
-                     "done": done, "total": total, "status": "done"},
-                ))
-            else:
-                yield ("event", DeepScanEvent(
-                    DeepScanPhase.SAST_SCANNING, message, base, data,
-                ))
+        try:
+            done = 0
+            while done < total:
+                message, data = await reporter.queue.get()
+                if data.get("_scanner_done"):
+                    done += 1
+                    count = data["findings"]
+                    detail = f"{count} finding(s)" if count else "clean"
+                    yield ("event", DeepScanEvent(
+                        DeepScanPhase.SAST_SCANNING,
+                        f"{data['scanner']}: {detail} ({done}/{total})",
+                        base + int(band * done / total),
+                        {"scanner": data["scanner"], "findings": count,
+                         "done": done, "total": total, "status": "done"},
+                    ))
+                else:
+                    yield ("event", DeepScanEvent(
+                        DeepScanPhase.SAST_SCANNING, message, base, data,
+                    ))
 
-        await asyncio.gather(*tasks, return_exceptions=True)
+            await asyncio.gather(*tasks, return_exceptions=True)
+        finally:
+            # If the consumer is cancelled mid-drain, don't leak the workers.
+            for t in tasks:
+                if not t.done():
+                    t.cancel()
         all_findings: list[DeepFinding] = []
         all_code_findings: list[CodeFinding] = []
         names: list[str] = []

@@ -19,6 +19,11 @@ import re
 from pathlib import Path
 
 from isitsecure.engine.code_analysis.protocols import RouteEntry
+from isitsecure.engine.code_analysis.shared_utils import (
+    is_plain_in_root,
+    iter_repo_files,
+    read_repo_file,
+)
 from isitsecure.engine.constants import GraphQLRouteMapperConfig
 
 logger = logging.getLogger(__name__)
@@ -99,12 +104,16 @@ class GraphQLRouteMapper:
             if not source_dir.is_dir():
                 continue
             for ext in GraphQLRouteMapperConfig.SDL_EXTENSIONS:
-                for file_path in source_dir.rglob(f"*{ext}"):
+                for file_path in iter_repo_files(
+                    root, [f"*{ext}"], base=source_dir
+                ):
                     candidates.append(file_path)
 
         # Also check root-level schema files
         for ext in GraphQLRouteMapperConfig.SDL_EXTENSIONS:
-            for file_path in root.glob(f"*{ext}"):
+            for file_path in sorted(root.glob(f"*{ext}")):
+                if not is_plain_in_root(root, file_path) or not file_path.is_file():
+                    continue
                 if file_path not in candidates:
                     candidates.append(file_path)
 
@@ -119,15 +128,12 @@ class GraphQLRouteMapper:
             if not source_dir.is_dir():
                 continue
             for ext in GraphQLRouteMapperConfig.CODE_EXTENSIONS:
-                for file_path in source_dir.rglob(f"*{ext}"):
-                    try:
-                        content = file_path.read_text(
-                            encoding="utf-8", errors="replace"
-                        )
-                        if self._is_resolver_file(content):
-                            resolver_files.append(file_path)
-                    except OSError:
-                        continue
+                for file_path in iter_repo_files(
+                    root, [f"*{ext}"], base=source_dir
+                ):
+                    content = read_repo_file(root, file_path)
+                    if content is not None and self._is_resolver_file(content):
+                        resolver_files.append(file_path)
 
         return resolver_files
 

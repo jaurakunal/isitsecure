@@ -20,8 +20,12 @@ import os
 from typing import Awaitable, Callable
 
 from isitsecure.config import load_api_key
-from isitsecure.engine.shared.safe_path import resolve_within
-from isitsecure.engine.fixes.fix_generator import FixGenerator, FixPlan
+from isitsecure.engine.fixes.fix_generator import (
+    FixGenerator,
+    FixPlan,
+    read_source_file,
+    write_source_file,
+)
 from isitsecure.engine.fixes.markdown_exporter import FixPlanMarkdownExporter
 from isitsecure.engine.fixes.pr_flow import (
     DEFAULT_MAX_PRS,
@@ -131,6 +135,7 @@ async def run_fix_all(
     github_token: str | None = None,
     pr_strategy: str = DEFAULT_STRATEGY,
     max_prs: int = DEFAULT_MAX_PRS,
+    api_key: str | None = None,
 ) -> dict:
     """Generate and (when possible) apply fixes for a scan's findings.
 
@@ -142,7 +147,8 @@ async def run_fix_all(
     GitHub (delegated to :class:`PRFlow`). Local-path targets keep the existing
     in-place apply behavior.
     """
-    api_key = load_api_key(llm_provider)
+    # A key supplied in the original scan request wins over server config.
+    api_key = api_key or load_api_key(llm_provider)
     if not api_key:
         raise RuntimeError(
             f"No API key found for {llm_provider}. "
@@ -198,12 +204,14 @@ async def run_fix_all(
             fp = fnd.code_location.file_path
             if fp in contents:
                 continue
-            full = os.path.join(local_repo, fp)
-            if os.path.isfile(full):
-                try:
-                    contents[fp] = open(full, encoding="utf-8", errors="replace").read()
-                except Exception as exc:
-                    logger.debug("Could not read %s for fix context: %s", fp, exc)
+            # Strict UTF-8, newlines untouched, .git refused: non-UTF-8 files
+            # are left out (reported as "source not available") rather than
+            # lossily decoded and written back corrupted.
+            text = read_source_file(local_repo, fp)
+            if text is None:
+                logger.debug("Skipping %s: unreadable, non-UTF-8 or refused", fp)
+            else:
+                contents[fp] = text
 
         await emit({"type": "progress", "message": "Generating fixes…",
                     "current": 0, "total": len(contents)})
@@ -220,8 +228,21 @@ async def run_fix_all(
             return {"mode": "applied", "applied": False, "fixed_count": 0,
                     "skipped": skipped, "message": "No fixes could be generated."}
 
+        # Take a restorable backup BEFORE touching anything; without one we
+        # change nothing (same rule as the CLI).
+        from isitsecure.engine.fixes.safety_net import create_safety_net
+        net = await asyncio.to_thread(create_safety_net, local_repo, list(final.keys()))
+        if net.kind == "none" or net.failed:
+            return {"mode": "applied", "applied": False, "fixed_count": 0,
+                    "skipped": skipped,
+                    "message": "Could not make a safe backup of the original files, "
+                               "so nothing was changed."
+                               + (f" Not backed up: {', '.join(net.failed[:5])}" if net.failed else "")}
+
         # Isolate the changes on a fresh branch; restore the user's branch after.
         base_branch = await _current_branch(local_repo)
+        _, base_sha, _ = await _git(local_repo, "rev-parse", "HEAD")
+        detached = base_branch == "HEAD"
         branch = await _pick_branch_name(local_repo, "isitsecure/fixes")
         await emit({"type": "progress", "message": f"Committing to {branch}…",
                     "current": len(final), "total": len(final)})
@@ -232,9 +253,7 @@ async def run_fix_all(
             raise RuntimeError(f"Could not create branch: {err}")
         try:
             for path, content in final.items():
-                safe_path = resolve_within(local_repo, path)
-                with open(safe_path, "w", encoding="utf-8") as fh:
-                    fh.write(content)
+                write_source_file(local_repo, path, content)
                 await _git(local_repo, "add", "--", path)
             msg = f"isitsecure: fix {fixed_count} finding(s) across {len(final)} file(s)"
             code, _, err = await _git(local_repo, "commit", "-m", msg)
@@ -254,7 +273,11 @@ async def run_fix_all(
                 logger.warning("Fix verification skipped: %s", e)
         finally:
             # Return the user to their original branch no matter what.
-            await _git(local_repo, "checkout", "--force", base_branch)
+            # A detached HEAD reports as "HEAD": go back to the commit instead.
+            if detached and base_sha:
+                await _git(local_repo, "checkout", "--force", "--detach", base_sha)
+            else:
+                await _git(local_repo, "checkout", "--force", base_branch)
 
         # Plain-language layer (#50): translate the fix + verify outcome into
         # git-free language the UI can show directly. The branch mechanics stay

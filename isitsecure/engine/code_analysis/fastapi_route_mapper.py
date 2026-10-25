@@ -72,7 +72,7 @@ class FastAPIRouteMapper:
         routes: list[RouteEntry] = []
 
         for file_path in root.rglob("*.py"):
-            if should_skip_path(file_path):
+            if should_skip_path(file_path, root=root):
                 continue
 
             try:

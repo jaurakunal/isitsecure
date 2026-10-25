@@ -48,7 +48,7 @@ These scanners analyze your source code without running it.
 - [Dependency Scanner (npm)](./dependency-scanner.md) · [animated](../interactive/npm-dependencies.html) — Known CVEs in package.json
 - [Python Dependency Scanner](./python-dependency-scanner.md) · [animated](../interactive/python-dependencies.html) — Known CVEs in requirements.txt / pyproject.toml
 - [Java Dependency Scanner](./java-dependency-scanner.md) · [animated](../interactive/java-dependencies.html) — Known CVEs in pom.xml / build.gradle
-- OSV Dependency Scanner — Real-time CVE lookups against Google's OSV.dev database (200K+ vulns, extracts npm, PyPI, Maven/Gradle, and Go dependencies; other ecosystems such as Rust are not extracted)
+- OSV Dependency Scanner — Real-time CVE lookups against Google's OSV.dev database (200K+ vulns, extracts npm, PyPI, Maven/Gradle, and Go dependencies; other ecosystems such as Rust are not extracted); full records are fetched per vulnerability, severity comes from database_specific or a computed CVSS v3 score, Medium if unreadable
 - [Docker Scanner](./docker-scanner.md) · [animated](../interactive/docker.html) — Dockerfile security issues
 - [Drizzle Schema Analyzer](./drizzle-schema-analyzer.md) · [animated](../interactive/drizzle-schema.html) — Schema-level vulnerabilities
 - [IaC Scanner](./iac-scanner.md) · [animated](../interactive/iac.html) — Infrastructure as Code misconfigurations

@@ -120,7 +120,7 @@
       <p class="step"><span class="n">2</span><b>Send.</b> Each qualifying file becomes one prompt: a system message naming the flaws to look for, and the file path plus its first 50,000 characters. The model is asked for a JSON array.</p>
       <p class="step"><span class="n">3</span><b>Reply.</b> Each flaw comes back as severity, title, description, line number and remediation guidance. The prompt tells the model to ignore missing policies and open rules, which the structural analyzers already report.</p>
       <p class="step"><span class="n">4</span><b>Parse.</b> The scanner takes everything from the first <code>[</code> to the last <code>]</code>, parses it, keeps at most seven objects, and builds each finding with its own fixed confidence of 0.70.</p>
-      <p class="step"><span class="n">5</span><b>Absent or failing.</b> Without an API key the scanner is not registered at all. If a call errors or the reply is not JSON, that file yields nothing and the scan continues.</p>
+      <p class="step"><span class="n">5</span><b>Absent or failing.</b> Without an API key the scanner is not registered at all. If a call errors or the reply is not JSON, that file yields nothing, is recorded in <code>skipped_files</code>, and the scan continues.</p>
     </div>
   </div>
 </section>
@@ -249,7 +249,7 @@
     </figure>
     <div class="scene-steps">
       <p class="step"><span class="n">1</span><b>No key, no call.</b> The verifier is registered only when an LLM client exists. Without one the scan runs every rule-based scanner and none of this.</p>
-      <p class="step"><span class="n">2</span><b>Extract.</b> The reply is searched for a JSON array. Missing or malformed gives an empty result for that file. An exception from the call is logged and swallowed.</p>
+      <p class="step"><span class="n">2</span><b>Extract.</b> The first valid JSON array in the reply is used; code fences and surrounding prose are tolerated. A reply with no valid array gives an empty result for that file, and one malformed item (for example a null severity, defaulted to Medium) is skipped or defaulted without losing the rest. A refused call, model error or unparseable reply is logged, shown as a progress message and recorded in <code>skipped_files</code>.</p>
       <p class="step"><span class="n">3</span><b>Per item.</b> At most seven items per file. Non-objects are skipped. A severity the code does not recognise is treated as MEDIUM.</p>
       <p class="step"><span class="n">4</span><b>Confidence is not the model's to set.</b> Every finding gets 0.70 and the fixed RLS misconfiguration category, so triage treats all of them alike.</p>
       <p class="step"><span class="n">5</span><b>Never auto-trusted.</b> Nothing re-tests the claim, and the line number is not checked against the file. The doc says the model supplies fix suggestions per finding, but the code requests them and does not store them.</p>

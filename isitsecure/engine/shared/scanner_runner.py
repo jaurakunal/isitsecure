@@ -1,6 +1,7 @@
 """Safe scanner execution with timeout and error isolation."""
 
 import asyncio
+import contextvars
 import logging
 from typing import Any, Coroutine
 
@@ -9,6 +10,60 @@ from isitsecure.engine.shared.progress import emit
 from isitsecure.engine.shared.time_budget import scanner_deadline
 
 logger = logging.getLogger(__name__)
+
+
+# Ambient list that run_scanner_safe appends "name: timed out/failed" to. The
+# agent installs one per scan; tasks inherit it by reference.
+_scanner_failures: contextvars.ContextVar = contextvars.ContextVar(
+    "isitsecure_scanner_failures", default=None
+)
+
+
+def use_failure_log(log: list[str]) -> contextvars.Token:
+    """Record scanner failures into ``log`` for the current context."""
+    return _scanner_failures.set(log)
+
+
+def reset_failure_log(token: contextvars.Token) -> None:
+    try:
+        _scanner_failures.reset(token)
+    except ValueError:  # generator closed from a different context
+        _scanner_failures.set(None)
+
+
+def record_scanner_failure(scanner_name: str, reason: str) -> None:
+    log = _scanner_failures.get()
+    if log is not None:
+        entry = f"{scanner_name}: {reason}"
+        if entry not in log:
+            log.append(entry)
+
+
+def record_skipped_work(scanner_name: str, scanner: Any) -> None:
+    """Surface work a scanner skipped without failing, into the failure log.
+
+    Scanners record ``skipped_files`` / ``skipped_steps`` (``(item, reason)``
+    pairs) and ``unchecked_packages`` (a count) when an LLM or network call
+    degraded. Nothing else reads those, so a partial review looked complete.
+    Read defensively (any scanner may lack them) and append one concise line
+    per kind so it reaches ``DeepScanReport.scanner_errors``.
+    """
+    for attr, noun in (("skipped_files", "file(s) not reviewed"),
+                       ("skipped_steps", "step(s) skipped")):
+        items = getattr(scanner, attr, None)
+        if isinstance(items, (list, tuple)) and items:
+            reasons = sorted({
+                str(i[1]) if isinstance(i, (list, tuple)) and len(i) > 1 else "unknown"
+                for i in items
+            })
+            record_scanner_failure(
+                scanner_name, f"{len(items)} {noun} ({', '.join(reasons[:3])})"
+            )
+    count = getattr(scanner, "unchecked_packages", None)
+    if not isinstance(count, int) or isinstance(count, bool) or count <= 0:
+        count = getattr(scanner, "_unchecked_packages", 0)
+    if isinstance(count, int) and not isinstance(count, bool) and count > 0:
+        record_scanner_failure(scanner_name, f"{count} package(s) not checked")
 
 
 class ScannerTimeouts:
@@ -87,7 +142,9 @@ async def run_scanner_safe(
             f"{scanner_name}: hard timeout at {timeout_seconds}s, "
             "findings lost"
         )
+        record_scanner_failure(scanner_name, "timed out")
         return []
     except Exception as e:
         logger.error("Scanner '%s' failed: %s", scanner_name, e, exc_info=True)
+        record_scanner_failure(scanner_name, "failed")
         return []

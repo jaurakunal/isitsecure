@@ -14,6 +14,7 @@ from pathlib import Path
 
 from isitsecure.engine.code_analysis.models import CodeFinding
 from isitsecure.engine.code_analysis.protocols import RepoSnapshot
+from isitsecure.engine.code_analysis.shared_utils import kill_and_reap
 from isitsecure.engine.constants import SecretScannerConfig
 from isitsecure.engine.shared.code_utils import find_line_number
 from isitsecure.engine.shared.progress import emit
@@ -92,10 +93,14 @@ class GitSecretScanner:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(),
-                timeout=SecretScannerConfig.GIT_LOG_TIMEOUT_SECONDS,
-            )
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(),
+                    timeout=SecretScannerConfig.GIT_LOG_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                await kill_and_reap(proc)
+                raise
 
             output = stdout.decode("utf-8", errors="replace")
             findings.extend(self._parse_git_log_output(output, repo))
@@ -209,10 +214,14 @@ class GitSecretScanner:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, _ = await asyncio.wait_for(
-                proc.communicate(),
-                timeout=SecretScannerConfig.GIT_LOG_TIMEOUT_SECONDS,
-            )
+            try:
+                stdout, _ = await asyncio.wait_for(
+                    proc.communicate(),
+                    timeout=SecretScannerConfig.GIT_LOG_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                await kill_and_reap(proc)
+                raise
 
             filenames = stdout.decode("utf-8", errors="replace").strip().split("\n")
             seen: set[str] = set()

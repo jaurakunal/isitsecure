@@ -14,10 +14,12 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from isitsecure.engine.code_analysis.protocols import WorkspaceInfo
+from isitsecure.engine.code_analysis.shared_utils import is_plain_in_root
 from isitsecure.engine.constants import WorkspaceDetectorConfig
 from isitsecure.engine.enums import (
     BackendType,
@@ -216,6 +218,8 @@ class WorkspaceDetector:
         for depth in range(1, WorkspaceDetectorConfig.MAX_HEURISTIC_DEPTH + 1):
             pattern = "/".join(["*"] * depth) + "/package.json"
             for pkg_path in root.glob(pattern):
+                if not is_plain_in_root(root, pkg_path.parent):
+                    continue
                 relative_dir = pkg_path.parent.relative_to(root)
                 dir_name = str(relative_dir)
 
@@ -237,7 +241,7 @@ class WorkspaceDetector:
         for depth in range(1, WorkspaceDetectorConfig.MAX_HEURISTIC_DEPTH + 1):
             pattern = "/".join(["*"] * depth)
             for dir_path in root.glob(pattern):
-                if not dir_path.is_dir():
+                if not dir_path.is_dir() or not is_plain_in_root(root, dir_path):
                     continue
 
                 relative_dir = dir_path.relative_to(root)
@@ -382,9 +386,29 @@ class WorkspaceDetector:
         seen_paths: set[str] = set()
 
         for pattern in patterns:
+            # The pattern comes from the scanned repo: it must stay inside it.
+            if not self._pattern_is_contained(pattern):
+                logger.warning(
+                    "Ignoring workspace pattern %r: absolute or contains '..'",
+                    pattern,
+                )
+                continue
             # Resolve glob (e.g., "packages/*" -> packages/ui, packages/api)
-            for matched in sorted(root.glob(pattern)):
+            try:
+                matches = sorted(root.glob(pattern))
+            except (ValueError, NotImplementedError, OSError) as exc:
+                logger.warning(
+                    "Ignoring unusable workspace pattern %r: %s", pattern, exc
+                )
+                continue
+            for matched in matches:
                 if not matched.is_dir():
+                    continue
+                if not is_plain_in_root(root, matched):
+                    logger.warning(
+                        "Ignoring workspace %s: resolves outside the clone",
+                        matched,
+                    )
                     continue
 
                 relative = str(matched.relative_to(root))
@@ -408,6 +432,18 @@ class WorkspaceDetector:
 
         return workspaces
 
+    @staticmethod
+    def _pattern_is_contained(pattern: object) -> bool:
+        """A workspace glob must be a relative pattern without ``..``."""
+        if not isinstance(pattern, str) or not pattern:
+            return False
+        normalised = pattern.replace("\\", "/")
+        if os.path.isabs(pattern) or normalised.startswith("/"):
+            return False
+        if len(normalised) > 1 and normalised[1] == ":":
+            return False
+        return ".." not in normalised.split("/")
+
     def _find_nx_projects(self, root: Path) -> list[WorkspaceInfo]:
         """Find Nx project directories via ``project.json`` files."""
         workspaces: list[WorkspaceInfo] = []
@@ -418,6 +454,8 @@ class WorkspaceDetector:
         ):
             pattern = "/".join(["*"] * depth) + "/project.json"
             for proj_path in root.glob(pattern):
+                if not is_plain_in_root(root, proj_path.parent):
+                    continue
                 relative_dir = str(proj_path.parent.relative_to(root))
                 if relative_dir in seen_paths:
                     continue

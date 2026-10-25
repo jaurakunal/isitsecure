@@ -33,6 +33,7 @@ from isitsecure.engine.code_analysis.protocols import (
     RepoSnapshot,
     RouteEntry,
 )
+from isitsecure.engine.code_analysis.shared_utils import read_repo_file
 from isitsecure.engine.constants import LSPConfig, SharedPatterns
 
 logger = logging.getLogger(__name__)
@@ -1021,10 +1022,12 @@ class AuthFlowTracer:
             except ValueError:
                 pass
 
-        # Read from disk
+        # Read from disk. Paths come from the language server, which resolves
+        # symlinks itself, so keep reads inside the clone and off links.
+        if self._repo.clone_path:
+            return read_repo_file(self._repo.clone_path, abs_path) or ""
         try:
-            content = Path(abs_path).read_text(encoding="utf-8", errors="replace")
-            return content
+            return Path(abs_path).read_text(encoding="utf-8", errors="replace")
         except OSError:
             return ""
 

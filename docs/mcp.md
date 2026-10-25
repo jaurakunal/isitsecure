@@ -86,7 +86,11 @@ scan_status(job_id)                                    → poll a DAST job; the 
   severity counts, **`path_to_next_grade`** (what it takes to reach each better
   grade — so an assistant answers "what gets me to a C?" without our grader),
   root-cause **themes**, and trimmed findings each with a plain-English
-  explanation (what-it-is / attacker-could / how-to-fix) and a priority.
+  explanation (what-it-is / attacker-could / how-to-fix) and a priority. When
+  part of the scan did not run (ingestion error, scanner timeout or crash, skipped
+  review work) the result carries `incomplete: true` and the `coverage_gaps`;
+  `safe_to_launch` is then false and the grade label is provisional. `verify`
+  and the markdown `export` apply the same rule.
 - **`explain`** *(implemented, #70).* `explain(scan_id, finding_id)` — deep dive
   on one finding resolved from the scan cache. Leads with the finding's **own**
   generated text (description, technical detail, evidence, the vulnerable
@@ -108,7 +112,9 @@ scan_status(job_id)                                    → poll a DAST job; the 
   resolved/still-present counts and the grade movement reflect only *verifiable*
   rule-based SAST findings; LLM/DAST findings are counted `unverifiable` and held
   constant (a code re-scan can't reliably reproduce them), so LLM non-determinism
-  can never inflate or deflate the grade. The visible reward that closes the loop.
+  can never inflate or deflate the grade. If the re-scan cannot run to completion
+  (no report), `verify` errors with "Could not verify" instead of reporting anything
+  as resolved. The visible reward that closes the loop.
 - **`export`** *(implemented, #88).* `export(scan_id, format)` renders a **cached**
   scan (no re-scan) as `html` | `sarif` | `json` | `markdown` and **returns the
   content** for the host to save — the MCP does not write files (same stance as
@@ -181,8 +187,9 @@ recorded here so the divergence is intentional, not an inconsistency.
 ### `apply=true` — the optional fallback
 
 For headless/non-agent callers, or a user who explicitly wants us to do it,
-`fix(..., apply=true)` writes via our Wave 2 pipeline: **back up the working tree
-(safety net) → write one finding's fix → re-scan to verify**. Still one finding at
+`fix(..., apply=true)` writes via our Wave 2 pipeline: **back up the file about to
+change (safety net) → write one finding's fix → re-scan to verify**. If the
+re-scan cannot run, the result says so and nothing is reported as resolved. Still one finding at
 a time; never a "fix everything" over MCP.
 
 ## Skill-level adaptation

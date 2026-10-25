@@ -12,6 +12,13 @@ import logging
 import httpx
 
 from isitsecure.engine.code_analysis.models import CodeFinding
+from isitsecure.engine.code_analysis.osv_enrichment import (
+    cvss3_base_score,
+    fetch_vuln_details,
+    fixed_version_from_osv,
+    severity_from_osv,
+    unenriched_message,
+)
 from isitsecure.engine.code_analysis.protocols import RepoSnapshot
 from isitsecure.engine.constants import DependencyScannerConfig
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
@@ -46,6 +53,7 @@ class DependencyScanner:
 
     def __init__(self, http_client: httpx.AsyncClient | None = None) -> None:
         self._external_client = http_client
+        self.unchecked_packages = 0
 
     @property
     def scanner_name(self) -> str:
@@ -64,6 +72,7 @@ class DependencyScanner:
         Returns:
             List of code findings for vulnerable dependencies.
         """
+        self.unchecked_packages = 0
         # Collect dependencies from root + all workspaces (monorepo support)
         all_dependencies: dict[str, str] = {}
         package_sources: dict[str, str] = {}  # package -> source label
@@ -101,6 +110,13 @@ class DependencyScanner:
         try:
             emit(f"OSV: querying {len(packages)} npm package(s)")
             findings = await self._scan_packages(client, packages)
+            if self.unchecked_packages:
+                msg = (
+                    f"OSV: {self.unchecked_packages} of {len(packages)} npm package(s) "
+                    f"could not be checked (OSV unreachable or rate limited)"
+                )
+                logger.warning(msg)
+                emit(msg)
 
             # Update file_path to reflect which workspace the dep came from
             for finding in findings:
@@ -116,6 +132,7 @@ class DependencyScanner:
                     error=str(exc)
                 )
             )
+            self.unchecked_packages = max(self.unchecked_packages, len(packages))
         finally:
             if owns_client:
                 await client.aclose()
@@ -196,11 +213,33 @@ class DependencyScanner:
                     error=str(exc)
                 )
             )
+            self.unchecked_packages += len(packages)
             return []
 
-        return self._parse_osv_batch_response(
-            response.json(), packages
-        )
+        data = response.json()
+        await self._enrich_batch_response(client, data)
+        return self._parse_osv_batch_response(data, packages)
+
+    async def _enrich_batch_response(
+        self, client: httpx.AsyncClient, data: dict
+    ) -> None:
+        """Merge full OSV records into the batch response's {id, modified} stubs."""
+        ids = [
+            v.get("id", "")
+            for r in data.get("results", [])
+            for v in r.get("vulns", [])
+        ]
+        if not ids:
+            return
+        records, failed = await fetch_vuln_details(client, ids)
+        if failed:
+            msg = unenriched_message(failed)
+            logger.warning(msg)
+            emit(msg)
+        for r in data.get("results", []):
+            r["vulns"] = [
+                {**v, **records.get(v.get("id", ""), {})} for v in r.get("vulns", [])
+            ]
 
     def _parse_osv_batch_response(
         self,
@@ -234,7 +273,7 @@ class DependencyScanner:
     ) -> CodeFinding | None:
         """Convert a single OSV vulnerability to a CodeFinding."""
         vuln_id = vuln.get("id", "unknown")
-        summary = vuln.get("summary", vuln_id)
+        summary = vuln.get("summary") or vuln_id
         severity_str = self._extract_severity(vuln)
         severity = _OSVSeverityMapper.map(severity_str)
 
@@ -253,23 +292,19 @@ class DependencyScanner:
             ),
             file_path=DependencyScannerConfig.PACKAGE_JSON_FILE,
             confidence=DependencyScannerConfig.CONFIDENCE_KNOWN_CVE,
+            fix_suggestion=(
+                f"Upgrade {package} to {fixed} or later"
+                if (fixed := fixed_version_from_osv(
+                    vuln, package, DependencyScannerConfig.ECOSYSTEM, version
+                ))
+                else ""
+            ),
         )
 
     @staticmethod
     def _extract_severity(vuln: dict) -> str:
         """Extract severity string from OSV vulnerability data."""
-        # OSV uses database_specific or severity array
-        severity_list = vuln.get("severity", [])
-        if severity_list:
-            for s in severity_list:
-                score = s.get("score", "")
-                if score:
-                    # CVSS score string; try to parse
-                    return _cvss_to_severity(score)
-
-        # Fallback: check database_specific
-        db_specific = vuln.get("database_specific", {})
-        return db_specific.get("severity", DependencyScannerConfig.DEFAULT_OSV_SEVERITY)
+        return severity_from_osv(vuln).value
 
 
 def _cvss_to_severity(cvss_vector: str) -> str:
@@ -280,8 +315,11 @@ def _cvss_to_severity(cvss_vector: str) -> str:
     try:
         score = float(cvss_vector)
     except ValueError:
-        # It's a CVSS vector string, default to HIGH
-        return DependencyScannerConfig.DEFAULT_OSV_SEVERITY
+        # CVSS vector string: compute the base score from the metrics
+        vector_score = cvss3_base_score(cvss_vector)
+        if vector_score is None:
+            return DependencyScannerConfig.DEFAULT_OSV_SEVERITY
+        score = vector_score
 
     if score >= DependencyScannerConfig.CVSS_CRITICAL_THRESHOLD:
         return SeverityLevel.CRITICAL.value

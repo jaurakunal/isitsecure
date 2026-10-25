@@ -147,6 +147,12 @@ class CICDIntegrationService:
                 critical=report.critical_count,
                 high=report.high_count,
             )
+        elif getattr(report, "coverage_gaps", None):
+            # Nothing failed the severity gate, but part of the scan did not
+            # run, so "passed" would be a false assurance.
+            state = "error"
+            gaps = "; ".join(report.coverage_gaps)
+            description = f"Security scan incomplete, did not run: {gaps}"[:140]
         else:
             state = "success"
             from isitsecure.engine.reporting.report_generator import (

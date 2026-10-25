@@ -25,7 +25,6 @@ to maximize throughput while respecting API rate limits.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import re
 
@@ -46,6 +45,13 @@ from isitsecure.engine.constants import (
 )
 from isitsecure.engine.enums import ReviewTriggerType
 from isitsecure.llm.protocol import LLMClientProtocol
+from isitsecure.engine.code_analysis.llm_parsing import (  # noqa: F401  (re-exported)
+    coerce_line_number,
+    coerce_severity,
+    extract_json_array,
+    parse_finding_fields,
+    record_skip,
+)
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
 from isitsecure.engine.code_analysis.category_classifier import (
     classify_finding_category,
@@ -94,6 +100,12 @@ class LLMCodeReviewer:
         self._total_tokens_used = 0
         self._sast_findings: list[CodeFinding] = []
         self._auth_flows: dict[str, object] = {}
+        # (file/route, reason) for every review that could not complete.
+        self.skipped_files: list[tuple[str, str]] = []
+
+    def _record_skip(self, name: str, reason: str) -> None:
+        """Make an incomplete review visible (list, log, progress)."""
+        record_skip(self.skipped_files, "LLM review incomplete for", name, reason)
 
     @property
     def scanner_name(self) -> str:
@@ -140,6 +152,19 @@ class LLMCodeReviewer:
         selected = self._route_selector.select_routes(
             repo, self._sast_findings
         )
+        self.skipped_files = []
+        selected_paths = {r.file_path for r, _ in selected}
+        for entry in repo.route_map:
+            if (
+                entry.file_path not in selected_paths
+                and len(entry.content) > LLMCodeReviewConfig.MAX_FILE_SIZE_CHARS
+            ):
+                selected_paths.add(entry.file_path)
+                self._record_skip(
+                    entry.file_path,
+                    f"file larger than {LLMCodeReviewConfig.MAX_FILE_SIZE_CHARS} "
+                    "chars, not reviewed",
+                )
 
         # Phase 2: Review routes in parallel batches
         batch_size = LLMCodeReviewConfig.MAX_CONCURRENT_REVIEWS
@@ -153,9 +178,9 @@ class LLMCodeReviewer:
 
             batch_results = await asyncio.gather(*tasks, return_exceptions=True)
 
-            for result in batch_results:
+            for (route, _), result in zip(batch, batch_results):
                 if isinstance(result, Exception):
-                    logger.warning("LLM review failed: %s", result)
+                    self._record_skip(route.file_path, f"review failed: {result}")
                 else:
                     findings.extend(result)
 
@@ -302,6 +327,7 @@ class LLMCodeReviewer:
                     file=route.file_path, error=str(e)
                 )
             )
+            self._record_skip(route.file_path, f"LLM error: {e}")
             return []
 
     # ------------------------------------------------------------------
@@ -431,6 +457,12 @@ class LLMCodeReviewer:
         self._total_tokens_used += (
             len(user_prompt) // LLMCodeReviewConfig.CHARS_PER_TOKEN_ESTIMATE
         )
+        if len(sql) > LLMCodeReviewConfig.MAX_FILE_SIZE_CHARS:
+            self._record_skip(
+                "rls_policies",
+                f"migration SQL truncated to {LLMCodeReviewConfig.MAX_FILE_SIZE_CHARS} "
+                "chars, later policies not reviewed",
+            )
 
         try:
             response = await self._llm.generate_with_system(
@@ -454,6 +486,7 @@ class LLMCodeReviewer:
                     file="rls_policies", error=str(e)
                 )
             )
+            self._record_skip("rls_policies", f"LLM error: {e}")
             return []
 
     # ------------------------------------------------------------------
@@ -475,72 +508,70 @@ class LLMCodeReviewer:
         SQLi/XSS/IDOR/etc. out of the ``AUTH_WEAKNESS`` catch-all so
         category-based PR grouping stays meaningful.
         """
-        from isitsecure.engine.shared.code_context import (
-            CodeContextExtractor,
-        )
-
         findings: list[CodeFinding] = []
 
-        # Extract JSON array from response (may be wrapped in code block)
-        json_match = re.search(r"\[.*\]", response, re.DOTALL)
-        if not json_match:
-            return findings
-
-        try:
-            items = json.loads(json_match.group(0))
-        except json.JSONDecodeError as e:
-            logger.debug(
-                LLMCodeReviewConfig.ERROR_PARSE_RESPONSE.format(
-                    error=str(e)
-                )
-            )
+        items = extract_json_array(response)
+        if items is None:
+            self._record_skip(file_path, "unparseable model reply (no JSON array)")
             return findings
 
         for item in items[: LLMCodeReviewConfig.MAX_FINDINGS_PER_FILE]:
             if not isinstance(item, dict):
                 continue
-
-            severity_str = item.get("severity", "MEDIUM").upper()
-            severity = self.SEVERITY_MAP.get(
-                severity_str, SeverityLevel.MEDIUM
-            )
-
-            line_number = item.get("line_number")
-
-            # Validate and correct LLM-reported line number.
-            # LLMs sometimes hallucinate line numbers. If the LLM
-            # quoted a code pattern, search for it near the reported
-            # line to find the true location.
-            line_number = self._validate_line_number(
-                content, line_number, item.get("description", "")
-            )
-
-            title = item.get(
-                "title",
-                LLMCodeReviewConfig.FALLBACK_FINDING_TITLE,
-            )
-            description = item.get("description", "")
-            category = classify_finding_category(
-                f"{title} {description}", default=default_category
-            )
-
-            findings.append(
-                CodeFinding(
-                    scanner_name=self.scanner_name,
-                    severity=severity,
-                    category=category,
-                    title=title,
-                    description=description,
-                    file_path=file_path,
-                    line_number=line_number,
-                    code_snippet=CodeContextExtractor.extract(
-                        content, line_number
-                    ) if content else "",
-                    confidence=LLMCodeReviewConfig.CONFIDENCE_LLM_FINDING,
+            try:
+                finding = self._build_finding(
+                    item, file_path, content, default_category
                 )
-            )
+            except Exception as exc:  # one bad item must not lose the rest
+                logger.warning(
+                    "Skipping malformed LLM finding for %s: %s", file_path, exc
+                )
+                continue
+            findings.append(finding)
 
         return findings
+
+    def _build_finding(
+        self,
+        item: dict,
+        file_path: str,
+        content: str,
+        default_category: FindingCategory,
+    ) -> CodeFinding:
+        """Build one CodeFinding from a parsed item (may raise on bad data)."""
+        from isitsecure.engine.shared.code_context import (
+            CodeContextExtractor,
+        )
+
+        fields = parse_finding_fields(
+            item, self.SEVERITY_MAP, LLMCodeReviewConfig.FALLBACK_FINDING_TITLE
+        )
+        severity, title, description = (
+            fields.severity, fields.title, fields.description
+        )
+        line_number = self._validate_line_number(
+            content, fields.line_number, description
+        )
+        category = classify_finding_category(
+            f"{title} {description}", default=default_category
+        )
+
+        return (
+            CodeFinding(
+                scanner_name=self.scanner_name,
+                severity=severity,
+                category=category,
+                title=title,
+                description=description,
+                file_path=file_path,
+                line_number=line_number,
+                code_snippet=CodeContextExtractor.extract(
+                    content, line_number
+                ) if content else "",
+                confidence=LLMCodeReviewConfig.CONFIDENCE_LLM_FINDING,
+            )
+        )
+
 
     # ------------------------------------------------------------------
     # Helpers

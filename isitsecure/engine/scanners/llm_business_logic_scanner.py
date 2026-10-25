@@ -21,11 +21,12 @@ import asyncio
 import json
 import logging
 import re
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 
 from isitsecure.engine.auth.protocols import AuthSession
+from isitsecure.engine.code_analysis.llm_parsing import record_skip
 from isitsecure.engine.constants import (
     LLMBusinessLogicConfig,
     SharedPatterns,
@@ -40,6 +41,22 @@ from isitsecure.engine.models import (
 from isitsecure.engine.shared.time_budget import TimeBudget
 
 logger = logging.getLogger(__name__)
+
+_MAX_REDIRECT_HOPS = 5
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def _origin(url: str) -> tuple[str, str, int | None] | None:
+    """Return (scheme, host, port) for an absolute http(s) URL, else None."""
+    try:
+        parts = urlparse(url)
+        host = (parts.hostname or "").lower()
+        scheme = parts.scheme.lower()
+        if scheme not in _DEFAULT_PORTS or not host:
+            return None
+        return scheme, host, parts.port or _DEFAULT_PORTS[scheme]
+    except ValueError:
+        return None
 
 
 class LLMBusinessLogicScanner:
@@ -71,6 +88,8 @@ class LLMBusinessLogicScanner:
         """
         self._llm = llm_client
         self._judgment_llm = judgment_llm_client or llm_client
+        # (url-or-plan, reason) for every step refused or plan that failed.
+        self.skipped_steps: list[tuple[str, str]] = []
 
     @property
     def scanner_name(self) -> str:
@@ -97,6 +116,7 @@ class LLMBusinessLogicScanner:
             List of confirmed vulnerability findings.
         """
         findings: list[DeepFinding] = []
+        self.skipped_steps = []
 
         # Phase 1: Select business-logic-heavy files
         selected_files = self._select_files(repo_files)
@@ -133,9 +153,13 @@ class LLMBusinessLogicScanner:
                     "LLMBusinessLogicScanner: time budget reached, stopping early"
                 )
                 break
-            finding = await self._execute_and_analyze_plan(
-                plan, sessions, target_url,
-            )
+            try:
+                finding = await self._execute_and_analyze_plan(
+                    plan, sessions, target_url,
+                )
+            except Exception as exc:  # a bad plan must not discard findings
+                self._record_skip(str(plan.get("title", "plan")), f"plan failed: {exc}")
+                continue
             if finding:
                 findings.append(finding)
 
@@ -144,6 +168,23 @@ class LLMBusinessLogicScanner:
             len(findings), len(attack_plans),
         )
         return findings
+
+    def _record_skip(self, name: str, reason: str) -> None:
+        """Make a refused step / failed plan visible (list, log, progress)."""
+        record_skip(
+            self.skipped_steps, "LLM Business Logic: skipped", name, reason
+        )
+
+    @staticmethod
+    def _resolve_in_scope(url: object, target_url: str) -> str | None:
+        """Resolve ``url`` against ``target_url``; None if it leaves the origin."""
+        if not isinstance(url, str) or not url.strip():
+            return None
+        resolved = urljoin(target_url, url.strip())
+        target_origin = _origin(target_url)
+        if target_origin is None or _origin(resolved) != target_origin:
+            return None
+        return resolved
 
     # ------------------------------------------------------------------
     # Phase 1: File Selection
@@ -242,21 +283,27 @@ class LLMBusinessLogicScanner:
         """Execute an attack plan step by step, then ask LLM if it worked."""
         plan_title = plan.get("title", "Unknown")
         steps = plan.get("steps", [])
-        if not steps:
+        if not steps or not isinstance(steps, list):
+            self._record_skip(str(plan_title), "plan has no executable steps")
             return None
 
         step_results: list[dict] = []
 
         async with httpx.AsyncClient(
             timeout=LLMBusinessLogicConfig.HTTP_TIMEOUT_SECONDS,
-            follow_redirects=True,
+            follow_redirects=False,  # hops are validated in _execute_step
         ) as client:
             for i, step in enumerate(
                 steps[: LLMBusinessLogicConfig.MAX_STEPS_PER_PLAN]
             ):
+                if not isinstance(step, dict):
+                    self._record_skip(str(plan_title), f"step {i + 1} is not an object")
+                    continue
                 result = await self._execute_step(
                     client, step, sessions, target_url,
                 )
+                if result is None:
+                    continue
                 step_results.append({
                     "step": i + 1,
                     "description": step.get("description", ""),
@@ -269,6 +316,9 @@ class LLMBusinessLogicScanner:
                     ],
                 })
 
+        if not step_results:
+            return None
+
         # Ask LLM to analyze the results
         return await self._analyze_results(plan, step_results)
 
@@ -278,24 +328,35 @@ class LLMBusinessLogicScanner:
         step: dict,
         sessions: dict[str, AuthSession],
         target_url: str,
-    ) -> dict:
-        """Execute a single attack step."""
-        method = step.get("method", "GET").upper()
-        url = step.get("url", "")
-        body = step.get("body")
-        user = step.get("user", "regular_user")
+    ) -> dict | None:
+        """Execute a single attack step.
 
-        # Build headers with auth
+        Returns None (and records the reason) when the step is malformed or
+        its URL is outside the target's scheme+host+port; no request is made
+        and no session token is attached in that case.
+        """
+        label = str(step.get("url", ""))[:200]
+        try:
+            method = str(step.get("method") or "GET").upper()
+            url = self._resolve_in_scope(step.get("url"), target_url)
+            body = step.get("body")
+            user = step.get("user", "regular_user")
+        except Exception as exc:
+            self._record_skip(label or "step", f"malformed step: {exc}")
+            return None
+        if url is None:
+            self._record_skip(label or "step", "URL outside target origin or invalid")
+            return None
+
+        # Build headers with auth (only reached for in-scope URLs)
         headers: dict[str, str] = {
             SharedPatterns.HEADER_CONTENT_TYPE: SharedPatterns.CONTENT_TYPE_JSON,
         }
-        session = sessions.get(user)
+        session = sessions.get(user) if isinstance(user, str) else None
         if session:
             headers[SharedPatterns.HEADER_AUTHORIZATION] = (
                 f"{SharedPatterns.BEARER_PREFIX}{session.access_token}"
             )
-        elif user == "no_auth":
-            pass  # No auth header
 
         try:
             kwargs: dict = {"headers": headers}
@@ -303,6 +364,24 @@ class LLMBusinessLogicScanner:
                 kwargs["content"] = json.dumps(body) if isinstance(body, dict) else str(body)
 
             resp = await client.request(method, url, **kwargs)
+            for _ in range(_MAX_REDIRECT_HOPS):
+                location = (
+                    resp.headers.get("location")
+                    if resp.status_code in (301, 302, 303, 307, 308)
+                    else None
+                )
+                if not location:
+                    break
+                next_url = self._resolve_in_scope(location, url)
+                if next_url is None:
+                    self._record_skip(
+                        label or "step", "redirect leaves target origin, not followed",
+                    )
+                    break
+                if resp.status_code == 303:
+                    method = "GET"
+                    kwargs.pop("content", None)
+                resp = await client.request(method, next_url, **kwargs)
             return {
                 "status": resp.status_code,
                 "body": resp.text,
@@ -335,6 +414,12 @@ class LLMBusinessLogicScanner:
                 max_tokens=LLMBusinessLogicConfig.MAX_TOKENS_RESULT,
             )
             verdict = self._parse_json_response(response)
+            if verdict is None:
+                self._record_skip(
+                    str(plan.get("title", "plan")),
+                    "unparseable judge reply (no JSON object)",
+                )
+                return None
             if not verdict:
                 return None
 
@@ -354,7 +439,9 @@ class LLMBusinessLogicScanner:
                     line_number=plan.get("affected_line"),
                 )
 
-            first_step = plan.get("steps", [{}])[0]
+            first_step = next(
+                (st for st in plan.get("steps", []) if isinstance(st, dict)), {},
+            )
             return DeepFinding(
                 source=FindingSource.SAST_GUIDED_DAST,
                 category=FindingCategory.AUTH_WEAKNESS,

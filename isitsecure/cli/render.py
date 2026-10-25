@@ -96,12 +96,14 @@ def _print_report_table(report) -> None:
             if (f.severity.value if hasattr(f.severity, "value") else f.severity)
             == "low"
         ),
+        provisional=bool(getattr(report, "coverage_gaps", None)),
     )
     grade = grade_result.grade
 
     # #57 — go/no-go launch verdict, rendered first and most prominently.
     verdict = plain_english.launch_verdict(
-        report.critical_count, report.high_count, report.medium_count
+        report.critical_count, report.high_count, report.medium_count,
+        incomplete=bool(getattr(report, "coverage_gaps", None)),
     )
     console.print()
     console.print(Panel(
@@ -110,6 +112,12 @@ def _print_report_table(report) -> None:
         title="Launch Readiness",
         border_style="green" if verdict.ready else "red",
     ))
+    if verdict.incomplete:
+        console.print(
+            "[yellow]Did not run: "
+            + "; ".join(report.coverage_gaps)
+            + "[/yellow]"
+        )
 
     console.print(Panel(
         f"[bold]Grade: {grade}[/bold] — {grade_result.label}\n"
@@ -220,7 +228,9 @@ def _print_report_table(report) -> None:
         ))
 
 
-def _generate_badge_svg(grade: str, critical: int, high: int, total: int) -> str:
+def _generate_badge_svg(
+    grade: str, critical: int, high: int, total: int, incomplete: bool = False
+) -> str:
     """Generate a shields.io-style SVG badge for the security grade."""
     GRADE_COLORS = {
         "A": "#4c1",      # Green
@@ -236,6 +246,10 @@ def _generate_badge_svg(grade: str, critical: int, high: int, total: int) -> str
     value = grade
     if total > 0:
         value = f"{grade} ({total} findings)"
+    if incomplete:
+        # Never show a clean-looking grade for a scan that did not fully run.
+        value = f"{value} provisional, scan incomplete"
+        color = "#9f9f9f"
 
     label_width = len(label) * 6.5 + 10
     value_width = len(value) * 6.5 + 10

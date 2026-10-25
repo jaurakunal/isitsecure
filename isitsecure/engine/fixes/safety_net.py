@@ -36,16 +36,22 @@ class SafetyNet:
     kind: str  # "git" | "copy" | "none"
     location: str = ""  # backup ref (git) or backup dir (copy)
     files: list[str] = field(default_factory=list)  # files backed up (copy mode)
+    failed: list[str] = field(default_factory=list)  # existing files we could NOT back up
 
     @property
     def restore_hint(self) -> str:
         """Plain-language one-liner: where the original is kept, if anywhere."""
+        if self.failed:
+            return (
+                "Some original files could NOT be backed up: "
+                + ", ".join(self.failed[:5])
+            )
         if self.kind == "git":
-            return "Your original code is safely backed up (nothing was lost)."
+            return "Your original code is safely backed up."
         if self.kind == "copy":
             return (
                 f"Your original files are safely backed up in "
-                f"{os.path.basename(self.location)}/ (nothing was lost)."
+                f"{os.path.basename(self.location)}/."
             )
         return ""
 
@@ -74,9 +80,21 @@ def create_safety_net(repo_path: str, files: list[str]) -> SafetyNet:
     effort: on any failure we degrade to ``kind="none"`` rather than blocking
     the fix (the user explicitly asked to apply fixes).
     """
-    stamp = time.strftime("%Y%m%d-%H%M%S")
+    stamp = time.strftime("%Y%m%d-%H%M%S") + f"-{time.time_ns() % 1_000_000:06d}"
 
+    # `git stash create` only captures TRACKED files. If any file we are about
+    # to overwrite is untracked/ignored, the git snapshot cannot restore it, so
+    # use the file-copy backup instead.
+    all_tracked = True
     if _is_git_repo(repo_path):
+        for rel in files:
+            if os.path.isfile(os.path.join(repo_path, rel)) and (
+                _git(repo_path, "ls-files", "--error-unmatch", "--", rel).returncode != 0
+            ):
+                all_tracked = False
+                break
+
+    if all_tracked and _is_git_repo(repo_path):
         ref = f"refs/isitsecure/backup/{stamp}"
         head = _git(repo_path, "rev-parse", "HEAD")
         if head.returncode == 0:
@@ -87,17 +105,23 @@ def create_safety_net(repo_path: str, files: list[str]) -> SafetyNet:
             # tree; on a clean tree it prints nothing and we fall back to HEAD.
             stash = _git(repo_path, "stash", "create", "isitsecure pre-fix backup")
             snapshot = stash.stdout.strip() if stash.returncode == 0 else ""
-            if not snapshot:
-                snapshot = head.stdout.strip()
-            # Point a private backup ref at that snapshot. This keeps it
-            # reachable even if the user later commits over the fixes.
-            _git(repo_path, "update-ref", ref, snapshot)
-            return SafetyNet(kind="git", location=ref)
-        # Repo with no commits yet — fall through to a file copy.
+            # A failed stash (rc != 0) would silently drop uncommitted edits;
+            # use the file copy instead of pretending HEAD is the pre-fix state.
+            if stash.returncode == 0:
+                if not snapshot:
+                    snapshot = head.stdout.strip()
+                # Point a private backup ref at that snapshot. This keeps it
+                # reachable even if the user later commits over the fixes.
+                up = _git(repo_path, "update-ref", ref, snapshot)
+                if up.returncode == 0:
+                    return SafetyNet(kind="git", location=ref)
+        # Repo with no commits yet / git backup failed — fall through to a file copy.
 
-    # Non-git (or unborn) repo: copy the to-be-changed files aside.
+    # Non-git, unborn, or has untracked/ignored targets: copy the to-be-changed
+    # files aside.
     backup_dir = os.path.join(repo_path, f".isitsecure-backup-{stamp}")
     saved: list[str] = []
+    failed: list[str] = []
     for rel in files:
         src = os.path.join(repo_path, rel)
         if not os.path.isfile(src):
@@ -108,7 +132,7 @@ def create_safety_net(repo_path: str, files: list[str]) -> SafetyNet:
             shutil.copy2(src, dst)
             saved.append(rel)
         except OSError:
-            continue
+            failed.append(rel)
     if saved:
-        return SafetyNet(kind="copy", location=backup_dir, files=saved)
-    return SafetyNet(kind="none")
+        return SafetyNet(kind="copy", location=backup_dir, files=saved, failed=failed)
+    return SafetyNet(kind="none", failed=failed)

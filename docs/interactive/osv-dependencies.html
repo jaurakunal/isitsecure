@@ -51,8 +51,8 @@
 </div>
 
 <div class="callout why">
-  <div class="label">Known gap, checked against the live API</div>
-  <p>The scanner reads <code>summary</code>, <code>details</code>, <code>affected</code> and <code>database_specific.severity</code> from each entry in the <code>/v1/querybatch</code> response. A live query for <code>lodash@4.17.15</code> on 2026-10-25 returned only <code>id</code> and <code>modified</code> for each vulnerability. If that holds for every query, the later scenes show what the code is written to do, while real findings would fall back to Medium severity, an empty summary and the generic upgrade text. The usual fix is a follow-up <code>GET /v1/vulns/{id}</code> per unique id. This page describes the code as written; the scanner has not been changed.</p>
+  <div class="label">Batch response is a stub, so full records are fetched</div>
+  <p>The scanner reads <code>summary</code>, <code>details</code>, <code>affected</code> and <code>database_specific.severity</code> from each entry in the <code>/v1/querybatch</code> response. A live query for <code>lodash@4.17.15</code> on 2026-10-25 returned only <code>id</code> and <code>modified</code> for each vulnerability. The scanner therefore follows the batch query with a <code>GET /v1/vulns/{id}</code> per unique id (at most 100 ids, a few at a time, with a per-request timeout) and merges the full record in before reading severity, summary and fixed version. A CVSS v3.x vector in <code>severity[]</code> is converted to a base score; CVSS 4.0 vectors are not scored and fall back to Medium. If a record cannot be fetched, its finding falls back to Medium severity and the generic upgrade text, and a progress message says so. If a batch query itself fails, the packages in it are reported as not checked rather than as clean.</p>
 </div>
 
 <section id="parse">
@@ -168,7 +168,7 @@
       <p class="step"><span class="n">2</span>The list is cut into slices of <b>100</b>. 230 packages make three batches of 100, 100 and 30. They run one after another, not in parallel.</p>
       <p class="step" data-on="osvSend"><span class="n">3</span>Each batch is one <code>POST</code> to <code>https://api.osv.dev/v1/querybatch</code> with a <code>queries</code> array. Every query is a package name, an ecosystem and a version. A fresh HTTP client with a <b>30 second timeout</b> is made per batch.</p>
       <p class="step" data-on="osvRecv"><span class="n">4</span>OSV answers with a <code>results</code> array in the same order as the queries. The scanner pairs each result with its dependency by position and <b>keeps only those with a non-empty <code>vulns</code> list</b>.</p>
-      <p class="step"><span class="n">5</span><b>Offline or slow.</b> A status other than 200, a timeout, a DNS failure or an unreadable reply logs a warning and returns an empty list for that batch. The scan does not abort and does not raise a finding, so the result is silent: an offline run reports zero vulnerable packages, which is the same as a clean one.</p>
+      <p class="step"><span class="n">5</span><b>Offline or slow.</b> A status other than 200, a timeout, a DNS failure or an unreadable reply logs a warning and returns an empty list for that batch. The scan does not abort and does not raise a finding, but it now logs a warning and emits a progress message such as <code>OSV: 12 of 12 package(s) could not be checked</code>, so an offline run no longer looks like a clean one.</p>
     </div>
   </div>
 </section>
@@ -195,7 +195,7 @@
             <text class="rec" x="14" y="238">}</text>
           </g>
           <text class="lbl" x="14" y="272">illustrative values; other fields are never read</text>
-          <text class="lbl" x="14" y="288">the CVSS vector in "severity" is not parsed</text>
+          <text class="lbl" x="14" y="288">a CVSS v3.x vector is scored</text>
         </g>
         <path class="wire at-2 accent" d="M450 175 H 488" marker-end="url(#arrO2)"/>
         <g class="node" transform="translate(490 20)"><rect width="450" height="310" rx="10"/>
@@ -216,11 +216,11 @@
       </svg>
     </figure>
     <div class="scene-steps">
-      <p class="step"><span class="n">1</span>OSV returns one record per vulnerability. The scanner reads six fields from it: <code>id</code>, <code>aliases</code>, <code>summary</code> (or <code>details</code>), <code>database_specific.severity</code>, <code>affected[].ecosystem_specific.severity</code>, and the <code>fixed</code> event of <code>affected[].ranges[]</code>.</p>
+      <p class="step"><span class="n">1</span>OSV returns one record per vulnerability. The scanner reads these fields from it: <code>id</code>, <code>aliases</code>, <code>summary</code> (or <code>details</code>), <code>database_specific.severity</code>, <code>severity[]</code>, <code>affected[].ecosystem_specific.severity</code>, and the <code>fixed</code> events of <code>affected[].ranges[]</code>.</p>
       <p class="step"><span class="n">2</span><b>Dedup.</b> Findings are keyed on <code>name:version:id</code>. If the same package at the same version appears in two manifests, only the first is kept.</p>
-      <p class="step"><span class="n">3</span><b>Severity.</b> The first match wins: <code>database_specific.severity</code> (CRITICAL, HIGH, MEDIUM, LOW; MODERATE maps to Medium), then <code>ecosystem_specific.severity</code> on an affected entry, then a default of <b>Medium</b>. The code has a loop over the CVSS vector but it does nothing, so a CVSS string never sets the severity.</p>
+      <p class="step"><span class="n">3</span><b>Severity.</b> The first match wins: <code>database_specific.severity</code> (CRITICAL, HIGH, MEDIUM, LOW; MODERATE maps to Medium), then the <code>severity[]</code> score, which may be a plain number or a CVSS v3.x vector whose base score is computed from its metrics, then <code>ecosystem_specific.severity</code> on an affected entry, then a default of <b>Medium</b>.</p>
       <p class="step"><span class="n">4</span><b>Title and text.</b> The first alias that starts with <code>CVE-</code> is added to the title. The description carries the summary cut to 200 characters, the package, the OSV id, all CVE aliases and the osv.dev link.</p>
-      <p class="step"><span class="n">5</span><b>Fix.</b> The first <code>fixed</code> event found across all affected ranges gives <code>Upgrade &lt;name&gt; to &lt;version&gt; or later</code>. With no <code>fixed</code> event, the text is <code>Upgrade &lt;name&gt; to the latest version</code>.</p>
+      <p class="step"><span class="n">5</span><b>Fix.</b> Only <code>ECOSYSTEM</code> and <code>SEMVER</code> ranges of the affected entry that matches the package and ecosystem count (never <code>GIT</code> commit SHAs). The <code>fixed</code> event of the range that contains the installed version gives <code>Upgrade &lt;name&gt; to &lt;version&gt; or later</code>; failing that, the smallest fixed version above the installed one. With none, the text is <code>Upgrade &lt;name&gt; to the latest version</code>.</p>
     </div>
   </div>
 </section>
@@ -267,7 +267,7 @@
         <tr><td>Batch size</td><td>100 queries per request, sent sequentially</td></tr>
         <tr><td>Timeout</td><td>30 seconds per request</td></tr>
         <tr><td>Ecosystems sent</td><td>npm, PyPI, Maven, Go</td></tr>
-        <tr><td>Severity order</td><td><code>database_specific.severity</code>, then <code>ecosystem_specific.severity</code>, then Medium</td></tr>
+        <tr><td>Severity order</td><td><code>database_specific.severity</code>, then <code>severity[]</code> (score or CVSS v3 vector), then <code>ecosystem_specific.severity</code>, then Medium</td></tr>
         <tr><td>Confidence</td><td>0.95 on every finding</td></tr>
       </tbody>
     </table>
