@@ -58,8 +58,7 @@ def test_foreign_origin_blocked_on_state_changing(client):
 
 
 def test_loopback_origin_and_no_origin_pass(client):
-    for headers in ({"Origin": "http://localhost:3000"},
-                    {"Origin": "http://127.0.0.1:3000"}, {}):
+    for headers in ({"Origin": "http://localhost:3000"}, {}):
         r = client.post("/api/fix-all", json={"scan_id": "nope"}, headers=headers)
         assert r.status_code == 404  # reached the route
 

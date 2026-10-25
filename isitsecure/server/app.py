@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import uuid
 from urllib.parse import urlsplit
 from pathlib import Path
@@ -54,24 +55,84 @@ app.add_middleware(
 # visits can DNS-rebind a hostname to 127.0.0.1 and drive this API same-origin.
 # Only loopback names (plus the host the server was told to bind to, plus
 # anything listed in ISITSECURE_ALLOWED_HOSTS) are accepted; everything else
-# gets 421. State-changing requests carrying a foreign Origin get 403.
+# gets 421 (Host is parsed strictly; exactly one Host header). State-changing
+# requests and WebSocket upgrades carrying an Origin that is not same-origin with
+# the request (or listed in ISITSECURE_ALLOWED_ORIGINS) get 403.
 
 ALLOWED_HOSTS_ENV = "ISITSECURE_ALLOWED_HOSTS"
 BIND_HOST_ENV = "ISITSECURE_BIND_HOST"
+ALLOWED_ORIGINS_ENV = "ISITSECURE_ALLOWED_ORIGINS"
 LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 _WILDCARD_HOSTS = frozenset({"", "0.0.0.0", "::", "*"})
 _STATE_CHANGING = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 
+_HOST_NAME_RE = re.compile(r"^[a-z0-9._-]+$")
+
+
+def _split_host(value: str) -> tuple[str, str] | None:
+    """Strictly parse a Host header value into ``(hostname, port)``.
+
+    Returns None for anything that is not ``name``, ``ipv4`` or ``[ipv6]``
+    optionally followed by ``:port`` (1-65535). Userinfo, ``#?/\\``,
+    whitespace, control or non-ASCII characters and empty hosts are rejected.
+    """
+    if not isinstance(value, str) or not value or not value.isascii():
+        return None
+    if any(c.isspace() or ord(c) < 32 or ord(c) == 127 or c in "@#?/\\" for c in value):
+        return None
+    value = value.lower()
+    if value.startswith("["):
+        end = value.find("]")
+        if end < 0:
+            return None
+        host, rest = value[1:end], value[end + 1:]
+        if not host or not re.fullmatch(r"[0-9a-f:.]+", host) or ":" not in host:
+            return None
+        if rest and not rest.startswith(":"):
+            return None
+        port = rest[1:] if rest else ""
+        has_port = bool(rest)
+    else:
+        host, sep, port = value.partition(":")
+        has_port = bool(sep)
+        if not _HOST_NAME_RE.match(host) or ":" in port:
+            return None
+    if has_port and not (port.isdigit() and port.isascii() and 1 <= int(port) <= 65535):
+        return None
+    host = host.rstrip(".")
+    return (host, port) if host else None
+
+
 def _normalize_host(value: str) -> str:
-    """Return the lower-cased hostname of a Host header value (no port/brackets)."""
-    value = (value or "").strip().lower()
-    if not value:
-        return ""
+    """Return the lower-cased hostname of a Host header value (no port/brackets);
+    "" when the value is malformed."""
+    parts = _split_host((value or "").strip())
+    return parts[0] if parts else ""
+
+
+def _allowed_origins() -> frozenset[str]:
+    """Extra exact origins from ISITSECURE_ALLOWED_ORIGINS (comma separated)."""
+    return frozenset(o.strip().rstrip("/").lower()
+                     for o in os.environ.get(ALLOWED_ORIGINS_ENV, "").split(",") if o.strip())
+
+
+def _origin_ok(origin: str, host_header: str) -> bool:
+    """Same-origin check: http(s) Origin whose host:port equals the request's
+    Host header, or an exact origin listed in ISITSECURE_ALLOWED_ORIGINS."""
+    origin = origin.strip().lower()
+    if origin in _allowed_origins():
+        return True
     try:
-        return (urlsplit("//" + value).hostname or "").rstrip(".")
+        parts = urlsplit(origin)
+        parts.port  # noqa: B018 - raises ValueError on a bad port
     except ValueError:
-        return ""
+        return False
+    if parts.scheme not in ("http", "https") or parts.path or parts.query or parts.fragment:
+        return False
+    if "#" in origin or "@" in parts.netloc or not parts.netloc:
+        return False
+    return parts.netloc == host_header.strip().lower()
 
 
 def allowed_hosts() -> frozenset[str]:
@@ -100,17 +161,17 @@ class HostOriginGuard:
     async def __call__(self, scope, receive, send):
         if scope["type"] not in ("http", "websocket"):
             return await self.app(scope, receive, send)
-        headers = {k.decode("latin-1").lower(): v.decode("latin-1")
-                   for k, v in scope.get("headers", [])}
+        raw = scope.get("headers", [])
+        hosts = [v.decode("latin-1") for k, v in raw if k.lower() == b"host"]
         allowed = allowed_hosts()
-        if _normalize_host(headers.get("host", "")) not in allowed:
+        # Exactly one Host header: the guard and the framework must agree on it.
+        if len(hosts) != 1 or _normalize_host(hosts[0]) not in allowed:
             return await self._reject(scope, receive, send, 421,
                                       "Host not allowed (see ISITSECURE_ALLOWED_HOSTS)")
-        origin = headers.get("origin")
-        if (origin is not None
-                and (scope["type"] == "websocket" or scope.get("method") in _STATE_CHANGING)
-                and _normalize_host(urlsplit(origin).netloc) not in allowed):
-            return await self._reject(scope, receive, send, 403, "Origin not allowed")
+        origins = [v.decode("latin-1") for k, v in raw if k.lower() == b"origin"]
+        if origins and (scope["type"] == "websocket" or scope.get("method") in _STATE_CHANGING):
+            if len(origins) != 1 or not _origin_ok(origins[0], hosts[0]):
+                return await self._reject(scope, receive, send, 403, "Origin not allowed")
         return await self.app(scope, receive, send)
 
     @staticmethod
@@ -127,6 +188,9 @@ app.add_middleware(HostOriginGuard)
 
 # In-memory scan storage (per-process, not persistent yet)
 _scans: dict[str, dict] = {}
+# Finished (complete/failed) scans kept for report retrieval; older ones are
+# evicted oldest-first. Running/pending scans are never evicted.
+MAX_RETAINED_SCANS = 50
 # In-memory "fix all" job storage
 _fix_jobs: dict[str, dict] = {}
 
@@ -156,6 +220,22 @@ class FindingStatusUpdate(BaseModel):
 # API Routes
 # ---------------------------------------------------------------------------
 
+def _evict_scans() -> None:
+    """Drop the oldest finished scans beyond MAX_RETAINED_SCANS."""
+    finished = [k for k, v in _scans.items() if v.get("status") in ("complete", "failed")]
+    for k in finished[:max(0, len(finished) - MAX_RETAINED_SCANS)]:
+        del _scans[k]
+
+
+def _settle_scan_key(scan: dict) -> None:
+    """Forget the request-supplied LLM key once no fix-all can still need it:
+    the scan failed or produced nothing to fix. Otherwise it is kept only until
+    the first fix-all started from this scan finishes (or the scan is evicted)."""
+    report = scan.get("report")
+    if scan.get("status") == "failed" or not (isinstance(report, dict) and report.get("findings")):
+        scan["api_key"] = None
+
+
 @app.post("/api/scan")
 async def start_scan(request: ScanRequest):
     """Start a new security scan. Returns scan_id for SSE streaming."""
@@ -169,6 +249,8 @@ async def start_scan(request: ScanRequest):
         "api_key": request.api_key,
         "error": None,
     }
+
+    _evict_scans()
 
     # Launch scan in background
     asyncio.create_task(_run_scan_background(scan_id, request))
@@ -439,18 +521,25 @@ async def start_fix_all(request: FixAllRequest):
     if provider == "none":
         provider = "anthropic"
 
-    asyncio.create_task(
-        _run_fix_all_job(
-            job_id,
-            scan["report"],
-            provider,
-            severities,
-            github_token=request.github_token,
-            pr_strategy=request.pr_strategy or DEFAULT_STRATEGY,
-            max_prs=request.max_prs or DEFAULT_MAX_PRS,
-            api_key=scan.get("api_key"),
-        )
-    )
+    api_key = scan.get("api_key")
+
+    async def _job_then_forget_key():
+        try:
+            await _run_fix_all_job(
+                job_id,
+                scan["report"],
+                provider,
+                severities,
+                github_token=request.github_token,
+                pr_strategy=request.pr_strategy or DEFAULT_STRATEGY,
+                max_prs=request.max_prs or DEFAULT_MAX_PRS,
+                api_key=api_key,
+            )
+        finally:
+            # The fix-all that needed the key has finished; do not keep it.
+            scan["api_key"] = None
+
+    asyncio.create_task(_job_then_forget_key())
     return {"job_id": job_id}
 
 
@@ -661,6 +750,8 @@ async def _run_scan_background(scan_id: str, request: ScanRequest) -> None:
             _scans[scan_id]["status"] = "failed"
             _scans[scan_id]["error"] = msg
             _scans[scan_id]["events"].append({"type": "error", "message": msg})
+        _settle_scan_key(_scans[scan_id])
+        _evict_scans()
 
     except Exception as e:
         logger.exception(f"Scan {scan_id} failed")
@@ -670,3 +761,5 @@ async def _run_scan_background(scan_id: str, request: ScanRequest) -> None:
             "type": "error",
             "message": str(e),
         })
+        _settle_scan_key(_scans[scan_id])
+        _evict_scans()
