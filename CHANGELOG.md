@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.32.4](https://github.com/jaurakunal/isitsecure/compare/v0.32.3...v0.32.4) (2026-10-25)
+
+
+### Bug Fixes
+
+* harden the server, ingestion, fix flow and scan reporting ([#260](https://github.com/jaurakunal/isitsecure/issues/260)) ([e729f5e](https://github.com/jaurakunal/isitsecure/commit/e729f5e3d4b7c8e0ec55d33c17d914f347e7b95b))
+
+
+### Documentation
+
+* cover the server guard and could-not-verify in the architecture docs ([#262](https://github.com/jaurakunal/isitsecure/issues/262)) ([4320160](https://github.com/jaurakunal/isitsecure/commit/43201600371b6b188b13dc4a4c9cf120990efc7f))
+
 ## [0.32.3](https://github.com/jaurakunal/isitsecure/compare/v0.32.2...v0.32.3) (2026-10-25)
 
 
