@@ -14,13 +14,13 @@ DIP: Depends on ``RouteMapperProtocol`` (abstraction), not on any
 from __future__ import annotations
 
 import logging
-import os
 import posixpath
 import re
 from pathlib import Path
 
 from isitsecure.engine.code_analysis.import_graph import ImportGraphBuilder
 from isitsecure.engine.code_analysis.protocols import RouteEntry
+from isitsecure.engine.code_analysis.shared_utils import iter_repo_files, read_repo_file
 from isitsecure.engine.constants import (
     ExpressRouteMapperConfig,
     SharedPatterns,
@@ -149,23 +149,17 @@ class ExpressRouteMapper:
         """
         code_files: dict[str, str] = {}
 
-        for dirpath, dirnames, filenames in os.walk(root):
-            dirnames[:] = [
-                d for d in dirnames
-                if d not in SharedPatterns.VENDOR_DIRS and not d.startswith(".")
-            ]
-            for name in filenames:
-                if not name.endswith(ExpressRouteMapperConfig.CODE_EXTENSIONS):
-                    continue
-                file_path = Path(dirpath) / name
-                try:
-                    content = file_path.read_text(
-                        encoding="utf-8", errors="replace"
-                    )
-                except OSError:
-                    continue
-                relative = file_path.relative_to(root).as_posix()
-                code_files[relative] = content
+        patterns = [f"*{ext}" for ext in ExpressRouteMapperConfig.CODE_EXTENSIONS]
+        for file_path in iter_repo_files(
+            root,
+            patterns,
+            skip_dirs=frozenset(SharedPatterns.VENDOR_DIRS),
+            skip_hidden=True,
+        ):
+            content = read_repo_file(root, file_path)
+            if content is None:
+                continue
+            code_files[file_path.relative_to(root).as_posix()] = content
             if len(code_files) >= ExpressRouteMapperConfig.MAX_FILES_SCANNED:
                 break
 

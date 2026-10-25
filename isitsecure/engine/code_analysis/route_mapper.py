@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 
 from isitsecure.engine.code_analysis.protocols import RouteEntry
+from isitsecure.engine.code_analysis.shared_utils import iter_repo_files
 from isitsecure.engine.constants import (
     RepoIngestionConfig,
     RouteMapperConfig,
@@ -43,7 +44,9 @@ class NextJSRouteMapper:
                 continue
 
             for route_file_name in RouteMapperConfig.APP_ROUTER_ROUTE_FILES:
-                for route_file in source_dir.rglob(route_file_name):
+                for route_file in iter_repo_files(
+                    root, [route_file_name], base=source_dir
+                ):
                     relative = route_file.relative_to(source_dir)
                     route_pattern = self._path_to_route_pattern(
                         str(relative), route_file_name
@@ -77,7 +80,9 @@ class NextJSRouteMapper:
                 continue
 
             for ext in RepoIngestionConfig.CODE_EXTENSIONS:
-                for api_file in api_dir.rglob(f"*{ext}"):
+                for api_file in iter_repo_files(
+                    root, [f"*{ext}"], base=api_dir
+                ):
                     relative = api_file.relative_to(source_dir)
                     route_pattern = self._path_to_route_pattern(
                         str(relative), api_file.name

@@ -27,6 +27,7 @@ from pathlib import Path
 
 from isitsecure.engine.code_analysis.models import CodeFinding
 from isitsecure.engine.code_analysis.protocols import RepoSnapshot
+from isitsecure.engine.code_analysis.shared_utils import iter_repo_files
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
 
 logger = logging.getLogger(__name__)
@@ -139,19 +140,22 @@ class SemgrepAnalyzer:
         """Extensions present under ``clone_path`` that any rule pack cares about.
 
         Case-sensitive (mirrors semgrep, which skips e.g. ``.PY``). Walk stops
-        early once every wanted extension has been seen.
+        early once every wanted extension has been seen. Symlinks are not
+        counted: semgrep itself never follows them (verified against the real
+        binary, in and out of a git work tree), so a symlinked file outside the
+        clone is neither scanned nor able to reach a finding's snippet.
         """
         wanted = {ext for pack in _RULE_PACKS for ext in pack.extensions}
         found: set[str] = set()
         try:
-            for _root, dirs, files in os.walk(clone_path):
-                dirs[:] = [d for d in dirs if d not in _WALK_SKIP_DIRS]
-                for f in files:
-                    ext = os.path.splitext(f)[1]
-                    if ext in wanted:
-                        found.add(ext)
-                        if found >= wanted:
-                            return found
+            for path in iter_repo_files(
+                clone_path, skip_dirs=frozenset(_WALK_SKIP_DIRS)
+            ):
+                ext = os.path.splitext(path.name)[1]
+                if ext in wanted:
+                    found.add(ext)
+                    if found >= wanted:
+                        return found
         except OSError:  # unreadable tree — let semgrep decide, select nothing here
             return found
         return found

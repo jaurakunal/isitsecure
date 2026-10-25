@@ -18,6 +18,7 @@ import re
 from pathlib import Path
 
 from isitsecure.engine.code_analysis.protocols import RouteEntry
+from isitsecure.engine.code_analysis.shared_utils import iter_repo_files, read_repo_file
 from isitsecure.engine.constants import TRPCRouteMapperConfig
 
 logger = logging.getLogger(__name__)
@@ -167,15 +168,12 @@ class TRPCRouteMapper:
                 continue
 
             for ext in TRPCRouteMapperConfig.CODE_EXTENSIONS:
-                for file_path in source_dir.rglob(f"*{ext}"):
-                    try:
-                        content = file_path.read_text(
-                            encoding="utf-8", errors="replace"
-                        )
-                        if self._is_router_file(content):
-                            router_files.append(file_path)
-                    except OSError:
-                        continue
+                for file_path in iter_repo_files(
+                    root, [f"*{ext}"], base=source_dir
+                ):
+                    content = read_repo_file(root, file_path)
+                    if content is not None and self._is_router_file(content):
+                        router_files.append(file_path)
 
         return router_files
 

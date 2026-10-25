@@ -7,10 +7,14 @@ and across Python and Java dependency scanners.
 from __future__ import annotations
 
 import asyncio
+import fnmatch
+import logging
 import os
 import re
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
+logger = logging.getLogger(__name__)
 
 # Directories that should be skipped during code scanning across all languages
 COMMON_SKIP_DIRS = frozenset({
@@ -36,7 +40,78 @@ def is_plain_in_root(root: Path | str, path: Path | str) -> bool:
         return False
     if rel == os.pardir or rel.startswith(os.pardir + os.sep):
         return False
-    return os.path.realpath(path) == os.path.join(real_root, rel)
+    return os.path.realpath(path) == os.path.normpath(os.path.join(real_root, rel))
+
+
+def iter_repo_files(
+    root: Path | str,
+    patterns: Iterable[str] = ("*",),
+    *,
+    base: Path | str | None = None,
+    skip_dirs: frozenset[str] = frozenset(),
+    skip_hidden: bool = False,
+) -> Iterator[Path]:
+    """Yield regular files under ``base`` (default ``root``) that are safe to read.
+
+    The single choke point for walking a scanned clone. Symlinked files and
+    symlinked directories are never followed or yielded (in-repo ones too: a
+    link is indistinguishable from an escape until resolved, and resolving is
+    what the repo controls), and neither is anything whose real path leaves
+    the real root. ``root`` itself may sit below symlinked parents (macOS
+    ``/var`` -> ``/private/var``): only links *inside* the clone count.
+
+    ``patterns`` are fnmatch globs on the file name; ``skip_hidden`` also
+    prunes dot-directories. Output is sorted so the
+    result is deterministic. One debug line reports how many links were
+    skipped.
+    """
+    root_p = Path(root)
+    start = Path(base) if base is not None else root_p
+    pats = tuple(patterns)
+    skipped = 0
+    try:
+        if not start.is_dir() or not is_plain_in_root(root_p, start):
+            if start.is_symlink():
+                skipped += 1
+            return
+        for dirpath, dirnames, filenames in os.walk(start, followlinks=False):
+            kept: list[str] = []
+            for d in sorted(dirnames):
+                if os.path.islink(os.path.join(dirpath, d)):
+                    skipped += 1
+                elif d not in skip_dirs and not (skip_hidden and d.startswith(".")):
+                    kept.append(d)
+            dirnames[:] = kept
+            for name in sorted(filenames):
+                if not any(fnmatch.fnmatchcase(name, pat) for pat in pats):
+                    continue
+                path = Path(dirpath) / name
+                if os.path.islink(path) or not is_plain_in_root(root_p, path):
+                    skipped += 1
+                    continue
+                yield path
+    finally:
+        if skipped:
+            logger.debug(
+                "repo walk of %s skipped %d symlinked path(s)", start, skipped
+            )
+
+
+def read_repo_file(
+    root: Path | str, path: Path | str, errors: str = "replace"
+) -> str | None:
+    """Read a text file of the scanned clone, or None if it is unsafe or unreadable.
+
+    Refuses symlinks and anything resolving outside ``root``; the companion
+    to :func:`iter_repo_files` for callers that got a path some other way.
+    """
+    if not is_plain_in_root(root, path):
+        logger.debug("refusing to read %s: symlinked or outside the repo", path)
+        return None
+    try:
+        return Path(path).read_text(encoding="utf-8", errors=errors)
+    except OSError:
+        return None
 
 
 def should_skip_path(
