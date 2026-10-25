@@ -17,6 +17,7 @@ from isitsecure.engine.code_analysis.osv_enrichment import (
     fetch_vuln_details,
     fixed_version_from_osv,
     severity_from_osv,
+    unenriched_message,
 )
 from isitsecure.engine.code_analysis.protocols import RepoSnapshot
 from isitsecure.engine.constants import DependencyScannerConfig
@@ -52,7 +53,7 @@ class DependencyScanner:
 
     def __init__(self, http_client: httpx.AsyncClient | None = None) -> None:
         self._external_client = http_client
-        self._unchecked_packages = 0
+        self.unchecked_packages = 0
 
     @property
     def scanner_name(self) -> str:
@@ -71,6 +72,7 @@ class DependencyScanner:
         Returns:
             List of code findings for vulnerable dependencies.
         """
+        self.unchecked_packages = 0
         # Collect dependencies from root + all workspaces (monorepo support)
         all_dependencies: dict[str, str] = {}
         package_sources: dict[str, str] = {}  # package -> source label
@@ -107,11 +109,10 @@ class DependencyScanner:
 
         try:
             emit(f"OSV: querying {len(packages)} npm package(s)")
-            self._unchecked_packages = 0
             findings = await self._scan_packages(client, packages)
-            if self._unchecked_packages:
+            if self.unchecked_packages:
                 msg = (
-                    f"OSV: {self._unchecked_packages} of {len(packages)} npm package(s) "
+                    f"OSV: {self.unchecked_packages} of {len(packages)} npm package(s) "
                     f"could not be checked (OSV unreachable or rate limited)"
                 )
                 logger.warning(msg)
@@ -131,6 +132,7 @@ class DependencyScanner:
                     error=str(exc)
                 )
             )
+            self.unchecked_packages = max(self.unchecked_packages, len(packages))
         finally:
             if owns_client:
                 await client.aclose()
@@ -211,7 +213,7 @@ class DependencyScanner:
                     error=str(exc)
                 )
             )
-            self._unchecked_packages += len(packages)
+            self.unchecked_packages += len(packages)
             return []
 
         data = response.json()
@@ -231,10 +233,7 @@ class DependencyScanner:
             return
         records, failed = await fetch_vuln_details(client, ids)
         if failed:
-            msg = (
-                f"OSV: details for {failed} vulnerability record(s) could not be "
-                f"fetched; their severity defaults to Medium"
-            )
+            msg = unenriched_message(failed)
             logger.warning(msg)
             emit(msg)
         for r in data.get("results", []):
@@ -295,7 +294,9 @@ class DependencyScanner:
             confidence=DependencyScannerConfig.CONFIDENCE_KNOWN_CVE,
             fix_suggestion=(
                 f"Upgrade {package} to {fixed} or later"
-                if (fixed := fixed_version_from_osv(vuln))
+                if (fixed := fixed_version_from_osv(
+                    vuln, package, DependencyScannerConfig.ECOSYSTEM, version
+                ))
                 else ""
             ),
         )

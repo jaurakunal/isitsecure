@@ -150,7 +150,7 @@ FULL = {
     "aliases": ["CVE-2024-0001"],
     "severity": [{"type": "CVSS_V3", "score": VECTOR_CRITICAL}],
     "affected": [{"ranges": [{"type": "ECOSYSTEM",
-                              "events": [{"introduced": "0"}, {"fixed": "2.0.1"}]}]}],
+                              "events": [{"introduced": "0"}, {"fixed": "9.9.9"}]}]}],
 }
 
 
@@ -175,7 +175,7 @@ class TestOSVScanner:
         f = findings[0]
         assert f.severity == SeverityLevel.CRITICAL
         assert "Bad thing" in f.description
-        assert f.fix_suggestion == "Upgrade django to 2.0.1 or later"
+        assert f.fix_suggestion == "Upgrade django to 9.9.9 or later"
 
     @respx.mock
     async def test_unique_ids_fetched_once(self):
@@ -243,7 +243,7 @@ class TestNpmDependencyScanner:
         assert len(findings) == 1
         assert findings[0].severity == SeverityLevel.CRITICAL
         assert "Bad thing" in findings[0].description
-        assert "2.0.1" in findings[0].fix_suggestion
+        assert "9.9.9" in findings[0].fix_suggestion
 
     @respx.mock
     async def test_429_reports_unchecked(self, monkeypatch):

@@ -349,7 +349,7 @@ class EndpointDiscoveryScanner:
         )
         if match:
             key = match.group(1)
-            logger.info("Discovered Supabase anon key: %s...", key[:20])
+            logger.info("Discovered Supabase anon key (%d chars)", len(key))
             return key
         return None
 

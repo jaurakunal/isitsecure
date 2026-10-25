@@ -28,6 +28,7 @@ from isitsecure.engine.code_analysis.osv_enrichment import (
     fetch_vuln_details,
     fixed_version_from_osv,
     severity_from_osv,
+    unenriched_message,
 )
 from isitsecure.engine.code_analysis.protocols import RepoSnapshot
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
@@ -73,8 +74,10 @@ class OSVDependencyScanner:
 
     DEFAULT_SEVERITY = SeverityLevel.MEDIUM
 
-    # Packages whose OSV batch query failed in the current scan (not checked).
-    _unchecked_packages = 0
+    def __init__(self) -> None:
+        # Packages whose OSV batch query failed in the current scan (not checked);
+        # reset at the start of every scan. Read by the orchestrator.
+        self.unchecked_packages = 0
 
     @property
     def scanner_name(self) -> str:
@@ -82,6 +85,7 @@ class OSVDependencyScanner:
 
     async def scan(self, repo: RepoSnapshot) -> list[CodeFinding]:
         """Scan all dependency files against OSV."""
+        self.unchecked_packages = 0
         deps = self._extract_all_dependencies(repo)
 
         if not deps:
@@ -98,11 +102,10 @@ class OSVDependencyScanner:
             f"across {', '.join(ecosystems)}"
         )
 
-        self._unchecked_packages = 0
         vulns = await self._query_osv_batch(deps)
-        if self._unchecked_packages:
+        if self.unchecked_packages:
             msg = (
-                f"OSV: {self._unchecked_packages} of {len(deps)} package(s) "
+                f"OSV: {self.unchecked_packages} of {len(deps)} package(s) "
                 f"could not be checked (OSV unreachable or rate limited)"
             )
             logger.warning(msg)
@@ -313,12 +316,10 @@ class OSVDependencyScanner:
                 records, failed = await fetch_vuln_details(client, ids)
         except Exception as e:
             logger.warning("OSV detail fetch failed: %s", e)
+            emit(unenriched_message(len(set(ids))))
             return vulns
         if failed:
-            msg = (
-                f"OSV: details for {failed} vulnerability record(s) could not be "
-                f"fetched; their severity defaults to Medium"
-            )
+            msg = unenriched_message(failed)
             logger.warning(msg)
             emit(msg)
         return [
@@ -340,7 +341,7 @@ class OSVDependencyScanner:
                 resp = await client.post(OSV_API_URL, json={"queries": queries})
                 if resp.status_code != 200:
                     logger.warning("OSV batch query failed: %d", resp.status_code)
-                    self._unchecked_packages += len(deps)
+                    self.unchecked_packages += len(deps)
                     return []
 
                 data = resp.json()
@@ -355,7 +356,7 @@ class OSVDependencyScanner:
 
         except Exception as e:
             logger.warning("OSV query failed: %s", e)
-            self._unchecked_packages += len(deps)
+            self.unchecked_packages += len(deps)
             return []
 
     # ------------------------------------------------------------------
@@ -414,7 +415,7 @@ class OSVDependencyScanner:
     @staticmethod
     def _extract_fix(vuln: dict, dep: ParsedDependency) -> str:
         """Extract the fixed version from OSV data."""
-        fixed = fixed_version_from_osv(vuln)
+        fixed = fixed_version_from_osv(vuln, dep.name, dep.ecosystem, dep.version)
         if fixed:
             return f"Upgrade {dep.name} to {fixed} or later"
         return f"Upgrade {dep.name} to the latest version"

@@ -167,6 +167,7 @@ class TestFixExtraction:
         vuln = {
             "affected": [{
                 "ranges": [{
+                    "type": "ECOSYSTEM",
                     "events": [
                         {"introduced": "0"},
                         {"fixed": "4.2.8"},
