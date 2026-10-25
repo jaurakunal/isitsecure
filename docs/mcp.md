@@ -108,7 +108,9 @@ scan_status(job_id)                                    → poll a DAST job; the 
   resolved/still-present counts and the grade movement reflect only *verifiable*
   rule-based SAST findings; LLM/DAST findings are counted `unverifiable` and held
   constant (a code re-scan can't reliably reproduce them), so LLM non-determinism
-  can never inflate or deflate the grade. The visible reward that closes the loop.
+  can never inflate or deflate the grade. If the re-scan cannot run to completion
+  (no report), `verify` errors with "Could not verify" instead of reporting anything
+  as resolved. The visible reward that closes the loop.
 - **`export`** *(implemented, #88).* `export(scan_id, format)` renders a **cached**
   scan (no re-scan) as `html` | `sarif` | `json` | `markdown` and **returns the
   content** for the host to save — the MCP does not write files (same stance as

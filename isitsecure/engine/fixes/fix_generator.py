@@ -12,6 +12,7 @@ DIP: Depends on LLMClientProtocol, not any concrete LLM implementation.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from difflib import unified_diff
@@ -259,11 +260,37 @@ class FixGenerator:
         response: str,
     ) -> FixResult:
         """Parse LLM response to extract fixed code and explanation."""
-        # Extract code block from response
-        fixed_code = self._extract_code_block(response)
         explanation = self._extract_explanation(response)
 
-        if not fixed_code:
+        # Work in LF; restore the file's own newline style on the way out.
+        crlf = "\r\n" in original_content
+        if crlf and original_content.count("\r\n") != original_content.count("\n"):
+            return FixResult(
+                finding_id=finding.id, file_path=file_path, success=False,
+                original_code=original_content, explanation=explanation,
+                error="File has mixed line endings; not auto-fixing",
+            )
+        original_lf = original_content.replace("\r\n", "\n")
+
+        raw, ambiguous = self._extract_raw_block(response)
+        if ambiguous:
+            # Several blocks, or fences inside the file. Only trust the
+            # outermost reading when the original file itself has fences.
+            raw = self._extract_outermost_block(response) if "```" in original_lf else ""
+            if not raw:
+                return FixResult(
+                    finding_id=finding.id, file_path=file_path, success=False,
+                    original_code=original_content, explanation=explanation,
+                    error="Could not extract fixed code from LLM response (ambiguous code fences)",
+                )
+        fixed_lf = raw.replace("\r\n", "\n")
+        # Preserve the original's trailing newline exactly.
+        trail = len(original_lf) - len(original_lf.rstrip("\n"))
+        fixed_lf = fixed_lf.rstrip("\n") + "\n" * trail
+        if not fixed_lf.strip():
+            fixed_lf = ""
+
+        if not fixed_lf:
             return FixResult(
                 finding_id=finding.id,
                 file_path=file_path,
@@ -273,8 +300,19 @@ class FixGenerator:
                 error="Could not extract fixed code from LLM response",
             )
 
-        # Generate unified diff
-        diff = self._generate_diff(file_path, original_content, fixed_code)
+        # Truncation guard: a reply far shorter than the file is almost
+        # certainly cut off (or a stub), never a real fix.
+        if len(original_lf) >= 400 and len(fixed_lf) < 0.4 * len(original_lf):
+            return FixResult(
+                finding_id=finding.id, file_path=file_path, success=False,
+                original_code=original_content, explanation=explanation,
+                error="LLM reply looks truncated (much shorter than the file); not applying",
+            )
+
+        fixed_code = fixed_lf.replace("\n", "\r\n") if crlf else fixed_lf
+
+        # Diff on LF-normalised text so an identical answer is "no change".
+        diff = self._generate_diff(file_path, original_lf, fixed_lf)
 
         if not diff:
             return FixResult(
@@ -299,20 +337,68 @@ class FixGenerator:
 
     @staticmethod
     def _extract_code_block(response: str) -> str:
-        """Extract the first fenced code block from the response."""
-        # Match ```language\n...code...\n```
-        pattern = r"```(?:\w+)?\s*\n(.*?)```"
-        match = re.search(pattern, response, re.DOTALL)
-        if match:
-            return match.group(1).strip()
+        """Extract the first fenced code block from the response (stripped)."""
+        code, _ = FixGenerator._extract_raw_block(response)
+        return code.strip()
+
+    @staticmethod
+    def _extract_raw_block(response: str) -> tuple[str, bool]:
+        """Extract the fenced block verbatim (no stripping).
+
+        Returns ``(code, ambiguous)``. Fence lines carrying a language tag
+        nest (a file may itself contain fenced examples); a bare fence line
+        closes the block. ``ambiguous`` is True when more fence lines follow
+        the chosen close, i.e. the reply holds several blocks or the file
+        contains bare fences, so the true end of the file is uncertain.
+        """
+        lines = response.splitlines(keepends=True)
+        fence_re = re.compile(r"^[ \t]*```([\w+#.-]*)[ \t]*\r?\n?$")
+        opener = None
+        for i, line in enumerate(lines):
+            if fence_re.match(line):
+                opener = i
+                break
+        if opener is not None:
+            depth = 0
+            closers: list[int] = []
+            for j in range(opener + 1, len(lines)):
+                m = fence_re.match(lines[j])
+                if not m:
+                    continue
+                if m.group(1):
+                    depth += 1
+                elif depth > 0:
+                    depth -= 1
+                else:
+                    closers.append(j)
+            if closers:
+                body = "".join(lines[opener + 1:closers[0]])
+                later_fences = any(fence_re.match(l) for l in lines[closers[0] + 1:])
+                return body, later_fences
+            # Unclosed fence: the reply was cut off — treat as unusable.
+            return "", False
 
         # Fallback: look for FIXED_CODE markers
         pattern2 = r"FIXED_CODE_START\n(.*?)FIXED_CODE_END"
         match2 = re.search(pattern2, response, re.DOTALL)
         if match2:
-            return match2.group(1).strip()
+            return match2.group(1), False
 
-        return ""
+        return "", False
+
+    @staticmethod
+    def _extract_outermost_block(response: str) -> str:
+        """First opening fence to the LAST bare fence line (for files that
+        themselves contain fences)."""
+        lines = response.splitlines(keepends=True)
+        fence_re = re.compile(r"^[ \t]*```([\w+#.-]*)[ \t]*\r?\n?$")
+        idx = [i for i, l in enumerate(lines) if fence_re.match(l)]
+        if len(idx) < 2:
+            return ""
+        last = next((i for i in reversed(idx) if not fence_re.match(lines[i]).group(1)), None)
+        if last is None or last <= idx[0]:
+            return ""
+        return "".join(lines[idx[0] + 1:last])
 
     @staticmethod
     def _extract_explanation(response: str) -> str:
@@ -347,3 +433,48 @@ class FixGenerator:
             return ""
 
         return "\n".join(diff_lines)
+
+
+# ---------------------------------------------------------------------------
+# Safe source IO for the fix flows
+# ---------------------------------------------------------------------------
+
+def resolve_fix_target(repo_path: str, rel_path: str) -> str:
+    """Resolve a finding's file path inside the repo, or raise ValueError.
+
+    Finding paths come from scanned content / LLM output: refuse absolute or
+    ``..`` escapes (via ``resolve_within``) and anything inside ``.git/``.
+    """
+    from isitsecure.engine.shared.safe_path import resolve_within
+
+    parts = rel_path.replace("\\", "/").split("/")
+    if ".git" in parts:
+        raise ValueError(f"Refusing to touch .git metadata: {rel_path!r}")
+    target = resolve_within(repo_path, rel_path)
+    real_rel = os.path.relpath(target, os.path.realpath(repo_path))
+    if ".git" in real_rel.replace("\\", "/").split("/"):
+        raise ValueError(f"Refusing to touch .git metadata: {rel_path!r}")
+    return target
+
+
+def read_source_file(repo_path: str, rel_path: str) -> str | None:
+    """Read a repo file for fixing: strict UTF-8, newlines untouched.
+
+    Returns None (file is unfixable) when the path is refused, missing, or the
+    bytes are not valid UTF-8 -- never a lossy decode.
+    """
+    try:
+        target = resolve_fix_target(repo_path, rel_path)
+        if not os.path.isfile(target):
+            return None
+        with open(target, "rb") as fh:
+            return fh.read().decode("utf-8")
+    except (ValueError, OSError, UnicodeDecodeError):
+        return None
+
+
+def write_source_file(repo_path: str, rel_path: str, content: str) -> None:
+    """Write fixed content back as UTF-8 with its newlines exactly as given."""
+    target = resolve_fix_target(repo_path, rel_path)
+    with open(target, "wb") as fh:
+        fh.write(content.encode("utf-8"))

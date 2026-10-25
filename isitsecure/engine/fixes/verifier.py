@@ -28,6 +28,11 @@ LLM_SCANNERS = {
 }
 
 
+class RescanFailed(RuntimeError):
+    """The code-only re-scan aborted without producing a report (e.g. the
+    repository could not be ingested). The check did not run."""
+
+
 @dataclass
 class VerifyResult:
     resolved: int = 0
@@ -35,6 +40,9 @@ class VerifyResult:
     unverifiable: int = 0
     still_present_titles: list[str] = field(default_factory=list)
     error: str = ""
+    # True when the re-scan itself failed/aborted: the check did not run, so
+    # nothing may be claimed as resolved.
+    could_not_verify: bool = False
 
     @property
     def checked(self) -> int:
@@ -48,6 +56,7 @@ class VerifyResult:
             "checked": self.checked,
             "still_present_titles": self.still_present_titles[:10],
             "error": self.error,
+            "could_not_verify": self.could_not_verify,
         }
 
 
@@ -85,14 +94,21 @@ async def _rescan_sast_findings(repo_path: str) -> list[dict]:
         repo_ingestion_service=repo_service,
     )
     report = None
+    last_message = ""
     async for event in agent.scan(
         repo_url=f"file://{repo_path}",
         scan_mode=ScanMode.CODE_ONLY,
     ):
         data = getattr(event, "data", None)
+        if isinstance(data, dict) and data.get("error"):
+            last_message = str(getattr(event, "message", "") or "")
         if isinstance(data, dict) and "report" in data:
             report = data["report"]
-    return report.get("findings", []) if report else []
+    if report is None:
+        # No report means the scan never ran (ingestion failure/abort). An
+        # empty list here would read as "every finding is gone".
+        raise RescanFailed(last_message or "the re-scan produced no report")
+    return report.get("findings", [])
 
 
 async def verify_findings_resolved(
@@ -114,6 +130,7 @@ async def verify_findings_resolved(
     except Exception as e:  # best-effort — never fail the fix over verification
         logger.warning("Fix verification re-scan failed: %s", e)
         result.error = str(e)
+        result.could_not_verify = True
         result.unverifiable += len(verifiable)
         return result
 

@@ -389,7 +389,7 @@ isitsecure verify https://your-app.com --report before.json --fingerprint de0e57
 
 - **DAST** findings are re-probed against the target — the exact endpoint is re-run through the scanner that raised it. To avoid ever *falsely* claiming a fix, a `fixed`/`still-present` verdict is only given when a single-endpoint re-probe can faithfully reproduce the finding (endpoint-level checks like security headers / CORS / CSRF, and parameter-level injection where the tested parameter is recoverable). Findings that depend on crawl-derived state or multi-request flows (e.g. stored XSS) are reported `unverifiable` — re-verify those with a full scan.
 - **SAST** findings are re-checked against a local `--repo` via a code-only re-scan.
-- Omit `--fingerprint` to re-verify every finding in the report. Exit codes make it a CI gate: **`0`** all clear (everything fixed), **`1`** at least one finding still present, **`2`** inconclusive — something couldn't be verified (`unverifiable`/error) or a requested fingerprint wasn't in the report. LLM-review findings (which need a model to reproduce) are always `unverifiable`.
+- Omit `--fingerprint` to re-verify every finding in the report. Exit codes make it a CI gate: **`0`** all clear (everything fixed), **`1`** at least one finding still present, **`2`** inconclusive — something couldn't be verified (`unverifiable`/error/`could_not_verify` — e.g. the target was unreachable or the re-scan couldn't read the repo; these are never reported as fixed) or a requested fingerprint wasn't in the report. LLM-review findings (which need a model to reproduce) are always `unverifiable`.
 
 (This is the per-finding CLI counterpart to the MCP `verify(scan_id)` tool, which instead re-scans everything and reports grade movement.)
 

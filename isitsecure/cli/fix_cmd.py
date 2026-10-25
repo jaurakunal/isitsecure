@@ -19,7 +19,10 @@ from isitsecure.cli.run import _run_scan
 def fix(
     repo: str = typer.Option(..., "--repo", "-r", help="Local repo path, OR a remote GitHub URL to open PRs against"),
     llm_provider: str = typer.Option("anthropic", "--llm", help="LLM provider: anthropic|google"),
-    api_key: Optional[str] = typer.Option(None, "--api-key", envvar="ANTHROPIC_API_KEY"),
+    api_key: Optional[str] = typer.Option(
+        None, "--api-key",
+        help="API key for the selected --llm provider (default: that provider's env var / config)",
+    ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show fixes without applying them"),
     severity: str = typer.Option("critical,high", "--severity", help="Severities to fix: critical,high,medium"),
     technical: bool = typer.Option(
@@ -43,7 +46,8 @@ def fix(
     else:
         logging.basicConfig(level=logging.WARNING)
 
-    # Resolve API key
+    # Resolve API key for the SELECTED provider only (never reuse another
+    # provider's key from the environment).
     resolved_key = api_key or _load_api_key(llm_provider)
     if not resolved_key:
         err_console.print(
@@ -120,16 +124,17 @@ def fix(
     console.print(f"\n[bold]Step 2/3:[/bold] Generating fixes for {len(fixable)} findings...")
 
     # Read file contents
+    # (confined to the repo, never .git/, strict UTF-8, newlines untouched;
+    # anything else is skipped as unfixable)
+    from isitsecure.engine.fixes.fix_generator import read_source_file, write_source_file
+
     file_contents: dict[str, str] = {}
     for finding in fixable:
         fp = finding.code_location.file_path
         if fp not in file_contents:
-            full_path = os.path.join(repo_path, fp)
-            if os.path.isfile(full_path):
-                try:
-                    file_contents[fp] = open(full_path).read()
-                except Exception:
-                    pass
+            content = read_source_file(repo_path, fp)
+            if content is not None:
+                file_contents[fp] = content
 
     fix_plan = asyncio.run(_run_fix_generation(llm_client, fixable, file_contents))
 
@@ -172,17 +177,21 @@ def fix(
     )
 
     from isitsecure.engine.fixes.safety_net import create_safety_net
-    from isitsecure.engine.shared.safe_path import resolve_within
 
     net = create_safety_net(repo_path, list(fix_plan.files.keys()))
+    if net.kind == "none" or net.failed:
+        err_console.print(
+            "[red]I couldn't make a safe backup of your original files, so I "
+            "haven't changed anything.[/red]"
+            + (f"\n[dim]Not backed up: {', '.join(net.failed[:5])}[/dim]" if net.failed else "")
+        )
+        raise typer.Exit(1)
 
     applied = 0
     failed = 0
     for path, fixed_content in fix_plan.files.items():
         try:
-            full_path = resolve_within(repo_path, path)
-            with open(full_path, "w") as f:
-                f.write(fixed_content)
+            write_source_file(repo_path, path, fixed_content)
             applied += 1
         except Exception as e:
             console.print(f"  [red]Couldn't update {path}: {e}[/red]")
@@ -215,6 +224,10 @@ def fix(
         title="Done",
         border_style="green" if counts.needs_review == 0 and counts.couldnt_fix == 0 else "yellow",
     ))
+    if vr.could_not_verify:
+        console.print(
+            f"[yellow]The re-check did not run: {vr.error or 'unknown error'}[/yellow]"
+        )
 
     hint = plain_results.next_step_hint(counts, saved_hint=net.restore_hint)
     if hint:

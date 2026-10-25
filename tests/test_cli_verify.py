@@ -100,3 +100,13 @@ def test_unverifiable_exits_two_not_green(tmp_path, monkeypatch):
     code = _run_verify(monkeypatch, p,
                        lambda fs: [R.Verdict(fs[0], R.VerifyStatus.UNVERIFIABLE)])
     assert code == 2
+
+
+def test_could_not_verify_is_inconclusive_never_fixed(tmp_path, monkeypatch, capsys):
+    f = _dast("http://app/login")
+    p = _write_report(tmp_path, [f])
+    code = _run_verify(monkeypatch, p,
+                       lambda fs: [R.Verdict(fs[0], R.VerifyStatus.COULD_NOT_VERIFY, "target unreachable")])
+    assert code == 2
+    out = json.loads(capsys.readouterr().out)
+    assert out["fixed"] == 0 and out["could_not_verify"] == 1

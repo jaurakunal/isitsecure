@@ -577,7 +577,9 @@ def verify(
     still = [v for v in verdicts if v.status == VerifyStatus.STILL_PRESENT]
     fixed = [v for v in verdicts if v.status == VerifyStatus.FIXED]
     inconclusive = [v for v in verdicts
-                    if v.status in (VerifyStatus.UNVERIFIABLE, VerifyStatus.ERROR)]
+                    if v.status in (VerifyStatus.UNVERIFIABLE, VerifyStatus.ERROR,
+                                    VerifyStatus.COULD_NOT_VERIFY)]
+    could_not = [v for v in verdicts if v.status == VerifyStatus.COULD_NOT_VERIFY]
 
     if output == "json":
         sys.stdout.write(json.dumps({
@@ -587,6 +589,7 @@ def verify(
                 for v in verdicts
             ],
             "fixed": len(fixed), "still_present": len(still),
+            "could_not_verify": len(could_not),
         }, indent=2) + "\n")
     else:
         _status_style = {
@@ -594,6 +597,7 @@ def verify(
             VerifyStatus.STILL_PRESENT: "[red]STILL PRESENT[/red]",
             VerifyStatus.UNVERIFIABLE: "[dim]unverifiable[/dim]",
             VerifyStatus.ERROR: "[yellow]error[/yellow]",
+            VerifyStatus.COULD_NOT_VERIFY: "[yellow]COULD NOT CHECK[/yellow]",
         }
         table = Table(title="Re-verification", show_lines=False)
         table.add_column("Status", width=16)
@@ -607,6 +611,11 @@ def verify(
             f"[red]{len(still)} still present[/red] · "
             f"[dim]{len(inconclusive)} unverifiable/error[/dim]"
         )
+        if could_not:
+            console.print(
+                f"[yellow]{len(could_not)} finding(s) could not be checked "
+                f"(the check did not run): {could_not[0].detail}[/yellow]"
+            )
 
     # Exit codes for CI: 1 = a regression is still present; 2 = inconclusive
     # (something couldn't be verified, or a requested fingerprint wasn't found) —

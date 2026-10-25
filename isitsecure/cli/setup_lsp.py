@@ -25,6 +25,7 @@ from isitsecure.cli.config import (
     CONFIG_FILE,
     _ensure_config_dir,
     _load_api_key,
+    write_secret_file,
 )
 
 def _print_status_report() -> None:
@@ -238,15 +239,14 @@ def setup(
     key = typer.prompt("Paste your Anthropic API key (or press Enter to skip)", default="", show_default=False)
     if key:
         import os
-        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        _ensure_config_dir()
         # Escape for a TOML basic string so a stray quote/backslash in the key
         # can't corrupt the file.
         safe_key = key.replace("\\", "\\\\").replace('"', '\\"')
-        CONFIG_FILE.write_text(f'[llm]\nanthropic_api_key = "{safe_key}"\n')
-        # The file holds a secret — restrict it to the owner.
+        # The file holds a secret — created owner-only (0600), never loose.
+        write_secret_file(CONFIG_FILE, f'[llm]\nanthropic_api_key = "{safe_key}"\n')
         try:
             os.chmod(CONFIG_DIR, 0o700)
-            os.chmod(CONFIG_FILE, 0o600)
         except OSError:
             pass
         console.print("[green]Saved to ~/.isitsecure/config.toml (perms 0600)[/green]")

@@ -63,9 +63,18 @@ isitsecure fix --repo https://github.com/you/your-app --github-token $GITHUB_TOK
 isitsecure fix --repo <github-url> --pr-strategy per-file --max-prs 5
 ```
 
-The local apply flow backs up the working tree first, then re-scans to verify
-findings are resolved and prints how many were fixed / need review / couldn't be
-fixed. The remote flow never pushes to the default branch — fixes land on
+The local apply flow backs up the files it is about to overwrite first (a git
+backup ref when every target is tracked; a file-copy backup when any target is
+untracked or ignored; it stops without changing anything if no backup could be
+made), then re-scans to verify findings are resolved and prints how many were
+fixed / need review / couldn't be fixed. If the re-scan itself cannot run (for
+example the repository cannot be read), nothing is counted as confirmed fixed
+and the output says the re-check did not run. Fixes keep each file's newline
+style and trailing newline; files that are not valid UTF-8, finding paths
+outside the repo, and anything under `.git/` are skipped; a reply that is
+truncated, ambiguous about its code fences, or identical to the input is
+rejected rather than written. `--api-key` applies to the selected `--llm`
+provider only; the environment/config key is looked up per provider. The remote flow never pushes to the default branch — fixes land on
 feature branches as pull requests; `--max-prs` caps the count (default 8) and
 excess low-severity categories batch into one PR. The GitHub token is used only
 for the push + PR and is never stored or logged.

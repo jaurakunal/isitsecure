@@ -882,7 +882,11 @@ def build_server():
 
         new_report = await _run_scan_silent(Path(repo_path), ScanMode.CODE_ONLY)
         if new_report is None:
-            raise ToolError("Re-scan completed but produced no report.")
+            raise ToolError(
+                "Could not verify: the re-scan did not run to completion "
+                "(no report was produced, e.g. the path could not be read). "
+                "Nothing is reported as resolved."
+            )
         new_scan_id = _cache_report(new_report, repo_path=repo_path)
         return _verify_result(old_report, new_report, new_scan_id)
 
