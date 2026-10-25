@@ -116,7 +116,7 @@
       <p class="step"><span class="n">2</span>Each one calls the same factory function with the options it has: an LLM client or none, quick or deep depth, whether writes may be probed, and an auth provider if credentials were given.</p>
       <p class="step"><span class="n">3</span>The factory instantiates every concrete scanner, strategy and service and injects them into one <code>DeepSecurityScanAgent</code>. The agent itself only knows protocols, never concrete classes.</p>
       <p class="step"><span class="n">4</span><code>scan()</code> is an async generator. It builds a <code>ScanContext</code>, then runs the phases in a fixed order, forwarding each phase's events as they happen. Two phases can abort the whole scan: URL ingestion and repo ingestion.</p>
-      <p class="step"><span class="n">5</span>Every consumer reads the same stream. The CLI prints phase headers and per-scanner lines, the server relays it as server-sent events, and the MCP server keeps the final report in an in-process cache keyed by <code>scan_id</code>. The final COMPLETE event carries the whole report as JSON.</p>
+      <p class="step"><span class="n">5</span>Every consumer reads the same stream. The CLI prints phase headers and per-scanner lines, the server relays it as server-sent events (behind a Host and Origin guard that answers <code>421</code> or <code>403</code> to anything that is not the local UI), and the MCP server keeps the final report in an in-process cache keyed by <code>scan_id</code>. The final COMPLETE event carries the whole report as JSON.</p>
     </div>
   </div>
 </section>
