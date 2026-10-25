@@ -430,7 +430,7 @@ await db.query(
       <tbody>
         <tr><td>Copies per endpoint</td><td>10</td><td><code>CONCURRENT_REQUESTS</code>; the SAST-guided variant fires 5</td></tr>
         <tr><td>Flag threshold</td><td>2 successes</td><td>200, 201 or 204 among the copies</td></tr>
-        <tr><td>Methods replayed</td><td>POST, PUT, PATCH</td><td>the scanner doc also lists DELETE; the replay list in config is these three</td></tr>
+        <tr><td>Methods replayed</td><td>POST, PUT, PATCH</td><td>DELETE is not replayed; the replay list in config is these three</td></tr>
         <tr><td>Endpoints per scan</td><td>10</td><td>unique by path, first seen first; a cooperative time budget stops early</td></tr>
         <tr><td>Input</td><td>intercepted authenticated requests</td><td>only mutations that carried a body and already succeeded once during the crawl</td></tr>
         <tr><td>Severity · confidence</td><td>HIGH · 0.80</td><td>the success count varies run to run, so it lives in the description, not the title</td></tr>

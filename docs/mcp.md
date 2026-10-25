@@ -71,7 +71,7 @@ Claude Desktop), some of which also gate tools behind user approval.
 ## Tool surface
 
 ```
-scan(path, mode="code-only", min_severity="medium")   → report + grade model + themes
+scan(path, min_severity="medium")                      → report + grade model + themes (code-only; no mode argument)
 explain(scan_id, finding_id)                           → deep dive: plain + technical + walkthrough
 fix(scan_id, finding_id)                               → return a diff + metadata; the HOST LLM applies it
 fix(scan_id, finding_id, apply=true)                   → (optional fallback) apply via our safety-net pipeline

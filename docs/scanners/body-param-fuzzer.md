@@ -1,15 +1,15 @@
 # Body Param Fuzzer
 
-**Type:** DAST (Special) | **Severity:** Medium–High | **Category:** Injection Risk
+**Type:** DAST (Special) | **Severity:** Medium to Critical | **Category:** Injection Risk
 
 ## What It Does
 
-Fuzzes JSON body parameters from intercepted authenticated requests with:
+Fuzzes JSON body parameters from intercepted authenticated requests (up to 20 successful POST/PUT/PATCH captures, up to 10 keys each; at most 123 requests per captured write) with:
 
-- **SQL injection** — injects `'` and checks for SQL error patterns in responses
-- **XSS reflection** — injects canary HTML and checks if reflected
-- **Type confusion** — sends wrong types (string instead of number, null, array) to find error handling bugs
-- **Prototype pollution** — sends `__proto__` and `constructor.prototype` keys to check if the server merges them into objects
+- **SQL injection** — injects three payloads (for example `' OR '1'='1' --`) and checks the reply against a 13-pattern error regex, with no baseline comparison. Six of the patterns are generic runtime errors (`stack trace`, `Traceback`, `TypeError`, `ValueError`, `Internal Server Error`, `NullPointerException`), so a crash message can match (Critical)
+- **XSS reflection** — injects two canary HTML payloads and checks if they are reflected verbatim (High)
+- **Type confusion** — for string-valued keys, sends seven other values (number, boolean, empty array, null, -1, 0, a large number) and reports a 5xx response (Medium, 0.70)
+- **Prototype pollution** — adds `__proto__`, `constructor.prototype` and `__proto__.polluted` keys to the body and reports when the server answers with a status below 400 (High). It does not verify that the server merged them; a server that simply ignores unknown keys is reported too
 
 ## Why It Matters
 

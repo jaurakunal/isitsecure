@@ -668,17 +668,17 @@ REQUEST_CONTEXT_WINDOW = <span class="k">60</span>   <span class="c"># wider sta
           <text class="ttl" x="12" y="22">Juice Shop v20.1.1, url-only</text>
           <g class="mono">
             <text class="lbl" x="12" y="46">recall       without → with</text>
-            <text x="12" y="64">README table 22/45  → 28/45</text>
-            <text x="12" y="80">architecture 24/45  → 30/45</text>
+            <text x="12" y="64">RESULTS.md   22/45  → 28/45</text>
+            <text x="12" y="80">(README and docs agree)</text>
             <text x="12" y="104">CSRF          0/1   → 1/1</text>
             <text x="12" y="120">XSS           1/7   → 4/7</text>
             <text x="12" y="136">IDOR          0/6   → 1/6</text>
             <text x="12" y="152">mass assign.  0/1   → 1/1</text>
-            <text x="12" y="176">time    27 min → ~48 (architecture)</text>
-            <text x="12" y="192">                 ~72 (README)</text>
+            <text x="12" y="176">time    27 min → ~72</text>
+            <text x="12" y="192">                 (README, RESULTS.md)</text>
           </g>
-          <text class="lbl" x="12" y="218">lost nothing · the two docs disagree on</text>
-          <text class="lbl" x="12" y="232">the exact figures; both are cited</text>
+          <text class="lbl" x="12" y="218">lost nothing · figures from</text>
+          <text class="lbl" x="12" y="232">benchmarks/RESULTS.md</text>
         </g>
 
         <g class="node only-3" transform="translate(20 276)">
@@ -705,7 +705,7 @@ REQUEST_CONTEXT_WINDOW = <span class="k">60</span>   <span class="c"># wider sta
       <p class="step"><span class="n">1</span>Url-only discovery produces GET endpoints only, because a path in a bundle carries no method. The scanners for stored XSS, mass assignment, CSRF and SSTI filter on POST/PUT and find <b>nothing to test</b>.</p>
       <p class="step"><span class="n">2</span><code>--probe-writes</code> derives state-changing twins from REST shape: <b>POST to a collection, PUT to an item</b>, the same convention that already produced <code>/api/Products/1</code>. DELETE is derived too and deliberately never emitted. Each twin carries source <code>rest_method</code>; the inventory roughly doubles.</p>
       <p class="step"><span class="n">3</span>It is off by default. The scan now writes to whatever it is pointed at: it creates records, and an endpoint that sends email or charges a card will do so. A scanner that deletes a customer's record to prove it could is not worth the finding.</p>
-      <p class="step"><span class="n">4</span>Measured on Juice Shop v20.1.1, url-only. The README table reports 22/45 → 28/45 and ~72 minutes against 27; the architecture doc reports 24/45 → 30/45 and ~48 minutes against 27. Both agree on what was gained (CSRF, three of five XSS, one IDOR, mass assignment) and that nothing was lost.</p>
+      <p class="step"><span class="n">4</span>Measured on Juice Shop v20.1.1, url-only. The benchmark (RESULTS.md, README, architecture doc) reports 22/45 → 28/45 and ~72 minutes against 27. What was gained: CSRF, three XSS challenges, one IDOR and mass assignment; nothing was lost.</p>
       <p class="step"><span class="n">5</span>The first measurement did not look like that. It read six gained, six lost, and the six lost were <code>exposed_data</code> and <code>info_disclosure</code>, both scored off <code>http_probe</code>. That scanner was running <b>901 s against a 900 s timeout</b>, and the hard cancel discarded every finding it held. The doubled inventory had pushed it over.</p>
       <p class="step"><span class="n">6</span>One bug wearing the costume of a trade-off. With scanners checking <code>budget.expired()</code> in their per-endpoint loop and returning early, the measurement reads six gained, nothing lost. The mechanism is animated on <a href="scan-pipeline.html#parallel-dast">the scan pipeline page</a>.</p>
     </div>

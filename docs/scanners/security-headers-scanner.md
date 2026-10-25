@@ -1,23 +1,25 @@
 # Security Headers Scanner
 
-**Type:** DAST | **Severity:** Medium–Low | **Category:** Missing Headers / Info Disclosure
+**Type:** DAST | **Severity:** Low–High | **Category:** Missing Headers / Info Disclosure
 
 ## What It Does
 
 Checks HTTP response headers for eight security headers:
 
-| Header | What It Prevents |
-|---|---|
-| `Strict-Transport-Security` | Downgrade attacks (HTTP → HTTPS stripping) |
-| `Content-Security-Policy` | XSS, data injection, clickjacking |
-| `X-Content-Type-Options` | MIME-type sniffing attacks |
-| `X-Frame-Options` | Clickjacking (embedding your site in iframes) |
-| `Permissions-Policy` | Restricts browser features (camera, mic, geolocation) |
-| `Referrer-Policy` | Leaking sensitive URLs to third parties |
-| `Server` | Version disclosure (e.g., `Server: Apache/2.4.51`) |
-| `X-Powered-By` | Technology disclosure (e.g., `X-Powered-By: Express`) |
+| Header | What It Prevents | Severity when flagged |
+|---|---|---|
+| `Strict-Transport-Security` | Downgrade attacks (HTTP → HTTPS stripping) | High (0.95) |
+| `Content-Security-Policy` | XSS, data injection, clickjacking | Medium (0.85) |
+| `X-Content-Type-Options` | MIME-type sniffing attacks (also flagged if the value is not `nosniff`) | Medium (0.95) |
+| `X-Frame-Options` | Clickjacking (embedding your site in iframes). Reported only when both this header and a CSP `frame-ancestors` directive are absent | Medium (0.90) |
+| `Permissions-Policy` | Restricts browser features (camera, mic, geolocation) | Low (0.80) |
+| `Referrer-Policy` | Leaking sensitive URLs to third parties | Low (0.80) |
+| `Server` | Version disclosure (e.g., `Server: Apache/2.4.51`). Flagged only when the value contains a version such as `/2.4` | Low (0.90) |
+| `X-Powered-By` | Technology disclosure (e.g., `X-Powered-By: Express`). Flagged whenever present | Low (0.90) |
 
-Also deduplicates: if the same header is missing on all endpoints, it reports once instead of per-endpoint.
+Every unique discovered URL is requested once with GET, shortest URL first (so the homepage is tested first).
+
+Also deduplicates: if the same header is missing on all endpoints, it reports once instead of per-endpoint (when the number of findings with the same title is at least the number of distinct URLs that produced a finding, and there is more than one such URL).
 
 ## Why It Matters
 

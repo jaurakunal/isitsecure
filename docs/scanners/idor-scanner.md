@@ -1,6 +1,6 @@
 # IDOR Scanner
 
-**Type:** DAST (Special) | **Severity:** High–Critical | **Category:** IDOR
+**Type:** DAST (Special) | **Severity:** Medium to Critical | **Category:** IDOR
 
 ## What It Does
 
@@ -21,7 +21,7 @@ In **authenticated mode** with two sets of credentials, the scanner performs **c
 - **Harvest User A's real object IDs** from parent collections (e.g. `GET /api/tasks` yields task IDs), instead of guessing. Both **numeric** and **UUID** id shapes are handled; when harvested IDs are all numeric the candidate set is filtered to numeric IDs so UUIDs aren't wasted
 - Try to access User A's harvested resources as User B (read, write, delete)
 - **Anonymous-access guard**: each resource is first probed with no auth at all — if it's simply public, the cross-user finding is suppressed as a false positive
-- **Content-match guard**: a hit is only reported when User B's response actually contains User A's data, not an empty or generic body
+- **Content-match guard**: for reads, a hit is only reported when User B's response body is exactly equal to User A's response for the same resource (a byte-for-byte match of the two bodies); a different body is treated as caller-scoped data, not cross-user access. For writes, B only has to get past access control (anything but 401/403)
 - **Mutation read-back**: for PUT/PATCH IDOR, a 2xx only proves the write was *accepted*. The probe writes a canary into one existing, non-sensitive field (never a money/auth/PII field), re-reads it, and restores the original value. Confirmed persistence → CRITICAL; genuinely unconfirmable → a downgraded HIGH lead. A write-open, read-gated endpoint (the GET returns 401 but the PUT echoes the object) is still confirmed, from the write response. Each endpoint yields one finding — self-swaps (id→same id) are skipped and probing stops at the first accepted swap. The read/swap probes run **anonymously** (an unauthenticated read can't confirm IDOR); the **mutation** probes (PUT/PATCH/DELETE) run **authenticated** when a session is available and only under `--probe-writes`, since they write to and delete from the target. This is what reaches an auth-gated BOLA delete like Juice Shop's "delete another user's feedback." The SPA catch-all (200 text/html for unknown routes) is rejected before any of this, so an app-shell response is never a write.
 - Test if User B can do a full-table `SELECT *` via Supabase REST API
 

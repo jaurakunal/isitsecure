@@ -141,7 +141,7 @@
     <div class="scene-steps">
       <p class="step"><span class="n">1</span>The scanner looks at the repository file index. Infrastructure as Code has a clear file extension, so <b>extension is the only test</b>.</p>
       <p class="step"><span class="n">2</span>Files ending in <code>.tf</code> or <code>.tfvars</code> are Terraform. Every one gets all eight checks, with no per-file routing. The <code>.tfvars</code> files matter because that is where people paste real values.</p>
-      <p class="step"><span class="n">3</span>Everything else is passed over. <b>CloudFormation templates are not read</b>, nor are JSON Terraform, state files or documentation, although the markdown mentions CloudFormation.</p>
+      <p class="step"><span class="n">3</span>Everything else is passed over. <b>CloudFormation templates are not read</b>, nor are JSON Terraform, state files or documentation.</p>
     </div>
   </div>
 </section>
@@ -387,7 +387,7 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "data" {
       <tr><td>Log retention</td><td><code>retention_in_days</code> of 7 or fewer</td><td>Low</td><td>0.65</td></tr>
     </tbody>
   </table></div>
-  <div class="callout note"><div class="label">Docs and code</div><p>The markdown describes Terraform and CloudFormation and lists unencrypted storage, a missing public access block, disabled CloudTrail and flow logs, and default VPC use. The code reads only <code>.tf</code> and <code>.tfvars</code> and implements none of those four. Instead it checks open security groups, secret defaults, Secrets Manager recovery, ALB HTTP, ECS public IPs and log retention, which the markdown does not mention. The code is AWS only. Severity runs from Low to Critical. Findings carry the file path only.</p></div>
+  <div class="callout note"><div class="label">Docs and code</div><p>The scanner reads only <code>.tf</code> and <code>.tfvars</code> and does not check unencrypted storage, a missing public access block, disabled CloudTrail and flow logs, or default VPC use. It checks open security groups, secret defaults, Secrets Manager recovery, ALB HTTP, ECS public IPs and log retention. It is AWS only. Severity runs from Low to Critical. Findings carry the file path only.</p></div>
 </section>
 
 <footer class="foot">

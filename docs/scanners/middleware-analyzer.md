@@ -1,14 +1,15 @@
 # Middleware Analyzer
 
-**Type:** SAST | **Severity:** High | **Category:** Auth Weakness
+**Type:** SAST | **Severity:** Low–High | **Category:** Auth Weakness
 
 ## What It Does
 
-Analyzes Next.js `middleware.ts` files for incomplete protection patterns:
+Analyzes Next.js `middleware.ts`/`middleware.js` files (repo root or `src/`) for incomplete protection patterns:
 
-- **Partial matcher coverage** — middleware protects `/dashboard/*` but not `/api/*`, leaving API routes exposed
-- **Missing auth check patterns** — middleware runs but doesn't verify auth tokens
-- **Bypass paths** — public paths that accidentally match protected route patterns
+- **No middleware file** — API routes exist but no middleware was found and the repo has no Express-style middleware (High)
+- **Partial matcher coverage** — middleware protects `/dashboard/*` but not `/api/*`, leaving API routes exposed. Only API routes (`app/api/**/route.ts`, `pages/api/**`) are compared with the matcher, one finding per uncovered route (Medium)
+- **Missing auth check patterns** — middleware only checks that a cookie exists and has no token/session verification call (Medium)
+- **Matcher bypass hints** — a literal matcher with no trailing `*` or `/`, or lowercase literal paths, may miss `/admin/` or differently cased requests (Low)
 
 ## Why It Matters
 

@@ -179,17 +179,17 @@
     <a class="card" href="jwt-attacks.html">
       <div class="thumb"><svg viewBox="0 0 200 80"><g class="n"><rect x="12" y="26" width="48" height="26" rx="4"/><rect x="66" y="26" width="64" height="26" rx="4"/><rect x="136" y="26" width="52" height="26" rx="4"/></g><text x="36" y="43" text-anchor="middle" style="font-size:9px">header</text><text x="98" y="43" text-anchor="middle" style="font-size:9px">payload</text><text x="162" y="43" text-anchor="middle" style="font-size:9px">sig</text><path class="w r" d="M142 30 L 182 48 M182 30 L 142 48"/><text x="12" y="70" class="fr" style="font-size:9px">alg: none → 200</text></svg></div>
       <h3>JWT attacks</h3><p>A forged token that the server accepts: alg none, weak secrets, RS to HS key confusion, plus the claims a token should carry.</p>
-      <div class="foot"><span class="pill dast">DAST</span><span class="pill crit">Critical</span><span class="pill">jwt-scanner.md</span></div>
+      <div class="foot"><span class="pill dast">DAST</span><span class="pill">Info</span><span class="pill crit">Critical</span><span class="pill">jwt-scanner.md</span></div>
     </a>
     <a class="card" href="session.html">
       <div class="thumb"><svg viewBox="0 0 200 80"><text x="12" y="24">Set-Cookie: sid=…</text><text x="12" y="44" class="fr">HttpOnly ✗</text><text x="100" y="44" class="fr">Secure ✗</text><text x="12" y="66">localStorage.setItem("token")</text><circle class="fr" cx="186" cy="62" r="5"/></svg></div>
       <h3>Session</h3><p>No request at all: it reads the captured snapshot for tokens in localStorage, auth cookies missing HttpOnly or Secure, and JWTs valid for more than 24 hours.</p>
-      <div class="foot"><span class="pill dast">DAST</span><span class="pill high">High</span><span class="pill">session-scanner.md</span></div>
+      <div class="foot"><span class="pill dast">DAST</span><span class="pill med">Medium</span><span class="pill high">High</span><span class="pill">session-scanner.md</span></div>
     </a>
     <a class="card" href="auth-bypass.html">
       <div class="thumb"><svg viewBox="0 0 200 80"><text x="12" y="24">nobody@x.test</text><text x="100" y="24" class="fr">User not found</text><text x="12" y="48">admin@test.com</text><text x="100" y="48" class="fr">Invalid password</text><path class="w r" d="M12 62 H 188"/><text x="12" y="76" style="font-size:9px">two replies, two stories</text></svg></div>
       <h3>Auth bypass</h3><p>Five phases with no session: username enumeration, 10 failed logins, seven default credential pairs, reset token leaks and Authorization header tricks.</p>
-      <div class="foot"><span class="pill dast">DAST</span><span class="pill crit">Critical</span><span class="pill">deep</span><span class="pill">auth-bypass-scanner.md</span></div>
+      <div class="foot"><span class="pill dast">DAST</span><span class="pill med">Medium</span><span class="pill crit">Critical</span><span class="pill">deep</span><span class="pill">auth-bypass-scanner.md</span></div>
     </a>
     <a class="card" href="password-reset.html">
       <div class="thumb"><svg viewBox="0 0 200 80"><text x="12" y="20">POST /forgot-password</text><g class="n"><rect x="12" y="32" width="28" height="16" rx="3"/><rect x="46" y="32" width="28" height="16" rx="3"/><rect x="80" y="32" width="28" height="16" rx="3"/><rect x="114" y="32" width="28" height="16" rx="3"/><rect x="148" y="32" width="28" height="16" rx="3"/></g><text x="26" y="44" text-anchor="middle" style="font-size:8px">202</text><text x="60" y="44" text-anchor="middle" style="font-size:8px">202</text><text x="94" y="44" text-anchor="middle" style="font-size:8px">202</text><text x="128" y="44" text-anchor="middle" style="font-size:8px">202</text><text x="162" y="44" text-anchor="middle" style="font-size:8px">202</text><text x="12" y="68" class="fr">"token":"9f3a1c77…"</text></svg></div>
@@ -199,7 +199,7 @@
     <a class="card" href="rate-limit.html">
       <div class="thumb"><svg viewBox="0 0 200 80"><g class="n"><rect x="10" y="24" width="12" height="16" rx="2"/><rect x="26" y="24" width="12" height="16" rx="2"/><rect x="42" y="24" width="12" height="16" rx="2"/><rect x="58" y="24" width="12" height="16" rx="2"/><rect x="74" y="24" width="12" height="16" rx="2"/><rect x="90" y="24" width="12" height="16" rx="2"/><rect x="106" y="24" width="12" height="16" rx="2"/><rect x="122" y="24" width="12" height="16" rx="2"/></g><rect class="fs" x="138" y="24" width="30" height="16" rx="2"/><text x="153" y="36" text-anchor="middle" style="font-size:8px;fill:var(--bg)">429</text><text x="10" y="62">limit after 20 → INFO</text></svg></div>
       <h3>Rate limit</h3><p>The count to the first 429, bursts of 10, 50 and 100, and whether a new Authorization header resets the allowance.</p>
-      <div class="foot"><span class="pill dast">DAST</span><span class="pill high">High</span><span class="pill med">Medium</span><span class="pill">deep</span><span class="pill">rate-limit-scanner.md</span></div>
+      <div class="foot"><span class="pill dast">DAST</span><span class="pill">Info</span><span class="pill high">High</span><span class="pill med">Medium</span><span class="pill">deep</span><span class="pill">rate-limit-scanner.md</span></div>
     </a>
   </div>
 </section>
@@ -209,7 +209,7 @@
   <div class="table-wrap"><table>
     <thead><tr><th>Scanner</th><th>What it looks at</th><th>What it reports</th><th>Severity</th><th>Needs</th></tr></thead>
     <tbody>
-      <tr><td><a href="jwt-attacks.html">JWT scanner</a></td><td>The session JWT, a protected endpoint, scripts for tokens in URLs</td><td>Forged tokens accepted (alg none, weak secret, key confusion); missing exp, iat, iss; a token in a URL</td><td>Critical</td><td>URL; an authenticated session (forgery tests are skipped without a token)</td></tr>
+      <tr><td><a href="jwt-attacks.html">JWT scanner</a></td><td>The session JWT, a protected endpoint, scripts for tokens in URLs</td><td>Forged tokens accepted (alg none, weak secret, key confusion); missing exp, iat, iss; a token in a URL</td><td>Info to Critical</td><td>URL; an authenticated session (forgery tests are skipped without a token)</td></tr>
       <tr><td><a href="session.html">Session scanner</a></td><td>The captured snapshot: JavaScript, response cookies, optionally the session JWT</td><td>A token in localStorage; auth cookies missing HttpOnly or Secure; a JWT valid more than 24 hours</td><td>Medium to High</td><td>URL only; runs at quick depth; sends no request</td></tr>
       <tr><td><a href="auth-bypass.html">Auth bypass scanner</a></td><td>Login, reset and auth-required endpoints, matched by URL substring</td><td>Username enumeration, no lockout, default credentials, reset token in a reply, Authorization header bypass</td><td>Medium to Critical</td><td>URL; <code>--depth deep</code>; deliberately not auth-aware</td></tr>
       <tr><td><a href="password-reset.html">Password reset scanner</a></td><td>Endpoints whose URL looks like forgot or reset password</td><td>Email enumeration, five unthrottled resets, a token in the reply body</td><td>Medium to Critical</td><td>URL; <code>--depth deep</code>; auth-aware when a session exists</td></tr>

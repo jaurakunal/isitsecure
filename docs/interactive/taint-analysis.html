@@ -426,7 +426,7 @@ const id = searchParams.get("id");
       <thead><tr><th>Limit</th><th>What happens instead</th></tr></thead>
       <tbody>
         <tr><td>Intra-file only</td><td>A route → helper → sink path across files is not tracked; the sink rule in the helper file usually still fires, and the path falls to the LLM reviewer.</td></tr>
-        <tr><td>Languages</td><td>JS/TS, Python, Java and Kotlin packs match the languages isitsecure supports for SAST; other stacks are DAST-only. Python, Java and Kotlin server-side XSS (template autoescaping nuance) is not yet covered.</td></tr>
+        <tr><td>Languages</td><td>JS/TS, Python, Java, Kotlin and Go packs ship; other stacks (Ruby, Rust, ...) have no taint pack. Python, Java and Kotlin server-side XSS (template autoescaping nuance) is not yet covered, and Go covers only the <code>template.HTML</code>-style safe-string cast.</td></tr>
         <tr><td>Python sources</td><td>Flask and Django <code>request.*</code>. FastAPI endpoint parameters are not tracked, so FastAPI cmdi/SSRF/path/SSTI fall to the LLM; string-built SQL is still caught on any stack.</td></tr>
         <tr><td>Java and Kotlin sources</td><td>Spring MVC and servlet (<code>@RequestParam</code>, <code>@PathVariable</code>, <code>getParameter</code>). JAX-RS and <code>@RequestBody</code> fields fall to the LLM. Concatenated SQL on unambiguous DB verbs is caught source-free; generic verbs need a recognised Spring source.</td></tr>
         <tr><td>Per-stack catalogue</td><td>A library with no rule produces no deterministic finding; the LLM backstops it.</td></tr>

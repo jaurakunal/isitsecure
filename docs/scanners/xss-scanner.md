@@ -1,22 +1,24 @@
 # XSS Scanner
 
-**Type:** DAST | **Severity:** High–Critical | **Category:** Injection Risk
+**Type:** DAST | **Severity:** Low–Critical | **Category:** Injection Risk
 
 ## What It Does
 
 Tests for Cross-Site Scripting (XSS) by injecting canary strings into URL parameters and POST body fields, then checking if the canary is reflected in the response without proper encoding.
 
-Three detection modes:
+Four detection modes:
 
 1. **Reflected XSS** — Injects a unique canary (`<canary_xss_abc123>`) into GET query parameters. If the canary appears unescaped in the HTML response, the parameter is vulnerable.
 
-2. **POST Body XSS** — Sends JSON payloads with canary strings in common field names. Checks if the canary is reflected in the response body.
+2. **POST Body XSS** — Sends a body with a canary in each field of the crawled form (falling back to a generic field-name list when the endpoint carried none), first as `application/x-www-form-urlencoded` and then as JSON, and checks whether a canary is reflected in the response. An unescaped canary is High (0.90); canary text reflected with its HTML characters encoded is Low (0.40).
 
-3. **DOM XSS (static)** — Scans JavaScript bundles for dangerous DOM sinks: `innerHTML`, `eval()`, `document.write()`, `setTimeout(string)`, `location.assign()`. Flags code paths where user input flows into these sinks.
+3. **Stored XSS** — If the POST response does not reflect the canary, the scanner issues a GET to the same URL and checks whether the canary now appears unescaped in an `text/html` response (POST then GET read-back). A hit is reported as **Critical** (0.95). JSON API responses are skipped to avoid false positives.
 
-The scanner is **context-aware**: if the canary lands inside an HTML attribute vs. a script block vs. raw HTML, it adjusts the severity and reports the injection context.
+4. **DOM XSS (static)** — A regex scan over the JavaScript bundles for dangerous sink patterns: `.innerHTML =`, `.outerHTML =`, `document.write(`, `document.writeln(`, `eval(`, `setTimeout("`, `setInterval("`, `Function("`, `.insertAdjacentHTML(`, `location.href =`, `location.replace(`, `dangerouslySetInnerHTML`. It does no data-flow analysis: it cannot tell whether user input reaches the sink. One finding is emitted per matched sink pattern (not per occurrence), as **Low** with confidence 0.60. A pattern is skipped only when every match is a static-string assignment. For tainted-flow detection in a real browser see the [DOM XSS scanner](dom-xss-scanner.md).
 
-**Scan depth (#118):** at `quick` depth (the default) the scanner runs the two network phases — reflected and POST-body — on a tighter 2-minute budget, so server-reflected XSS on protected endpoints is caught even in a fast pass. The static **DOM XSS** sink analysis (mode 3) is heavier and runs only at `--depth deep`; the deterministic Semgrep taint layer already provides a DOM-XSS floor at quick depth.
+The scanner is **context-aware**: when the canary text is reflected but its HTML characters are encoded, it detects whether the canary landed in a double- or single-quoted attribute, a JS string, a template literal, an `href`, or an HTML comment, and sends a matching breakout payload. If that payload comes back unescaped the finding is High (0.95) and names the context; if not, the result stays an unconfirmed reflection (Low, 0.40).
+
+**Scan depth (#118):** at `quick` depth (the default) the scanner runs the two network phases (reflected and POST-body, which includes the stored read-back) on a tighter 15-minute budget (`XSS_QUICK_SECONDS` = 900 s, versus 3600 s at deep), so server-reflected XSS on protected endpoints is caught even in a fast pass. The static **DOM XSS** sink analysis (mode 4) is a noisy static heuristic and runs only at `--depth deep`; the deterministic Semgrep taint layer already provides a DOM-XSS floor at quick depth.
 
 ## Why It Matters
 

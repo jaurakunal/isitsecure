@@ -281,7 +281,7 @@ components:
       <tr><td>Multiplicity</td><td>One finding for check 1 per file; checks 2, 5 and 6 report once per match (per URL, per path key, per <code>security: []</code>); checks 3 and 4 once per file.</td></tr>
       <tr><td>Categories</td><td>Checks 1, 3, 5 and 6 report as auth weakness; the HTTP server as mixed content; the API key in the query as exposed secrets.</td></tr>
       <tr><td>Overlap</td><td>A path such as <code>/admin/users:</code> matches both the <code>/admin</code> and <code>/users</code> patterns and is reported twice.</td></tr>
-      <tr><td>Not covered</td><td>Example values holding real keys or PII, and freeform object parameters, are not inspected. Those are listed in the markdown doc but have no check in the code.</td></tr>
+      <tr><td>Not covered</td><td>Example values holding real keys or PII, and freeform object parameters, are not inspected: no check in the code covers them.</td></tr>
     </tbody>
   </table></div>
 </section>

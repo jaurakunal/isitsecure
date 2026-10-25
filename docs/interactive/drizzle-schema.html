@@ -221,7 +221,7 @@
   <h2>Why it matters</h2>
   <div class="grid-2">
     <div class="callout why"><div class="label">Why it matters</div><p>Schema decisions have security consequences. <b>PII stored in plaintext is a breach liability: if the database leaks, all personal data is immediately readable.</b> A secret column turns one leaked row into a working credential, and a table without <code>tenant_id</code> gives the query layer nothing to isolate tenants with.</p></div>
-    <div class="callout breach"><div class="label">Real-world breach</div><p><b>GitHub (2012).</b> A mass assignment vulnerability in Rails let an attacker add his SSH key to the Rails core repository by exploiting a <code>user_id</code> field that sat directly on the model rather than in a separate association table. The markdown names schema design as the enabler. The <code>isAdmin</code> and <code>role</code> column check it describes is not one of the four checks in the current code.</p></div>
+    <div class="callout breach"><div class="label">Real-world breach</div><p><b>GitHub (2012).</b> A mass assignment vulnerability in Rails let an attacker add his SSH key to the Rails core repository by exploiting a <code>user_id</code> field that sat directly on the model rather than in a separate association table. A check for <code>isAdmin</code> and <code>role</code> columns is not one of the four checks in the current code.</p></div>
   </div>
 </section>
 
@@ -253,7 +253,7 @@ export const users = pgTable(<span class="s">"users"</span>, {
   stripeId: text(<span class="s">"stripe_customer_id"</span>),   <span class="c">// still Low: a judgement call</span>
 })</code></pre></div>
   </div>
-  <div class="callout note"><div class="label">Scope note</div><p>The markdown lists <code>isAdmin</code> and <code>role</code> columns, a missing <code>deleted_at</code> and missing <code>created_at</code> or <code>updated_at</code>. The code defines audit column constants but no check uses them, and none of the four checks above look for those columns. The markdown's own fix, moving roles into a separate <code>user_roles</code> table, is still good practice.</p></div>
+  <div class="callout note"><div class="label">Scope note</div><p><code>isAdmin</code> and <code>role</code> columns, a missing <code>deleted_at</code> and missing <code>created_at</code> or <code>updated_at</code> are not checked. The code defines audit column constants but no check uses them. The recommended fix, moving roles into a separate <code>user_roles</code> table, is still good practice.</p></div>
 </section>
 
 <section id="limits">
@@ -266,7 +266,7 @@ export const users = pgTable(<span class="s">"users"</span>, {
       <tr><td>Severity and confidence</td><td>Secret High 0.90, PII Medium 0.80, tenant scope Medium 0.75, payment ID Low 0.70.</td></tr>
       <tr><td>Tenant check</td><td>On only if a table is named exactly tenants, organizations, orgs, workspaces or companies (or a singular form). Flags tables whose lowercase name contains users, apps, subscriptions, purchases, orders, invoices, settings or profiles.</td></tr>
       <tr><td>Secret check</td><td>No skip for names that are already encrypted or hashed, so <code>password_hash</code> is reported.</td></tr>
-      <tr><td>Not implemented</td><td>The markdown's <code>isAdmin</code> and <code>role</code>, soft delete and audit timestamp checks.</td></tr>
+      <tr><td>Not implemented</td><td><code>isAdmin</code> and <code>role</code>, soft delete and audit timestamp checks.</td></tr>
     </tbody>
   </table></div>
 </section>

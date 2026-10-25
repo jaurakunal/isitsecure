@@ -4,19 +4,19 @@
 
 ## What It Does
 
-Performs five checks against the target:
+Performs five checks against the target, in this order (the fixed-cost checks on the base URL run first so a large app does not spend its budget before reaching them):
 
-1. **Method tampering** — sends OPTIONS and TRACE requests. TRACE enabled can leak auth headers; unexpected methods may bypass security controls.
-2. **Host header injection** — sends requests with a forged Host header. If reflected in the response or Location header, it can enable cache poisoning or password reset poisoning.
-3. **Verbose errors** — requests paths that trigger 4xx/5xx and checks for stack traces, framework details, or database error messages.
-4. **Directory listing** — checks for `.git/config`, `.env`, directory index pages.
-5. **CRLF injection** — injects `\r\n` in headers to test for response splitting.
+1. **Verbose errors** — requests four error-triggering paths (a nonexistent path, a nonexistent `/api/` path, `/%00`, and an oversized path) and checks 4xx/5xx bodies for stack traces, file paths, or framework details. Medium.
+2. **Sensitive files and directory listing** — fetches `/.git/HEAD` (looks for `ref:`), `/.env` and `/.env.local` (look for `=`), and `/robots.txt` (looks for `Disallow`), plus index pages at `/api/`, `/static/`, `/assets/`, `/backup/` and `/backups/` (look for "Index of /" style listings). Exposed `.git` and `.env` files are High; `robots.txt` with a `Disallow` line and directory listings are Medium.
+3. **Method tampering** — sends OPTIONS and TRACE to each endpoint. TRACE or CONNECT in the `Allow` header is reported (TRACE High, CONNECT Medium), and a TRACE request that echoes the request back is High (cross-site tracing can leak auth headers).
+4. **Host header injection** — sends a forged `Host` header, and also `X-Forwarded-Host`, to the homepage and the first two endpoints. If the forged value is reflected in the response body or the `Location` header, it can enable cache poisoning or password reset poisoning. High.
+5. **CRLF injection** — injects `\r\n` plus a canary header into 9 query-param names (`url`, `redirect`, `next`, `return`, `callback`, `path`, `ref`, `location`, `goto`) with 3 payloads each, and checks whether the canary appears as a response header (response splitting). High.
 
 ## Why It Matters
 
 These issues individually seem low-risk but chain together dangerously:
 - `.env` exposure → attacker gets database credentials
-- `.git/config` exposure → attacker can reconstruct your source code
+- `.git` exposure (`/.git/HEAD`) → attacker can reconstruct your source code
 - Stack traces → reveal framework version, file paths, query structure
 - TRACE method → reflects auth cookies in response body (cross-site tracing)
 

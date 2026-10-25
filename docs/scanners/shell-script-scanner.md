@@ -1,16 +1,21 @@
 # Shell Script Scanner
 
-**Type:** SAST | **Severity:** High | **Category:** Injection Risk
+**Type:** SAST | **Severity:** Low–High | **Category:** Injection Risk
 
 ## What It Does
 
-Scans shell scripts (`.sh`, `.bash`) in the repository for:
+Scans shell scripts (`.sh`, `.bash`) in the repository with line-level regular expressions for:
 
-1. **Command injection via eval** — `eval "$USER_INPUT"` allows arbitrary command execution
-2. **Unquoted variables** — `rm -rf $DIR` instead of `rm -rf "$DIR"` breaks on paths with spaces and can be exploited
-3. **Curl piped to shell** — `curl url | sh` executes remote code without verification
-4. **Hardcoded credentials** — passwords, tokens, and keys in script variables
-5. **Insecure temp files** — using predictable `/tmp/myapp` paths (symlink attacks)
+1. **Command injection via eval** — `eval "$USER_INPUT"`: `eval` followed by a `$` on the same line (Medium)
+2. **Curl piped to shell** — `curl url | sh` executes remote code without verification (High)
+3. **Hardcoded credentials** — passwords, tokens, and keys assigned to named variables such as `*PASSWORD`, `*API_KEY`, `*SECRET`, `AWS_SECRET_ACCESS_KEY`, `DATABASE_URL` (High, one finding per secret type per file).
+4. **Hardcoded AWS account IDs** — a 12-digit ID in an ECR image URL (Low)
+5. **Permissive chmod** — `chmod 777`, `666` or `a+rwx` (Medium)
+6. **Missing error handling** — no `set -e`, `-u` or `-o` text anywhere in the file (Low)
+7. **Secrets echoed to output** — `echo` of a password, secret, token or key followed by `:` or `=` (Medium)
+8. **TLS verification disabled** — `curl -k` or `--insecure` (Medium)
+
+Not covered today: unquoted variables (`rm -rf $DIR`) and predictable `/tmp` paths.
 
 ## Why It Matters
 

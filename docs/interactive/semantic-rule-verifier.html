@@ -297,11 +297,11 @@
       <tbody>
         <tr><td>Needs</td><td>an LLM API key</td><td>runs in the SAST phase when a policy file or rules file is present</td></tr>
         <tr><td>SQL files reviewed</td><td>contain <code>CREATE POLICY</code> or <code>ENABLE ROW LEVEL SECURITY</code></td><td>case-insensitive text match on .sql files</td></tr>
-        <tr><td>Firebase files reviewed</td><td>firestore.rules · storage.rules · database.rules.json</td><td>the md names Firebase rules; this list is from the code</td></tr>
+        <tr><td>Firebase files reviewed</td><td>firestore.rules · storage.rules · database.rules.json</td><td>the list of rules files the scanner collects</td></tr>
         <tr><td>Sent per file</td><td>first 50,000 characters</td><td>one model call per file</td></tr>
         <tr><td>Reply limit</td><td>4,096 tokens</td><td>findings per file capped at 7</td></tr>
         <tr><td>Confidence</td><td>0.70, fixed</td><td>the same for every finding</td></tr>
-        <tr><td>Severity</td><td>CRITICAL, HIGH, MEDIUM or LOW from the model</td><td>unknown values become MEDIUM; the scanner doc lists Critical to High</td></tr>
+        <tr><td>Severity</td><td>CRITICAL, HIGH, MEDIUM or LOW from the model</td><td>unknown values become MEDIUM</td></tr>
         <tr><td>Category</td><td>RLS misconfiguration</td><td>fixed, including for Firebase rule findings</td></tr>
       </tbody>
     </table>

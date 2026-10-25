@@ -1,20 +1,22 @@
 # JWT Scanner
 
-**Type:** DAST (Special) | **Severity:** Critical | **Category:** Auth Weakness
+**Type:** DAST (Special) | **Severity:** Info to Critical | **Category:** Auth Weakness
 
 ## What It Does
 
-Tests JWT (JSON Web Token) implementations for five common vulnerabilities:
+Tests JWT (JSON Web Token) implementations for six vulnerability classes (the forgery tests need a captured session JWT; the token-in-URL check does not):
 
-1. **Missing Claims** — Checks if the token lacks `exp` (expiration), `iat` (issued at), or `iss` (issuer). Tokens without expiration are valid forever.
+1. **Missing Claims** — Checks if the token lacks `exp` (expiration), `iat` (issued at), or `iss` (issuer). Tokens without expiration are valid forever. A missing `exp` is reported on its own (High, confidence 0.75); any missing `iat`/`iss` are bundled into one Low finding (0.60).
 
 2. **Algorithm None Bypass** — Forges a new JWT with `"alg": "none"` and no signature, then sends it. If the server accepts it, any user can forge tokens without knowing the secret.
 
-3. **Weak Secret Signing** — Tests 10+ common secrets (`""`, `"secret"`, `"password"`, `"123456"`, `"your-256-bit-secret"`, etc.) by signing a forged token and sending it. If accepted, the secret can be brute-forced.
+3. **Weak Secret Signing** — Tests 14 common secrets (`""`, `"secret"`, `"password"`, `"123456"`, `"your-256-bit-secret"`, etc.) by signing a forged token and sending it. If accepted, the secret can be brute-forced.
 
-4. **RS256/ES256 Key Confusion** — If the server uses RSA (RS256), attempts to use the RSA public key as an HMAC secret (HS256). This exploits libraries that don't enforce algorithm restrictions.
+4. **RS256/ES256 Key Confusion** — If the server uses RSA (RS256), attempts to use the RSA public key as an HMAC secret (HS256). The key is fetched only from `/.well-known/jwks.json`; a reachable JWKS is itself reported as an Info finding (0.50). This exploits libraries that don't enforce algorithm restrictions.
 
-5. **Token in URL** — Scans JavaScript bundles for patterns like `?token=eyJ...` where JWT tokens are passed as URL parameters (logged by proxies, cached by browsers).
+5. **Token in URL** — Matches the discovered endpoint URLs (extracted from the JavaScript bundles) against `[?&](token|access_token|jwt|auth)=x.y.z`, i.e. JWT-shaped values passed as URL parameters (logged by proxies, cached by browsers).
+
+6. **Claim Manipulation** — When the captured token uses HS256/384/512 and the original token is accepted (2xx baseline), re-signs it with an empty secret after setting `role`/`is_admin`/`admin`/`user_role` to admin values (escalation) or swapping `sub`/`user_id`/`uid`/`email` for a zero UUID (identity swap). A 2xx on a forged token is Critical (0.90).
 
 ## Why It Matters
 

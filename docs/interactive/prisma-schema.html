@@ -244,7 +244,7 @@
   <h2>Why it matters</h2>
   <div class="grid-2">
     <div class="callout why"><div class="label">Why it matters</div><p>Schema design decides how bad a breach is. <b>PII stored in plaintext becomes a liability when, not if, the database leaks</b>, and a secret column means one leaked row is a working credential. A model without a tenant column has nothing to filter on, so a cross-tenant read is one forgotten <code>where</code> clause away.</p></div>
-    <div class="callout breach"><div class="label">Real-world context</div><p><b>GitHub (2012).</b> A mass assignment bug let an attacker add his SSH key to the Rails core repository through a field that sat directly on the model. The markdown cites schema design as the enabler. That specific pattern, an <code>isAdmin</code> or <code>role</code> field, is not one of the four checks the analyzer runs today.</p></div>
+    <div class="callout breach"><div class="label">Real-world context</div><p><b>GitHub (2012).</b> A mass assignment bug let an attacker add his SSH key to the Rails core repository through a field that sat directly on the model. That specific pattern, an <code>isAdmin</code> or <code>role</code> field, is not one of the four checks the analyzer runs today.</p></div>
   </div>
 </section>
 
@@ -276,7 +276,7 @@ model UserSettings {
   stripe_customer_id String   <span class="c">// still Low: a judgement call</span>
 }</code></pre></div>
   </div>
-  <div class="callout note"><div class="label">Scope note</div><p>The markdown for this analyzer lists four other checks: <code>isAdmin</code> or <code>role</code> fields as mass assignment targets, missing <code>createdAt</code> and <code>updatedAt</code>, and a missing <code>deletedAt</code>. The current analyzer code does not run them. This page shows what the code does. Its recommended fix, a separate <code>Role</code> model instead of an <code>isAdmin</code> column, is still sound schema design.</p></div>
+  <div class="callout note"><div class="label">Scope note</div><p>The analyzer does not check <code>isAdmin</code> or <code>role</code> fields as mass assignment targets, missing <code>createdAt</code> and <code>updatedAt</code>, or a missing <code>deletedAt</code>. Its recommended fix, a separate <code>Role</code> model instead of an <code>isAdmin</code> column, is still sound schema design.</p></div>
 </section>
 
 <section id="limits">
@@ -290,7 +290,7 @@ model UserSettings {
       <tr><td>Tenant check</td><td>Runs only when a model named Tenant, Organization, Org, Workspace or Company (or a lowercase plural) exists. It flags models whose lowercase name contains users, apps, subscriptions, purchases, orders, invoices, settings or profiles, so a singular <code>Order</code> is not examined.</td></tr>
       <tr><td>Secret check</td><td>No skip for names that are already encrypted or hashed, so <code>password_hash</code> and <code>access_token_encrypted</code> are reported.</td></tr>
       <tr><td>Name matching</td><td>Indicators are lowercase snake_case. camelCase spellings such as <code>apiKey</code>, <code>emailAddress</code> and <code>tenantId</code> do not match.</td></tr>
-      <tr><td>Not implemented</td><td>The markdown's <code>isAdmin</code> and <code>role</code>, audit timestamp and soft delete checks.</td></tr>
+      <tr><td>Not implemented</td><td><code>isAdmin</code> and <code>role</code> fields, audit timestamp and soft delete checks.</td></tr>
     </tbody>
   </table></div>
 </section>

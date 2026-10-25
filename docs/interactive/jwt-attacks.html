@@ -456,7 +456,7 @@ const decoded = jwt.verify(token, PUBLIC_KEY, { <span class="k">algorithms</span
   </div>
   <div class="callout note">
     <div class="label">What it stays quiet about</div>
-    <p>No session token means every forgery test is skipped and only the URL check runs. Nothing is reported on a 4xx, so a server that rejects every forgery produces no JWT findings at all. The forgeries keep the captured payload unchanged; a separate claim-manipulation pass in the implementation (role escalation and identity swap, signed with an empty secret) is not part of the five tests described in the scanner doc.</p>
+    <p>No session token means every forgery test is skipped and only the URL check runs. Nothing is reported on a 4xx, so a server that rejects every forgery produces no JWT findings at all. The three signature forgeries keep the captured payload unchanged; a separate claim-manipulation pass (role escalation and identity swap, signed with an empty secret, HS256 family tokens only) is documented in the scanner doc as a sixth check.</p>
   </div>
 </section>
 

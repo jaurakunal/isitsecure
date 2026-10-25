@@ -387,7 +387,7 @@ spec:
       <tr><td>Helm values</td><td>plaintext password, secret or API key, token or database URL in <code>values.yaml</code></td><td>High</td><td>0.80</td></tr>
     </tbody>
   </table></div>
-  <div class="callout note"><div class="label">Docs and code</div><p>The markdown lists missing resource limits, hostPath mounts, a missing <code>runAsNonRoot: true</code> and missing network policies. None of those are implemented. The code instead adds host namespaces, ALL capabilities, LoadBalancer exposure, image tags and Helm values files, and its severity runs from Low to Critical where the markdown says High to Critical. Findings carry the file path only, with no line number.</p></div>
+  <div class="callout note"><div class="label">Docs and code</div><p>Resource limits, hostPath mounts, a missing <code>runAsNonRoot: true</code> and network policies are not checked. Severity runs from Low to Critical. Findings carry the file path only, with no line number.</p></div>
 </section>
 
 <footer class="foot">

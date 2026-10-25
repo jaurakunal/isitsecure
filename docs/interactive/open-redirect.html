@@ -177,7 +177,7 @@ return NextResponse.redirect(target)</code></pre></div>
   </div>
   <div class="callout note">
     <div class="label">Why the origin comparison</div>
-    <p>The markdown fix rejects values that start with <code>http</code> or <code>//</code>. The scanner's third payload, <code>/\/evil.com</code>, starts with neither, and browsers treat the backslash as a slash. Resolving the value with <code>new URL</code> and comparing origins covers all four payload shapes the scanner sends.</p>
+    <p>A fix that only rejects values starting with <code>http</code> or <code>//</code> is not enough. The scanner's third payload, <code>/\/evil.com</code>, starts with neither, and browsers treat the backslash as a slash. Resolving the value with <code>new URL</code> and comparing origins covers all four payload shapes the scanner sends, and the markdown fix uses the same approach.</p>
   </div>
 </section>
 

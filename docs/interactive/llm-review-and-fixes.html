@@ -63,7 +63,7 @@
 
 <section id="triggers">
   <h2>Which routes get read</h2>
-  <p class="prose">Sending every route to the LLM is too expensive, so every mapped route is a candidate and five triggers decide which ones pass. Triggers run in priority order, a route selected by a higher-priority trigger is not selected again, and a file budget caps the total. Each trigger has its own specialised system prompt.</p>
+  <p class="prose">Sending every route to the LLM is too expensive, so every mapped route is a candidate and the triggers decide which ones pass (the scene shows five; a sixth, the injection-pattern file flag at priority 5, adds up to 15 non-route files). Triggers run in priority order, a route selected by a higher-priority trigger is not selected again, and a 500-file budget caps the total. Four of the triggers have their own specialised system prompt.</p>
 
   <div class="scene" id="triggers" data-scene data-interval="3000">
     <figure class="stage">
@@ -93,9 +93,9 @@
 
         <!-- gates -->
         <g class="node gate lit-2" transform="translate(340 26)"><rect width="260" height="56" rx="8"/><text class="ttl" x="12" y="19">0 · Financial operation</text><text class="lbl" x="12" y="34">always · payment, checkout, billing</text><text class="lbl" x="12" y="47">prompt: races, idempotency, price</text></g>
-        <g class="node gate lit-3" transform="translate(340 84)"><rect width="260" height="56" rx="8"/><text class="ttl" x="12" y="19">1 · Cross-scanner flagged</text><text class="lbl" x="12" y="34">flagged by 2+ SAST scanners</text><text class="lbl" x="12" y="47">own system prompt</text></g>
-        <g class="node gate lit-4" transform="translate(340 142)"><rect width="260" height="56" rx="8"/><text class="ttl" x="12" y="19">2 · State mutation</text><text class="lbl" x="12" y="34">POST · PUT · PATCH · DELETE</text><text class="lbl" x="12" y="47">own system prompt</text></g>
-        <g class="node gate lit-5" transform="translate(340 200)"><rect width="260" height="56" rx="8"/><text class="ttl" x="12" y="19">3 · Risk indicator</text><text class="lbl" x="12" y="34">eval · exec · raw SQL in the file</text><text class="lbl" x="12" y="47">prompt: data flow and sanitisation</text></g>
+        <g class="node gate lit-3" transform="translate(340 84)"><rect width="260" height="56" rx="8"/><text class="ttl" x="12" y="19">1 · Cross-scanner flagged</text><text class="lbl" x="12" y="34">touches a SAST-flagged entity</text><text class="lbl" x="12" y="47">own system prompt</text></g>
+        <g class="node gate lit-4" transform="translate(340 142)"><rect width="260" height="56" rx="8"/><text class="ttl" x="12" y="19">2 · State mutation</text><text class="lbl" x="12" y="34">DB write plus a branch</text><text class="lbl" x="12" y="47">own system prompt</text></g>
+        <g class="node gate lit-5" transform="translate(340 200)"><rect width="260" height="56" rx="8"/><text class="ttl" x="12" y="19">3 · Risk indicator</text><text class="lbl" x="12" y="34">no auth · unowned id · service_role</text><text class="lbl" x="12" y="47">prompt: data flow and sanitisation</text></g>
         <g class="node gate lit-6" transform="translate(340 258)"><rect width="260" height="56" rx="8"/><text class="ttl" x="12" y="19">4 · Import graph centrality</text><text class="lbl" x="12" y="34">helpers imported by many risky routes</text><text class="lbl" x="12" y="47">lib/db.ts ← 15 routes</text></g>
 
         <!-- gate → LLM wires -->
@@ -129,9 +129,9 @@
     <div class="scene-steps">
       <p class="step"><span class="n">1</span>The route mapper has listed every route, and the file index holds every source file. All of them are candidates for LLM review; none has been selected yet.</p>
       <p class="step"><span class="n">2</span><b>Financial operation, priority 0, always.</b> Payment, checkout, billing and subscription routes go first, no matter what else is true. Their prompt is tuned for race conditions, idempotency and price manipulation.</p>
-      <p class="step"><span class="n">3</span><b>Cross-scanner flagged, priority 1.</b> A route that two or more different SAST scanners already flagged is worth a second, smarter read.</p>
-      <p class="step"><span class="n">4</span><b>State mutation, priority 2.</b> POST, PUT, PATCH and DELETE routes change data, so they pass. GET routes do not qualify on this trigger.</p>
-      <p class="step"><span class="n">5</span><b>Risk indicator, priority 3.</b> A file containing <code>eval</code>, <code>exec</code> or raw SQL patterns passes. The injection-style prompt focuses on data flow and sanitisation.</p>
+      <p class="step"><span class="n">3</span><b>Cross-scanner flagged, priority 1.</b> A route that references a table or route named in an earlier SAST finding is worth a second, smarter read.</p>
+      <p class="step"><span class="n">4</span><b>State mutation, priority 2.</b> A route whose code both writes to the database and branches on a condition passes, whatever its HTTP method; plain reads do not qualify.</p>
+      <p class="step"><span class="n">5</span><b>Risk indicator, priority 3.</b> A route with no auth check, a user-supplied id without an ownership check, or <code>service_role</code> usage passes.</p>
       <p class="step"><span class="n">6</span><b>Import graph centrality, priority 4.</b> Not a route at all: <code>lib/db.ts</code> is imported by 15 already-selected routes, so a bug in it has a huge blast radius. It is sent regardless of its own content (next scene).</p>
       <p class="step"><span class="n">7</span>Two GET routes matched nothing and are skipped. Duplicates resolve to the higher-priority trigger, and if the file budget runs out the lower-priority routes are dropped first.</p>
     </div>
@@ -140,7 +140,7 @@
 
 <section id="centrality">
   <h2>Import graph centrality</h2>
-  <p class="prose">The other four triggers look at a route's own pattern or content. This one looks at the shape of the codebase: a module dependency graph is built, and non-route files with high fan-in from already-selected routes are reviewed too.</p>
+  <p class="prose">The route-based triggers look at a route's own pattern or content. This one looks at the shape of the codebase: a module dependency graph is built, and non-route files with high fan-in from already-selected routes are reviewed too.</p>
 
   <div class="scene" id="centrality" data-scene data-interval="2800">
     <figure class="stage">
@@ -473,7 +473,7 @@ const task = await db.query(
     </table>
   </div>
   <div class="grid-2">
-    <div class="callout note"><div class="label">Deliberately not reviewed</div><p>Routes that match none of the five triggers are not sent to the LLM. GET routes with no risk pattern, no cross-scanner flag and no financial keywords stay out, which is how the token budget holds. Fix generation only considers critical and high findings that have a source code location.</p></div>
+    <div class="callout note"><div class="label">Deliberately not reviewed</div><p>Routes that match none of the triggers are not sent to the LLM. Routes with no risk pattern, no cross-scanner flag, no financial keywords and no write-plus-branch logic stay out, which is how the cost holds. Fix generation only considers findings that have a source code location, and only critical and high ones (the <code>fix</code> command's <code>--severity</code> can add medium).</p></div>
     <div class="callout note"><div class="label">The MCP uses the same generator</div><p>The <code>fix</code> MCP tool calls the same <code>FixGenerator</code> and returns the diff for the host editor to apply instead of writing files. How that loop works is on <a href="mcp-loop.html">The MCP remediation loop</a>.</p></div>
   </div>
 </section>

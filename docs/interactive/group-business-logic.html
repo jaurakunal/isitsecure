@@ -94,7 +94,7 @@
           </g>
           <g class="only-3 mono">
             <text class="lbl" x="16" y="62">claim: this route lets the client set what the server should own</text>
-            <text x="16" y="92">route source picked by one of five triggers</text>
+            <text x="16" y="92">route source picked by the review triggers</text>
             <text x="16" y="116">amount: price,   // from request.json()</text>
             <text x="16" y="140">model reply: CRITICAL, price manipulation</text>
             <text class="t-attacker" x="16" y="176">FLAG: the model's reading of the code</text>
@@ -125,7 +125,7 @@
     <div class="scene-steps">
       <p class="step"><span class="n">1</span>Four scanners, one idea. Each turns a rule the business assumed into a claim and looks for evidence against it. <b>What differs is who supplies the evidence.</b></p>
       <p class="step"><span class="n">2</span><b>Race conditions.</b> Ten identical mutations at once over one connection. If two or more come back 200, 201 or 204, the check-then-act gap is real. A counted result, no model.</p>
-      <p class="step"><span class="n">3</span><b>LLM code review.</b> A model reads high-priority route source, selected by five triggers, and flags code that trusts the client. It sends nothing to the app. This is the one that catches <code>amount: price</code>.</p>
+      <p class="step"><span class="n">3</span><b>LLM code review.</b> A model reads high-priority route source, selected by the review triggers, and flags code that trusts the client. It sends nothing to the app. This is the one that catches <code>amount: price</code>.</p>
       <p class="step"><span class="n">4</span><b>LLM business logic.</b> A model writes an attack plan from source, the scanner runs it with two real logins, and a second model call judges the responses. Only a confirmed verdict becomes a finding.</p>
       <p class="step"><span class="n">5</span><b>Semantic rule verifier.</b> A model reads RLS migrations and Firebase rules for logic errors the structural analyzers cannot see. Every finding gets a fixed 0.70 confidence. Without an API key it does not run.</p>
     </div>
@@ -138,11 +138,11 @@
     <a class="card" href="race-conditions.html">
       <div class="thumb"><svg viewBox="0 0 200 80"><text x="10" y="26">A</text><text x="10" y="58">B</text><path class="w" d="M24 22H190M24 54H190"/><circle class="fi" cx="60" cy="22" r="4"/><circle class="fi" cx="64" cy="54" r="4"/><circle class="fr" cx="150" cy="22" r="4"/><circle class="fr" cx="154" cy="54" r="4"/><text x="100" y="42" text-anchor="middle" class="fr">both read 100</text></svg></div>
       <h3>Race conditions</h3><p>Check-then-act on two lanes, N identical requests over one connection, and the row lock or atomic update that closes the gap.</p>
-      <div class="foot"><span class="pill dast">DAST</span><span class="pill high">High</span><span class="pill crit">Critical</span><span class="pill">race-condition-scanner.md</span></div>
+      <div class="foot"><span class="pill dast">DAST</span><span class="pill high">High</span><span class="pill">race-condition-scanner.md</span></div>
     </a>
     <a class="card" href="llm-review-and-fixes.html">
       <div class="thumb"><svg viewBox="0 0 200 80"><text x="12" y="26">amount: price</text><text x="12" y="48" class="fr">← client-controlled</text><g class="n"><rect x="130" y="14" width="60" height="18" rx="3"/></g><text x="160" y="27" text-anchor="middle">CRITICAL</text><text x="12" y="70" class="fs">+ PLAN_PRICES[plan]</text></svg></div>
-      <h3>LLM review and AI fixes</h3><p>Five triggers choose which routes are worth the tokens, what the model catches that regex cannot, and the three ways a fix is delivered.</p>
+      <h3>LLM review and AI fixes</h3><p>Several triggers choose which routes and files are worth the tokens, what the model catches that regex cannot, and the three ways a fix is delivered.</p>
       <div class="foot"><span class="pill llm">LLM</span><span class="pill">Varies</span><span class="pill">llm-code-reviewer.md</span></div>
     </a>
     <a class="card" href="llm-business-logic.html">
@@ -153,7 +153,7 @@
     <a class="card" href="semantic-rule-verifier.html">
       <div class="thumb"><svg viewBox="0 0 200 80"><text x="10" y="26">USING (auth.uid()</text><text x="10" y="44" class="fr">   = id)</text><text x="10" y="64" class="fs">   = user_id ✓</text><circle class="fr" cx="176" cy="40" r="5"/></svg></div>
       <h3>Semantic rule verifier</h3><p>A model reads RLS migrations and Firebase rules for logic errors: the wrong column, uneven coverage, broken tenant scoping. Parsed, capped, fixed at 0.70 confidence.</p>
-      <div class="foot"><span class="pill llm">LLM</span><span class="pill sast">SAST</span><span class="pill crit">Critical</span><span class="pill">semantic-rule-verifier.md</span></div>
+      <div class="foot"><span class="pill llm">LLM</span><span class="pill sast">SAST</span><span class="pill">Low to Critical</span><span class="pill">semantic-rule-verifier.md</span></div>
     </a>
   </div>
 </section>
@@ -163,10 +163,10 @@
   <div class="table-wrap"><table>
     <thead><tr><th>Scanner</th><th>What it looks at</th><th>What it reports</th><th>Severity</th><th>Needs</th></tr></thead>
     <tbody>
-      <tr><td><a href="race-conditions.html">Race condition scanner</a></td><td>Mutations the authenticated crawl saw succeed with a body</td><td>An endpoint where two or more identical concurrent requests succeed</td><td>High to Critical</td><td>URL; credentials; special DAST scanner</td></tr>
-      <tr><td><a href="llm-review-and-fixes.html">LLM code reviewer</a></td><td>High-priority route source chosen by five triggers</td><td>Missing ownership checks, price manipulation, payment races, auth bypass, business rule violations</td><td>Varies</td><td>Repository; an LLM API key (about $5 to $8 per code-only scan, per its doc)</td></tr>
+      <tr><td><a href="race-conditions.html">Race condition scanner</a></td><td>Mutations the authenticated crawl saw succeed with a body</td><td>An endpoint where two or more identical concurrent requests succeed</td><td>High</td><td>URL; credentials; special DAST scanner</td></tr>
+      <tr><td><a href="llm-review-and-fixes.html">LLM code reviewer</a></td><td>High-priority route source chosen by the review triggers</td><td>Missing ownership checks, price manipulation, payment races, auth bypass, business rule violations</td><td>Varies</td><td>Repository; an LLM API key (about $5 to $8 per code-only scan, per its doc)</td></tr>
       <tr><td><a href="llm-business-logic.html">LLM business logic scanner</a></td><td>Up to 30 business-logic source files, up to 50 discovered endpoints, then live responses</td><td>Attack plans the judge confirmed against the running app</td><td>High to Critical (judge's choice)</td><td>Repository; URL; two logins; authenticated or full mode; an LLM API key</td></tr>
-      <tr><td><a href="semantic-rule-verifier.html">Semantic rule verifier</a></td><td>.sql files with RLS policies; firestore.rules, storage.rules, database.rules.json</td><td>Logical flaws in security rules, as RLS misconfiguration</td><td>Critical to High per its doc</td><td>Repository; an LLM API key</td></tr>
+      <tr><td><a href="semantic-rule-verifier.html">Semantic rule verifier</a></td><td>.sql files with RLS policies; firestore.rules, storage.rules, database.rules.json</td><td>Logical flaws in security rules, as RLS misconfiguration</td><td>Low to Critical (the model's choice)</td><td>Repository; an LLM API key</td></tr>
     </tbody>
   </table></div>
 </section>

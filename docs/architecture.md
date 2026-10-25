@@ -2,31 +2,31 @@
 
 isitsecure is a unified security scanning pipeline that runs SAST, DAST, and LLM-powered analysis in a single orchestrated flow. This document explains how the pieces fit together.
 
-## The 10-Phase Pipeline
+## The Scan Pipeline
 
-Every scan follows this sequence. Phases are skipped automatically based on scan mode and available inputs.
+Every scan follows this sequence: `agent.scan()` runs 18 phase methods (the numbered phases below, including the .x sub-phases) and then builds the report (Phase 10), 19 steps in all; with fix generation the list below has 20 entries. Phases are skipped automatically based on scan mode and available inputs. Phase 11 (fix generation) is not part of `scan()`; it runs afterwards, on request.
 
 ```
 Phase 1:  URL Ingestion          ─── Playwright captures HTML + JS bundles
 Phase 2:  Endpoint Discovery     ─── JS bundles + OpenAPI specs + HTML forms + active probing
 Phase 3:  Authenticated Crawl    ─── Browser login + BFS page discovery
 Phase 3.5: OOB Registration      ─── Setup blind SSRF/injection callbacks
-Phase 4:  DAST Scanners          ─── 16 scanners run in parallel (quick; deep adds 3)
+Phase 4:  DAST Scanners          ─── 16 scanners run in parallel (quick; deep adds 3 = 19)
 Phase 5:  Authenticated DAST     ─── JWT, RLS, privilege escalation, cross-user IDOR
 Phase 5.5: Probe Analysis        ─── Cross-scanner pattern detection on HTTP pairs
 Phase 5.6: OOB Collection        ─── Poll for blind vulnerability callbacks
 Phase 6:  Repo Ingestion         ─── Clone + index repository
 Phase 6.5: LSP Initialization    ─── Start TypeScript Language Server
-Phase 7:  SAST Scanners          ─── 18 scanners run in parallel
+Phase 7:  SAST Scanners          ─── 18 scanners run in parallel (+1 LLM verifier with an API key)
 Phase 7.5: LSP Validation        ─── Trace auth flows, suppress false positives
 Phase 8:  LLM Code Review        ─── AI analyzes high-risk routes
-Phase 9:  Cross-Reference        ─── Match DAST findings to SAST findings
+Phase 9:  Cross-Reference        ─── Pair DAST and SAST findings by category
 Phase 9.1: SAST-Guided DAST     ─── Generate targeted tests from code findings
 Phase 9.2: LLM Business Logic    ─── AI plans business logic attacks
 Phase 9.4: Injection Adjudication ── AI drops heuristic injection false positives
 Phase 9.5: LLM Triage           ─── Deduplicate, enrich, prioritize, theme
 Phase 10: Report                 ─── Build DeepScanReport
-Phase 11: Fix Generation         ─── AI generates code patches (optional, --output fixes)
+Phase 11: Fix Generation         ─── AI generates code patches (separate step after scan(), --output fixes)
 ```
 
 ## How Each Phase Works
@@ -70,22 +70,21 @@ After the crawl, the orchestrator hands the captured auth (bearer token and/or s
 ### Phase 4–5: DAST Scanners
 
 16 standard scanners run in parallel at quick depth (deep adds 3 aggressive
-ones — rate-limit, auth-bypass, password-reset), each with per-scanner timeouts:
+ones — rate-limit, auth-bypass, password-reset — for 19), each with a hard
+per-scanner timeout (`ScannerTimeouts`, resolved in `agent.py`; any scanner
+not listed gets the 600s default):
 
-```
-┌──────────────────────────────────────────────────────┐
-│                  DAST Scanners (parallel)             │
-├──────────┬──────────┬──────────┬──────────┬──────────┤
-│ XSS      │ SQLi     │ CSRF     │ CORS     │ SSRF     │
-│ (3600s)  │ (5400s)  │ (600s)   │ (600s)   │ (600s)   │
-├──────────┼──────────┼──────────┼──────────┼──────────┤
-│ Headers  │ GraphQL  │ Upload   │ Redirect │ Session  │
-│ (600s)   │ (600s)   │ (600s)   │ (600s)   │ (600s)   │
-├──────────┼──────────┼──────────┼──────────┼──────────┤
-│ AuthByp  │ MassAsgn │ RateLimit│ PwdReset │ HTTPProbe│
-│ (1800s)  │ (600s)   │ (900s)   │ (600s)   │ (900s)   │
-└──────────┴──────────┴──────────┴──────────┴──────────┘
-```
+| Scanner | Hard timeout | Depth |
+|---|---|---|
+| SQLi / injection (`active_injection_scanner`) | 5400s | quick + deep |
+| XSS | 3600s hard cap; the scanner's own budget is 900s at quick, 3600s at deep | quick + deep |
+| Auth bypass | 1800s | deep only |
+| Rate limit | 900s | deep only |
+| HTTP probe | 900s | quick + deep |
+| CSRF, CORS, SSRF, headers, GraphQL, upload, open redirect, session, mass assignment, source map, mixed content, SRI, client exposure | 600s (default) | quick + deep |
+| Password reset | 600s (default) | deep only |
+
+The authenticated and special passes use their own limits: IDOR cross-user and privilege escalation 1800s, DOM XSS 1800s, SAST-guided DAST 1800s. On the SAST side the git-secret scanner has 90s and the Semgrep taint analyzer 150s; every other SAST scanner gets the 600s default.
 
 **Timeout isolation**: If one scanner hangs or crashes, the rest continue. `run_scanner_safe()` wraps every scanner with timeout + exception handling, and publishes its deadline so a scanner short of time returns what it found rather than being cancelled holding it.
 
@@ -157,19 +156,23 @@ Each trigger type gets a **specialized system prompt**. The financial operation 
 
 ### Phase 9: Cross-Referencing
 
-The cross-referencer matches DAST and SAST findings:
+The cross-referencer (`engine/cross_referencer.py`) pairs DAST and SAST findings by category:
 
 ```
 DAST: IDOR on /api/tasks/[id]    ──┐
-                                     ├── CONFIRMED: IDOR + missing auth on same endpoint
+                                     ├── CONFIRMED: IDOR + missing auth
 SAST: Missing auth on tasks/[id]  ──┘
 ```
 
-Matching rules:
-- IDOR (DAST) + Missing auth (SAST) → **Confirmed IDOR** (severity boosted)
-- RLS bypass (DAST) + Missing RLS (SAST) → **Confirmed RLS gap**
-- Injection (DAST) + Injection risk (SAST) → **Confirmed injection**
-- Secret exposure (DAST) + Secret in code (SAST) → **Confirmed secret leak**
+Matching is by finding category only; it does not compare endpoints or file paths (route-file-to-endpoint alignment happens later, in `guided_dast/route_endpoint_matcher.py`). Six category pairs (DAST + SAST) produce a confirmed finding:
+- IDOR + IDOR → **Confirmed IDOR**
+- IDOR + Auth weakness (missing auth) → **IDOR with missing auth**
+- RLS misconfiguration + RLS misconfiguration → **Confirmed RLS gap**
+- Exposed secrets + Exposed secrets → **Confirmed secret leak**
+- Exposed API endpoint + Auth weakness → **Confirmed exposed endpoint**
+- Injection risk + Injection risk → **Confirmed injection**
+
+Each SAST finding is consumed at most once (first match wins), and the confirmed finding takes the higher of the two severities boosted by one level (capped at critical). Confirmed findings are appended alongside the original DAST and SAST findings; the originals are not removed here.
 
 Cross-referenced findings get higher confidence and boosted severity because they're proven from both sides.
 
@@ -180,7 +183,7 @@ This is the core differentiator. Six strategies generate targeted DAST tests fro
 | Strategy | SAST Input | DAST Test Generated |
 |---|---|---|
 | **Auth Bypass** | Route missing auth check | Send unauthenticated request to the endpoint |
-| **IDOR Targeted** | Route missing ownership check | Swap path parameter ID and check response |
+| **IDOR Targeted** | Route missing ownership check | Request the endpoint's discovered URL with its own method; when a parameter name is known, send `{param: "00000000-0000-0000-0000-000000000001"}` as a JSON body (the path ID is not swapped) |
 | **Injection Targeted** | Raw SQL concatenation detected | Send `' OR '1'='1' --` to the flagged parameter |
 | **Mass Assignment** | Schema has `isAdmin` field | POST `{"isAdmin": true}` to the endpoint |
 | **Race Condition** | LLM flags TOCTOU | Fire 5 concurrent identical mutations |
@@ -215,7 +218,7 @@ The triage service processes all findings through four stages:
 - Assigns likelihood level (ACTIVELY_EXPLOITABLE, REQUIRES_AUTH, REQUIRES_ADMIN, THEORETICAL)
 - Derives priority (1–4) from impact × likelihood matrix
 
-**Stage 1.5: Calibration**
+**Stage 1.5: Calibration** (named `Phase 1.6` in `llm_triage_service.py`)
 - Auto-escalates HIGH → CRITICAL if impact is financial/data_breach AND likelihood is actively_exploitable
 
 **Stage 2: Owner summary**
@@ -368,9 +371,9 @@ It is off by default: it makes a scan write to whatever it is pointed at.
 DELETE is derived and deliberately never emitted — a scanner that destroys a
 record to prove it could is not worth the finding.
 
-Measured on Juice Shop, url-only: **24/45 → 30/45**, gaining CSRF, SSTI,
-three of the five XSS challenges and one IDOR, losing nothing. The scan takes
-about 48 minutes against 27, since the inventory doubles.
+Measured on Juice Shop, url-only: **22/45 → 28/45**, gaining CSRF, mass
+assignment, three XSS challenges (1/7 to 4/7) and one IDOR, losing nothing. The scan takes
+about 72 minutes against 27, since the inventory doubles.
 
 That number was not always what it looked like. The first measurement read
 neutral — six gained, six lost — and the six "lost" were `exposed_data` and
@@ -486,7 +489,7 @@ This powers both the CLI progress bar and the web UI's real-time dashboard.
 ```
 isitsecure/
 ├── engine/                     # The scanner engine
-│   ├── agent.py                # 10-phase orchestrator
+│   ├── agent.py                # 18-phase scan orchestrator (+ report)
 │   ├── factory.py              # Dependency injection + wiring
 │   ├── models.py               # DeepFinding, DeepScanReport, etc.
 │   ├── enums.py                # All enumerations

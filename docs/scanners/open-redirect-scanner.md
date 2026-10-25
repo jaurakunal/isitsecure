@@ -1,12 +1,12 @@
 # Open Redirect Scanner
 
-**Type:** DAST | **Severity:** Medium | **Category:** Auth Weakness
+**Type:** DAST | **Severity:** Medium–High | **Category:** Auth Weakness
 
 ## What It Does
 
-Tests URL parameters commonly used for redirects (`redirect_to`, `return_url`, `next`, `callback`, etc.) by injecting external URLs and checking if the server issues a 3xx redirect to the attacker's domain. Also checks for JavaScript/meta redirects in response bodies.
+Tests URL parameters commonly used for redirects (`redirect`, `return_url`, `next`, `callback`, etc.) by injecting external URLs and checking if the server issues a 3xx redirect to the attacker's domain (High, confidence 0.90). Also checks for JavaScript/meta redirects in response bodies (Medium, confidence 0.75).
 
-Payload types tested: absolute URLs (`https://evil.com`), protocol-relative (`//evil.com`), data URIs.
+Payload types tested: absolute URL (`https://evil.com`), protocol-relative (`//evil.com`), path confusion (`/\/evil.com`), and a null-byte host (`https://evil.com%00.target.com`). When the parameter already carries a value, an allowlist-bypass payload (`https://evil.com/?_=<existing value>`) is tried first. There is no data-URI payload.
 
 ## Why It Matters
 
@@ -23,10 +23,13 @@ Open redirects let attackers craft links that look legitimate (your domain) but 
 ## How to Fix
 
 ```typescript
-// GOOD: Only allow relative paths, block absolute URLs
+// GOOD: Resolve against your own origin, then compare origins.
+// A starts-with check on "http" or "//" is not enough: browsers treat a
+// backslash as a slash, so "/\/evil.com" slips past it.
 const redirectTo = searchParams.get("redirect_to") || "/"
-if (redirectTo.startsWith("http") || redirectTo.startsWith("//")) {
+const target = new URL(redirectTo, request.url)
+if (target.origin !== new URL(request.url).origin) {
   return NextResponse.redirect(new URL("/", request.url))
 }
-return NextResponse.redirect(new URL(redirectTo, request.url))
+return NextResponse.redirect(target)
 ```

@@ -559,8 +559,8 @@
   </div>
 
   <div class="callout note">
-    <div class="label">Where the design doc and the code differ</div>
-    <p><code>docs/mcp.md</code> lists <code>scan(path, mode="code-only", min_severity)</code>; the registered tool takes only <code>path</code> and <code>min_severity</code>, and the mode is always code-only. The <code>apply=true</code> fallback on <code>fix</code> is listed in the doc but not implemented. This page follows the code.</p>
+    <div class="label">Design doc versus code</div>
+    <p><code>docs/mcp.md</code> now lists <code>scan(path, min_severity)</code>, matching the registered tool: there is no mode argument and the scan is always code-only. The <code>apply=true</code> fallback on <code>fix</code> is still only a proposal in the doc and is not implemented.</p>
   </div>
 
   <h3>Open questions from the design doc</h3>

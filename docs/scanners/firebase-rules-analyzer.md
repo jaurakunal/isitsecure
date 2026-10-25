@@ -1,15 +1,19 @@
 # Firebase Rules Analyzer
 
-**Type:** SAST | **Severity:** Critical–High | **Category:** Auth Weakness
+**Type:** SAST | **Severity:** Critical–Medium | **Category:** Auth Weakness
 
 ## What It Does
 
-Analyzes Firebase security rules files (`firestore.rules`, `database.rules.json`, `storage.rules`) for:
+Analyzes Firebase security rules files (`firestore.rules`, `storage.rules`, `database.rules.json`, also under `firebase/`) as text for:
 
-1. **Wide-open rules** — `allow read, write: if true` grants all access to anyone without authentication
-2. **Missing rules for collections** — Firestore collections without explicit rules default to denied, but developers often add `if true` to "fix" access errors
-3. **Overly permissive conditions** — `if request.auth != null` allows ANY authenticated user to read/write ANY document (no ownership check)
-4. **Missing validation rules** — write rules that don't validate data structure or field types
+1. **Wide-open rules** — `allow read, write: if true` grants all access to anyone without authentication (Critical); `allow read: if true` or `allow write: if true` alone is High
+2. **Allow rules with no auth test** — an `allow read|write|create|update|delete:` line with no `request.auth != null` or `request.auth.uid` on that line or the two after it (High)
+3. **Broad wildcards** — `match /{document=**}` style catch-all matches (Medium)
+4. **Realtime Database open rules** — `".read": true` and `".write": true` in `database.rules.json` (Critical each)
+
+Only the literal `if true` form is treated as open, and multi-operation lines such as `allow read, write: if <expr>` are caught only when the expression is exactly `true`. Any mention of `request.auth != null` counts as auth: ownership is not checked.
+
+Not covered today: collections with no rule, `request.auth != null` with no ownership check, and missing data-validation rules.
 
 This scanner activates when Firebase is detected as the backend.
 

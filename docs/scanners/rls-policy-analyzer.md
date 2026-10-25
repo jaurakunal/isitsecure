@@ -1,18 +1,20 @@
 # RLS Policy Analyzer
 
-**Type:** SAST | **Severity:** Critical | **Category:** RLS Misconfiguration
+**Type:** SAST | **Severity:** Critical–Medium | **Category:** RLS Misconfiguration
 
 ## What It Does
 
 Scans Supabase migration SQL files for Row Level Security gaps:
 
-1. **Missing RLS** — Tables with `CREATE TABLE` but no `ALTER TABLE ... ENABLE ROW LEVEL SECURITY` are flagged. Without RLS, the Supabase anon key grants read/write access to every row.
+1. **Missing RLS** (Critical) — Tables with `CREATE TABLE` but no `ALTER TABLE ... ENABLE ROW LEVEL SECURITY` are flagged. Without RLS, the Supabase anon key grants read/write access to every row.
 
-2. **RLS Enabled but No Policies** — Tables where RLS is enabled but no `CREATE POLICY` statements exist. RLS without policies blocks all access (or allows all, depending on Supabase config).
+2. **RLS Enabled but No Policies** (High) — Tables where RLS is enabled but no `CREATE POLICY` statements exist. RLS without policies blocks all access (or allows all, depending on Supabase config).
 
-3. **Overly Permissive Policies** — Policies using `USING (true)` or `WITH CHECK (true)` that effectively disable RLS for that operation.
+3. **Overly Permissive Policies** (High) — Policies using `USING (true)` or `WITH CHECK (true)` that effectively disable RLS for that operation.
 
-The scanner parses migration files in `supabase/migrations/` and understands Supabase's policy syntax.
+4. **Policy never references `auth.uid()`** (Medium) — A policy whose `USING` / `WITH CHECK` expressions never call `auth.uid()` may allow cross-user access. Policies already flagged as permissive are not reported twice.
+
+The scanner parses every `.sql` file whose path contains "migration" (typically `supabase/migrations/`), collecting `CREATE TABLE`, `ENABLE ROW LEVEL SECURITY` and `CREATE POLICY` statements across all of them. It stops at the first problem per table: a table with no RLS gets only the missing-RLS finding, and a table with RLS but no policies gets only the no-policies finding.
 
 ## Why It Matters
 

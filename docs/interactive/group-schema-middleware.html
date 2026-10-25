@@ -191,27 +191,27 @@
     <a class="card" href="prisma-schema.html">
       <div class="thumb"><svg viewBox="0 0 200 80"><g class="n"><rect x="14" y="10" width="110" height="60" rx="4"/></g><text x="22" y="26">model User {</text><text x="26" y="42">id String</text><text x="26" y="58" class="fr">email String</text><circle class="fr" cx="164" cy="54" r="5"/><path class="w r" d="M126 54 H 156"/></svg></div>
       <h3>Prisma schema</h3><p>Four field checks on schema.prisma, and the camelCase spellings that decide what the matcher can see.</p>
-      <div class="foot"><span class="pill sast">SAST</span><span class="pill high">High</span><span class="pill">prisma-schema-analyzer.md</span></div>
+      <div class="foot"><span class="pill sast">SAST</span><span class="pill high">Low to High</span><span class="pill">prisma-schema-analyzer.md</span></div>
     </a>
     <a class="card" href="drizzle-schema.html">
       <div class="thumb"><svg viewBox="0 0 200 80"><text x="10" y="18">pgTable("users", {</text><text x="18" y="36" class="fr">api_key: text(</text><text x="18" y="52">tenant_id: —</text><text x="10" y="68">})</text><circle class="fr" cx="176" cy="32" r="5"/><circle class="fa" cx="176" cy="48" r="5"/></svg></div>
       <h3>Drizzle schema</h3><p>The same checks on pgTable definitions, run on the database column name, plus the tenant check across tables.</p>
-      <div class="foot"><span class="pill sast">SAST</span><span class="pill high">High</span><span class="pill">drizzle-schema-analyzer.md</span></div>
+      <div class="foot"><span class="pill sast">SAST</span><span class="pill high">Low to High</span><span class="pill">drizzle-schema-analyzer.md</span></div>
     </a>
     <a class="card" href="firebase-rules.html">
       <div class="thumb"><svg viewBox="0 0 200 80"><text x="10" y="20">match /users/{id} {</text><text x="20" y="40" class="fr">allow read, write:</text><text x="20" y="56" class="fr">if true;</text><text x="10" y="72">}</text><circle class="fr" cx="178" cy="46" r="6"/></svg></div>
       <h3>Firebase rules</h3><p>Open rules, missing auth tests and wildcards, line by line, and one rule evaluated against a request.</p>
-      <div class="foot"><span class="pill sast">SAST</span><span class="pill crit">Critical</span><span class="pill">firebase-rules-analyzer.md</span></div>
+      <div class="foot"><span class="pill sast">SAST</span><span class="pill crit">Medium to Critical</span><span class="pill">firebase-rules-analyzer.md</span></div>
     </a>
     <a class="card" href="middleware.html">
       <div class="thumb"><svg viewBox="0 0 200 80"><text x="10" y="16" class="fi">matcher /api/:path*</text><g class="n"><rect x="10" y="26" width="86" height="18" rx="3"/><rect x="104" y="26" width="86" height="18" rx="3"/></g><text x="16" y="39">/api/tasks</text><text x="110" y="39">/api/admin</text><circle class="fs" cx="86" cy="35" r="3"/><circle class="fr" cx="180" cy="35" r="3"/><path class="w s" d="M53 44 V 62"/><path class="w r" d="M147 44 V 62"/><text x="26" y="74" class="fs">covered</text><text x="114" y="74" class="fr">not covered</text></svg></div>
       <h3>Next.js middleware</h3><p>A matcher laid over the route tree: which API routes fall outside it, and which matcher shapes hide them.</p>
-      <div class="foot"><span class="pill sast">SAST</span><span class="pill high">High</span><span class="pill">middleware-analyzer.md</span></div>
+      <div class="foot"><span class="pill sast">SAST</span><span class="pill high">Low to High</span><span class="pill">middleware-analyzer.md</span></div>
     </a>
     <a class="card" href="express-middleware.html">
       <div class="thumb"><svg viewBox="0 0 200 80"><text x="10" y="22">app.get("/admin",</text><text x="10" y="40" class="fr">  getUsers)</text><text x="10" y="62" class="fs">app.get("/admin",</text><text x="10" y="74" class="fs">  requireAuth, ...)</text><circle class="fr" cx="170" cy="36" r="5"/><circle class="fs" cx="170" cy="64" r="5"/></svg></div>
       <h3>Express middleware</h3><p>Routes without a guard in their own arguments, weak token checks, and rate limit, header, CORS and tenant checks.</p>
-      <div class="foot"><span class="pill sast">SAST</span><span class="pill high">High</span><span class="pill">express-middleware-analyzer.md</span></div>
+      <div class="foot"><span class="pill sast">SAST</span><span class="pill high">Low to High</span><span class="pill">express-middleware-analyzer.md</span></div>
     </a>
   </div>
 </section>

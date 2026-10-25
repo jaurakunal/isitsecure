@@ -235,8 +235,8 @@ pip freeze &gt; requirements.txt
     </table>
   </div>
   <div class="callout note">
-    <div class="label">What it deliberately stays quiet about, and where it differs from the prose docs</div>
-    <p>The table is frozen in the source and was not updated against newer advisories; a package outside it is never reported, only its missing pin. Ranges with <code>&gt;=</code>, <code>~=</code> or <code>!=</code> are compared as plain versions. The scanner's own docstring lists <code>requirements/*.txt</code>, but the name test accepts only files whose name starts with <code>requirements</code>. Findings carry the file path and line number; the unpinned finding is LOW at 0.60, so the severity range is Critical to Low although the markdown says Critical to Medium. Some lines that are not plain pins also reach the unpinned branch: <code>requests[security]==2.0</code> (extras) and <code>git+https://…</code> are reported as unpinned <code>requests</code> and <code>git</code>. For broader Python coverage see <a href="osv-dependencies.html">OSV dependencies</a>, and for npm see <a href="npm-dependencies.html">npm dependencies</a>.</p>
+    <div class="label">What it deliberately stays quiet about</div>
+    <p>The table is frozen in the source and was not updated against newer advisories; a package outside it is never reported, only its missing pin. Ranges with <code>&gt;=</code>, <code>~=</code> or <code>!=</code> are compared as plain versions. The scanner's own docstring lists <code>requirements/*.txt</code>, but the name test accepts only files whose name starts with <code>requirements</code>. Findings carry the file path and line number; the unpinned finding is LOW at 0.60, so the severity range is Critical to Low. Some lines that are not plain pins also reach the unpinned branch: <code>requests[security]==2.0</code> (extras) and <code>git+https://…</code> are reported as unpinned <code>requests</code> and <code>git</code>. For broader Python coverage see <a href="osv-dependencies.html">OSV dependencies</a>, and for npm see <a href="npm-dependencies.html">npm dependencies</a>.</p>
   </div>
 </section>
 

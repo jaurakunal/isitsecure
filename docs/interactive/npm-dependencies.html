@@ -38,7 +38,7 @@
   <h1>npm Dependency Scanner</h1>
   <p class="lede">Your application is mostly other people's code. This scanner reads <code>package.json</code> from the repository root and every workspace, strips each version down to a bare number, and asks the OSV.dev vulnerability database whether that package at that version has a published advisory. It reads no lock file, and one advisory becomes one finding.</p>
   <div class="meta">
-    <span class="pill sast">SAST</span><span class="pill high">High–Critical</span><span class="pill">Dependency Vulnerability</span><span class="pill">needs api.osv.dev</span><span class="pill">200 packages max</span>
+    <span class="pill sast">SAST</span><span class="pill high">Low–Critical</span><span class="pill">Dependency Vulnerability</span><span class="pill">needs api.osv.dev</span><span class="pill">200 packages max</span>
   </div>
 </header>
 
@@ -286,8 +286,8 @@ npm install
     </table>
   </div>
   <div class="callout note">
-    <div class="label">Where the code differs from the prose docs</div>
-    <p>The markdown describes "npm audit advisories". The scanner does not run <code>npm audit</code>; it queries OSV.dev, and the configuration holds an "outdated package" title, a confidence of 0.50 and a lock-file error message that the scanner never uses. The file attached to a finding is found by checking which package name appears in the finding's title, so a short name that is contained in a longer one (<code>react</code> inside <code>react-dom</code>) can be attributed to the wrong manifest. The related <a href="java-dependencies.html">Java</a>, <a href="python-dependencies.html">Python</a> and <a href="osv-dependencies.html">OSV</a> scanners cover other ecosystems.</p>
+    <div class="label">Scope note</div>
+    <p>The scanner does not run <code>npm audit</code>; it queries OSV.dev, and the configuration holds an "outdated package" title, a confidence of 0.50 and a lock-file error message that the scanner never uses. The file attached to a finding is found by checking which package name appears in the finding's title, so a short name that is contained in a longer one (<code>react</code> inside <code>react-dom</code>) can be attributed to the wrong manifest. The batch endpoint normally returns only advisory ids, so the severity and summary fields the parser reads are usually absent and findings tend to land on the High default. The related <a href="java-dependencies.html">Java</a>, <a href="python-dependencies.html">Python</a> and <a href="osv-dependencies.html">OSV</a> scanners cover other ecosystems.</p>
   </div>
 </section>
 

@@ -248,7 +248,7 @@ export async function middleware(request: NextRequest) {
     <tbody>
       <tr><td>Input</td><td><code>middleware.ts</code> or <code>.js</code>, at the repo root or in <code>src/</code>, plus the route map. No network.</td></tr>
       <tr><td>Routes compared</td><td>API routes only (<code>app/api/**/route.ts</code> and <code>pages/api/**</code>). A page such as <code>/dashboard</code> is never in the list, so a matcher that misses a page is not reported.</td></tr>
-      <tr><td>Severity and confidence</td><td>No middleware: High 0.90. Uncovered route: Medium 0.85 each. Weak token check: Medium 0.75. Matcher bypass: Low 0.70 each. The markdown's single High rating describes the missing-file case.</td></tr>
+      <tr><td>Severity and confidence</td><td>No middleware: High 0.90. Uncovered route: Medium 0.85 each. Weak token check: Medium 0.75. Matcher bypass: Low 0.70 each.</td></tr>
       <tr><td>Wildcards understood</td><td>Only the <code>/:name*</code> form. A <code>:path+</code> or <code>:path?</code> segment is compared as literal text.</td></tr>
       <tr><td>Public routes</td><td>No allow-list. Login, register and health routes outside the matcher are reported like any other.</td></tr>
       <tr><td>Strong token check</td><td>Any of <code>getUser(</code>, <code>getSession(</code>, <code>auth()</code>, <code>verifyToken(</code>, <code>cookies().get</code>, <code>getToken(</code>, <code>createServerClient</code> and a few others. Note that <code>cookies().get</code> reads a cookie and counts as strong.</td></tr>

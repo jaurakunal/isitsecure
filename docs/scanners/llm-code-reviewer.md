@@ -13,17 +13,18 @@ Uses Claude or Gemini to analyze code for **business logic vulnerabilities** tha
 - **Auth bypass through alternative code paths** — the happy path is protected but error/edge paths skip auth
 - **Business rule violations** — coupons applied after payment, negative quantities, self-referrals
 
-**Not every route gets reviewed.** Five review triggers select high-priority routes to stay within token budget:
+**Not every route gets reviewed.** Six review triggers select high-priority routes and files. A route or file picked by a higher-priority trigger is not picked again, and the total is capped at 500 files of at most 50,000 characters each (there is no separate token cap):
 
 | Trigger | Priority | What It Selects |
 |---|---|---|
 | Financial Operation | 0 (always) | Payment, checkout, billing, subscription routes |
-| Cross-Scanner Flagged | 1 | Routes flagged by 2+ SAST scanners |
-| State Mutation | 2 | POST/PUT/PATCH/DELETE routes |
-| Risk Indicator | 3 | Routes with eval, exec, raw SQL patterns |
-| Import Graph Centrality | 4 | Shared helpers imported by many risky routes |
+| Cross-Scanner Flagged | 1 | Routes that reference a table or route named in a SAST finding |
+| State Mutation | 2 | Routes whose code has both a database mutation (`.insert(`, `.update(`, `.delete(`, `INSERT INTO`, etc.) and conditional logic (`if (`, `switch (`, etc.), whatever the HTTP method |
+| Risk Indicator | 3 | Routes with no auth check, user-supplied IDs without an ownership check, or `service_role` usage |
+| Import Graph Centrality | 4 | Non-route files imported by at least 2 already-selected routes (up to 10 files) |
+| Injection Pattern | 5 | Non-route files with SQL template literals, `innerHTML` assignments, `exec`/`spawn` calls or `fs` calls with variable paths (up to 15 files) |
 
-Each trigger type gets a **specialized system prompt** tuned for that vulnerability class.
+Financial, State Mutation, Import Graph Centrality and Injection Pattern selections get a **specialized system prompt** tuned for that vulnerability class; the other triggers use the general route-review prompt.
 
 ## Why It Matters
 

@@ -1,6 +1,6 @@
 # Semantic Rule Verifier
 
-**Type:** LLM-Powered | **Severity:** Critical–High | **Category:** RLS Misconfiguration
+**Type:** LLM-Powered | **Severity:** Low to Critical (set by the model, default Medium; confidence fixed at 0.70) | **Category:** RLS Misconfiguration
 
 ## What It Does
 
@@ -12,6 +12,8 @@ Uses AI to analyze Supabase RLS policies and Firebase security rules for **logic
 - **Tenant isolation errors** — multi-tenant policies that don't properly scope queries to the tenant
 
 The structural RLS Policy Analyzer checks *if* policies exist. This scanner checks *if the logic is correct*.
+
+It reviews `firestore.rules`, `storage.rules`, `database.rules.json`, and any `.sql` file containing `CREATE POLICY` or `ENABLE ROW LEVEL SECURITY`. Each file is sent to the LLM on its own (truncated at 50,000 characters, at most 7 findings kept per file).
 
 ## Why It Matters
 

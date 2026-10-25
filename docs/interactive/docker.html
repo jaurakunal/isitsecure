@@ -424,7 +424,7 @@ CMD ["node", "dist/index.js"]
       <tr><td>Compose port</td><td>container port 5432, 3306, 6379, 27017 or 9200 published</td><td>Low</td><td>0.75</td></tr>
     </tbody>
   </table></div>
-  <div class="callout note"><div class="label">Docs and code</div><p>The markdown lists <code>COPY . .</code> and <code>COPY .env</code> as a check. The code defines a pattern for <code>COPY . .</code> but nothing runs it, so those lines produce no finding today. The markdown quotes severity Medium to Low; the code reaches High (ENV secrets) and Critical (compose privileged mode). Findings carry the file path only, with no line number.</p></div>
+  <div class="callout note"><div class="label">Docs and code</div><p>The code defines a pattern for <code>COPY . .</code> but nothing runs it, so <code>COPY . .</code> and <code>COPY .env</code> produce no finding today. Severity reaches High (ENV secrets) and Critical (compose privileged mode). Findings carry the file path only, with no line number.</p></div>
 </section>
 
 <footer class="foot">

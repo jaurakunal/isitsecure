@@ -4,11 +4,10 @@
 
 ## What It Does
 
-Tests for Cross-Site Request Forgery by sending state-changing requests (POST, PUT, DELETE) with forged `Origin` headers and checking if the server accepts them. Also analyzes:
+Tests for Cross-Site Request Forgery by sending state-changing requests (POST, PUT, PATCH, DELETE) with a forged `Origin` and `Referer` (`https://evil-attacker.com`) and checking if the server accepts them. The probe sends an empty body and treats any 2xx response as acceptance, which is reported as High (confidence 0.90). Also analyzes:
 
-- **Cookie SameSite attribute** — auth cookies without `SameSite=Strict` or `SameSite=Lax` are vulnerable
-- **Hidden CSRF token fields** — checks if HTML forms include CSRF tokens
-- **Origin/Referer validation** — checks if the server rejects requests from unknown origins
+- **Cookie SameSite attribute** — cookies in the response snapshot with no `SameSite` attribute, or with `SameSite=None`, are reported as Medium (0.70)
+- **Hidden CSRF token fields** — checks whether POST forms on the scanned page include a hidden field with a known CSRF token name (`csrf_token`, `_csrf`, `authenticity_token`, `xsrf-token`, `token`, ...); a form without one is reported as Medium (0.85)
 
 ## Why It Matters
 

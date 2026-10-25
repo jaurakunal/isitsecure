@@ -84,7 +84,7 @@
         <g class="cls node lit-4" transform="translate(16 172)"><rect width="160" height="36" rx="6"/><text class="ttl" x="12" y="16">Command injection</text><text class="lbl" x="12" y="30">canary in the output</text></g>
         <g class="cls node lit-5" transform="translate(16 216)"><rect width="160" height="36" rx="6"/><text class="ttl" x="12" y="16">NoSQL injection</text><text class="lbl" x="12" y="30">operator broadens query</text></g>
         <g class="cls node lit-6 lit-7" transform="translate(16 260)"><rect width="160" height="36" rx="6"/><text class="ttl" x="12" y="16">XXE</text><text class="lbl" x="12" y="30">as body and as file</text></g>
-        <g class="cls node lit-8" transform="translate(16 304)"><rect width="160" height="36" rx="6"/><text class="ttl" x="12" y="16">SSTI</text><text class="lbl" x="12" y="30">{{7*7}} → 49</text></g>
+        <g class="cls node lit-8" transform="translate(16 304)"><rect width="160" height="36" rx="6"/><text class="ttl" x="12" y="16">SSTI</text><text class="lbl" x="12" y="30">{{99991*7}} → 699937</text></g>
 
         <!-- lane headers -->
         <text class="eyebrow" x="196" y="76" style="font-size:10px">1 · REQUEST</text>
@@ -96,23 +96,23 @@
           <rect width="230" height="256" rx="8"/>
           <g class="only-1 mono">
             <text x="12" y="22">GET /rest/products/search</text>
-            <text x="12" y="38" class="t-attacker">?q='</text>
-            <text x="12" y="54" class="t-attacker">?q="1"="2"</text>
+            <text x="12" y="38" class="t-attacker">?q=1; SELECT 1--</text>
+            <text x="12" y="54" class="t-attacker">?q=' OR '1'='1</text>
             <text x="12" y="78" class="lbl">a stray quote breaks the SQL</text>
             <text x="12" y="92" class="lbl">that embeds the value</text>
           </g>
           <g class="only-2 mono">
             <text x="12" y="22">GET /api/users?id=1</text>
             <text x="12" y="36" class="lbl">baseline: a safe value, timed</text>
-            <text x="12" y="60" class="t-attacker">?id=1' OR SLEEP(5)--</text>
-            <text x="12" y="76" class="t-attacker">?id=1'; SELECT pg_sleep(5)--</text>
+            <text x="12" y="60" class="t-attacker">?id=1' OR SLEEP(3)--</text>
+            <text x="12" y="76" class="t-attacker">?id=1'; SELECT pg_sleep(3)--</text>
             <text x="12" y="100" class="lbl">one per dialect: MySQL,</text>
             <text x="12" y="114" class="lbl">PostgreSQL, MSSQL WAITFOR</text>
           </g>
           <g class="only-3 mono">
             <text x="12" y="22" class="lbl">a second, independent pair:</text>
             <text x="12" y="44">?id=1               0.19 s</text>
-            <text x="12" y="60" class="t-attacker">?id=1' OR SLEEP(5)--  5.22 s</text>
+            <text x="12" y="60" class="t-attacker">?id=1' OR SLEEP(3)--  3.22 s</text>
             <text x="12" y="84" class="lbl">same endpoint, same payload,</text>
             <text x="12" y="98" class="lbl">fresh timing</text>
           </g>
@@ -152,9 +152,9 @@
           </g>
           <g class="only-8 mono">
             <text x="12" y="22">GET /greet</text>
-            <text x="12" y="38" class="t-attacker">?name={{7*7}}</text>
-            <text x="12" y="62" class="lbl">also ${7*7}, &lt;%= 7*7 %&gt;,</text>
-            <text x="12" y="76" class="lbl">#{7*7} for other engines</text>
+            <text x="12" y="38" class="t-attacker">?name={{99991*7}}</text>
+            <text x="12" y="62" class="lbl">also ${99991*7}, &lt;%= 99991*7 %&gt;,</text>
+            <text x="12" y="76" class="lbl">#{99991*7} and more engines</text>
           </g>
         </g>
 
@@ -166,7 +166,7 @@
             <text x="12" y="38" class="t-attacker">SQLITE_ERROR: unrecognized</text>
             <text x="12" y="54" class="t-attacker">token: "'"</text>
             <text x="12" y="80" class="lbl">patterns from drivers and ORMs:</text>
-            <text x="12" y="94" class="lbl">psycopg2 · syntax error at or near</text>
+            <text x="12" y="94" class="lbl">PostgreSQL · syntax error at or near</text>
             <text x="12" y="108" class="lbl">MySQL · SQL syntax</text>
             <text x="12" y="122" class="lbl">sqlite3 · unrecognized token</text>
             <text x="12" y="136" class="lbl">Oracle · ORA-nnnnn</text>
@@ -176,14 +176,14 @@
           </g>
           <g class="only-2 mono">
             <text x="12" y="22">baseline    0.21 s</text>
-            <text x="12" y="38" class="t-attacker">injected    5.30 s</text>
-            <text x="12" y="54">delta       5.09 s</text>
+            <text x="12" y="38" class="t-attacker">injected    3.30 s</text>
+            <text x="12" y="54">delta       3.09 s</text>
             <text x="12" y="80" class="lbl">the bodies are identical:</text>
             <text x="12" y="94" class="lbl">nothing to read, only time</text>
           </g>
           <g class="only-3 mono">
-            <text x="12" y="22">delta #1    5.09 s</text>
-            <text x="12" y="38" class="t-attacker">delta #2    5.03 s</text>
+            <text x="12" y="22">delta #1    3.09 s</text>
+            <text x="12" y="38" class="t-attacker">delta #2    3.03 s</text>
             <text x="12" y="64" class="lbl">a one-off GC pause or load spike</text>
             <text x="12" y="78" class="lbl">would have given</text>
             <text x="12" y="94">delta #2    0.30 s</text>
@@ -216,7 +216,7 @@
           </g>
           <g class="only-8 mono">
             <text x="12" y="22">200 OK</text>
-            <text x="12" y="38" class="t-attacker">Hello 49</text>
+            <text x="12" y="38" class="t-attacker">Hello 699937</text>
             <text x="12" y="64" class="lbl">the template engine evaluated</text>
             <text x="12" y="78" class="lbl">the expression</text>
           </g>
@@ -237,7 +237,7 @@
           </g>
           <g class="only-2">
             <text x="12" y="22" class="lbl">rule: injected response at least</text>
-            <text x="12" y="36" class="lbl">5 s slower than the baseline</text>
+            <text x="12" y="36" class="lbl">2.5 s slower than the baseline</text>
             <text x="12" y="62" class="ttl t-accent">candidate, not reported yet</text>
             <text x="12" y="88" class="lbl">one measurement can be noise:</text>
             <text x="12" y="102" class="lbl">a GC pause, a load spike,</text>
@@ -288,21 +288,21 @@
             <text x="12" y="22" class="lbl">rule: the product appears, so</text>
             <text x="12" y="36" class="lbl">the template evaluated input</text>
             <text x="12" y="62" class="ttl t-attacker">SSTI</text>
-            <text x="12" y="88" class="lbl">{{7*7}} echoed unchanged:</text>
+            <text x="12" y="88" class="lbl">{{99991*7}} echoed unchanged:</text>
             <text x="12" y="102" class="lbl">not flagged</text>
           </g>
         </g>
       </svg>
     </figure>
     <div class="scene-steps">
-      <p class="step" data-on="oracleStep"><span class="n">1</span><b>Error-based SQLi.</b> A bare <code>'</code> and <code>"1"="2"</code> go into the parameter. The response is searched for SQL error patterns from raw drivers and from ORMs: psycopg2, MySQL, sqlite3's <code>unrecognized token</code>, Oracle <code>ORA-</code>, MSSQL, and SQLAlchemy's <code>OperationalError</code> and <code>ProgrammingError</code>, so an injection surfaces even behind an ORM.</p>
-      <p class="step" data-on="oracleStep"><span class="n">2</span><b>Time-based blind SQLi, first measurement.</b> The scanner times a safe value, then sends <code>SLEEP(5)</code> or <code>pg_sleep(5)</code>. A response at least 5 s slower is a candidate. Nothing is reported yet.</p>
+      <p class="step" data-on="oracleStep"><span class="n">1</span><b>Error-based SQLi.</b> Payloads such as <code>' OR '1'='1</code> and <code>1 UNION SELECT NULL--</code> go into the parameter. The response is searched for SQL error signatures from databases and ORMs: MySQL <code>SQL syntax</code>, PostgreSQL <code>syntax error at or near</code>, sqlite3's <code>unrecognized token</code>, Oracle <code>ORA-</code>, MSSQL, and the ORM error types <code>OperationalError</code> and <code>ProgrammingError</code>, so an injection surfaces even behind an ORM.</p>
+      <p class="step" data-on="oracleStep"><span class="n">2</span><b>Time-based blind SQLi, first measurement.</b> The scanner times a safe value, then sends <code>SLEEP(3)</code> or <code>pg_sleep(3)</code>. A response at least 2.5 s slower is a candidate. Nothing is reported yet.</p>
       <p class="step" data-on="oracleStep"><span class="n">3</span><b>Re-measure independently.</b> A second baseline and a second injected request are timed. <b>The finding is reported only if the delay reproduces.</b> A one-off GC pause, load spike or jitter fails the second pair and is dropped.</p>
       <p class="step" data-on="oracleStep"><span class="n">4</span><b>Command injection.</b> Shell metacharacters <code>;</code>, <code>|</code> and backticks carry an <code>echo</code> of a canary string. The canary must appear in the body while the literal <code>echo xss_cmd_test</code> does not, so a page that reflects its input is not mistaken for a shell.</p>
       <p class="step" data-on="oracleStep"><span class="n">5</span><b>NoSQL injection.</b> A control request uses a sentinel value that cannot match anything. Then <code>[$ne]=null</code> (and <code>$regex</code>, <code>$gt</code>) goes in, as a query parameter and as a JSON body. <b>Flag only if the operator response is 2xx, non-empty, and distinct from and larger than the control</b>: the backend applied a client-supplied operator and the response inflated with real records.</p>
       <p class="step" data-on="oracleStep"><span class="n">6</span><b>XXE as a request body.</b> An external entity pointing at <code>/etc/passwd</code> is posted with an XML content type on endpoints that advertise XML or are POST. File-system content in the response is the proof.</p>
       <p class="step" data-on="oracleStep"><span class="n">7</span><b>XXE as an uploaded file.</b> The same payload is sent as <code>xxe.xml</code> and <code>xxe.svg</code> on upload-shaped paths, because an endpoint that accepts XML as a file rejects it as a body. This delivery is not gated on the recorded HTTP method: discovery records most endpoints as GET, and an upload endpoint is worth probing either way.</p>
-      <p class="step" data-on="oracleStep"><span class="n">8</span><b>SSTI.</b> <code>{{7*7}}</code> goes in; if <code>49</code> comes back, the template engine evaluated the input. An unchanged echo is not a finding.</p>
+      <p class="step" data-on="oracleStep"><span class="n">8</span><b>SSTI.</b> <code>{{99991*7}}</code> goes in (plus the same expression in other engines' syntax); if <code>699937</code> comes back, the template engine evaluated the input. An unchanged echo is not a finding.</p>
     </div>
   </div>
 </section>
@@ -346,7 +346,7 @@
         <g class="node card c3 lit-3" transform="translate(358 86)">
           <rect width="584" height="56" rx="8"/>
           <text class="ttl" x="12" y="20">Query parameter</text>
-          <text class="mono" x="12" y="42">GET /rest/products/search?q=' OR SLEEP(5)--   ·   GET endpoints</text>
+          <text class="mono" x="12" y="42">GET /rest/products/search?q=' OR SLEEP(3)--   ·   GET endpoints</text>
         </g>
 
         <path class="wire card c4" d="M320 180 H 356" marker-end="url(#arrI2)"/>
@@ -566,8 +566,8 @@ const ALLOWED_STATUSES = [<span class="s">"pending"</span>, <span class="s">"in_
 <script src="assets/isdoc.js"></script>
 <script>
 (function () {
-  const REQ = ["?q='", "' OR SLEEP(5)--", "' OR SLEEP(5)-- again", "; echo xss_cmd_test", "user[$ne]=null", "<!ENTITY xxe SYSTEM …>", "file=xxe.svg", "{{7*7}}"];
-  const RES = ["500 · unrecognized token", "5.30 s", "5.22 s", "xss_cmd_test", "9,870 b", "root:x:0:0", "root:x:0:0", "Hello 49"];
+  const REQ = ["?q=' OR '1'='1", "' OR SLEEP(3)--", "' OR SLEEP(3)-- again", "; echo xss_cmd_test", "user[$ne]=null", "<!ENTITY xxe SYSTEM …>", "file=xxe.svg", "{{99991*7}}"];
+  const RES = ["500 · unrecognized token", "3.30 s", "3.22 s", "xss_cmd_test", "9,870 b", "root:x:0:0", "root:x:0:0", "Hello 699937"];
   window.oracleStep = function (scene, i, el) {
     const svg = el.querySelector("svg"); IsDoc.clearPackets(svg);
     IsDoc.packet(svg, svg.querySelector("#ireq"), { cls: "f-attacker", label: REQ[i - 1], duration: 900 });

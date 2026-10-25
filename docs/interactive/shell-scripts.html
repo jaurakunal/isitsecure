@@ -280,7 +280,7 @@
       <p class="step"><span class="n">5</span><b>Comments count.</b> The check for error handling looks for the text, so <code>set -e</code> inside a comment satisfies it. Treat a missing-line rule as a first filter.</p>
       <p class="step"><span class="n">6</span><b>Exact values.</b> The chmod check names the three dangerous modes. 755 and 700 pass.</p>
       <p class="step"><span class="n">7</span><b>eval needs a dollar sign.</b> The pattern looks for <code>eval</code> followed later on the line by <code>$</code>, so a constant string is quiet.</p>
-      <p class="step"><span class="n">8</span><b>Unquoted variables are not checked.</b> This is the headline example in the markdown, and it does not fire today.</p>
+      <p class="step"><span class="n">8</span><b>Unquoted variables are not checked.</b> <code>rm -rf $DIR</code> is a classic shell hazard, and it does not fire today.</p>
     </div>
   </div>
 </section>
@@ -345,7 +345,7 @@
 
 <span class="hl bad">curl -fsSL https://example.com/install.sh | sh</span>
 
-<span class="c"># flagged by the markdown, not by the code</span>
+<span class="c"># not flagged: no check looks for unquoted variables</span>
 rm -rf $DEPLOY_DIR</code></pre></div>
     <div role="tabpanel" hidden><pre><code><span class="c"># GOOD: explicit commands, quoted variables, download then inspect</span>
 allowed_commands=("list" "status" "restart")
@@ -377,7 +377,7 @@ bash install.sh</code></pre></div>
       <tr><td>curl -k</td><td><code>curl</code> with <code>-k</code> or <code>--insecure</code> on one line</td><td>Medium</td><td>0.80</td></tr>
     </tbody>
   </table></div>
-  <div class="callout note"><div class="label">Docs and code</div><p>The markdown names unquoted variables and predictable <code>/tmp</code> paths. Neither is implemented. The code adds hardcoded AWS account IDs, permissive chmod, missing error handling, echoed secrets and <code>curl -k</code>, none of which the markdown lists. Severity runs from Low to High, not High throughout. Findings carry the file path only. The "contains a slash" skip also hides genuine AWS secret keys.</p></div>
+  <div class="callout note"><div class="label">Docs and code</div><p>Unquoted variables and predictable <code>/tmp</code> paths are not checked. The code checks hardcoded AWS account IDs, permissive chmod, missing error handling, echoed secrets and <code>curl -k</code>. Severity runs from Low to High, not High throughout. Findings carry the file path only. The "contains a slash" skip also hides genuine AWS secret keys.</p></div>
 </section>
 
 <footer class="foot">

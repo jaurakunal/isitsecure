@@ -291,7 +291,7 @@ match /posts/{postId} {
     &amp;&amp; request.resource.data.title.size() &lt;= 200;
 }</code></pre></div>
   </div>
-  <div class="callout note"><div class="label">Scope note</div><p>The markdown lists four problems. The analyzer detects the first, wide-open rules, and in a narrower form the third: a missing auth test is reported, but <code>request.auth != null</code> with no ownership check is accepted. <b>Missing rules for a collection and missing validation rules are not checked.</b> The wildcard check and the Realtime Database check are in the code but not in the markdown.</p></div>
+  <div class="callout note"><div class="label">Scope note</div><p>A missing auth test is reported, but <code>request.auth != null</code> with no ownership check is accepted. <b>Missing rules for a collection and missing validation rules are not checked.</b></p></div>
 </section>
 
 <section id="limits">

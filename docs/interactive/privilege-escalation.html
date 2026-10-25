@@ -326,7 +326,7 @@ export async function GET(request: Request) {
       <tr><td>8 RPC call</td><td>Supabase; function names found in JS</td><td>200/201</td><td>High · 0.80</td></tr>
     </tbody>
   </table></div>
-  <div class="callout note"><div class="label">What the status code cannot tell</div><p>Probes 1 and 3 to 8 accept a 200 without checking the body, so a single-page app that answers 200 for every path, or a server that returns 204 without acting, can look like access. The confidence values are all below 1 for this reason. The scanner also trusts the session roles it is given: it assumes User A is the admin side, so with two ordinary accounts the differential compares two ordinary users.</p></div>
+  <div class="callout note"><div class="label">What the status code cannot tell</div><p>Probes 3, 4 and 6 to 8 accept a 200 without checking the body (probe 1 only checks it is not an empty list), so a single-page app that answers 200 for every path, or a server that returns 204 without acting, can look like access. The confidence values are all below 1 for this reason. The scanner also trusts the session roles it is given: it assumes User A is the admin side, so with two ordinary accounts the differential compares two ordinary users.</p></div>
 </section>
 
 <footer class="foot">

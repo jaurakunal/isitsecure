@@ -1,20 +1,26 @@
 # Docker Scanner
 
-**Type:** SAST | **Severity:** Medium–Low | **Category:** Infrastructure Misconfiguration
+**Type:** SAST | **Severity:** Low–Critical | **Category:** Infrastructure Misconfiguration
 
 ## What It Does
 
-Analyzes Dockerfiles for security best practices:
+Analyzes Dockerfiles (`Dockerfile`, `Dockerfile.dev`/`.prod`/`.staging`) and Docker Compose files (`docker-compose[.dev|.prod].yml/.yaml`, `compose.yml/.yaml`) for security best practices. The root-user and HEALTHCHECK checks are skipped for any path containing "dev". Dockerfile checks:
 
 1. **Running as root** — No `USER` directive means the container runs as root. If the container is compromised, the attacker has root access.
 
 2. **Unpinned base image** — Using `FROM node:latest` instead of `FROM node:20.11-alpine`. The `:latest` tag can change unexpectedly, introducing vulnerabilities or breaking changes.
 
-3. **Sensitive files copied** — `COPY . .` or `COPY .env .env` copies secrets into the image. Anyone who pulls the image can extract them.
+3. **Exposed sensitive ports** — `EXPOSE 5432` (PostgreSQL) or `EXPOSE 6379` (Redis) suggests the database runs in the same container, which is an anti-pattern. Also SSH, MySQL, MongoDB, Elasticsearch, Memcached and the Docker daemon ports.
 
-4. **Exposed sensitive ports** — `EXPOSE 5432` (PostgreSQL) or `EXPOSE 6379` (Redis) suggests the database runs in the same container, which is an anti-pattern.
+4. **No HEALTHCHECK** — Without a health check, orchestrators can't detect when the container is unhealthy.
 
-5. **No HEALTHCHECK** — Without a health check, orchestrators can't detect when the container is unhealthy.
+5. **Secrets in `ENV`** — an `ENV` name containing PASSWORD, SECRET, KEY or TOKEN with a literal value is stored in the image layers (High, one finding per file).
+
+6. **`ADD` with a remote URL** — `ADD https://...` pulls unverified bytes into the image at build time (Medium).
+
+Docker Compose checks: default or short (8 characters or fewer) `PASSWORD`/`PASSWD` values (Medium), `privileged: true` (Critical), and database ports published to the host such as `5432:5432` (Low).
+
+Not covered today: `COPY . .` and `COPY .env` are not flagged, so use a `.dockerignore` yourself.
 
 ## Why It Matters
 

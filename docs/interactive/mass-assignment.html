@@ -270,7 +270,7 @@ await db.update(<span class="s">"profiles"</span>, userId, allowedUpdate)</code>
 
 <section id="limits">
   <h2>Limits</h2>
-  <div class="callout note"><div class="label">What a finding means</div><p>The scanner checks reflection in the reply. It does not fetch the record afterwards to see whether the value was stored, and the probe itself is a real POST, PUT or PATCH that may create or change a record. The severity is always High at confidence 0.85; the markdown lists High to Critical, but the code does not vary it by field.</p></div>
+  <div class="callout note"><div class="label">What a finding means</div><p>The scanner checks reflection in the reply. It does not fetch the record afterwards to see whether the value was stored, and the probe itself is a real POST, PUT or PATCH that may create or change a record. The severity is always High at confidence 0.85, whatever the field.</p></div>
   <div class="table-wrap"><table>
     <thead><tr><th>Setting</th><th>Value</th></tr></thead>
     <tbody>

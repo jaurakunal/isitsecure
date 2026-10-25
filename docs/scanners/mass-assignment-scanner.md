@@ -1,18 +1,18 @@
 # Mass Assignment Scanner
 
-**Type:** DAST | **Severity:** High–Critical | **Category:** Privilege Escalation
+**Type:** DAST | **Severity:** High | **Category:** Privilege Escalation
 
 ## What It Does
 
-Sends POST/PATCH requests with extra fields that shouldn't be accepted — `is_admin`, `role`, `price`, `balance`, `permissions` — and checks if the server accepts them (returns 2xx with the field present in the response).
+Sends POST/PUT/PATCH requests to every discovered state-changing endpoint, one extra field per request, from a list of seven: `role=admin`, `is_admin=true`, `is_verified=true`, `email_verified=true`, `plan=enterprise`, `credits=99999`, `permissions=all`. It checks if the server accepts them (2xx with the field present in the response). Every finding is High (confidence 0.85); the severity does not vary by field.
 
-Also tests Supabase-specific escalation fields via the REST API.
+When the URL contains `supabase` or `rest/v1`, the list is replaced by three fields: `role`, `is_admin` and `stripe_customer_id`.
 
 ### Where it looks in the response
 
 The injected field is searched for **anywhere in the response body**, not just at the top level. Most APIs wrap the object they just created in an envelope — `{"status": "success", "data": {...}}`, `{"result": {...}}`, JSON:API's `{"data": {"attributes": {...}}}` — and a top-level-only check reads every one of those as "not reflected". That is how a confirmed, reproducible mass assignment reports as clean.
 
-The value still has to match: finding `role` nested somewhere proves nothing if it came back as `customer`.
+The value still has to match: finding `role` nested somewhere proves nothing if it came back as `customer`. The search goes up to 8 levels deep, and a string `"true"` does not match a boolean `true`. The scanner does not read the record back afterwards to confirm it was stored; reflection in the reply is the only evidence.
 
 ### What it does not do yet
 

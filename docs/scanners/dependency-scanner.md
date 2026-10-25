@@ -1,15 +1,16 @@
 # Dependency Scanner
 
-**Type:** SAST | **Severity:** High–Critical | **Category:** Dependency Vulnerability
+**Type:** SAST | **Severity:** Low–Critical (High when unknown) | **Category:** Dependency Vulnerability
 
 ## What It Does
 
-Reads `package.json` and checks every dependency version against known vulnerability databases. Flags packages with published CVEs (Common Vulnerabilities and Exposures).
+Reads `package.json` (the root and every workspace; `dependencies` and `devDependencies`) and checks each dependency version against the OSV.dev vulnerability database. Flags packages with published advisories (CVEs and GHSA entries).
 
-The scanner identifies:
-- **Critical CVEs** — Remote code execution, authentication bypass
-- **High CVEs** — Information disclosure, denial of service
-- **Package-specific advisories** — npm audit advisories
+How it works:
+- Each version is reduced to a bare number by stripping leading `^ ~ > = <` and spaces. No lockfile is read and `npm audit` is not run, so transitive dependencies are not checked.
+- Packages are sent to `https://api.osv.dev/v1/querybatch` in batches of 100 (30 s timeout), capped at 200 packages. The scan needs outbound HTTPS to api.osv.dev; offline it reports nothing.
+- Each advisory returned becomes one finding (confidence 0.95).
+- Severity comes from the first `severity[]` score if it is a plain number (9.0+ Critical, 7.0+ High, 4.0+ Medium, else Low), otherwise from `database_specific.severity` (CRITICAL, HIGH, MODERATE/MEDIUM, LOW). A CVSS vector string is not decoded, and anything unreadable defaults to High.
 
 ## Why It Matters
 

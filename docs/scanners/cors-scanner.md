@@ -4,7 +4,7 @@
 
 ## What It Does
 
-Tests Cross-Origin Resource Sharing configuration by sending requests with forged `Origin` headers:
+Tests Cross-Origin Resource Sharing configuration by sending GET requests with forged `Origin` headers. One endpoint is tested per distinct two-segment path prefix (for example `/api/users`), and each endpoint is probed with three origins in order: `https://evil.com`, `null`, and `https://{host}.evil.com` (a suffix-match bypass of the target's own hostname). The first response that matches one of the rules below ends testing for that endpoint, so at most one finding is reported per endpoint:
 
 1. **Wildcard + Credentials** — Sends `Origin: https://evil.com` and checks if the response has `Access-Control-Allow-Origin: *` with `Access-Control-Allow-Credentials: true`. This is the most dangerous combo — any website can read authenticated responses. **Severity: Critical.**
 
@@ -13,6 +13,8 @@ Tests Cross-Origin Resource Sharing configuration by sending requests with forge
 3. **Null Origin Allowed** — Sends `Origin: null` (used by sandboxed iframes). If accepted, attackers can use sandboxed iframes to steal data. **Severity: High.**
 
 4. **Wildcard Without Credentials** — `Access-Control-Allow-Origin: *` without credentials. Less dangerous but still allows any site to read public responses. **Severity: Medium.**
+
+The `https://{host}.evil.com` suffix-bypass probe has no rule of its own: if the server echoes it back, it is reported under rule 2 (arbitrary origin reflected).
 
 ## Why It Matters
 

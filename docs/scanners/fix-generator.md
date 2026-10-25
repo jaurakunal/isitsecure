@@ -4,9 +4,9 @@
 
 ## What It Does
 
-Generates code patches for security findings using LLM. For each critical and high finding that has a source code location:
+Generates code patches for security findings using LLM. For each critical and high finding that has a source code location (the `fix` command's `--severity` can add medium):
 
-1. Reads the full source file
+1. Reads the full source file (files over 50,000 bytes are skipped)
 2. Sends the finding details + file content to the LLM with a security-aware system prompt
 3. Parses the LLM response to extract the fixed code
 4. Generates a unified diff between original and fixed code

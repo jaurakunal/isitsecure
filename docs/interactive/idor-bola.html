@@ -39,7 +39,7 @@
   <h1>IDOR and Cross-User BOLA</h1>
   <p class="lede">An insecure direct object reference is an id in a URL that the server looks up without asking who is asking. isitsecure probes ids four ways with no credentials, which can only produce leads, and then logs in as two users so that User B can try to read and write User A's real objects. That second pass is the only one that confirms anything.</p>
   <div class="meta">
-    <span class="pill dast">DAST</span><span class="pill high">High</span><span class="pill crit">Critical</span><span class="pill">IDOR</span><span class="pill">BOLA</span>
+    <span class="pill dast">DAST</span><span class="pill med">Medium</span><span class="pill high">High</span><span class="pill crit">Critical</span><span class="pill">IDOR</span><span class="pill">BOLA</span>
   </div>
 </header>
 
@@ -254,14 +254,14 @@
         <g class="only-1" transform="translate(20 236)"><text>The owner read is the reference. Everything later is compared against this exact body.</text></g>
         <g class="only-2" transform="translate(20 236)"><text><tspan class="t-attacker" style="font-weight:600">Guard 1.</tspan> If a request with no auth gets through, the endpoint is simply public and the cross-user finding is suppressed.</text><text class="lbl" x="0" y="20">That is how /api/Products/{id} on a shop stays out of the report.</text></g>
         <g class="only-3" transform="translate(20 236)"><text>B's token reaches A's URL. A 2xx makes it a candidate, a 4xx ends the probe. Writes only need to get past access control here.</text></g>
-        <g class="only-4" transform="translate(20 236)"><text><tspan class="t-attacker" style="font-weight:600">Guard 2.</tspan> B's response must contain A's data. If the bodies differ, the id was ignored or coerced to B's own record: caller-scoped, not IDOR.</text><text class="lbl" x="0" y="20">Only the equal case becomes a finding: CONFIRMED, confidence 0.95.</text></g>
+        <g class="only-4" transform="translate(20 236)"><text><tspan class="t-attacker" style="font-weight:600">Guard 2.</tspan> B's response must equal A's body. If the bodies differ, the id was ignored or coerced to B's own record: caller-scoped, not IDOR.</text><text class="lbl" x="0" y="20">Only the equal case becomes a finding: CONFIRMED, confidence 0.95.</text></g>
       </svg>
     </figure>
     <div class="scene-steps">
       <p class="step"><span class="n">1</span><b>Owner baseline.</b> A reads the object with its own token. The response must be a 2xx carrying data; this body is what B's will be compared against.</p>
       <p class="step"><span class="n">2</span><b>Anonymous-access guard.</b> The same URL is requested with no auth at all, before B tries. If that returns anything but 401 or 403 the resource is public, so a cross-user hit would be meaningless and the finding is suppressed.</p>
       <p class="step"><span class="n">3</span><b>Attacker probe.</b> B requests the URL. A 4xx ends it. A 2xx is only a candidate.</p>
-      <p class="step"><span class="n">4</span><b>Content-match guard.</b> B's body must equal A's body. <b>Flag only if the response differs from anonymous AND contains A's data</b>; an empty or generic body, or a body that is really B's own data, is dropped.</p>
+      <p class="step"><span class="n">4</span><b>Content-match guard.</b> B's body must equal A's body. <b>The comparison is exact equality of the two body texts</b> (not a search for A's values inside B's body). Any difference, including a changed timestamp or a request id, drops the candidate as caller-scoped data, so a real hit on a response that carries volatile fields can be missed. For writes only the 401/403 check applies.</p>
     </div>
   </div>
 </section>

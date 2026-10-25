@@ -7,11 +7,12 @@
 Scans Java/Kotlin dependency files for known vulnerable libraries:
 
 - **pom.xml** (Maven) — parses `<dependency>` blocks with groupId, artifactId, version
-- **build.gradle / build.gradle.kts** (Gradle) — parses `implementation`, `api`, `compile` declarations
+- **build.gradle / build.gradle.kts** (Gradle) — parses `implementation`, `api`, `compile`, `runtimeOnly` and `testImplementation` declarations written as `group:artifact:version` strings
 - Checks 12 common packages against a built-in CVE database
-- Skips property-referenced versions (`${version.property}`)
+- Maven: skips property-referenced versions (`${version.property}`) and dependencies with no version. Gradle: there is no `$` guard; an interpolated version simply fails the numeric comparison and is not reported
+- Every finding is Medium to Critical at confidence 0.85, and the fix suggestion is always "Upgrade {group:artifact} to the latest version". `struts2-core` has two ranges, so one old version can produce two findings
 
-Known vulnerability database includes: Log4j (Log4Shell), Apache Struts, Spring Boot, Spring Security, Jackson Databind, JJWT, Commons Text (Text4Shell), Commons IO, Guava, Tomcat, MySQL Connector.
+Known vulnerability database includes: Log4j (Log4Shell), Apache Struts, Spring Web MVC, Spring Boot, Spring Security, Jackson Databind, JJWT, Commons Text (Text4Shell), Commons IO, Guava, Tomcat, MySQL Connector.
 
 ## Why It Matters
 

@@ -184,7 +184,7 @@
     <a class="card" href="idor-bola.html">
       <div class="thumb"><svg viewBox="0 0 200 80"><text x="12" y="30">User B →</text><text x="76" y="30" class="fr">GET /api/tasks/42</text><text x="12" y="58">200</text><text x="40" y="58">{ owner: "user-a", …}</text><circle class="fr" cx="186" cy="54" r="5"/></svg></div>
       <h3>IDOR and cross-user BOLA</h3><p>Why an unauthenticated swap is only a lead, harvesting User A's real ids, the two guards that kill false positives, and mutation read-back.</p>
-      <div class="foot"><span class="pill dast">DAST</span><span class="pill high">High</span><span class="pill crit">Critical</span><span class="pill">idor-scanner.md</span></div>
+      <div class="foot"><span class="pill dast">DAST</span><span class="pill med">Medium</span><span class="pill high">High</span><span class="pill crit">Critical</span><span class="pill">idor-scanner.md</span></div>
     </a>
     <a class="card" href="rls-supabase.html">
       <div class="thumb"><svg viewBox="0 0 200 80"><g class="n"><rect x="30" y="10" width="140" height="60" rx="4"/></g><path class="w" d="M30 25H170M30 40H170M30 55H170"/><rect class="fs" x="31" y="26" width="138" height="13" opacity=".35"/><text x="100" y="22" text-anchor="middle" style="font-size:9px">rows</text><text x="100" y="36" text-anchor="middle" style="font-size:9px">auth.uid() = user_id</text></svg></div>
@@ -209,7 +209,7 @@
     <a class="card" href="body-param-fuzzer.html">
       <div class="thumb"><svg viewBox="0 0 200 80"><text x="12" y="24">{"item":"mug",</text><text x="12" y="42" class="fr"> "qty":"' OR '1'='1",</text><text x="12" y="60"> "__proto__":{…}}</text><circle class="fr" cx="182" cy="40" r="5"/><path class="w r" d="M150 40 H 176"/></svg></div>
       <h3>Body param fuzzer</h3><p>Captured authenticated writes replayed with one JSON field swapped: SQL error patterns, verbatim reflection, 5xx on a wrong type, and a prototype-pollution key accepted without a 400.</p>
-      <div class="foot"><span class="pill dast">DAST</span><span class="pill med">Medium</span><span class="pill crit">Critical</span><span class="pill">body-param-fuzzer.md</span></div>
+      <div class="foot"><span class="pill dast">DAST</span><span class="pill med">Medium</span><span class="pill high">High</span><span class="pill crit">Critical</span><span class="pill">body-param-fuzzer.md</span></div>
     </a>
   </div>
 </section>
@@ -219,7 +219,7 @@
   <div class="table-wrap"><table>
     <thead><tr><th>Scanner</th><th>What it looks at</th><th>What it reports</th><th>Severity</th><th>Needs</th></tr></thead>
     <tbody>
-      <tr><td><a href="idor-bola.html">IDOR scanner</a></td><td>Endpoints with ids; the ids User A owns, harvested during the crawl</td><td>User B reading or mutating User A's object; unauthenticated swaps as leads only</td><td>High to Critical</td><td>URL; credentials, a second account for cross-user; <code>--probe-writes</code> for the mutation path</td></tr>
+      <tr><td><a href="idor-bola.html">IDOR scanner</a></td><td>Endpoints with ids; the ids User A owns, harvested during the crawl</td><td>User B reading or mutating User A's object; unauthenticated swaps as leads only</td><td>Medium to Critical</td><td>URL; credentials, a second account for cross-user; <code>--probe-writes</code> for the mutation path</td></tr>
       <tr><td><a href="rls-supabase.html">RLS policy analyzer</a></td><td>Supabase migration SQL</td><td>Tables without Row Level Security or with permissive policies</td><td>Critical</td><td>Repository</td></tr>
       <tr><td><a href="rls-supabase.html">RLS deep scanner</a></td><td>Live Supabase REST with the anon key and both sessions</td><td>Anonymous and cross-user reads and writes the policies should block</td><td>Critical</td><td>URL; Supabase URL and anon key found in the JS; credentials</td></tr>
       <tr><td><a href="route-auth-lsp.html">Route auth analyzer</a></td><td>Every API route file and its handler; the guard's definition via LSP</td><td>Routes missing authentication or input validation</td><td>High</td><td>Repository; a language server for guard tracing (optional)</td></tr>
