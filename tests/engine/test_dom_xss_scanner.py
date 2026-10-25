@@ -405,3 +405,50 @@ class TestInteractiveInputVector:
             pytest.skip("chromium not available")
         hits = await _run_input_vector(self.NO_INPUT)
         assert hits == []
+
+
+# ---------------------------------------------------------------------------
+# Hook script form + canary escape classification (Playwright-free)
+# ---------------------------------------------------------------------------
+
+
+class TestHookScriptForm:
+    def test_script_is_invoked_iife(self) -> None:
+        """add_init_script evaluates source and never calls it: the script must
+        invoke itself or no sink is ever hooked."""
+        s = _SINK_HOOK_SCRIPT.strip()
+        assert s.startswith("(() => {")
+        assert s.endswith("})();")
+
+    def test_location_hooks_cannot_abort_later_hooks(self) -> None:
+        assert "try {" in _SINK_HOOK_SCRIPT.split("location.assign")[0][-200:]
+
+    def test_markup_payload_shape(self, scanner: DOMXSSScanner) -> None:
+        assert scanner._markup_payload("DOMXSS_CANARY_abcd1234") == (
+            '<i id="DOMXSS_CANARY_abcd1234">'
+        )
+
+    @staticmethod
+    def _raw_re():
+        import re
+
+        m = re.search(r"RAW_MARKUP_RE = /(.*)/i;", _SINK_HOOK_SCRIPT)
+        assert m
+        return re.compile(m.group(1), re.I)
+
+    def test_raw_markup_is_recorded(self, scanner: DOMXSSScanner) -> None:
+        rx = self._raw_re()
+        c = "DOMXSS_CANARY_abcd1234"
+        assert rx.search(scanner._markup_payload(c))
+        assert rx.search(f'<img src=x id="{c}">')  # typed-input payload
+        assert rx.search(f"<div>{scanner._markup_payload(c)}</div>")
+
+    @pytest.mark.parametrize("escaped", [
+        "&lt;i id=&quot;{c}&quot;&gt;",
+        "%3Ci%20id%3D%22{c}%22%3E",
+        "{c}",
+        "i id={c}",
+    ])
+    def test_escaped_or_bare_canary_is_not_recorded(self, escaped: str) -> None:
+        c = "DOMXSS_CANARY_abcd1234"
+        assert not self._raw_re().search(escaped.format(c=c))
