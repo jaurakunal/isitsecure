@@ -15,6 +15,8 @@ The structural RLS Policy Analyzer checks *if* policies exist. This scanner chec
 
 It reviews `firestore.rules`, `storage.rules`, `database.rules.json`, and any `.sql` file containing `CREATE POLICY` or `ENABLE ROW LEVEL SECURITY`. Each file is sent to the LLM on its own (truncated at 50,000 characters, at most 7 findings kept per file).
 
+A failed or refused model call, or an unparseable reply, is logged, emitted as a progress message and recorded in `skipped_files`. The first valid JSON array in the reply is used, and a malformed item (null severity defaults to Medium) is handled on its own without losing the others.
+
 ## Why It Matters
 
 An RLS policy that looks correct but references the wrong column is worse than no policy — it gives false confidence while being completely bypassable. For example:

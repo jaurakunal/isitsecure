@@ -270,10 +270,10 @@
           <text class="ttl t-attacker" x="12" y="24">Not guarded</text>
           <text class="lbl" x="12" y="50">the verdict is the proof;</text>
           <text class="lbl" x="12" y="68">no code re-reads the body</text>
-          <text class="lbl" x="12" y="86">step URL is not checked</text>
-          <text class="lbl" x="12" y="104">against the target URL</text>
+          <text class="lbl" x="12" y="86">off-origin step URLs are</text>
+          <text class="lbl" x="12" y="104">refused, never sent</text>
           <text class="lbl" x="12" y="130">DELETE can be sent, with</text>
-          <text class="lbl" x="12" y="148">real session tokens</text></g>
+          <text class="lbl" x="12" y="148">real tokens (target only)</text></g>
 
         <text class="lbl" x="12" y="236">No API key: the primary LLM client is missing, no code reviewer exists, and this phase never starts.</text>
         <text class="lbl" x="12" y="254">Rule-based scanners are unaffected.</text>
@@ -282,10 +282,10 @@
     </figure>
     <div class="scene-steps">
       <p class="step"><span class="n">1</span><b>Before any call.</b> All preconditions must hold: scan mode, both logins, endpoints, target URL, repository and an LLM client. Without an API key the phase is simply absent.</p>
-      <p class="step"><span class="n">2</span><b>The plan reply.</b> Parsed as JSON, with code fences stripped and a fallback that hunts for the first <code>{...}</code> block. A plan that is not an object or has no steps is dropped. If nothing parses, no request is sent.</p>
+      <p class="step"><span class="n">2</span><b>The plan reply.</b> Parsed as JSON, with code fences stripped and a fallback that hunts for the first <code>{...}</code> block. A plan that is not an object or has no steps is dropped, and a malformed step inside a plan is skipped. If nothing parses, no request is sent.</p>
       <p class="step"><span class="n">3</span><b>While executing.</b> Hard caps on files, endpoints, plans and steps. A request that fails is recorded as status 0 and the plan continues. A cooperative time budget stops the loop before the runner's 30 minute cancel would discard everything.</p>
       <p class="step"><span class="n">4</span><b>The verdict.</b> Only <code>confirmed: true</code> passes. Anything else, including an exception, gives no finding. Evidence and response preview are cut to 300 characters.</p>
-      <p class="step"><span class="n">5</span><b>What the code does not check.</b> The judge's word is final: no code re-reads the body. The executor sends the plan's URL as written without comparing its host to the target, so the prompt rule "use a real endpoint from the list" is the only constraint. Read confirmed findings as strong leads.</p>
+      <p class="step"><span class="n">5</span><b>What the code does not check.</b> The judge's word is final: no code re-reads the body. Every step URL is resolved against the target and refused (logged, counted, no request, no token) if its scheme, host or port differs; redirects off the target origin are not followed, and a malformed step is skipped without aborting the scan. Methods are not restricted, so DELETE against the target itself is still possible. Read confirmed findings as strong leads.</p>
     </div>
   </div>
 </section>
