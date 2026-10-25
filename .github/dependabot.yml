@@ -19,12 +19,18 @@ updates:
       prefix: "deps"
 
   # GitHub Actions used in workflows
+  #
+  # Ignored on purpose: these bumps are not required. Close-and-ignore was the
+  # decision for the setup-node and codeql-action bump PRs.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
     commit-message:
       prefix: "deps"
+    ignore:
+      - dependency-name: "actions/setup-node"
+      - dependency-name: "github/codeql-action"
 
   # UI dependencies (Next.js app) — version updates disabled on purpose.
   #
