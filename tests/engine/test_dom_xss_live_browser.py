@@ -34,6 +34,11 @@ _PAGES = {
     "/urlencoded": "var q=new URLSearchParams(location.search).get('q');"
                    "if(q)document.getElementById('o').innerHTML="
                    "encodeURIComponent(q);",
+    "/postmessage": "window.addEventListener('message',function(e){"
+                    "if(e.data&&typeof e.data.html==='string')"
+                    "document.getElementById('o').innerHTML=e.data.html;});",
+    "/lowercased": "var q=new URLSearchParams(location.search).get('q');"
+                   "if(q)document.getElementById('o').innerHTML=q.toLowerCase();",
     "/textcontent": "var q=new URLSearchParams(location.search).get('q');"
                     "if(q)document.getElementById('o').textContent=q;",
 }
@@ -101,6 +106,22 @@ def test_real_sink_is_found(findings, page, sink):
     """POSITIVE CONTROL: genuine unescaped flows are still confirmed."""
     assert page in findings, f"{page} not detected"
     assert sink in findings[page].title
+
+
+def test_postmessage_html_listener_is_found(findings):
+    """Template 4 ({"html": ...}) was invalid JS (doubled braces) before."""
+    assert "postmessage" in findings
+    assert "innerHTML" in findings["postmessage"].title
+
+
+def test_lowercased_flow_is_found(findings):
+    assert "lowercased" in findings
+    assert "innerHTML" in findings["lowercased"].title
+
+
+def test_postmessage_templates_are_valid_js():
+    for tpl in DOMXSSConfig.POSTMESSAGE_PAYLOADS:
+        assert "{{" not in tpl and "}}" not in tpl
 
 
 @pytest.mark.parametrize("page", ["escaped", "urlencoded", "textcontent"])

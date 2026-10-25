@@ -14,6 +14,8 @@ Uses **Playwright** (real browser) to detect DOM-based XSS by hooking dangerous 
   3. `postMessage` (4 payload shapes: a bare string, `{"data": ...}`, `{"type": "navigate", "url": ...}`, and an `{"html": ..., "action": "render"}` object)
   4. Typed form inputs: text-like inputs, textareas and contenteditable fields (up to 8 per page) are filled with `<img src=x id="<canary>">`, then Enter is pressed. This vector confirms either when the string reaches a hooked sink or when an element with the canary id appears in the DOM (a DOM-element oracle).
 - The injected value is inert markup, `<i id="<canary>">` (query, hash and `postMessage` vectors; the typed-input vector uses `<img src=x id="<canary>">`). A sink call is recorded only if that markup reaches the sink raw. A flow that HTML-escapes, URL-encodes or strips the `<` and `"` characters still contains the bare canary token but is not exploitable, so it is not reported.
+- The canary match is case-insensitive, so a flow that lower-cases the value (`q.toLowerCase()` into `innerHTML`) is still detected; the raw-markup rule is unchanged.
+- Known recall limits: `iframe.srcdoc` and `location.href` assignments are not hooked.
 - If a canary reaches a hooked sink raw (or materializes as an element), the finding is confirmed with the exact sink name and source
 - Limits: at most 30 pages per run and a 300 s soft wall-clock budget (the scan stops and returns the findings gathered so far)
 

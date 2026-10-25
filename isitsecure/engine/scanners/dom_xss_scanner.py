@@ -56,7 +56,7 @@ _SINK_HOOK_SCRIPT = """
     if (window.__domxss_findings) return;
     window.__domxss_findings = [];
 
-    const CANARY_RE = /DOMXSS_CANARY_[a-f0-9]{8}/;
+    const CANARY_RE = /DOMXSS_CANARY_[a-f0-9]{8}/i;
     const RAW_MARKUP_RE = /<(?:i|img)\\b[^>]*\\bid=["']?DOMXSS_CANARY_[a-f0-9]{8}/i;
 
     function _record(sink, value) {

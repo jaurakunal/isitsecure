@@ -333,12 +333,20 @@ class OpenRedirectScanner(AuthAwareScanner):
         """
         loc = location.strip().replace("\\", "/")
 
-        if loc.startswith("//"):
-            # Protocol-relative: the authority follows the leading slashes.
-            parsed = urlparse("//" + loc.lstrip("/"))
-            return self._host_is_evil(parsed.hostname)
+        try:
+            if loc.startswith("//"):
+                # Protocol-relative: the authority follows the leading slashes.
+                parsed = urlparse("//" + loc.lstrip("/"))
+                return self._host_is_evil(parsed.hostname)
 
-        parsed = urlparse(loc)
+            parsed = urlparse(loc)
+        except ValueError:
+            # Unparsable (e.g. '//[evil.com'): external only if it looks like
+            # an authority/scheme-led URL that names the attacker domain.
+            return bool(
+                re.match(r"(?i)(//|[a-z][a-z0-9+.-]*:)", loc)
+                and self._host_is_evil(loc)
+            )
 
         # Absolute URL with a scheme pointing to an evil domain
         if parsed.scheme in (

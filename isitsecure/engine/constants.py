@@ -1433,9 +1433,9 @@ class DOMXSSConfig:
     # postMessage payloads (canary inserted at {canary})
     POSTMESSAGE_PAYLOADS = (
         '"{canary}"',
-        '{{"data": "{canary}"}}',
-        '{{"type": "navigate", "url": "{canary}"}}',
-        '{{"html": "<img src=x onerror={canary}>", "action": "render"}}',
+        '{"data": "{canary}"}',
+        '{"type": "navigate", "url": "{canary}"}',
+        '{"html": "<img src=x onerror={canary}>", "action": "render"}',
     )
 
     # Error messages

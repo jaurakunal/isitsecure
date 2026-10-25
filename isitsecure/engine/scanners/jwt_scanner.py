@@ -66,6 +66,9 @@ class JWTScanner:
     ) -> None:
         self._auth_session = auth_session
         self._test_endpoint = test_endpoint
+        # (url, token) -> {"control": resp, "baseline": resp}; reused by all
+        # four forgery tests so each scan fetches the controls once.
+        self._control_cache: dict[tuple[str, str], dict[str, Any]] = {}
 
     @property
     def scanner_name(self) -> str:
@@ -92,6 +95,7 @@ class JWTScanner:
             List of unified findings from this scanner.
         """
         findings: list[DeepFinding] = []
+        self._control_cache = {}
 
         # Phase 5: Token in URL detection (no auth required)
         token_url_findings = self._check_token_in_url(endpoints)
@@ -230,13 +234,41 @@ class JWTScanner:
         control  = same request with a clearly invalid token.
         baseline = same request with the real captured token.
         """
-        control = await client.get(
-            test_url, headers={"Authorization": f"Bearer {self.CONTROL_TOKEN}"}
+        cached = self._control_cache.setdefault((test_url, original_token), {})
+        for key, token in (
+            ("control", self.CONTROL_TOKEN),
+            ("baseline", original_token),
+        ):
+            if key in cached:
+                continue
+            try:
+                cached[key] = await client.get(
+                    test_url, headers={"Authorization": f"Bearer {token}"}
+                )
+            except Exception as exc:  # noqa: BLE001 - degrade, don't abort
+                logger.debug("JWT %s request failed: %s", key, exc)
+        return cached.get("control"), cached.get("baseline")
+
+    NO_CONTROL_CONFIDENCE_PENALTY = 0.2
+
+    @staticmethod
+    def _control_status(control: Any) -> str:
+        return str(control.status_code) if control is not None else "unavailable"
+
+    def _adjust(self, confidence: float, control: Any) -> float:
+        """Lower confidence when no negative control could be obtained."""
+        if control is None:
+            return round(max(0.0, confidence - self.NO_CONTROL_CONFIDENCE_PENALTY), 2)
+        return confidence
+
+    @staticmethod
+    def _no_control_note(control: Any) -> str:
+        return (
+            ""
+            if control is not None
+            else "\nNo negative control could be obtained (request failed); "
+            "a public or token-ignoring endpoint cannot be ruled out."
         )
-        baseline = await client.get(
-            test_url, headers={"Authorization": f"Bearer {original_token}"}
-        )
-        return control, baseline
 
     def _forgery_accepted(self, forged: Any, control: Any, baseline: Any) -> bool:
         """True only when the forged token is treated differently from garbage.
@@ -248,6 +280,8 @@ class JWTScanner:
         """
         if not self._is_2xx(forged):
             return False
+        if control is None:
+            return True  # no control obtainable: callers lower confidence
         if not self._is_2xx(control):
             return True
         forged_text = getattr(forged, "text", None)
@@ -315,14 +349,15 @@ class JWTScanner:
                             f"Sent forged JWT with alg:none to {test_url}\n"
                             f"Response status: {response.status_code}\n"
                             f"Negative control (garbage token) -> "
-                            f"{control.status_code}"
+                            f"{self._control_status(control)}"
+                            + self._no_control_note(control)
                         ),
                         evidence=(
                             f"GET {test_url} with alg:none JWT -> "
                             f"{response.status_code} (garbage-token control -> "
-                            f"{control.status_code})"
+                            f"{self._control_status(control)})"
                         ),
-                        confidence=JWTAttackConfig.CONFIDENCE_ALG_NONE,
+                        confidence=self._adjust(JWTAttackConfig.CONFIDENCE_ALG_NONE, control),
                         scanner_name=self.scanner_name,
                         endpoint_url=test_url,
                         http_method="GET",
@@ -402,14 +437,15 @@ class JWTScanner:
                                 f"sent to {test_url}\n"
                                 f"Response status: {response.status_code}\n"
                                 f"Negative control (garbage token) -> "
-                                f"{control.status_code}"
+                                f"{self._control_status(control)}"
+                                + self._no_control_note(control)
                             ),
                             evidence=(
                                 f"GET {test_url} with JWT signed by "
                                 f"'{secret_display}' -> {response.status_code} "
-                                f"(garbage-token control -> {control.status_code})"
+                                f"(garbage-token control -> {self._control_status(control)})"
                             ),
-                            confidence=JWTAttackConfig.CONFIDENCE_WEAK_SECRET,
+                            confidence=self._adjust(JWTAttackConfig.CONFIDENCE_WEAK_SECRET, control),
                             scanner_name=self.scanner_name,
                             endpoint_url=test_url,
                             http_method="GET",
@@ -464,7 +500,7 @@ class JWTScanner:
                 control, baseline = await self._fetch_controls(
                     client, test_url, original_token
                 )
-                if not self._is_2xx(baseline):
+                if baseline is None or not self._is_2xx(baseline):
                     return findings  # Can't establish baseline
 
                 # Test 1: Escalation mutations
@@ -493,12 +529,13 @@ class JWTScanner:
                                 f"and signed with empty secret.\n"
                                 f"Server accepted at {test_url} "
                                 f"(status: {response.status_code})"
+                                + self._no_control_note(control)
                             ),
                             evidence=(
                                 f"GET {test_url} with '{claim}={value}' in "
                                 f"JWT -> {response.status_code}"
                             ),
-                            confidence=JWTAttackConfig.CONFIDENCE_CLAIM_MANIPULATION,
+                            confidence=self._adjust(JWTAttackConfig.CONFIDENCE_CLAIM_MANIPULATION, control),
                             scanner_name=self.scanner_name,
                             endpoint_url=test_url,
                             http_method="GET",
@@ -539,12 +576,13 @@ class JWTScanner:
                                 f"(original: '{payload.get(claim)}').\n"
                                 f"Server accepted at {test_url} "
                                 f"(status: {response.status_code})"
+                                + self._no_control_note(control)
                             ),
                             evidence=(
                                 f"GET {test_url} with swapped '{claim}' "
                                 f"in JWT -> {response.status_code}"
                             ),
-                            confidence=JWTAttackConfig.CONFIDENCE_CLAIM_MANIPULATION,
+                            confidence=self._adjust(JWTAttackConfig.CONFIDENCE_CLAIM_MANIPULATION, control),
                             scanner_name=self.scanner_name,
                             endpoint_url=test_url,
                             http_method="GET",
@@ -664,12 +702,13 @@ class JWTScanner:
                                     f"Response status: {response.status_code}\n"
                                     f"Key type: {jwk.get('kty', 'unknown')}, "
                                     f"kid: {jwk.get('kid', 'N/A')}"
+                                    + self._no_control_note(control)
                                 ),
                                 evidence=(
                                     f"GET {test_url} with HMAC-signed JWT "
                                     f"using public key -> {response.status_code}"
                                 ),
-                                confidence=JWTAttackConfig.CONFIDENCE_KEY_CONFUSION,
+                                confidence=self._adjust(JWTAttackConfig.CONFIDENCE_KEY_CONFUSION, control),
                                 scanner_name=self.scanner_name,
                                 endpoint_url=test_url,
                                 http_method="GET",

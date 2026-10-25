@@ -48,11 +48,17 @@ async def test_200_with_failure_body_is_not_accepted() -> None:
 
 
 @pytest.mark.asyncio
-async def test_200_with_generic_success_and_no_reference_is_not_accepted() -> None:
+async def test_200_with_generic_success_and_no_reference_is_low_tier_only() -> None:
+    """No storage evidence: only the Medium/<=0.4 tier, never High/traversal."""
+
     async def post(url, **kw):
         return _resp('{"success": true}')
 
-    assert await _scan(post) == []
+    findings = await _scan(post)
+    assert FileUploadConfig.TITLE_PATH_TRAVERSAL not in _titles(findings)
+    assert findings and all(
+        f.severity.value == "medium" and f.confidence <= 0.4 for f in findings
+    )
 
 
 @pytest.mark.asyncio

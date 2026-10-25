@@ -250,6 +250,11 @@ class HTTPProbeScanner(AuthAwareScanner):
                     # Check Location header for redirects
                     location = resp.headers.get("location", "")
                     if evil_host in location:
+                        # A redirect to the SAME path (or '/') with only the
+                        # scheme/host changed is a canonicalising redirect
+                        # (http->https, trailing slash): reflection of the
+                        # Host, but rarely exploitable. Keep it, but low.
+                        canonical = self._is_canonical_redirect(url, location)
                         findings.append(self._build_finding(
                             endpoint_url=url,
                             title=HTTPProbeConfig.TITLE_HOST_INJECTION.format(
@@ -259,8 +264,14 @@ class HTTPProbeScanner(AuthAwareScanner):
                                 url=url, header=header_name,
                                 host=evil_host,
                             ),
-                            severity=SeverityLevel.HIGH,
-                            confidence=HTTPProbeConfig.CONFIDENCE_HOST_INJECTION,
+                            severity=(
+                                SeverityLevel.LOW if canonical else SeverityLevel.HIGH
+                            ),
+                            confidence=(
+                                min(0.4, HTTPProbeConfig.CONFIDENCE_HOST_INJECTION)
+                                if canonical
+                                else HTTPProbeConfig.CONFIDENCE_HOST_INJECTION
+                            ),
                         ))
                         return findings
 
@@ -268,6 +279,19 @@ class HTTPProbeScanner(AuthAwareScanner):
                     logger.debug("Host header check failed for %s: %s", url, e)
 
         return findings
+
+    @staticmethod
+    def _is_canonical_redirect(request_url: str, location: str) -> bool:
+        """True when Location keeps the request path (or is '/')."""
+        from urllib.parse import urlparse
+
+        try:
+            loc_path = urlparse(location).path or "/"
+            req_path = urlparse(request_url).path or "/"
+        except ValueError:
+            return False
+        norm = lambda p: p.rstrip("/") or "/"  # noqa: E731
+        return norm(loc_path) in (norm(req_path), "/")
 
     # ------------------------------------------------------------------
     # Check 3: Verbose Error Pages

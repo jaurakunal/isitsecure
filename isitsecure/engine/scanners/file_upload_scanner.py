@@ -147,22 +147,38 @@ class FileUploadScanner(AuthAwareScanner):
                 payload_marker=payload,
             )
             if finding:
+                unverified = finding == self.NO_STORAGE_EVIDENCE
                 findings.append(
                     DeepFinding(
                         source=FindingSource.DAST_URL,
                         category=FindingCategory.INJECTION_RISK,
-                        severity=SeverityLevel.HIGH,
+                        severity=(
+                            SeverityLevel.MEDIUM if unverified else SeverityLevel.HIGH
+                        ),
                         title=FileUploadConfig.TITLE_UNRESTRICTED_TYPE,
                         description=FileUploadConfig.DESC_UNRESTRICTED_TYPE.format(
                             url=url, ext=ext, content_type=content_type
                         ),
                         technical_detail=(
                             f"Uploaded test{ext} with content-type {content_type}\n"
-                            f"Server returned 2xx with a success body that references the "
-                            f"stored file ({finding})"
+                            "Server returned 2xx with a non-failure body, but evidence "
+                            "of storage was not found (the response does not name or "
+                            "link the file)"
+                            if unverified
+                            else f"Server returned 2xx with a success body that "
+                            f"references the stored file ({finding})"
                         ),
-                        evidence=f"POST {url} with test{ext} -> accepted ({finding})",
-                        confidence=FileUploadConfig.CONFIDENCE_UNRESTRICTED,
+                        evidence=(
+                            f"POST {url} with test{ext} -> 2xx; evidence of storage "
+                            f"was not found"
+                            if unverified
+                            else f"POST {url} with test{ext} -> accepted ({finding})"
+                        ),
+                        confidence=(
+                            min(0.4, FileUploadConfig.CONFIDENCE_UNRESTRICTED)
+                            if unverified
+                            else FileUploadConfig.CONFIDENCE_UNRESTRICTED
+                        ),
                         scanner_name=self.scanner_name,
                         endpoint_url=url,
                         http_method="POST",
@@ -226,6 +242,11 @@ class FileUploadScanner(AuthAwareScanner):
         r"\b(invalid|not allowed|disallowed|forbidden|rejected|denied|error|"
         r"fail(?:ed|ure)?|unsupported|unauthori[sz]ed)\b",
         re.IGNORECASE,
+    )
+    # Sentinel: 2xx, non-failure body, but nothing shows the file was stored.
+    NO_STORAGE_EVIDENCE = "no evidence of storage"
+    _UNSAFE_FOLLOWUP_RE = re.compile(
+        r"logout|signout|delete|remove|destroy|reset", re.IGNORECASE
     )
     _FAILURE_STATUS_VALUES = frozenset({"error", "fail", "failed", "failure", "false"})
 
@@ -299,6 +320,7 @@ class FileUploadScanner(AuthAwareScanner):
             return None
 
         basename = filename.rsplit("/", 1)[-1]
+        ext = "." + basename.rsplit(".", 1)[-1].lower() if "." in basename else ""
         if payload_marker:
             candidates = [loc for loc in [response.headers.get("location", "")] if loc]
             candidates += [
@@ -308,8 +330,11 @@ class FileUploadScanner(AuthAwareScanner):
             host = urlparse(url).netloc
             for cand in candidates[:5]:
                 target = urljoin(url, cand)
-                if urlparse(target).netloc != host:
+                parsed = urlparse(target)
+                if parsed.netloc != host:
                     continue
+                if parsed.query or self._UNSAFE_FOLLOWUP_RE.search(parsed.path):
+                    continue  # never GET state-changing / session-ending URLs
                 try:
                     follow = await client.get(target)
                     if (
@@ -320,8 +345,22 @@ class FileUploadScanner(AuthAwareScanner):
                         return f"follow-up GET {target} serves the uploaded file"
                 except Exception as exc:  # noqa: BLE001 - evidence is best-effort
                     logger.debug("FileUploadScanner follow-up failed: %s", exc)
+            for cand in candidates[:5]:
+                parsed = urlparse(urljoin(url, cand))
+                if (
+                    ext
+                    and parsed.netloc == host
+                    and parsed.path.lower().endswith(ext)
+                    and parsed.path.lower() != urlparse(url).path.lower()
+                ):
+                    # The server points at a same-host file of the uploaded
+                    # type: storage evidence even if a GET is not verbatim
+                    # (e.g. the script executes instead of being served).
+                    return f"response points at stored file URL {parsed.path}"
         if any(basename in h for h in haystacks):
             return "response references the stored file name"
+        if payload_marker:
+            return self.NO_STORAGE_EVIDENCE
         return None
 
     async def _upload_file(
