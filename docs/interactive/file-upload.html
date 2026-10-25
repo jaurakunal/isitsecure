@@ -161,7 +161,7 @@
       <p class="step"><span class="n">1</span>Each probe is a multipart POST with a single part named <code>file</code>, carrying a filename, a part content type and a tiny body. The session's auth headers are attached when the scan has a session.</p>
       <p class="step" data-on="probeStep"><span class="n">2</span><b>Type probes.</b> <code>test.html</code> (<code>text/html</code>) and <code>test.svg</code> (<code>image/svg+xml</code>), each with a script payload. A 2xx for either is a High finding titled "File upload accepts dangerous file types", because an uploaded HTML or SVG file served back runs script on your origin.</p>
       <p class="step" data-on="probeStep"><span class="n">3</span><b>Traversal probes.</b> A harmless <code>test</code> body under three filenames in order. The first 2xx is a Critical finding, "File upload vulnerable to path traversal", and the remaining names are skipped for that endpoint.</p>
-      <p class="step" data-on="probeStep"><span class="n">4</span><b>The decision rule is the status code and nothing else.</b> Anything from 200 to 299 is "accepted". A 4xx, a 5xx or a failed connection is not.</p>
+      <p class="step" data-on="probeStep"><span class="n">4</span><b>A 2xx alone is not enough.</b> The body must not be a failure shape (such as <code>success: false</code> or an <code>error</code> field), and there must be evidence of storage: a same-host URL from the response that serves the uploaded file back, or the response referencing the stored name. For traversal probes the response must echo the unsanitised filename. A 4xx, a 5xx or a failed connection is never accepted.</p>
     </div>
   </div>
 </section>
@@ -204,8 +204,8 @@
     </figure>
     <div class="scene-steps">
       <p class="step"><span class="n">1</span>A refusing server answers 4xx. No finding, no noise.</p>
-      <p class="step"><span class="n">2</span>A server that stores the file answers 2xx, often with a URL. That is the finding. The scanner never opens the URL to check how the file is served or whether a traversal name escaped the folder.</p>
-      <p class="step"><span class="n">3</span>Some APIs return 200 and put the refusal in the JSON body. The scanner reports these too, since it never reads the body, so treat a High finding as "verify this upload by hand".</p>
+      <p class="step"><span class="n">2</span>A server that stores the file answers 2xx, usually with a URL or the stored name. The scanner opens a same-host URL to see if the payload is served back, and for traversal checks that the raw name was echoed.</p>
+      <p class="step"><span class="n">3</span>Some APIs return 200 and put the refusal in the JSON body. The scanner reads the body and skips these failure shapes. A bare <code>{"success": true}</code> that never mentions the file is also not reported.</p>
       <p class="step"><span class="n">4</span>The part is always named <code>file</code>. An endpoint that requires a different field name rejects every probe and is silently skipped.</p>
     </div>
   </div>

@@ -172,7 +172,14 @@ class XSSScanner(AuthAwareScanner):
                 content_type = response.headers.get("content-type", "")
 
                 # Check if canary is reflected with HTML chars unescaped
-                if probe_value in body and "text/html" in content_type.lower():
+                # Only the angle-bracket probe proves unescaped HTML: a quote-only
+                # probe reflecting says nothing about < > encoding, so it falls
+                # through to the context-aware check below.
+                if (
+                    probe_value in body
+                    and "<" in probe_value
+                    and "text/html" in content_type.lower()
+                ):
                     capture = build_probe_capture(
                         method="GET",
                         url=url,
@@ -225,7 +232,11 @@ class XSSScanner(AuthAwareScanner):
                 if canary_text in body and "text/html" in content_type.lower():
                     # Attempt context-aware confirmation before reporting LOW
                     ctx_finding = await self._test_context_xss(
-                        client, endpoint, param_name, canary_text, body,
+                        client, endpoint, param_name, canary_text,
+                        # Neutralise our own probe quotes so a quote-only probe
+                        # echoed in a plain text node is not read as a JS/attr
+                        # string context.
+                        body.replace(probe_value, canary_text),
                     )
                     if ctx_finding:
                         return ctx_finding
@@ -392,8 +403,14 @@ class XSSScanner(AuthAwareScanner):
             response_body = response.text
             content_type = response.headers.get("content-type", "")
 
+            # A JSON/plain-text echo is not executable in a browser: only an
+            # HTML response can be reflected XSS (same gate as the GET path).
+            is_html = "text/html" in content_type.lower()
+
             # Check each field's canary for unescaped reflection
             for field_name, canary_value in field_canary_map.items():
+                if not is_html:
+                    break
                 if canary_value in response_body:
                     capture = build_probe_capture(
                         method=http_method,

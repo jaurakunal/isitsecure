@@ -138,7 +138,7 @@
     </figure>
     <div class="scene-steps">
       <p class="step"><span class="n">1</span>Payloads are sent one at a time into the redirect parameter: an absolute URL, a protocol-relative URL, a backslash trick and a null-byte variant. Redirects are <b>not followed</b>, so the first response is the evidence.</p>
-      <p class="step"><span class="n">2</span><b>Header check.</b> The status must be 3xx and a <code>Location</code> header must be present. The location counts as external if it starts with <code>//</code>, or is an http(s) URL whose hostname contains <code>evil.com</code>. That is <b>HIGH, confidence 0.90</b>.</p>
+      <p class="step"><span class="n">2</span><b>Header check.</b> The status must be 3xx and a <code>Location</code> header must be present. The location counts as external if its host contains <code>evil.com</code>, whether written as an http(s) URL, <code>//evil.com</code>, or the browser-normalised forms <code>/\/evil.com</code> and <code>///evil.com</code>. A <code>//</code> redirect to the site's own host is not external. That is <b>HIGH, confidence 0.90</b>.</p>
       <p class="step"><span class="n">3</span><b>Body check.</b> If the header check found nothing, the lower-cased body is searched for <code>window.location =</code>, <code>window.location.href =</code>, <code>window.location.replace(</code> or a meta refresh, each pointing at <code>http(s)://evil.com</code>. That is <b>MEDIUM, confidence 0.75</b>.</p>
       <p class="step"><span class="n">4</span>A redirect to the app's own page is silent. The check looks for the scanner's own marker host, so a redirect to some other external host is not reported either. <b>The first hit stops the loop: one finding per parameter.</b></p>
     </div>
@@ -187,7 +187,7 @@ return NextResponse.redirect(target)</code></pre></div>
     <table>
       <thead><tr><th>Check</th><th>Reads</th><th>Reports when</th><th>Severity · confidence</th></tr></thead>
       <tbody>
-        <tr><td>Header redirect</td><td>status and <code>Location</code></td><td>3xx and Location starts with <code>//</code> or is an http(s) URL whose host contains <code>evil.com</code></td><td>High · 0.90</td></tr>
+        <tr><td>Header redirect</td><td>status and <code>Location</code></td><td>3xx and the Location host (http(s), <code>//</code>, or backslash forms) contains <code>evil.com</code></td><td>High · 0.90</td></tr>
         <tr><td>Body redirect</td><td>response body, lower-cased</td><td>JavaScript location assignment, <code>replace(</code> or meta refresh to <code>http(s)://evil.com</code></td><td>Medium · 0.75</td></tr>
       </tbody>
     </table>

@@ -262,7 +262,7 @@ class OpenRedirectScanner(AuthAwareScanner):
                     f"Location header: {location}"
                 ),
                 evidence=(
-                    f"GET {endpoint.url}?{param_name}={payload} -> "
+                    f"GET {inject_query_param(endpoint.url, param_name, payload)} -> "
                     f"{status_code} Location: {location}"
                 ),
                 confidence=OpenRedirectConfig.CONFIDENCE_HEADER_REDIRECT,
@@ -306,7 +306,7 @@ class OpenRedirectScanner(AuthAwareScanner):
                         f"Response body contains redirect pattern"
                     ),
                     evidence=(
-                        f"GET {endpoint.url}?{param_name}={payload} -> "
+                        f"GET {inject_query_param(endpoint.url, param_name, payload)} -> "
                         f"body contains JS/meta redirect"
                     ),
                     confidence=OpenRedirectConfig.CONFIDENCE_BODY_REDIRECT,
@@ -324,21 +324,36 @@ class OpenRedirectScanner(AuthAwareScanner):
     # ------------------------------------------------------------------
 
     def _is_external_redirect(self, location: str) -> bool:
-        """Check if a Location header value points to an external domain."""
-        # Protocol-relative URLs like //evil.com
-        if location.startswith("//"):
-            return True
+        """Check if a Location header value points to the attacker domain.
 
-        parsed = urlparse(location)
+        Browsers treat ``\\`` as ``/`` and ignore extra leading slashes, so
+        ``//evil.com``, ``/\\/evil.com`` and ``///evil.com`` all land on
+        evil.com. A protocol-relative redirect to a *different* host (e.g. the
+        site's own host) is not an open redirect.
+        """
+        loc = location.strip().replace("\\", "/")
+
+        if loc.startswith("//"):
+            # Protocol-relative: the authority follows the leading slashes.
+            parsed = urlparse("//" + loc.lstrip("/"))
+            return self._host_is_evil(parsed.hostname)
+
+        parsed = urlparse(loc)
 
         # Absolute URL with a scheme pointing to an evil domain
         if parsed.scheme in (
             OpenRedirectConfig.SCHEME_HTTP,
             OpenRedirectConfig.SCHEME_HTTPS,
-        ) and parsed.hostname:
-            return any(
-                indicator in parsed.hostname
-                for indicator in OpenRedirectConfig.EVIL_DOMAIN_INDICATORS
-            )
+        ):
+            return self._host_is_evil(parsed.hostname)
 
         return False
+
+    @staticmethod
+    def _host_is_evil(hostname: str | None) -> bool:
+        if not hostname:
+            return False
+        return any(
+            indicator in hostname
+            for indicator in OpenRedirectConfig.EVIL_DOMAIN_INDICATORS
+        )

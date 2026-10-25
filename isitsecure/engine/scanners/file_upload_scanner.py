@@ -7,8 +7,12 @@ Tests file upload endpoints for:
 
 from __future__ import annotations
 
+import json
 import logging
-from urllib.parse import urlparse
+import re
+from urllib.parse import urljoin, urlparse
+
+import httpx
 
 from isitsecure.engine.constants import DeepScanConfig, FileUploadConfig
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
@@ -139,7 +143,8 @@ class FileUploadScanner(AuthAwareScanner):
 
         for ext, content_type, payload in FileUploadConfig.DANGEROUS_EXTENSIONS:
             finding = await self._upload_file(
-                client, url, f"test{ext}", content_type, payload.encode()
+                client, url, f"test{ext}", content_type, payload.encode(),
+                payload_marker=payload,
             )
             if finding:
                 findings.append(
@@ -153,9 +158,10 @@ class FileUploadScanner(AuthAwareScanner):
                         ),
                         technical_detail=(
                             f"Uploaded test{ext} with content-type {content_type}\n"
-                            f"Server returned 2xx, indicating the file was accepted"
+                            f"Server returned 2xx with a success body that references the "
+                            f"stored file ({finding})"
                         ),
-                        evidence=f"POST {url} with test{ext} -> accepted",
+                        evidence=f"POST {url} with test{ext} -> accepted ({finding})",
                         confidence=FileUploadConfig.CONFIDENCE_UNRESTRICTED,
                         scanner_name=self.scanner_name,
                         endpoint_url=url,
@@ -178,7 +184,8 @@ class FileUploadScanner(AuthAwareScanner):
 
         for traversal_filename in FileUploadConfig.PATH_TRAVERSAL_FILENAMES:
             result = await self._upload_file(
-                client, url, traversal_filename, "text/plain", self.SAFE_FILE_CONTENT
+                client, url, traversal_filename, "text/plain", self.SAFE_FILE_CONTENT,
+                require_raw_name=True,
             )
             if result:
                 findings.append(
@@ -192,11 +199,12 @@ class FileUploadScanner(AuthAwareScanner):
                         ),
                         technical_detail=(
                             f"Uploaded file with name '{traversal_filename}'\n"
-                            f"Server returned 2xx, suggesting the name was accepted"
+                            f"Server returned 2xx and echoed the unsanitised name "
+                            f"({result})"
                         ),
                         evidence=(
                             f"POST {url} with filename='{traversal_filename}' "
-                            f"-> accepted"
+                            f"-> accepted ({result})"
                         ),
                         confidence=FileUploadConfig.CONFIDENCE_PATH_TRAVERSAL,
                         scanner_name=self.scanner_name,
@@ -214,6 +222,108 @@ class FileUploadScanner(AuthAwareScanner):
     # Upload helper
     # ------------------------------------------------------------------
 
+    _FAILURE_TEXT_RE = re.compile(
+        r"\b(invalid|not allowed|disallowed|forbidden|rejected|denied|error|"
+        r"fail(?:ed|ure)?|unsupported|unauthori[sz]ed)\b",
+        re.IGNORECASE,
+    )
+    _FAILURE_STATUS_VALUES = frozenset({"error", "fail", "failed", "failure", "false"})
+
+    @classmethod
+    def _body_signals_failure(cls, text: str) -> bool:
+        """True when a 2xx body is really an application-level rejection."""
+        try:
+            data = json.loads(text)
+        except ValueError:
+            return bool(cls._FAILURE_TEXT_RE.search(text[:2000]))
+        if not isinstance(data, dict):
+            return False
+        for key in ("success", "ok", "uploaded"):
+            if data.get(key) is False:
+                return True
+        status = data.get("status")
+        if isinstance(status, str) and status.lower() in cls._FAILURE_STATUS_VALUES:
+            return True
+        if isinstance(status, bool) and not status:
+            return True
+        return bool(data.get("error") or data.get("errors"))
+
+    @staticmethod
+    def _json_strings(text: str) -> list[str]:
+        """All string values (recursively) in a JSON body; [] if not JSON."""
+        try:
+            data = json.loads(text)
+        except ValueError:
+            return []
+        out: list[str] = []
+        stack = [data]
+        while stack:
+            node = stack.pop()
+            if isinstance(node, str):
+                out.append(node)
+            elif isinstance(node, dict):
+                stack.extend(node.values())
+            elif isinstance(node, list):
+                stack.extend(node)
+        return out
+
+    async def _stored_evidence(
+        self,
+        client: RateLimitedClient,
+        url: str,
+        response: httpx.Response,
+        filename: str,
+        payload_marker: str | None,
+        require_raw_name: bool,
+    ) -> str | None:
+        """Evidence (beyond a bare 2xx) that the upload was actually stored.
+
+        Rule: the 2xx body must not be a failure shape, AND either
+        (a) a same-host URL/path the response points at (JSON value or
+        Location header) is fetched and serves back the uploaded payload, or
+        (b) the response echoes the uploaded filename (for traversal tests:
+        the *unsanitised* name, so a server that stores the basename is not
+        flagged).
+        """
+        text = response.text
+        if self._body_signals_failure(text):
+            return None
+        strings = self._json_strings(text)
+        haystacks = [text, *strings]
+
+        if require_raw_name:
+            raw = filename
+            escaped = filename.replace("\\", "\\\\")
+            if any(raw in h or escaped in h for h in haystacks):
+                return "response echoes the unsanitised filename"
+            return None
+
+        basename = filename.rsplit("/", 1)[-1]
+        if payload_marker:
+            candidates = [loc for loc in [response.headers.get("location", "")] if loc]
+            candidates += [
+                v for v in strings
+                if basename in v or v.startswith(("/", "http://", "https://"))
+            ]
+            host = urlparse(url).netloc
+            for cand in candidates[:5]:
+                target = urljoin(url, cand)
+                if urlparse(target).netloc != host:
+                    continue
+                try:
+                    follow = await client.get(target)
+                    if (
+                        isinstance(follow.status_code, int)
+                        and self.HTTP_STATUS_OK_LOWER <= follow.status_code < self.HTTP_STATUS_OK_UPPER
+                        and payload_marker in follow.text
+                    ):
+                        return f"follow-up GET {target} serves the uploaded file"
+                except Exception as exc:  # noqa: BLE001 - evidence is best-effort
+                    logger.debug("FileUploadScanner follow-up failed: %s", exc)
+        if any(basename in h for h in haystacks):
+            return "response references the stored file name"
+        return None
+
     async def _upload_file(
         self,
         client: RateLimitedClient,
@@ -221,18 +331,28 @@ class FileUploadScanner(AuthAwareScanner):
         filename: str,
         content_type: str,
         content: bytes,
-    ) -> bool:
-        """Attempt to upload a file and return True if the server accepted it."""
+        payload_marker: str | None = None,
+        require_raw_name: bool = False,
+    ) -> str | None:
+        """Upload a file; return a short evidence string if it was really stored.
+
+        A bare 2xx is NOT acceptance (many endpoints answer 200 with an error
+        body or sanitise the name): see ``_stored_evidence`` for the rule.
+        """
         try:
             files = {
                 self.FORM_FIELD_NAME: (filename, content, content_type),
             }
             response = await client.post(url, files=files)
 
-            return (
+            if not (
                 self.HTTP_STATUS_OK_LOWER
                 <= response.status_code
                 < self.HTTP_STATUS_OK_UPPER
+            ):
+                return None
+            return await self._stored_evidence(
+                client, url, response, filename, payload_marker, require_raw_name,
             )
 
         except Exception as exc:
@@ -241,4 +361,4 @@ class FileUploadScanner(AuthAwareScanner):
                     endpoint=url, error=str(exc)
                 )
             )
-            return False
+            return None

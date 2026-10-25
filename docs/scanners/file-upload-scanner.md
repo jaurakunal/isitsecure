@@ -9,7 +9,7 @@ Tests file upload endpoints (found by upload-like path indicators) by attempting
 - **Dangerous types**: only `.html` (`text/html`) and `.svg` (`image/svg+xml`), each with a small script payload. An accepted upload is reported High (confidence 0.85).
 - **Path traversal**: filenames `../../../etc/passwd`, `..\\..\\..\\etc\\passwd` and `....//....//etc/passwd`, sent with `text/plain` content. The scanner stops at the first accepted name and reports Critical (confidence 0.90).
 
-The decision is the HTTP status only: any 2xx response counts as acceptance. The scanner does not check that the file is stored, returned as a URL, or served back, so a 2xx from an endpoint that silently discards the file is still reported.
+A bare 2xx is not acceptance. A probe counts as accepted only when the status is 2xx, the body is not a failure shape (JSON with `success`/`ok`/`uploaded` false, `status` of error/fail, a non-empty `error`/`errors`, or non-JSON text containing words such as invalid, forbidden or rejected), and there is evidence the file was stored: for the `.html`/`.svg` probes, a same-host URL from the response (a JSON value or the `Location` header) is fetched and serves the uploaded payload back, or the response references the stored file name; for the traversal probes, the response echoes the unsanitised traversal filename, so a server that stores only the basename is not reported. The finding evidence names which of these was observed. The scanner does not delete the test files it uploads.
 
 Not covered today: executable extensions such as `.php`, `.jsp`, `.exe` and `.sh`, and content-type mismatch tests (executable content sent with an image content-type).
 

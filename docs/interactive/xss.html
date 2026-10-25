@@ -129,7 +129,7 @@
       <p class="step" data-on="reflectStep"><span class="n">2</span>The canary goes into the query string with the session's auth headers. A response with status 400 or higher is skipped.</p>
       <p class="step"><span class="n">3</span><b>Flag only if the whole probe string, brackets included, is in the body and the Content-Type contains <code>text/html</code>.</b> That is reported as Confirmed reflected XSS, High, confidence 0.95.</p>
       <p class="step"><span class="n">4</span>If the brackets were encoded to <code>&amp;lt;</code> but the bare text <code>canary_xss_8f3a</code> is still in the page, the scanner does not stop. It looks at where the text landed and tries a breakout for that spot.</p>
-      <p class="step"><span class="n">5</span>The guard: a JSON endpoint that echoes the canary raw produces nothing, because both checks require <code>text/html</code>. This keeps API echoes out of the report.</p>
+      <p class="step"><span class="n">5</span>The guard: a JSON endpoint that echoes the canary raw produces nothing, because both checks require <code>text/html</code>. This keeps API echoes out of the report. POST-body probes use the same guard, and the quote-only probes cannot produce a Confirmed result on their own; they only feed the context check.</p>
     </div>
   </div>
 </section>
