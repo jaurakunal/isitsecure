@@ -8,15 +8,17 @@ Tests JWT (JSON Web Token) implementations for six vulnerability classes (the fo
 
 1. **Missing Claims** — Checks if the token lacks `exp` (expiration), `iat` (issued at), or `iss` (issuer). Tokens without expiration are valid forever. A missing `exp` is reported on its own (High, confidence 0.75); any missing `iat`/`iss` are bundled into one Low finding (0.60).
 
-2. **Algorithm None Bypass** — Forges a new JWT with `"alg": "none"` and no signature, then sends it. If the server accepts it, any user can forge tokens without knowing the secret.
+2. **Algorithm None Bypass** — Forges a new JWT with `"alg": "none"` and no signature, then sends it. If the server accepts it (and treats it differently from a garbage-token negative control), any user can forge tokens without knowing the secret.
 
 3. **Weak Secret Signing** — Tests 14 common secrets (`""`, `"secret"`, `"password"`, `"123456"`, `"your-256-bit-secret"`, etc.) by signing a forged token and sending it. If accepted, the secret can be brute-forced.
 
-4. **RS256/ES256 Key Confusion** — If the server uses RSA (RS256), attempts to use the RSA public key as an HMAC secret (HS256). The key is fetched only from `/.well-known/jwks.json`; a reachable JWKS is itself reported as an Info finding (0.50). This exploits libraries that don't enforce algorithm restrictions.
+4. **RS256/ES256 Key Confusion** — If the server uses RSA (RS256), attempts to use the RSA public key as an HMAC secret (HS256). The key is fetched only from `/.well-known/jwks.json`; a reachable JWKS (valid JSON with a `keys` array) is itself reported as an Info finding (0.50). The HMAC secret is the SubjectPublicKeyInfo PEM built from the JWK's `n`/`e` (also tried PEM-stripped and DER), which is what a confusable `jwt.verify(token, publicKeyPEM)` server uses; EC keys are skipped. This exploits libraries that don't enforce algorithm restrictions.
 
 5. **Token in URL** — Matches the discovered endpoint URLs (extracted from the JavaScript bundles) against `[?&](token|access_token|jwt|auth)=x.y.z`, i.e. JWT-shaped values passed as URL parameters (logged by proxies, cached by browsers).
 
-6. **Claim Manipulation** — When the captured token uses HS256/384/512 and the original token is accepted (2xx baseline), re-signs it with an empty secret after setting `role`/`is_admin`/`admin`/`user_role` to admin values (escalation) or swapping `sub`/`user_id`/`uid`/`email` for a zero UUID (identity swap). A 2xx on a forged token is Critical (0.90).
+6. **Claim Manipulation** — When the captured token uses HS256/384/512 and the original token is accepted (2xx baseline), re-signs it with an empty secret after setting `role`/`is_admin`/`admin`/`user_role` to admin values (escalation) or swapping `sub`/`user_id`/`uid`/`email` for a zero UUID (identity swap). A forged token accepted (see below) is Critical (0.90).
+
+**Negative control.** Before each forgery test the scanner sends the same request with a clearly invalid token (`invalid.invalid.invalid`) and with the real token. A forged 2xx is reported only if the garbage control was rejected (non-2xx), or, when the control was also 2xx, the forged response body equals the real-token body and differs from the control body. A public endpoint or SPA that answers 2xx to any token therefore yields no forgery findings. Severities are unchanged for sound findings; evidence includes the control status.
 
 ## Why It Matters
 

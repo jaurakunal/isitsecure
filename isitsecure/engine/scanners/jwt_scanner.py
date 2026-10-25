@@ -139,7 +139,7 @@ class JWTScanner:
             if base_url:
                 emit(f"JWT: key-confusion via JWKS on {test_url}")
                 key_confusion_findings = await self._test_key_confusion(
-                    payload, test_url, base_url
+                    payload, test_url, base_url, token
                 )
                 findings.extend(key_confusion_findings)
 
@@ -214,6 +214,54 @@ class JWTScanner:
         return findings
 
     # ------------------------------------------------------------------
+    # Negative control (shared by every forgery test)
+    # ------------------------------------------------------------------
+
+    CONTROL_TOKEN = "invalid.invalid.invalid"
+
+    def _is_2xx(self, response: Any) -> bool:
+        return self.HTTP_STATUS_OK_LOWER <= response.status_code < self.HTTP_STATUS_OK_UPPER
+
+    async def _fetch_controls(
+        self, client: Any, test_url: str, original_token: str
+    ) -> tuple[Any, Any]:
+        """Return (control, baseline) responses for the endpoint.
+
+        control  = same request with a clearly invalid token.
+        baseline = same request with the real captured token.
+        """
+        control = await client.get(
+            test_url, headers={"Authorization": f"Bearer {self.CONTROL_TOKEN}"}
+        )
+        baseline = await client.get(
+            test_url, headers={"Authorization": f"Bearer {original_token}"}
+        )
+        return control, baseline
+
+    def _forgery_accepted(self, forged: Any, control: Any, baseline: Any) -> bool:
+        """True only when the forged token is treated differently from garbage.
+
+        A forged 2xx counts only if the garbage-token control was NOT also
+        accepted, or (when the control was accepted too) the forged response
+        body matches the real-token baseline and differs from the control body
+        (body discrimination). Otherwise the endpoint ignores the token.
+        """
+        if not self._is_2xx(forged):
+            return False
+        if not self._is_2xx(control):
+            return True
+        forged_text = getattr(forged, "text", None)
+        control_text = getattr(control, "text", None)
+        baseline_text = getattr(baseline, "text", None)
+        if not all(isinstance(t, str) for t in (forged_text, control_text, baseline_text)):
+            return False
+        return (
+            self._is_2xx(baseline)
+            and forged_text == baseline_text
+            and forged_text != control_text
+        )
+
+    # ------------------------------------------------------------------
     # Phase 2: Algorithm none attack
     # ------------------------------------------------------------------
 
@@ -248,16 +296,15 @@ class JWTScanner:
                 timeout_seconds=JWTAttackConfig.HTTP_TIMEOUT_SECONDS,
                 user_agent=DeepScanConfig.USER_AGENT,
             ) as client:
+                control, baseline = await self._fetch_controls(
+                    client, test_url, original_token
+                )
                 response = await client.get(
                     test_url,
                     headers={"Authorization": f"Bearer {forged_token}"},
                 )
 
-                if (
-                    self.HTTP_STATUS_OK_LOWER
-                    <= response.status_code
-                    < self.HTTP_STATUS_OK_UPPER
-                ):
+                if self._forgery_accepted(response, control, baseline):
                     return DeepFinding(
                         source=FindingSource.DAST_URL,
                         category=FindingCategory.AUTH_WEAKNESS,
@@ -266,11 +313,14 @@ class JWTScanner:
                         description=JWTAttackConfig.DESC_ALG_NONE,
                         technical_detail=(
                             f"Sent forged JWT with alg:none to {test_url}\n"
-                            f"Response status: {response.status_code}"
+                            f"Response status: {response.status_code}\n"
+                            f"Negative control (garbage token) -> "
+                            f"{control.status_code}"
                         ),
                         evidence=(
                             f"GET {test_url} with alg:none JWT -> "
-                            f"{response.status_code}"
+                            f"{response.status_code} (garbage-token control -> "
+                            f"{control.status_code})"
                         ),
                         confidence=JWTAttackConfig.CONFIDENCE_ALG_NONE,
                         scanner_name=self.scanner_name,
@@ -327,6 +377,9 @@ class JWTScanner:
                 timeout_seconds=JWTAttackConfig.HTTP_TIMEOUT_SECONDS,
                 user_agent=DeepScanConfig.USER_AGENT,
             ) as client:
+                control, baseline = await self._fetch_controls(
+                    client, test_url, original_token
+                )
                 for secret in JWTAttackConfig.COMMON_WEAK_SECRETS:
                     forged_token = self._sign_hs256(payload, secret)
                     response = await client.get(
@@ -334,11 +387,7 @@ class JWTScanner:
                         headers={"Authorization": f"Bearer {forged_token}"},
                     )
 
-                    if (
-                        self.HTTP_STATUS_OK_LOWER
-                        <= response.status_code
-                        < self.HTTP_STATUS_OK_UPPER
-                    ):
+                    if self._forgery_accepted(response, control, baseline):
                         secret_display = secret if secret else "<empty string>"
                         return DeepFinding(
                             source=FindingSource.DAST_URL,
@@ -351,11 +400,14 @@ class JWTScanner:
                             technical_detail=(
                                 f"Signed JWT with secret '{secret_display}' and "
                                 f"sent to {test_url}\n"
-                                f"Response status: {response.status_code}"
+                                f"Response status: {response.status_code}\n"
+                                f"Negative control (garbage token) -> "
+                                f"{control.status_code}"
                             ),
                             evidence=(
                                 f"GET {test_url} with JWT signed by "
-                                f"'{secret_display}' -> {response.status_code}"
+                                f"'{secret_display}' -> {response.status_code} "
+                                f"(garbage-token control -> {control.status_code})"
                             ),
                             confidence=JWTAttackConfig.CONFIDENCE_WEAK_SECRET,
                             scanner_name=self.scanner_name,
@@ -408,16 +460,11 @@ class JWTScanner:
                 timeout_seconds=JWTAttackConfig.HTTP_TIMEOUT_SECONDS,
                 user_agent=DeepScanConfig.USER_AGENT,
             ) as client:
-                # Get baseline: original token should return 2xx
-                baseline = await client.get(
-                    test_url,
-                    headers={"Authorization": f"Bearer {original_token}"},
+                # Baseline (original token must be 2xx) + negative control
+                control, baseline = await self._fetch_controls(
+                    client, test_url, original_token
                 )
-                if not (
-                    self.HTTP_STATUS_OK_LOWER
-                    <= baseline.status_code
-                    < self.HTTP_STATUS_OK_UPPER
-                ):
+                if not self._is_2xx(baseline):
                     return findings  # Can't establish baseline
 
                 # Test 1: Escalation mutations
@@ -430,11 +477,7 @@ class JWTScanner:
                         headers={"Authorization": f"Bearer {forged}"},
                     )
 
-                    if (
-                        self.HTTP_STATUS_OK_LOWER
-                        <= response.status_code
-                        < self.HTTP_STATUS_OK_UPPER
-                    ):
+                    if self._forgery_accepted(response, control, baseline):
                         findings.append(DeepFinding(
                             source=FindingSource.DAST_URL,
                             category=FindingCategory.AUTH_WEAKNESS,
@@ -476,11 +519,7 @@ class JWTScanner:
                         headers={"Authorization": f"Bearer {forged}"},
                     )
 
-                    if (
-                        self.HTTP_STATUS_OK_LOWER
-                        <= response.status_code
-                        < self.HTTP_STATUS_OK_UPPER
-                    ):
+                    if self._forgery_accepted(response, control, baseline):
                         findings.append(DeepFinding(
                             source=FindingSource.DAST_URL,
                             category=FindingCategory.AUTH_WEAKNESS,
@@ -528,6 +567,7 @@ class JWTScanner:
         payload: dict[str, Any],
         test_url: str,
         base_url: str,
+        original_token: str = "",
     ) -> list[DeepFinding]:
         """Test for algorithm confusion by using public key as HMAC secret.
 
@@ -554,7 +594,15 @@ class JWTScanner:
                 if jwks_response.status_code >= 400:
                     return findings
 
-                # Step 2: Report JWKS exposure
+                # Step 2: Report JWKS exposure (only when it really is a JWKS)
+                try:
+                    jwks_data = jwks_response.json()
+                except (json.JSONDecodeError, ValueError):
+                    return findings
+                if not isinstance(jwks_data, dict) or not isinstance(
+                    jwks_data.get("keys"), list
+                ):
+                    return findings
                 findings.append(
                     DeepFinding(
                         source=FindingSource.DAST_URL,
@@ -576,33 +624,30 @@ class JWTScanner:
                     )
                 )
 
-                # Step 3: Parse JWKS and extract public keys
-                try:
-                    jwks_data = jwks_response.json()
-                except (json.JSONDecodeError, ValueError):
-                    return findings
-
-                keys = jwks_data.get("keys", [])
+                keys = jwks_data["keys"]
                 if not keys:
                     return findings
 
-                # Step 4: Try key confusion with each key
+                control, baseline = await self._fetch_controls(
+                    client, test_url, original_token
+                )
+
+                # Step 4: Try key confusion with each key (PEM / DER forms)
                 for jwk in keys:
-                    key_bytes = self._extract_public_key_bytes(jwk)
-                    if not key_bytes:
+                    if not isinstance(jwk, dict):
                         continue
-
-                    forged_token = self._sign_hs256_bytes(payload, key_bytes)
-                    response = await client.get(
-                        test_url,
-                        headers={"Authorization": f"Bearer {forged_token}"},
-                    )
-
-                    if (
-                        self.HTTP_STATUS_OK_LOWER
-                        <= response.status_code
-                        < self.HTTP_STATUS_OK_UPPER
-                    ):
+                    response = None
+                    for key_bytes in self._extract_public_key_candidates(jwk):
+                        forged_token = self._sign_hs256_bytes(payload, key_bytes)
+                        response = await client.get(
+                            test_url,
+                            headers={"Authorization": f"Bearer {forged_token}"},
+                        )
+                        if self._forgery_accepted(response, control, baseline):
+                            break
+                    else:
+                        continue
+                    if response is not None:
                         findings.append(
                             DeepFinding(
                                 source=FindingSource.DAST_URL,
@@ -640,41 +685,43 @@ class JWTScanner:
 
         return findings
 
-    def _extract_public_key_bytes(self, jwk: dict[str, Any]) -> bytes | None:
-        """Extract raw public key bytes from a JWK for use as HMAC secret.
+    def _extract_public_key_candidates(self, jwk: dict[str, Any]) -> list[bytes]:
+        """Key material a confusable server would HMAC with, for an RSA JWK.
 
-        For RSA keys, concatenates n and e components.
-        For EC keys, concatenates x and y components.
-        Returns None if the key type is unsupported.
+        Servers that pass the verification key straight to an HMAC verifier
+        use the SubjectPublicKeyInfo PEM text (what ``jwt.verify(token, pem)``
+        receives), or occasionally the DER bytes. Returns those candidates
+        (PEM with trailing newline, PEM stripped, DER). EC keys are skipped:
+        HS256-with-EC-key confusion is not the same bug.
         """
-        kty = jwk.get("kty", "")
-
+        if jwk.get("kty") != "RSA":
+            return []
         try:
-            if kty == "RSA":
-                n_b64 = jwk.get("n", "")
-                e_b64 = jwk.get("e", "")
-                if not n_b64 or not e_b64:
-                    return None
-                # Use the modulus (n) as the primary key material
-                padding = 4 - len(n_b64) % 4
-                n_bytes = base64.urlsafe_b64decode(n_b64 + "=" * padding)
-                return n_bytes
+            from cryptography.hazmat.primitives import serialization
+            from cryptography.hazmat.primitives.asymmetric.rsa import (
+                RSAPublicNumbers,
+            )
 
-            if kty == "EC":
-                x_b64 = jwk.get("x", "")
-                y_b64 = jwk.get("y", "")
-                if not x_b64 or not y_b64:
-                    return None
-                x_padding = 4 - len(x_b64) % 4
-                y_padding = 4 - len(y_b64) % 4
-                x_bytes = base64.urlsafe_b64decode(x_b64 + "=" * x_padding)
-                y_bytes = base64.urlsafe_b64decode(y_b64 + "=" * y_padding)
-                return x_bytes + y_bytes
+            def _b64_int(value: str) -> int:
+                raw = base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+                return int.from_bytes(raw, "big")
 
+            n_b64, e_b64 = jwk.get("n", ""), jwk.get("e", "")
+            if not n_b64 or not e_b64:
+                return []
+            public_key = RSAPublicNumbers(_b64_int(e_b64), _b64_int(n_b64)).public_key()
+            pem = public_key.public_bytes(
+                serialization.Encoding.PEM,
+                serialization.PublicFormat.SubjectPublicKeyInfo,
+            )
+            der = public_key.public_bytes(
+                serialization.Encoding.DER,
+                serialization.PublicFormat.SubjectPublicKeyInfo,
+            )
+            return [pem, pem.strip(), der]
         except Exception as exc:
-            logger.debug("Failed to extract public key bytes: %s", exc)
-
-        return None
+            logger.debug("Failed to build public key candidates: %s", exc)
+            return []
 
     # ------------------------------------------------------------------
     # Phase 5: Token in URL detection
