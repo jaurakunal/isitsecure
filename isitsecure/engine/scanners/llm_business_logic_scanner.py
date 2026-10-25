@@ -26,6 +26,7 @@ from urllib.parse import urljoin, urlparse
 import httpx
 
 from isitsecure.engine.auth.protocols import AuthSession
+from isitsecure.engine.code_analysis.llm_parsing import record_skip
 from isitsecure.engine.constants import (
     LLMBusinessLogicConfig,
     SharedPatterns,
@@ -37,7 +38,6 @@ from isitsecure.engine.models import (
     DiscoveredEndpoint,
     FindingSource,
 )
-from isitsecure.engine.shared.progress import emit
 from isitsecure.engine.shared.time_budget import TimeBudget
 
 logger = logging.getLogger(__name__)
@@ -171,9 +171,9 @@ class LLMBusinessLogicScanner:
 
     def _record_skip(self, name: str, reason: str) -> None:
         """Make a refused step / failed plan visible (list, log, progress)."""
-        self.skipped_steps.append((name, reason))
-        logger.warning("LLM Business Logic: skipping %s: %s", name, reason)
-        emit(f"LLM Business Logic: skipped {name}: {reason}")
+        record_skip(
+            self.skipped_steps, "LLM Business Logic: skipped", name, reason
+        )
 
     @staticmethod
     def _resolve_in_scope(url: object, target_url: str) -> str | None:
@@ -284,6 +284,7 @@ class LLMBusinessLogicScanner:
         plan_title = plan.get("title", "Unknown")
         steps = plan.get("steps", [])
         if not steps or not isinstance(steps, list):
+            self._record_skip(str(plan_title), "plan has no executable steps")
             return None
 
         step_results: list[dict] = []
@@ -413,6 +414,12 @@ class LLMBusinessLogicScanner:
                 max_tokens=LLMBusinessLogicConfig.MAX_TOKENS_RESULT,
             )
             verdict = self._parse_json_response(response)
+            if verdict is None:
+                self._record_skip(
+                    str(plan.get("title", "plan")),
+                    "unparseable judge reply (no JSON object)",
+                )
+                return None
             if not verdict:
                 return None
 

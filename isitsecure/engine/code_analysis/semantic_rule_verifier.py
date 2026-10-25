@@ -20,17 +20,16 @@ from __future__ import annotations
 
 import logging
 
-from isitsecure.engine.code_analysis.llm_code_reviewer import (
-    coerce_line_number,
-    coerce_severity,
+from isitsecure.engine.code_analysis.llm_parsing import (
     extract_json_array,
+    parse_finding_fields,
+    record_skip,
 )
 from isitsecure.engine.code_analysis.models import CodeFinding
 from isitsecure.engine.code_analysis.protocols import RepoSnapshot
 from isitsecure.engine.constants import SemanticRuleVerifierConfig
 from isitsecure.llm.protocol import LLMClientProtocol
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
-from isitsecure.engine.shared.progress import emit
 
 logger = logging.getLogger(__name__)
 
@@ -57,9 +56,9 @@ class SemanticRuleVerifier:
 
     def _record_skip(self, name: str, reason: str) -> None:
         """Make an incomplete review visible (list, log, progress)."""
-        self.skipped_files.append((name, reason))
-        logger.warning("Semantic rule review incomplete for %s: %s", name, reason)
-        emit(f"Semantic rule review incomplete for {name}: {reason}")
+        record_skip(
+            self.skipped_files, "Semantic rule review incomplete for", name, reason
+        )
 
     @property
     def scanner_name(self) -> str:
@@ -236,20 +235,20 @@ class SemanticRuleVerifier:
             if not isinstance(item, dict):
                 continue
             try:
+                fields = parse_finding_fields(
+                    item,
+                    self.SEVERITY_MAP,
+                    SemanticRuleVerifierConfig.FALLBACK_FINDING_TITLE,
+                )
                 findings.append(
                     CodeFinding(
                         scanner_name=self.scanner_name,
-                        severity=coerce_severity(
-                            item.get("severity"), self.SEVERITY_MAP
-                        ),
+                        severity=fields.severity,
                         category=FindingCategory.RLS_MISCONFIGURATION,
-                        title=str(
-                            item.get("title")
-                            or SemanticRuleVerifierConfig.FALLBACK_FINDING_TITLE
-                        ),
-                        description=str(item.get("description") or ""),
+                        title=fields.title,
+                        description=fields.description,
                         file_path=file_path,
-                        line_number=coerce_line_number(item.get("line_number")),
+                        line_number=fields.line_number,
                         confidence=SemanticRuleVerifierConfig.CONFIDENCE_LLM_FINDING,
                     )
                 )
@@ -257,44 +256,5 @@ class SemanticRuleVerifier:
                 logger.warning(
                     "Skipping malformed LLM finding for %s: %s", file_path, exc
                 )
-
-        return findings
-
-        try:
-            items = json.loads(json_match.group(0))
-        except json.JSONDecodeError as e:
-            logger.debug(
-                SemanticRuleVerifierConfig.ERROR_PARSE_RESPONSE.format(
-                    error=str(e)
-                )
-            )
-            return findings
-
-        for item in items[: SemanticRuleVerifierConfig.MAX_FINDINGS_PER_FILE]:
-            if not isinstance(item, dict):
-                continue
-
-            severity_str = item.get("severity", "MEDIUM").upper()
-            severity = self.SEVERITY_MAP.get(
-                severity_str, SeverityLevel.MEDIUM
-            )
-
-            line_number = item.get("line_number")
-
-            findings.append(
-                CodeFinding(
-                    scanner_name=self.scanner_name,
-                    severity=severity,
-                    category=FindingCategory.RLS_MISCONFIGURATION,
-                    title=item.get(
-                        "title",
-                        SemanticRuleVerifierConfig.FALLBACK_FINDING_TITLE,
-                    ),
-                    description=item.get("description", ""),
-                    file_path=file_path,
-                    line_number=line_number,
-                    confidence=SemanticRuleVerifierConfig.CONFIDENCE_LLM_FINDING,
-                )
-            )
 
         return findings

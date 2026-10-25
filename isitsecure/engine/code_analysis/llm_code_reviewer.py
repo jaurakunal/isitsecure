@@ -25,7 +25,6 @@ to maximize throughput while respecting API rate limits.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import re
 
@@ -46,52 +45,19 @@ from isitsecure.engine.constants import (
 )
 from isitsecure.engine.enums import ReviewTriggerType
 from isitsecure.llm.protocol import LLMClientProtocol
-from isitsecure.engine.shared.progress import emit
+from isitsecure.engine.code_analysis.llm_parsing import (  # noqa: F401  (re-exported)
+    coerce_line_number,
+    coerce_severity,
+    extract_json_array,
+    parse_finding_fields,
+    record_skip,
+)
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
 from isitsecure.engine.code_analysis.category_classifier import (
     classify_finding_category,
 )
 
 logger = logging.getLogger(__name__)
-
-
-def extract_json_array(response: str) -> list | None:
-    """Return the first valid JSON array found in an LLM reply, else None.
-
-    Tolerates code fences and prose (including bracketed prose such as
-    "Found [2 issues]:") before the array by trying ``raw_decode`` from each
-    ``[`` rather than a greedy ``\\[.*\\]`` match.
-    """
-    text = (response or "").strip()
-    decoder = json.JSONDecoder()
-    pos = text.find("[")
-    while pos != -1:
-        try:
-            value, _ = decoder.raw_decode(text, pos)
-        except ValueError:
-            value = None
-        if isinstance(value, list):
-            return value
-        pos = text.find("[", pos + 1)
-    return None
-
-
-def coerce_severity(raw: object, severity_map: dict) -> SeverityLevel:
-    """Map a model-supplied severity to a level, defaulting to MEDIUM."""
-    if isinstance(raw, str):
-        return severity_map.get(raw.strip().upper(), SeverityLevel.MEDIUM)
-    return SeverityLevel.MEDIUM
-
-
-def coerce_line_number(raw: object) -> int | None:
-    """Return a positive int line number or None (never raises)."""
-    if isinstance(raw, bool):
-        return None
-    if isinstance(raw, int):
-        return raw
-    if isinstance(raw, str) and raw.strip().isdigit():
-        return int(raw.strip())
-    return None
 
 
 class LLMCodeReviewer:
@@ -139,9 +105,7 @@ class LLMCodeReviewer:
 
     def _record_skip(self, name: str, reason: str) -> None:
         """Make an incomplete review visible (list, log, progress)."""
-        self.skipped_files.append((name, reason))
-        logger.warning("LLM review incomplete for %s: %s", name, reason)
-        emit(f"LLM review incomplete for {name}: {reason}")
+        record_skip(self.skipped_files, "LLM review incomplete for", name, reason)
 
     @property
     def scanner_name(self) -> str:
@@ -579,17 +543,15 @@ class LLMCodeReviewer:
             CodeContextExtractor,
         )
 
-        severity = coerce_severity(item.get("severity"), self.SEVERITY_MAP)
-
-        line_number = coerce_line_number(item.get("line_number"))
+        fields = parse_finding_fields(
+            item, self.SEVERITY_MAP, LLMCodeReviewConfig.FALLBACK_FINDING_TITLE
+        )
+        severity, title, description = (
+            fields.severity, fields.title, fields.description
+        )
         line_number = self._validate_line_number(
-            content, line_number, str(item.get("description") or "")
+            content, fields.line_number, description
         )
-
-        title = str(
-            item.get("title") or LLMCodeReviewConfig.FALLBACK_FINDING_TITLE
-        )
-        description = str(item.get("description") or "")
         category = classify_finding_category(
             f"{title} {description}", default=default_category
         )
