@@ -106,7 +106,9 @@ class TestRedactBody:
     def test_one_megabyte_adversarial_bodies_are_fast(self, body):
         start = time.perf_counter()
         redact_body(body)
-        assert time.perf_counter() - start < 1.0
+        # A quadratic or backtracking regex takes tens of seconds on 1 MB; the bound
+        # only has to catch that, with headroom for a loaded CI runner.
+        assert time.perf_counter() - start < 5.0
 
 
 class TestRedactUrlsAndHeaders:
