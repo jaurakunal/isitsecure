@@ -126,7 +126,7 @@
       <p class="step" data-on="bizFlow"><span class="n">3</span><b>Plan.</b> One call. The model gets the file contents, up to 50 discovered endpoints and a framework guess, and must answer with JSON: attack plans, each a list of HTTP steps plus a success criterion. The prompt tells it to use real endpoint URLs from the list.</p>
       <p class="step" data-on="bizFlow"><span class="n">4</span><b>Execute.</b> The scanner, not the model, sends each step, with the bearer token of the user the plan names. For every step it records the status and the first 300 characters of the body.</p>
       <p class="step" data-on="bizFlow"><span class="n">5</span><b>Judge.</b> A second call, on the cheaper judgment client when one is configured, receives the plan and what actually came back. It answers confirmed or not, with evidence, severity and a fix.</p>
-      <p class="step" data-on="bizFlow"><span class="n">6</span>Only <code>confirmed: true</code> becomes a finding. A plan that errors, parses badly or is judged not confirmed leaves no trace in the report.</p>
+      <p class="step" data-on="bizFlow"><span class="n">6</span>Only <code>confirmed: true</code> becomes a finding. A plan that errors, parses badly or is judged not confirmed leaves no finding in the report; refused steps and failed plans are logged, emitted as progress messages and kept in the scanner's <code>skipped_steps</code>.</p>
     </div>
   </div>
 </section>
@@ -331,6 +331,7 @@ export async function POST(request: Request) {
         <tr><td>Files sent to the planner</td><td>30</td><td>path must contain a business-logic word; extensions .ts .tsx .js .jsx .py .go .rs; whole file, no truncation</td></tr>
         <tr><td>Endpoints in the prompt</td><td>50</td><td>as <code>METHOD url</code> lines</td></tr>
         <tr><td>Plans · steps</td><td>10 · 8</td><td>asked for in the prompt and enforced by slicing in code</td></tr>
+        <tr><td>Step URLs</td><td>resolved against the target; scheme, host and port must match</td><td>off-origin steps are refused with no request and no token; up to 5 same-origin redirect hops are followed and re-checked, and a redirect that leaves the origin is not followed</td></tr>
         <tr><td>Request timeout</td><td>15 s</td><td>a failure becomes status 0 and the plan carries on</td></tr>
         <tr><td>Body preview</td><td>300 chars</td><td>what the judge sees per step, and the cap on stored evidence</td></tr>
         <tr><td>Token limits</td><td>20,480 · 2,048</td><td>planner reply · judge reply</td></tr>

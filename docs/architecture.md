@@ -86,7 +86,9 @@ not listed gets the 600s default):
 
 The authenticated and special passes use their own limits: IDOR cross-user and privilege escalation 1800s, DOM XSS 1800s, SAST-guided DAST 1800s. On the SAST side the git-secret scanner has 90s and the Semgrep taint analyzer 150s; every other SAST scanner gets the 600s default.
 
-**Timeout isolation**: If one scanner hangs or crashes, the rest continue. `run_scanner_safe()` wraps every scanner with timeout + exception handling, and publishes its deadline so a scanner short of time returns what it found rather than being cancelled holding it. A scanner that times out or crashes (including by `CancelledError`) is recorded in `DeepScanReport.scanner_errors`; the streamed runners always post a completion marker so the drain loop cannot wait forever. When `ingestion_errors` or `scanner_errors` is non-empty the launch verdict becomes an explicit "scan incomplete" state (never "safe to launch") and the grade is labelled provisional; the thresholds are unchanged, and critical/high findings still produce their normal verdicts.
+**Timeout isolation**: If one scanner hangs or crashes, the rest continue. `run_scanner_safe()` wraps every scanner with timeout + exception handling, and publishes its deadline so a scanner short of time returns what it found rather than being cancelled holding it. A scanner that times out or crashes (including by `CancelledError`) is recorded in `DeepScanReport.scanner_errors`; the streamed runners always post a completion marker so the drain loop cannot wait forever. When `ingestion_errors` or `scanner_errors` is non-empty the launch verdict becomes an explicit "scan incomplete" state (never "safe to launch") and the grade is labelled provisional; the thresholds are unchanged, and critical/high findings still produce their normal verdicts. Only the JSON report carries `scanner_errors`, `ingestion_errors` and `launch_verdict.incomplete`; SARIF is unchanged, and the CLI exit code changes only for an ingestion failure.
+
+**Evidence redaction**: probe captures in reports have cookies, `Authorization`/API-key/CSRF headers, any header whose name contains token/secret/key/session, token- or password-like JSON and form fields, Bearer values and JWTs replaced with a `REDACTED` placeholder; the rest of the body is kept so the evidence stays useful. JWTs shown in auth-bypass finding text are masked to an 8-character prefix plus length. A capture's curl command therefore will not replay an authenticated request verbatim.
 
 **Rate limiting**: All HTTP requests go through `RateLimitedClient` with configurable concurrency and per-request delays. This prevents getting blocked by the target's WAF.
 
@@ -107,7 +109,7 @@ The repository is cloned (shallow, to temp dir) and indexed:
    - `ExpressRouteMapper`: `app.get('/path', ...)` → route pattern + methods
    - `TRPCRouteMapper`: `router.query/mutation` → procedures
    - `GraphQLRouteMapper`: schema definitions → query/mutation types
-4. **File indexing** — reads all source files into memory (filtered by extension, size limit, skip `node_modules`)
+4. **File indexing** — reads all source files into memory (filtered by extension and size limit). Vendored/generated directories are skipped by matching the path relative to the scan root, so a clone that lives under a directory named `build` or `env` is still scanned. Symlinked files and anything reached through a symlinked directory are never read, and workspace globs from `package.json`/`pnpm-workspace.yaml` that are absolute, contain `..`, or resolve outside the clone are ignored with a warning.
 
 18 SAST scanners then run in parallel against the indexed codebase (plus the LLM-powered Semantic Rule Verifier when an API key is available). One of them, the **Semgrep Taint Analyzer** (`semgrep_taint`), is a deterministic source→sink injection floor for JS/TS, Python, Java, Kotlin, and Go that sits beneath the LLM code reviewer: it catches the mechanical SQLi/XSS/SSRF/path-traversal/command-injection/SSTI cases reproducibly and for free, leaving the LLM to cover business logic and uncatalogued libraries. It is opt-in (`[taint]` extra) and no-ops if the `semgrep` binary is absent.
 
@@ -239,9 +241,11 @@ explanation per finding, designed to paste directly into Cursor or Claude Code
 ("Apply all the security fixes in this document").
 
 **b) Local apply + verify** (`isitsecure fix --repo <path>`) — git-free:
-`fixes/safety_net.py` snapshots the working tree first (git-stash-create ref or
-file-copy backup), the fixes are written in place, then the code is **re-scanned
-to verify each finding is resolved**. `fixes/plain_results.py` classifies the
+`fixes/safety_net.py` backs up the files about to change first (a git-stash-create
+ref when all are tracked, otherwise a file-copy backup; no backup means no write),
+the fixes are written in place (strict UTF-8, newline style preserved, nothing
+under `.git/` or outside the repo), then the code is **re-scanned to verify each
+finding is resolved**; if the re-scan cannot run, nothing is counted as fixed. `fixes/plain_results.py` classifies the
 outcome (fixed / needs review / couldn't fix) into a plain-language summary
 (`--technical` surfaces the git/backup mechanics).
 
@@ -441,6 +445,7 @@ The scanner works at any completeness level:
 | No repo URL | SAST skipped entirely. DAST-only scan |
 | Repo fails to clone | Code-only: the scan stops and exits 1 (no report). Full: DAST findings are kept, the reason is recorded in `ingestion_errors`, and the CLI exits 1 — a zero-finding report must never read as "your code is fine" |
 | No target URL | SAST-only scan against code |
+| Scanner times out or crashes | The rest continue; recorded in `scanner_errors`; verdict "scan incomplete", grade provisional; exit code unchanged |
 | No credentials | Authenticated scanners skipped. No IDOR cross-user, no privilege escalation |
 
 ### Timeout Isolation

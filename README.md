@@ -329,6 +329,10 @@ isitsecure scan URL --output sarif   # SARIF 2.1.0 for GitHub Code Scanning
 isitsecure scan URL --output fixes   # AI-generated fix plan (Markdown with diffs)
 ```
 
+If a scanner times out or crashes, or something you asked to scan could not be read, the table shows "Scan incomplete" instead of "safe to launch", labels the grade "Provisional (scan incomplete)", and lists what did not run. The JSON report carries `scanner_errors`, `ingestion_errors` and `launch_verdict.incomplete` (SARIF does not). This does not change the exit code: only an ingestion failure exits 1.
+
+Probe captures in reports (the curl-reproducible request/response evidence) have their secrets redacted: cookies, `Authorization`/API-key/CSRF headers, any header whose name contains token/secret/key/session, token- or password-like JSON and form fields, Bearer values and JWTs are replaced with a `REDACTED` placeholder, and the rest of the body is kept so the evidence stays useful. JWTs quoted in auth-bypass finding text are masked to an 8-character prefix plus length. A capture's curl command will therefore not replay an authenticated request verbatim.
+
 ## Suppressing False Positives
 
 A finding you've reviewed and accepted (a false positive, or an accepted risk) shouldn't nag you on every scan. Each finding has a **stable fingerprint** — the same across runs, environments (localhost vs. prod), and code edits — shown under each row in the table output (`fp <hash>`) and in the JSON/SARIF output.
@@ -390,6 +394,7 @@ isitsecure verify https://your-app.com --report before.json --fingerprint de0e57
 - **DAST** findings are re-probed against the target — the exact endpoint is re-run through the scanner that raised it. To avoid ever *falsely* claiming a fix, a `fixed`/`still-present` verdict is only given when a single-endpoint re-probe can faithfully reproduce the finding (endpoint-level checks like security headers / CORS / CSRF, and parameter-level injection where the tested parameter is recoverable). Findings that depend on crawl-derived state or multi-request flows (e.g. stored XSS) are reported `unverifiable` — re-verify those with a full scan.
 - **SAST** findings are re-checked against a local `--repo` via a code-only re-scan.
 - Omit `--fingerprint` to re-verify every finding in the report. Exit codes make it a CI gate: **`0`** all clear (everything fixed), **`1`** at least one finding still present, **`2`** inconclusive — something couldn't be verified (`unverifiable`/error/`could_not_verify` — e.g. the target was unreachable or the re-scan couldn't read the repo; these are never reported as fixed) or a requested fingerprint wasn't in the report. LLM-review findings (which need a model to reproduce) are always `unverifiable`.
+- `--output json` includes a `could_not_verify` count.
 
 (This is the per-finding CLI counterpart to the MCP `verify(scan_id)` tool, which instead re-scans everything and reports grade movement.)
 
@@ -433,16 +438,24 @@ of PRs (default 8); excess low-severity categories are batched into a single PR
 so nothing is silently dropped. The token is used only for the push + PR and is
 never stored or logged (env var `GITHUB_TOKEN` also works).
 
+`--repo` accepts `https://github.com/owner/repo[.git]`, `git@github.com:owner/repo.git`,
+`ssh://git@github.com/owner/repo` or `github.com/owner/repo`. URLs with credentials, a
+query string, a fragment, `http://`, or extra path segments (such as `/tree/main`) are
+rejected.
+
 What the local flow does:
 1. Scans your repo with all SAST scanners
-2. Backs up the working tree, then for each critical/high finding with a code
-   location, sends the file to the LLM and writes a fixed version
-3. **Re-scans the fixed code** to confirm each finding is resolved
+2. Backs up the files it is about to change (a git ref when they are all
+   tracked, otherwise a file copy; if no backup can be made it stops and
+   changes nothing), then for each critical/high finding with a code location,
+   sends the file to the LLM and writes a fixed version
+3. **Re-scans the fixed code** to confirm each finding is resolved; if the
+   re-scan cannot run, nothing is reported as confirmed fixed
 4. Prints a plain-language summary of what was fixed, needs review, or couldn't
    be fixed (pass `--technical` for the git diff / backup-restore details)
 
-Your original files are backed up automatically; the summary tells you how to
-review and restore if needed.
+Your original files are backed up before anything is written; the summary tells
+you how to review and restore them.
 
 ## Security Badge
 
@@ -522,6 +535,8 @@ echo "ANTHROPIC_API_KEY=sk-ant-..." > .env
 # Or interactive setup
 isitsecure setup
 ```
+
+`isitsecure setup` stores the key in `~/.isitsecure/config.toml`, created with owner-only (`0600`) permissions inside a `0700` directory.
 
 ### OOB Callbacks (Blind Vulnerability Detection)
 
@@ -607,7 +622,7 @@ Options:
   --auth-email-b TEXT    Second user's email — enables cross-user IDOR/BOLA testing
   --auth-password-b TEXT Second user's password (paired with --auth-email-b)
   --login-url TEXT       Explicit login endpoint (else auto-discovered)
-  --github-token TEXT    GitHub token for cloning private repos
+  --github-token TEXT    GitHub token for cloning private repos (only sent to https://github.com/owner/repo URLs)
   --suppress TEXT        Fingerprint to add to .isitsecureignore (repeatable)
   --suppress-reason TEXT Reason recorded next to --suppress entries
   --suppress-file TEXT   Ignore file path [default: ./.isitsecureignore]
@@ -618,12 +633,14 @@ Options:
   -v, --verbose          Enable debug logging
 
   # exit 1 if something you asked to scan couldn't be read (e.g. the repo
-  # failed to clone) — a report that never saw your code isn't a clean scan
+  # failed to clone) — a report that never saw your code isn't a clean scan.
+  # A scanner timing out or crashing is reported as "scan incomplete" but does
+  # not change the exit code.
 
 isitsecure fix [OPTIONS]
   -r, --repo TEXT        Local repo path, OR a remote GitHub URL to open PRs against [required]
   --llm TEXT             LLM provider: anthropic|google [default: anthropic]
-  --api-key TEXT         API key (env ANTHROPIC_API_KEY)
+  --api-key TEXT         API key for the selected --llm provider (default: that provider's env var / config)
   --dry-run              Show fixes without applying them
   --severity TEXT        Severities to fix: critical,high,medium [default: critical,high]
   --technical            Show git/backup details instead of the plain-language summary
@@ -645,7 +662,8 @@ isitsecure badge [OPTIONS]
 
 isitsecure launch [OPTIONS]
   -p, --port INT         Port for web UI [default: 3000]
-  --host TEXT            Host to bind [default: 127.0.0.1]
+  --host TEXT            Host to bind [default: 127.0.0.1]; binding elsewhere prints a warning and only
+                         allow-listed Host names are served (see ISITSECURE_ALLOWED_HOSTS)
 
 isitsecure mcp            Run the local MCP server (stdio) for AI coding tools
 isitsecure setup          Interactive first-time setup
@@ -670,9 +688,11 @@ The UI provides:
 - **Report export** — download JSON, or open the self-contained HTML report in a new tab
 - **Scan history** — recent scans are remembered locally in your browser
 
-The web server resolves your LLM API key the same way the CLI does (`ANTHROPIC_API_KEY`, a `.env` file, or `isitsecure setup`), so scans and fixes work without pasting a key into the browser. You can still enter one in the scan form to override it.
+The web server resolves your LLM API key the same way the CLI does (`ANTHROPIC_API_KEY`, a `.env` file, or `isitsecure setup`), so scans and fixes work without pasting a key into the browser. You can still enter one in the scan form to override it; "Fix all" reuses the key entered with the original scan.
 
-**Security model.** The web server has no authentication, so it is meant for loopback only (the default `--host 127.0.0.1`). To block DNS-rebinding attacks it answers `421` to any request whose `Host` header is not `localhost`, `127.0.0.1`, `[::1]` (any port) or the host you passed to `--host`, and rejects state-changing requests (`POST`/`PUT`/`PATCH`/`DELETE`) carrying a foreign `Origin` with `403`. If you deliberately expose it (for example behind a reverse proxy), add the public names with `ISITSECURE_ALLOWED_HOSTS=name1,name2` (comma separated). `isitsecure launch` prints a warning when you bind to a non-loopback address.
+A scan that errors or finishes without a report is shown as `failed` with its error (the report and export endpoints return `500` "Scan failed: ...") instead of staying "in progress".
+
+**Security model.** The web server has no authentication, so it is meant for loopback only (the default `--host 127.0.0.1`). To block DNS-rebinding attacks it answers `421` to any request whose `Host` header is not `localhost`, `127.0.0.1`, `[::1]` (any port) or the host you passed to `--host`, and rejects state-changing requests (`POST`/`PUT`/`PATCH`/`DELETE`) and WebSocket upgrades carrying a foreign `Origin` (`403` for requests, a close for WebSockets). If you deliberately expose it (for example behind a reverse proxy), add the public names with `ISITSECURE_ALLOWED_HOSTS=name1,name2` (comma separated). `isitsecure launch` prints a warning when you bind to a non-loopback address.
 
 ## Use Inside Your AI Coding Tool (MCP)
 

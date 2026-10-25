@@ -369,7 +369,7 @@
       </svg>
     </figure>
     <div class="scene-steps">
-      <p class="step"><span class="n">1</span>The repository is cloned shallow into a temp directory. Vendored and generated directories are pruned.</p>
+      <p class="step"><span class="n">1</span>The repository is cloned shallow into a temp directory. Vendored and generated directories are pruned by their path relative to the scan root, so a clone under a directory named <code>build</code> or <code>env</code> is still scanned. Symlinked files and anything behind a symlinked directory are never read, and workspace globs that are absolute, contain <code>..</code> or resolve outside the clone are ignored with a warning.</p>
       <p class="step"><span class="n">2</span><code>package.json</code> and friends identify the framework and backend. A framework-specific route mapper turns files into routes with methods. Express routes are searched everywhere, then filtered to the ones actually reachable through the import graph, so fixture code like Juice Shop's 135 unused route definitions is ignored.</p>
       <p class="step"><span class="n">3</span>Eighteen analyzers run against the indexed code at once. The Semgrep taint layer gives a deterministic source-to-sink floor for injection; the rest look for missing auth, missing RLS, leaked secrets, CVEs and infrastructure misconfiguration.</p>
       <p class="step"><span class="n">4</span>If a language server is available, every auth guard is resolved to its definition and read. A finding the tracer disproves is removed, matched back per route, so one guarded route in a file of a hundred cannot vouch for the rest.</p>
@@ -411,7 +411,7 @@
 
 <section id="degrade">
   <h2>What runs with what you provide</h2>
-  <p class="prose">The scanner works at any completeness level. Toggle the inputs to see which phases run, which fall back, and which are skipped. A missing input never fails the scan, with one exception: a repository that fails to clone exits non-zero, because a zero-finding report must never read as "your code is fine".</p>
+  <p class="prose">The scanner works at any completeness level. Toggle the inputs to see which phases run, which fall back, and which are skipped. A missing input never fails the scan, with one exception: a repository that fails to clone exits non-zero, because a zero-finding report must never read as "your code is fine". A scanner that times out or crashes is recorded in <code>scanner_errors</code>; the verdict becomes "scan incomplete" and the grade provisional unless critical or high findings already decide it.</p>
 
   <div class="degrade" id="degrade-widget">
     <fieldset>

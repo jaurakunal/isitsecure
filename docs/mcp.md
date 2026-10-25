@@ -183,8 +183,9 @@ recorded here so the divergence is intentional, not an inconsistency.
 ### `apply=true` — the optional fallback
 
 For headless/non-agent callers, or a user who explicitly wants us to do it,
-`fix(..., apply=true)` writes via our Wave 2 pipeline: **back up the working tree
-(safety net) → write one finding's fix → re-scan to verify**. Still one finding at
+`fix(..., apply=true)` writes via our Wave 2 pipeline: **back up the file about to
+change (safety net) → write one finding's fix → re-scan to verify**. If the
+re-scan cannot run, the result says so and nothing is reported as resolved. Still one finding at
 a time; never a "fix everything" over MCP.
 
 ## Skill-level adaptation

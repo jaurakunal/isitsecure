@@ -634,7 +634,9 @@ def verify(
 @app.command()
 def launch(
     port: int = typer.Option(3000, "--port", "-p", help="Port for the web UI"),
-    host: str = typer.Option("127.0.0.1", "--host", help="Host to bind to"),
+    host: str = typer.Option("127.0.0.1", "--host",
+        help="Host to bind to; binding elsewhere prints a warning and only allow-listed Host names are served (see ISITSECURE_ALLOWED_HOSTS)",
+    ),
 ) -> None:
     """Launch the isitsecure web UI in your browser."""
     import webbrowser

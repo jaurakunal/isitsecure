@@ -306,7 +306,7 @@
         <g class="node" transform="translate(20 20)"><rect width="420" height="260" rx="8"/><text class="ttl" x="12" y="22">DeepFinding</text>
           <g class="mono">
             <g class="fld at-1"><text class="lbl" x="12" y="48">id · source · scanner_name · confidence</text><text class="lbl" x="12" y="64">category · severity · title · description</text><text class="lbl" x="12" y="80">technical_detail · evidence · remediation_guidance</text></g>
-            <g class="fld at-2"><text class="t-attacker" x="12" y="106">endpoint_url · http_method · request_payload</text><text class="t-attacker" x="12" y="122">response_preview · baseline_response_preview</text><text class="t-attacker" x="12" y="138">probe_captures[] (curl-reproducible)</text></g>
+            <g class="fld at-2"><text class="t-attacker" x="12" y="106">endpoint_url · http_method · request_payload</text><text class="t-attacker" x="12" y="122">response_preview · baseline_response_preview</text><text class="t-attacker" x="12" y="138">probe_captures[] (curl-reproducible, secrets redacted)</text></g>
             <g class="fld at-3"><text class="t-info" x="12" y="164">code_location { file_path, line_number, snippet, github_url }</text></g>
             <g class="fld at-4"><text class="t-accent" x="12" y="190">related_finding_ids[]</text></g>
             <g class="fld at-5"><text class="t-safe" x="12" y="216">impact · likelihood · priority 1–4</text><text class="t-safe" x="12" y="232">theme_id</text></g>
@@ -399,6 +399,7 @@
       <tr><td>Language server for the project's language</td><td>LSP validation skipped. More false positives on missing-auth. A server for a different language is never substituted.</td></tr>
       <tr><td>Repository URL</td><td>SAST, cross-reference and guided DAST skipped. DAST-only scan.</td></tr>
       <tr><td>Repository fails to clone</td><td>Code-only: scan stops, exit 1, no report. Full: DAST findings kept, the reason recorded in <code>ingestion_errors</code>, exit 1. A zero-finding report must never read as clean: the launch verdict shows &ldquo;scan incomplete&rdquo; and the grade is labelled provisional. The same applies when a scanner times out or crashes (recorded in <code>scanner_errors</code>).</td></tr>
+      <tr><td>Scanner times out or crashes</td><td>The rest continue; recorded in <code>scanner_errors</code>; verdict &ldquo;scan incomplete&rdquo;, grade provisional; exit code unchanged.</td></tr>
       <tr><td>Target URL</td><td>SAST-only scan.</td></tr>
       <tr><td>Credentials</td><td>Authenticated scanners skipped. No cross-user IDOR, no privilege escalation.</td></tr>
       <tr><td><code>semgrep</code> binary</td><td>Taint analyzer no-ops. Injection detection rests on the LLM layer.</td></tr>

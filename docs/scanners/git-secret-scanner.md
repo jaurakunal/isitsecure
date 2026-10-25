@@ -13,7 +13,7 @@ Scans the files at HEAD, the lines added by past commits, and the names of every
 - **Private keys**: `-----BEGIN [RSA |EC |DSA ]PRIVATE KEY-----` headers
 - **Sensitive file names**: `.env` (and `.local`/`.production`/`.staging`), `.pem`, `.key`, `credentials.json`, service-account JSON, reported as High even if no pattern matches inside
 
-Matches shorter than 8 or longer than 500 characters are dropped. There is no entropy-based or variable-name-based generic secret detection, no Stripe `sk_test_` pattern and no GitLab token pattern.
+Matches shorter than 8 or longer than 500 characters are dropped. Symlinked files and symlinked `.env*` files are skipped, and git subprocesses that outlive their timeout are killed. There is no entropy-based or variable-name-based generic secret detection, no Stripe `sk_test_` pattern and no GitLab token pattern.
 
 The scanner checks **both HEAD (current files) and git history**. This matters because developers often commit secrets, then remove them in a later commit, but the secret is still in the git history and accessible to anyone who clones the repo. A history finding is tagged "currently in the codebase" when the file path still exists in the HEAD index (the file, not the secret value).
 

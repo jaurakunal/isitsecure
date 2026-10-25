@@ -16,7 +16,7 @@ Fixes are delivered three ways:
 - **Markdown fix plan** (`scan --output fixes`) — diffs + explanations to paste
   into Cursor/Claude Code, `git apply`, or review manually.
 - **Local apply + verify** (`fix --repo <path>`) — writes fixes in place
-  (git-free), after backing up the working tree, then **re-scans to confirm each
+  (git-free), after backing up the files it will change, then **re-scans to confirm each
   finding is resolved** and reports a plain-language summary.
 - **Remote clone → per-category PRs** (`fix --repo <github-url>`) — clones,
   fixes, and opens one pull request per finding category (one commit per
@@ -73,7 +73,9 @@ and the output says the re-check did not run. Fixes keep each file's newline
 style and trailing newline; files that are not valid UTF-8, finding paths
 outside the repo, and anything under `.git/` are skipped; a reply that is
 truncated, ambiguous about its code fences, or identical to the input is
-rejected rather than written. `--api-key` applies to the selected `--llm`
+rejected rather than written. A reply under 40% of the original length (for
+files of 400 characters or more) is treated as truncated; files with mixed
+CRLF/LF line endings are not auto-fixed; CRLF files stay CRLF. `--api-key` applies to the selected `--llm`
 provider only; the environment/config key is looked up per provider. The remote flow never pushes to the default branch — fixes land on
 feature branches as pull requests; `--max-prs` caps the count (default 8) and
 excess low-severity categories batch into one PR. The GitHub token is used only

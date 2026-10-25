@@ -195,7 +195,7 @@
             <text class="rec" x="14" y="238">}</text>
           </g>
           <text class="lbl" x="14" y="272">illustrative values; other fields are never read</text>
-          <text class="lbl" x="14" y="288">the CVSS vector in "severity" is not parsed</text>
+          <text class="lbl" x="14" y="288">a CVSS v3.x vector is scored</text>
         </g>
         <path class="wire at-2 accent" d="M450 175 H 488" marker-end="url(#arrO2)"/>
         <g class="node" transform="translate(490 20)"><rect width="450" height="310" rx="10"/>
@@ -216,9 +216,9 @@
       </svg>
     </figure>
     <div class="scene-steps">
-      <p class="step"><span class="n">1</span>OSV returns one record per vulnerability. The scanner reads six fields from it: <code>id</code>, <code>aliases</code>, <code>summary</code> (or <code>details</code>), <code>database_specific.severity</code>, <code>affected[].ecosystem_specific.severity</code>, and the <code>fixed</code> event of <code>affected[].ranges[]</code>.</p>
+      <p class="step"><span class="n">1</span>OSV returns one record per vulnerability. The scanner reads these fields from it: <code>id</code>, <code>aliases</code>, <code>summary</code> (or <code>details</code>), <code>database_specific.severity</code>, <code>severity[]</code>, <code>affected[].ecosystem_specific.severity</code>, and the <code>fixed</code> event of <code>affected[].ranges[]</code>.</p>
       <p class="step"><span class="n">2</span><b>Dedup.</b> Findings are keyed on <code>name:version:id</code>. If the same package at the same version appears in two manifests, only the first is kept.</p>
-      <p class="step"><span class="n">3</span><b>Severity.</b> The first match wins: <code>database_specific.severity</code> (CRITICAL, HIGH, MEDIUM, LOW; MODERATE maps to Medium), then <code>ecosystem_specific.severity</code> on an affected entry, then a default of <b>Medium</b>. The code has a loop over the CVSS vector but it does nothing, so a CVSS string never sets the severity.</p>
+      <p class="step"><span class="n">3</span><b>Severity.</b> The first match wins: <code>database_specific.severity</code> (CRITICAL, HIGH, MEDIUM, LOW; MODERATE maps to Medium), then the <code>severity[]</code> score, which may be a plain number or a CVSS v3.x vector whose base score is computed from its metrics, then <code>ecosystem_specific.severity</code> on an affected entry, then a default of <b>Medium</b>.</p>
       <p class="step"><span class="n">4</span><b>Title and text.</b> The first alias that starts with <code>CVE-</code> is added to the title. The description carries the summary cut to 200 characters, the package, the OSV id, all CVE aliases and the osv.dev link.</p>
       <p class="step"><span class="n">5</span><b>Fix.</b> The first <code>fixed</code> event found across all affected ranges gives <code>Upgrade &lt;name&gt; to &lt;version&gt; or later</code>. With no <code>fixed</code> event, the text is <code>Upgrade &lt;name&gt; to the latest version</code>.</p>
     </div>
@@ -267,7 +267,7 @@
         <tr><td>Batch size</td><td>100 queries per request, sent sequentially</td></tr>
         <tr><td>Timeout</td><td>30 seconds per request</td></tr>
         <tr><td>Ecosystems sent</td><td>npm, PyPI, Maven, Go</td></tr>
-        <tr><td>Severity order</td><td><code>database_specific.severity</code>, then <code>ecosystem_specific.severity</code>, then Medium</td></tr>
+        <tr><td>Severity order</td><td><code>database_specific.severity</code>, then <code>severity[]</code> (score or CVSS v3 vector), then <code>ecosystem_specific.severity</code>, then Medium</td></tr>
         <tr><td>Confidence</td><td>0.95 on every finding</td></tr>
       </tbody>
     </table>
