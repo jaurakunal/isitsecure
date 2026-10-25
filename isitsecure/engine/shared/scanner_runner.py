@@ -39,6 +39,33 @@ def record_scanner_failure(scanner_name: str, reason: str) -> None:
             log.append(entry)
 
 
+def record_skipped_work(scanner_name: str, scanner: Any) -> None:
+    """Surface work a scanner skipped without failing, into the failure log.
+
+    Scanners record ``skipped_files`` / ``skipped_steps`` (``(item, reason)``
+    pairs) and ``unchecked_packages`` (a count) when an LLM or network call
+    degraded. Nothing else reads those, so a partial review looked complete.
+    Read defensively (any scanner may lack them) and append one concise line
+    per kind so it reaches ``DeepScanReport.scanner_errors``.
+    """
+    for attr, noun in (("skipped_files", "file(s) not reviewed"),
+                       ("skipped_steps", "step(s) skipped")):
+        items = getattr(scanner, attr, None)
+        if isinstance(items, (list, tuple)) and items:
+            reasons = sorted({
+                str(i[1]) if isinstance(i, (list, tuple)) and len(i) > 1 else "unknown"
+                for i in items
+            })
+            record_scanner_failure(
+                scanner_name, f"{len(items)} {noun} ({', '.join(reasons[:3])})"
+            )
+    count = getattr(scanner, "unchecked_packages", None)
+    if not isinstance(count, int) or isinstance(count, bool) or count <= 0:
+        count = getattr(scanner, "_unchecked_packages", 0)
+    if isinstance(count, int) and not isinstance(count, bool) and count > 0:
+        record_scanner_failure(scanner_name, f"{count} package(s) not checked")
+
+
 class ScannerTimeouts:
     """Per-scanner timeout configuration.
 

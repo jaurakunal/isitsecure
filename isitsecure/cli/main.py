@@ -729,11 +729,20 @@ def badge(
     gen = ReportGenerator()
     grade = gen._calculate_grade(report)
 
-    svg = _generate_badge_svg(grade, report.critical_count, report.high_count, len(report.findings))
+    gaps = list(getattr(report, "coverage_gaps", None) or [])
+    svg = _generate_badge_svg(
+        grade, report.critical_count, report.high_count, len(report.findings),
+        incomplete=bool(gaps),
+    )
     Path(output_file).write_text(svg)
 
     console.print(f"[green]Badge written to {output_file}[/green]")
     console.print(f"Grade: [bold]{grade}[/bold]  |  {len(report.findings)} findings")
+    if gaps:
+        console.print(
+            "[yellow]Scan incomplete, grade is provisional. Did not run: "
+            + "; ".join(gaps) + "[/yellow]"
+        )
     console.print(f"\nAdd to your README:")
     # Only prefix "./" for relative paths; an absolute -o path would otherwise
     # render as ".//abs/path".

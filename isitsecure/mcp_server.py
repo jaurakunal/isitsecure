@@ -66,6 +66,8 @@ class ScanResult(TypedDict):
     grade_label: str
     safe_to_launch: bool
     verdict: str
+    incomplete: bool
+    coverage_gaps: list[str]
     counts: dict[str, int]
     total_findings: int
     returned_findings: int
@@ -135,6 +137,7 @@ class VerifyResult(TypedDict):
     previous_grade: str
     grade: str
     grade_improved: bool
+    incomplete: bool
     previous_counts: dict[str, int]
     counts: dict[str, int]
     safe_to_launch: bool
@@ -365,6 +368,11 @@ def _count_by_severity(findings) -> dict[str, int]:
     return counts
 
 
+def _coverage_gaps(report) -> list[str]:
+    """What did not run (ingestion errors + scanner failures); [] when complete."""
+    return list(getattr(report, "coverage_gaps", None) or [])
+
+
 def _severity_counts(report) -> dict[str, int]:
     """Count a report's findings by severity."""
     return _count_by_severity(report.findings)
@@ -407,10 +415,14 @@ def _trim_report(report, min_severity: str, scan_id: str) -> ScanResult:
 
     findings_out.sort(key=lambda f: -_SEVERITY_RANK.get(f["severity"], 0))
 
+    gaps = _coverage_gaps(report)
     grade = calculate_grade(
-        counts["critical"], counts["high"], counts["medium"], counts["low"]
+        counts["critical"], counts["high"], counts["medium"], counts["low"],
+        provisional=bool(gaps),
     )
-    verdict = launch_verdict(counts["critical"], counts["high"], counts["medium"])
+    verdict = launch_verdict(
+        counts["critical"], counts["high"], counts["medium"], incomplete=bool(gaps)
+    )
 
     # What it takes to climb to each better grade — so an assistant can answer
     # "what gets me to a C?" without reading isitsecure's grader (#68).
@@ -436,6 +448,8 @@ def _trim_report(report, min_severity: str, scan_id: str) -> ScanResult:
         "grade_label": grade.label,
         "safe_to_launch": verdict.ready,
         "verdict": verdict.headline,
+        "incomplete": bool(gaps),
+        "coverage_gaps": gaps,
         "counts": counts,
         "total_findings": len(report.findings),
         "returned_findings": len(findings_out),
@@ -604,7 +618,10 @@ def _verify_result(old_report, new_report, new_scan_id: str) -> VerifyResult:
     cur = _count_by_severity(effective)
     prev_grade = calculate_grade(prev["critical"], prev["high"], prev["medium"], prev["low"]).grade
     grade = calculate_grade(cur["critical"], cur["high"], cur["medium"], cur["low"]).grade
-    verdict = launch_verdict(cur["critical"], cur["high"], cur["medium"])
+    verdict = launch_verdict(
+        cur["critical"], cur["high"], cur["medium"],
+        incomplete=bool(_coverage_gaps(new_report)),
+    )
 
     if resolved and grade != prev_grade:
         summary = (
@@ -627,6 +644,7 @@ def _verify_result(old_report, new_report, new_scan_id: str) -> VerifyResult:
         "previous_counts": prev,
         "counts": cur,
         "safe_to_launch": verdict.ready,
+        "incomplete": verdict.incomplete,
         "resolved_count": len(resolved),
         "resolved": resolved[:20],
         "still_present_count": len(still),
@@ -645,16 +663,21 @@ def _render_markdown(report) -> str:
     )
 
     counts = _severity_counts(report)
+    gaps = _coverage_gaps(report)
     grade = calculate_grade(
-        counts["critical"], counts["high"], counts["medium"], counts["low"]
+        counts["critical"], counts["high"], counts["medium"], counts["low"],
+        provisional=bool(gaps),
     )
-    verdict = launch_verdict(counts["critical"], counts["high"], counts["medium"])
+    verdict = launch_verdict(
+        counts["critical"], counts["high"], counts["medium"], incomplete=bool(gaps)
+    )
 
     lines = [
         f"# Security Report — Grade {grade.grade}",
         "",
         verdict.headline,
         "",
+        *([f"**Did not run:** {'; '.join(gaps)}", ""] if gaps else []),
         f"**Findings:** {counts['critical']} critical · {counts['high']} high · "
         f"{counts['medium']} medium · {counts['low']} low",
         "",

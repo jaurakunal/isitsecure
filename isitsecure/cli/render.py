@@ -228,7 +228,9 @@ def _print_report_table(report) -> None:
         ))
 
 
-def _generate_badge_svg(grade: str, critical: int, high: int, total: int) -> str:
+def _generate_badge_svg(
+    grade: str, critical: int, high: int, total: int, incomplete: bool = False
+) -> str:
     """Generate a shields.io-style SVG badge for the security grade."""
     GRADE_COLORS = {
         "A": "#4c1",      # Green
@@ -244,6 +246,10 @@ def _generate_badge_svg(grade: str, critical: int, high: int, total: int) -> str
     value = grade
     if total > 0:
         value = f"{grade} ({total} findings)"
+    if incomplete:
+        # Never show a clean-looking grade for a scan that did not fully run.
+        value = f"{value} provisional, scan incomplete"
+        color = "#9f9f9f"
 
     label_width = len(label) * 6.5 + 10
     value_width = len(value) * 6.5 + 10

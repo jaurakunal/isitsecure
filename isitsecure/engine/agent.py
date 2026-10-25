@@ -38,6 +38,7 @@ from isitsecure.engine.shared.scanner_runner import (
     record_scanner_failure,
     reset_failure_log,
     run_scanner_safe,
+    record_skipped_work,
     use_failure_log,
 )
 from isitsecure.engine.enums import SeverityLevel
@@ -288,8 +289,8 @@ class DeepSecurityScanAgent:
         - Repo only               -> CODE_ONLY
 
         ``repo_branch`` defaults to the repository's own default branch.
+        :meth:`scan` wraps this body with guaranteed cleanup.
         """
-        """Scan body; :meth:`scan` wraps it with guaranteed cleanup."""
         start_time = time.monotonic()
         mode = scan_mode or self._detect_scan_mode(target_url, repo_url, credentials_a)
 
@@ -545,6 +546,9 @@ class DeepSecurityScanAgent:
                     SharedPatterns.HEADER_AUTHORIZATION
                 )
                 if auth_header:
+                    # Runtime import: the module-level one is TYPE_CHECKING only.
+                    from isitsecure.engine.auth.protocols import AuthSession
+
                     token = auth_header.removeprefix(SharedPatterns.BEARER_PREFIX)
                     ctx.session_a = AuthSession(
                         user_id=(
@@ -986,6 +990,8 @@ class DeepSecurityScanAgent:
                     sast_findings, sast_names, ctx.sast_code_findings = _payload
             ctx.all_findings.extend(sast_findings)
             ctx.scanners_run.extend(sast_names)
+            for _s in self._sast_scanners:
+                record_skipped_work(_s.scanner_name, _s)
 
     async def _phase_lsp_validation(
         self, ctx: ScanContext
@@ -1071,6 +1077,7 @@ class DeepSecurityScanAgent:
             for cf in llm_code_findings:
                 ctx.all_findings.append(self._code_finding_to_deep_finding(cf))
             ctx.scanners_run.append("llm_review")
+            record_skipped_work("llm_code_reviewer", self._llm_code_reviewer)
 
     async def _phase_cross_reference(
         self, ctx: ScanContext
@@ -1178,6 +1185,9 @@ class DeepSecurityScanAgent:
                 )
                 ctx.all_findings.extend(biz_findings)
                 ctx.scanners_run.append(LLMBusinessLogicConfig.SCANNER_NAME)
+                record_skipped_work(
+                    LLMBusinessLogicConfig.SCANNER_NAME, biz_logic_scanner
+                )
 
                 yield DeepScanEvent(
                     DeepScanPhase.LLM_BUSINESS_LOGIC,
@@ -1362,10 +1372,14 @@ class DeepSecurityScanAgent:
             findings = []
             try:
                 findings = await coro
-            except BaseException as exc:  # incl. CancelledError: never hang the drain loop
+            except BaseException as exc:  # record, post the marker (finally), then re-raise below
                 logger.debug("DAST scanner %s failed: %s", name, exc)
                 record_scanner_failure(name, "failed")
                 findings = []
+                if not isinstance(exc, Exception):
+                    # CancelledError / KeyboardInterrupt / SystemExit must
+                    # still cancel the scan; only ordinary errors are absorbed.
+                    raise
             finally:
                 results[name] = findings
                 reporter.post(_DONE, {"scanner": name, "findings": len(findings),
@@ -1392,27 +1406,33 @@ class DeepSecurityScanAgent:
                 ),
             )))
 
-        done = 0
-        while done < total:
-            message, data = await reporter.queue.get()
-            if data.get("_scanner_done"):
-                done += 1
-                count = data["findings"]
-                detail = f"{count} finding(s)" if count else "clean"
-                yield ("event", DeepScanEvent(
-                    DeepScanPhase.DAST_SCANNING,
-                    f"{data['scanner']}: {detail} ({done}/{total})",
-                    base + int(band * done / total),
-                    {"scanner": data["scanner"], "findings": count,
-                     "done": done, "total": total, "status": "done"},
-                ))
-            else:
-                # A scanner's own progress message (via emit()).
-                yield ("event", DeepScanEvent(
-                    DeepScanPhase.DAST_SCANNING, message, base, data,
-                ))
+        try:
+            done = 0
+            while done < total:
+                message, data = await reporter.queue.get()
+                if data.get("_scanner_done"):
+                    done += 1
+                    count = data["findings"]
+                    detail = f"{count} finding(s)" if count else "clean"
+                    yield ("event", DeepScanEvent(
+                        DeepScanPhase.DAST_SCANNING,
+                        f"{data['scanner']}: {detail} ({done}/{total})",
+                        base + int(band * done / total),
+                        {"scanner": data["scanner"], "findings": count,
+                         "done": done, "total": total, "status": "done"},
+                    ))
+                else:
+                    # A scanner's own progress message (via emit()).
+                    yield ("event", DeepScanEvent(
+                        DeepScanPhase.DAST_SCANNING, message, base, data,
+                    ))
 
-        await asyncio.gather(*tasks, return_exceptions=True)
+            await asyncio.gather(*tasks, return_exceptions=True)
+        finally:
+            # If the consumer is cancelled mid-drain, don't leak the workers.
+            for t in tasks:
+                if not t.done():
+                    t.cancel()
         all_findings: list[DeepFinding] = []
         names: list[str] = []
         for s in self._dast_scanners:
@@ -1693,10 +1713,14 @@ class DeepSecurityScanAgent:
             code_findings = []
             try:
                 code_findings = await coro
-            except BaseException as exc:  # incl. CancelledError: never hang the drain loop
+            except BaseException as exc:  # record, post the marker (finally), then re-raise below
                 logger.debug("SAST scanner %s failed: %s", name, exc)
                 record_scanner_failure(name, "failed")
                 code_findings = []
+                if not isinstance(exc, Exception):
+                    # CancelledError / KeyboardInterrupt / SystemExit must
+                    # still cancel the scan; only ordinary errors are absorbed.
+                    raise
             finally:
                 results[name] = code_findings
                 reporter.post(_DONE, {"scanner": name, "findings": len(code_findings),
@@ -1719,26 +1743,32 @@ class DeepSecurityScanAgent:
                 ),
             )))
 
-        done = 0
-        while done < total:
-            message, data = await reporter.queue.get()
-            if data.get("_scanner_done"):
-                done += 1
-                count = data["findings"]
-                detail = f"{count} finding(s)" if count else "clean"
-                yield ("event", DeepScanEvent(
-                    DeepScanPhase.SAST_SCANNING,
-                    f"{data['scanner']}: {detail} ({done}/{total})",
-                    base + int(band * done / total),
-                    {"scanner": data["scanner"], "findings": count,
-                     "done": done, "total": total, "status": "done"},
-                ))
-            else:
-                yield ("event", DeepScanEvent(
-                    DeepScanPhase.SAST_SCANNING, message, base, data,
-                ))
+        try:
+            done = 0
+            while done < total:
+                message, data = await reporter.queue.get()
+                if data.get("_scanner_done"):
+                    done += 1
+                    count = data["findings"]
+                    detail = f"{count} finding(s)" if count else "clean"
+                    yield ("event", DeepScanEvent(
+                        DeepScanPhase.SAST_SCANNING,
+                        f"{data['scanner']}: {detail} ({done}/{total})",
+                        base + int(band * done / total),
+                        {"scanner": data["scanner"], "findings": count,
+                         "done": done, "total": total, "status": "done"},
+                    ))
+                else:
+                    yield ("event", DeepScanEvent(
+                        DeepScanPhase.SAST_SCANNING, message, base, data,
+                    ))
 
-        await asyncio.gather(*tasks, return_exceptions=True)
+            await asyncio.gather(*tasks, return_exceptions=True)
+        finally:
+            # If the consumer is cancelled mid-drain, don't leak the workers.
+            for t in tasks:
+                if not t.done():
+                    t.cancel()
         all_findings: list[DeepFinding] = []
         all_code_findings: list[CodeFinding] = []
         names: list[str] = []
