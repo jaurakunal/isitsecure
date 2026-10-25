@@ -1,15 +1,17 @@
 # Drizzle Schema Analyzer
 
-**Type:** SAST | **Severity:** Medium | **Category:** Various
+**Type:** SAST | **Severity:** Low–High | **Category:** Various
 
 ## What It Does
 
-Analyzes Drizzle ORM schema definitions for:
+Analyzes Drizzle ORM schema definitions (files calling `pgTable`, `mysqlTable` or `sqliteTable` with a quoted table name; the quoted column name is what is checked) for:
 
-1. **Sensitive fields exposed** — `isAdmin`, `role`, `permissions` columns that could be targets for mass assignment
-2. **PII without encryption** — `email`, `phone`, `ssn` columns stored as plain text without encryption markers
-3. **No soft delete** — tables without `deleted_at` column (hard deletes are irreversible)
-4. **Missing audit fields** — tables without `created_at`, `updated_at` timestamps
+1. **Plaintext secrets** — columns whose name contains `secret`, `api_key`, `password`, `access_token` and similar, with no `_encrypted`/`_hash`/`_hashed` twin (High, 0.90)
+2. **PII without a protected twin** — `email`, `phone`, `ssn`, `address` and similar columns with no `_encrypted`/`_hash`/`_hashed` column (Medium, 0.80)
+3. **Missing tenant scope** — when a `tenants`/`organizations`/`orgs`/`workspaces`/`companies` table exists, tables such as users, orders or invoices without a `tenant_id` column (Medium, 0.75)
+4. **Payment provider IDs** — `stripe_customer_id`-style columns stored as plain text (Low, 0.70)
+
+Not covered today: `isAdmin`/`role`/`permissions` mass-assignment columns, missing `deleted_at` (soft delete) and missing `created_at`/`updated_at` audit columns.
 
 ## Why It Matters
 

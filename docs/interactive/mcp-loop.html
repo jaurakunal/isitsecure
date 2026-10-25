@@ -1,0 +1,615 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The MCP Remediation Loop · isitsecure</title>
+<meta name="description" content="How the isitsecure MCP server drives scan, explain, fix, verify and export from inside an AI coding tool, and why the host LLM, not the MCP, applies the fix. Animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  /* actors: the "not tools" strike-through */
+  #actors .strike { stroke: var(--attacker); stroke-width: 2; }
+
+  /* loop: lifelines and the host "applies" node */
+  #loop .life { stroke: var(--line); stroke-dasharray: 3 5; stroke-width: 1.5; }
+  #loop .panel-title { font-family: var(--font-display); font-weight: 600; font-size: 13px; }
+  #loop .ret { stroke-dasharray: 5 5; }
+  #loop.s7 .mcp-head > rect { stroke: var(--line); }
+  #loop[data-step="7"] .noexec { fill: var(--attacker); }
+
+  /* dast: progress bar scales per step */
+  #dast .bar { fill: var(--info); transform-box: fill-box; transform-origin: left center; transform: scaleX(.02); transition: transform 1.2s cubic-bezier(.4,0,.2,1); }
+  #dast.s2 .bar { transform: scaleX(.25); }
+  #dast.s3 .bar { transform: scaleX(.7); }
+  #dast.s4 .bar { transform: scaleX(1); fill: var(--safe); }
+  #dast .track { fill: var(--surface-2); stroke: var(--line); }
+
+  /* cache: eviction */
+  #cache[data-step="4"] .evict > rect { stroke: var(--attacker); stroke-dasharray: 4 3; }
+  #cache[data-step="4"] .evict text { fill: var(--muted); text-decoration: line-through; }
+
+  /* cli: dim the lane that is not being discussed */
+  #cli[data-step="2"] .lane-mcp, #cli[data-step="3"] .lane-cli { opacity: .35; }
+  #cli .lane-cli, #cli .lane-mcp { transition: opacity .45s ease; }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› The MCP Remediation Loop</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../mcp.md" title="The markdown source for this page">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">Architecture · MCP</div>
+  <h1>The MCP Remediation Loop</h1>
+  <p class="lede">isitsecure ships a local MCP server so the AI coding tool you already use can scan, explain, fix, verify and export without leaving the editor. The server supplies data and verbs. The host LLM supplies the conversation, the plan and the judgment.</p>
+  <div class="meta">
+    <span class="pill sast">7 tools</span><span class="pill llm">host LLM applies fixes</span><span class="pill">local stdio · per user</span><span class="pill">scan → explain → fix → verify → export</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#actors"><span class="n">01</span>Actors and the principle</a>
+  <a href="#loop"><span class="n">02</span>The loop</a>
+  <a href="#who-applies"><span class="n">03</span>Who applies the fix</a>
+  <a href="#dast"><span class="n">04</span>Live-URL scans</a>
+  <a href="#cache"><span class="n">05</span>Stable finding ids</a>
+  <a href="#cli"><span class="n">06</span>Why the CLI differs</a>
+  <a href="#surface"><span class="n">07</span>Tool surface</a>
+</nav>
+
+<section id="actors">
+  <h2>Three actors, one principle</h2>
+  <p class="prose">The bar is four needs: scan, converse about the report, plan the fixes, run individual fixes. Only the first and the last are functions. The two in the middle are the host LLM reasoning and talking, and the MCP's job is to make that reasoning grounded instead of guessed.</p>
+
+  <div class="scene" id="actors" data-scene data-interval="3200">
+    <figure class="stage">
+      <svg viewBox="0 0 960 300" role="img" aria-label="A user in an AI coding tool talks to the host LLM, which calls a local isitsecure MCP server over stdio. The MCP supplies data and verbs; the host LLM supplies judgment.">
+        <defs><marker id="arrA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+
+        <g class="node lit-1" transform="translate(20 80)">
+          <rect width="210" height="130" rx="10"/>
+          <text class="ttl" x="14" y="26">You</text>
+          <text class="lbl" x="14" y="46">in your AI coding tool</text>
+          <g class="mono"><text x="14" y="72">Cursor</text><text x="14" y="90">Claude Code</text><text x="14" y="108">Claude Desktop</text></g>
+        </g>
+
+        <path class="wire at-2 accent" d="M230 130 H 318" marker-end="url(#arrA)"/>
+        <text class="lbl at-2" x="274" y="120" text-anchor="middle">plain language</text>
+
+        <g class="node at-2 lit-2" transform="translate(320 60)">
+          <rect width="280" height="170" rx="10"/>
+          <text class="ttl" x="14" y="26">Host LLM</text>
+          <text class="lbl" x="14" y="46">Claude inside the tool</text>
+          <text x="14" y="76">converses about the report</text>
+          <text x="14" y="98">decides priority</text>
+          <text x="14" y="120">plans the fixes</text>
+          <text x="14" y="142">adapts to your skill level</text>
+          <text class="at-4 t-accent" x="14" y="162">edits your files</text>
+        </g>
+
+        <path class="wire at-3 info" d="M600 118 H 718" marker-end="url(#arrA)"/>
+        <text class="lbl at-3" x="659" y="108" text-anchor="middle">tool calls</text>
+        <path class="wire at-3 info dashed" d="M718 150 H 600" marker-end="url(#arrA)"/>
+        <text class="lbl at-3" x="659" y="168" text-anchor="middle">self-describing data</text>
+
+        <g class="node at-3 lit-3" transform="translate(720 50)">
+          <rect width="220" height="190" rx="10"/>
+          <text class="ttl" x="14" y="26">isitsecure MCP</text>
+          <text class="lbl" x="14" y="46">local stdio process</text>
+          <text class="lbl" x="14" y="61">spawned per user by the tool</text>
+          <g class="mono">
+            <text x="14" y="90">scan · explain · fix</text>
+            <text x="14" y="108">verify · export</text>
+            <text x="14" y="126">scan_url · scan_status</text>
+          </g>
+          <text class="lbl" x="14" y="156">nothing is hosted</text>
+          <text class="lbl" x="14" y="172">needs: pip install isitsecure[mcp]</text>
+        </g>
+
+        <g class="only-4" transform="translate(20 240)">
+          <rect x="0" y="0" width="300" height="44" rx="8" class="soft-info"/>
+          <text class="ttl" x="12" y="18">MCP: data + verbs</text>
+          <text class="lbl" x="12" y="34">tools, rich payloads, re-scan proof</text>
+          <rect x="320" y="0" width="280" height="44" rx="8" class="soft-accent"/>
+          <text class="ttl" x="332" y="18">Host LLM: judgment</text>
+          <text class="lbl" x="332" y="34">conversation, plan, priority, tone</text>
+          <g class="mono"><text x="720" y="18">converse()</text><text x="720" y="36">plan()</text></g>
+          <line class="strike" x1="716" y1="14" x2="800" y2="14"/>
+          <line class="strike" x1="716" y1="32" x2="770" y2="32"/>
+          <text class="lbl" x="810" y="27">not tools</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>You work in Cursor, Claude Code or Claude Desktop and ask about your code in your own words. You never have to name isitsecure.</p>
+      <p class="step"><span class="n">2</span>The host LLM is the one that <b>converses, prioritises and plans</b>. Of the four needs (scan, converse, plan, run fixes), the two in the middle are its reasoning, not something you call.</p>
+      <p class="step"><span class="n">3</span>Your tool spawns <code>isitsecure mcp</code> as a local stdio process, one per user. It exposes seven tools and returns typed, self-describing payloads. Nothing runs on a server anywhere.</p>
+      <p class="step"><span class="n">4</span><b>The principle: the MCP supplies data + verbs; the host LLM supplies judgment.</b> Building "conversation" or "planning" as tools fights the grain. Instead the scan and fix verbs are made excellent and their payloads rich enough that the LLM never has to guess.</p>
+    </div>
+  </div>
+
+  <div class="callout why">
+    <div class="label">The failure this prevents</div>
+    <p>Asked "what gets me to a C grade?", an agent once gave a perfect answer, but only because it could read the grader in <code>plain_english.py</code>. A real user's agent, scanning their own repo, has no access to isitsecure internals and would guess the thresholds. The fix was not a "grading tool". It was putting the grade model into the scan payload as <code>path_to_next_grade</code>.</p>
+  </div>
+</section>
+
+<section id="loop">
+  <h2>The loop, one turn at a time</h2>
+  <p class="prose">A sequence diagram of a real session. Solid arrows are calls, dashed arrows are what comes back. The panel on the right shows the payload at each step, which is what the host LLM reasons over.</p>
+
+  <div class="scene" id="loop" data-scene data-interval="3600">
+    <figure class="stage">
+      <svg viewBox="0 0 960 464" role="img" aria-label="Sequence diagram across three lanes (user, host LLM, isitsecure MCP): the user asks if the code is safe to ship, the host calls scan, answers a grade question from the payload, then calls explain, fix, applies the diff itself, calls verify and export.">
+        <defs><marker id="arrL" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+
+        <!-- lane heads -->
+        <g class="node" transform="translate(30 14)"><rect width="120" height="30" rx="8"/><text class="ttl" x="60" y="20" text-anchor="middle">You</text></g>
+        <g class="node" transform="translate(250 14)"><rect width="140" height="30" rx="8"/><text class="ttl" x="70" y="20" text-anchor="middle">Host LLM</text></g>
+        <g class="node mcp-head" transform="translate(480 14)"><rect width="140" height="30" rx="8"/><text class="ttl" x="70" y="20" text-anchor="middle">isitsecure MCP</text></g>
+        <line class="life" x1="90" y1="46" x2="90" y2="450"/>
+        <line class="life" x1="320" y1="46" x2="320" y2="450"/>
+        <line class="life" x1="550" y1="46" x2="550" y2="450"/>
+
+        <!-- band 1: the question -->
+        <text class="at-1" x="205" y="55" text-anchor="middle">“is this safe to ship?”</text>
+        <path id="lp1" class="wire at-1 lit-1" d="M102 60 H 308" marker-end="url(#arrL)"/>
+
+        <!-- band 2/3: scan -->
+        <text class="mono at-2" x="435" y="105" text-anchor="middle">scan(path, min_severity)</text>
+        <path id="lp2" class="wire at-2 lit-2" d="M332 110 H 538" marker-end="url(#arrL)"/>
+        <path id="lp3" class="wire ret at-3 lit-3" d="M538 124 H 332" marker-end="url(#arrL)"/>
+        <text class="mono at-3 t-info" x="435" y="136" text-anchor="middle">ScanResult · grade F</text>
+
+        <!-- band 4: grade question answered from the payload -->
+        <text class="at-4" x="205" y="155" text-anchor="middle">“what gets me to a C?”</text>
+        <path id="lp4" class="wire at-4 lit-4" d="M102 160 H 308" marker-end="url(#arrL)"/>
+        <path id="lp4r" class="wire ret at-4 lit-4" d="M308 174 H 102" marker-end="url(#arrL)"/>
+        <text class="mono at-4 t-info" x="205" y="186" text-anchor="middle">from path_to_next_grade</text>
+        <text class="lbl at-4" x="435" y="170" text-anchor="middle">no tool call</text>
+
+        <!-- band 5: explain -->
+        <text class="mono at-5" x="435" y="205" text-anchor="middle">explain(scan_id, finding_id)</text>
+        <path id="lp5" class="wire at-5 lit-5" d="M332 210 H 538" marker-end="url(#arrL)"/>
+        <path id="lp5r" class="wire ret at-5 lit-5" d="M538 224 H 332" marker-end="url(#arrL)"/>
+        <text class="mono at-5 t-info" x="435" y="236" text-anchor="middle">FindingDetail</text>
+
+        <!-- band 6: fix -->
+        <text class="mono at-6" x="435" y="255" text-anchor="middle">fix(scan_id, finding_id)</text>
+        <path id="lp6" class="wire at-6 lit-6" d="M332 260 H 538" marker-end="url(#arrL)"/>
+        <path id="lp6r" class="wire ret at-6 lit-6" d="M538 274 H 332" marker-end="url(#arrL)"/>
+        <text class="mono at-6 t-info" x="435" y="286" text-anchor="middle">FixProposal · applied: false</text>
+
+        <!-- band 7: the host applies -->
+        <g class="node at-7 lit-7" transform="translate(236 300)"><rect width="168" height="28" rx="8" class="soft-accent"/><text x="84" y="18" text-anchor="middle">host applies the diff</text></g>
+        <text class="lbl at-7 noexec" x="550" y="318" text-anchor="middle">writes no files</text>
+        <path class="wire at-7 accent" d="M102 314 H 232" marker-end="url(#arrL)"/>
+        <text class="lbl at-7" x="166" y="309" text-anchor="middle">you review, approve, undo</text>
+
+        <!-- band 8: verify -->
+        <text class="mono at-8" x="435" y="355" text-anchor="middle">verify(scan_id)</text>
+        <path id="lp8" class="wire at-8 lit-8" d="M332 360 H 538" marker-end="url(#arrL)"/>
+        <path id="lp8r" class="wire ret at-8 lit-8" d="M538 374 H 332" marker-end="url(#arrL)"/>
+        <text class="mono at-8 t-safe" x="435" y="386" text-anchor="middle">VerifyResult · F → D</text>
+
+        <!-- band 9: export -->
+        <text class="mono at-9" x="435" y="405" text-anchor="middle">export(scan_id, "html")</text>
+        <path id="lp9" class="wire at-9 lit-9" d="M332 410 H 538" marker-end="url(#arrL)"/>
+        <path id="lp9r" class="wire ret at-9 lit-9" d="M538 424 H 332" marker-end="url(#arrL)"/>
+        <text class="mono at-9 t-info" x="435" y="436" text-anchor="middle">content · host saves the file</text>
+
+        <!-- payload panel -->
+        <g class="node" transform="translate(630 14)">
+          <rect width="314" height="436" rx="10"/>
+          <text class="panel-title" x="14" y="24">What the host LLM sees</text>
+
+          <g class="only-1">
+            <text class="lbl" x="14" y="56">Your words. No tool named.</text>
+            <text class="lbl" x="14" y="80">Whether the LLM reaches for scan</text>
+            <text class="lbl" x="14" y="96">on its own is decided by metadata</text>
+            <text class="lbl" x="14" y="112">the server advertises (next step).</text>
+          </g>
+
+          <g class="only-2">
+            <text class="lbl" x="14" y="56">Why the LLM picked scan, in order:</text>
+            <g class="mono">
+              <text x="14" y="80" class="t-accent">1  server instructions</text>
+              <text x="14" y="112" class="t-accent">2  tool description</text>
+              <text x="14" y="144" class="t-accent">3  tool name</text>
+            </g>
+            <text class="lbl" x="30" y="95">in the MCP initialize response:</text>
+            <text class="lbl" x="30" y="127">leads with "Security audit…"</text>
+            <text class="lbl" x="30" y="159">isitsecure / scan</text>
+            <text class="lbl" x="14" y="190">Caveat: the host decides, and some</text>
+            <text class="lbl" x="14" y="206">clients gate tools behind approval.</text>
+            <g class="mono"><text x="14" y="236">scan(path, min_severity="medium")</text></g>
+            <text class="lbl" x="14" y="254">mode is fixed to code-only SAST</text>
+          </g>
+
+          <g class="only-3">
+            <g class="mono">
+              <text x="14" y="56" class="t-info">ScanResult</text>
+              <text x="14" y="78">scan_id: "9f2c3a7b1e04"</text>
+              <text x="14" y="96">grade: "F"  safe_to_launch: false</text>
+              <text x="14" y="114">counts: crit 1 · high 3 · med 4 · low 1</text>
+              <text x="14" y="138">path_to_next_grade:</text>
+              <text x="28" y="154">D   clear ≥1  "0 critical"</text>
+              <text x="28" y="170">C   clear ≥4  "0 critical, 0 high"</text>
+              <text x="28" y="186">C+  clear ≥6  "…at most 2 medium"</text>
+              <text x="14" y="210">themes: [{title, severity,</text>
+              <text x="28" y="226">finding_count}]</text>
+              <text x="14" y="250">findings: [{id, severity, category,</text>
+              <text x="28" y="266">file, line, priority, what_it_is,</text>
+              <text x="28" y="282">attacker_could, fix}]</text>
+            </g>
+            <text class="lbl" x="14" y="310">Plain and technical register, both.</text>
+            <text class="lbl" x="14" y="326">Trimmed to min_severity and above.</text>
+          </g>
+
+          <g class="only-4">
+            <text class="lbl" x="14" y="56">No tool call. The LLM reads the rung:</text>
+            <g class="mono">
+              <text x="14" y="82" class="t-accent">C  requires "0 critical, 0 high"</text>
+              <text x="14" y="100" class="t-accent">   clear_at_least: 4</text>
+            </g>
+            <text x="14" y="130">"Fix the 1 critical and the 3 high</text>
+            <text x="14" y="148">findings and you are at a C."</text>
+            <text class="lbl" x="14" y="180">Same computation as the grader,</text>
+            <text class="lbl" x="14" y="196">handed over in the payload, so it</text>
+            <text class="lbl" x="14" y="212">never guesses the thresholds.</text>
+          </g>
+
+          <g class="only-5">
+            <g class="mono">
+              <text x="14" y="56" class="t-info">FindingDetail</text>
+              <text x="14" y="78">id · severity · category</text>
+              <text x="14" y="94">file · line · code_snippet</text>
+              <text x="14" y="118">description</text>
+              <text x="14" y="134">technical_detail</text>
+              <text x="14" y="150">evidence</text>
+              <text x="14" y="174">what_it_is · attacker_could</text>
+              <text x="14" y="190">business_impact</text>
+              <text x="14" y="214">remediation</text>
+              <text x="14" y="230">stack_remediation</text>
+              <text x="14" y="246">walkthrough: [step, step, …]</text>
+            </g>
+            <text class="lbl" x="14" y="278">Leads with this finding's own text</text>
+            <text class="lbl" x="14" y="294">(its snippet, its evidence), not the</text>
+            <text class="lbl" x="14" y="310">category blurb the scan list carries.</text>
+          </g>
+
+          <g class="only-6">
+            <g class="mono">
+              <text x="14" y="56" class="t-info">FixProposal</text>
+              <text x="14" y="78">finding_id · file · title</text>
+              <text x="14" y="94">category · severity</text>
+              <text x="14" y="118">diff: "--- a/app/api/… +++ b/…"</text>
+              <text x="14" y="134">fixed_file: "…whole file…"</text>
+              <text x="14" y="150">explanation: "…"</text>
+              <text x="14" y="174" class="t-accent">applied: false</text>
+              <text x="14" y="198">next_step: "Review the diff and</text>
+              <text x="28" y="214">apply it with your editor…"</text>
+            </g>
+            <text class="lbl" x="14" y="246">Reads the finding's source file from</text>
+            <text class="lbl" x="14" y="262">the cached scan path. Needs an LLM</text>
+            <text class="lbl" x="14" y="278">key (ANTHROPIC_API_KEY).</text>
+          </g>
+
+          <g class="only-7">
+            <text class="lbl" x="14" y="56">The MCP does not write files. Why:</text>
+            <text x="14" y="82"><tspan class="t-accent">1</tspan>  the host has the edit UX:</text>
+            <text class="lbl" x="30" y="98">diff review, apply, undo, approval</text>
+            <text x="14" y="122"><tspan class="t-accent">2</tspan>  single writer = coherence:</text>
+            <text class="lbl" x="30" y="138">the agent's context matches disk</text>
+            <text x="14" y="162"><tspan class="t-accent">3</tspan>  less scary than "the tool</text>
+            <text class="lbl" x="30" y="178">rewrote 5 of your files"</text>
+            <text x="14" y="202"><tspan class="t-accent">4</tspan>  applied with understanding:</text>
+            <text class="lbl" x="30" y="218">imports and style adapted to fit</text>
+            <text class="lbl" x="14" y="250">The diff is a reference</text>
+            <text class="lbl" x="14" y="266">implementation, not a mandate.</text>
+          </g>
+
+          <g class="only-8">
+            <g class="mono">
+              <text x="14" y="56" class="t-info">VerifyResult</text>
+              <text x="14" y="78">previous_grade: "F"  grade: "D"</text>
+              <text x="14" y="94" class="t-safe">grade_improved: true</text>
+              <text x="14" y="118">resolved: ["SQL injection in …"]</text>
+              <text x="14" y="134">still_present_count: 3</text>
+              <text x="14" y="158" class="t-accent">unverifiable_count: 2</text>
+              <text x="14" y="190">scan_id: "b7e15d20c9a3"</text>
+            </g>
+            <text class="lbl" x="30" y="174">LLM / DAST findings, held constant</text>
+            <text class="lbl" x="30" y="206">a fresh id so the loop continues</text>
+            <text class="lbl" x="14" y="238">Only rule-based findings count toward</text>
+            <text class="lbl" x="14" y="254">cleared and toward the grade move, so</text>
+            <text class="lbl" x="14" y="270">LLM non-determinism cannot inflate</text>
+            <text class="lbl" x="14" y="286">or deflate the result.</text>
+          </g>
+
+          <g class="only-9">
+            <g class="mono">
+              <text x="14" y="56" class="t-info">ExportResult</text>
+              <text x="14" y="78">format: "html"</text>
+              <text x="14" y="94">content: "&lt;!doctype html&gt;…"</text>
+              <text x="14" y="110">suggested_filename:</text>
+              <text x="28" y="126">"isitsecure-report.html"</text>
+              <text x="14" y="142">next_step: "Save this with your</text>
+              <text x="28" y="158">editor (the MCP does not write)"</text>
+            </g>
+            <text class="lbl" x="14" y="190">Formats: html · sarif · json · markdown</text>
+            <text class="lbl" x="14" y="206">Rendered from the cache, no re-scan.</text>
+            <text class="lbl" x="14" y="222">SARIF feeds GitHub code scanning.</text>
+          </g>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step" data-on="loopHook"><span class="n">1</span>You ask <b>"is this safe to ship?"</b> in your editor. isitsecure is not mentioned anywhere in the question.</p>
+      <p class="step" data-on="loopHook"><span class="n">2</span>The host LLM reaches for <code>scan(path, min_severity)</code> on its own. Discoverability comes from three things, in priority order: the server <b>instructions</b> in the initialize response, the tool <b>description</b> that leads with the trigger phrases, and the tool <b>name</b>. It maximises the odds; it cannot guarantee the call.</p>
+      <p class="step" data-on="loopHook"><span class="n">3</span><code>scan</code> returns a typed <code>ScanResult</code>: a <code>scan_id</code>, the grade, the launch verdict, severity counts, <b><code>path_to_next_grade</code></b>, root-cause <code>themes</code> and trimmed findings with a plain-English explanation and a priority each.</p>
+      <p class="step" data-on="loopHook"><span class="n">4</span>You ask <b>"what gets me to a C?"</b>. No tool runs. The LLM reads the rung for C from the payload (requires 0 critical, 0 high; clear at least 4) and answers from the grade model instead of guessing.</p>
+      <p class="step" data-on="loopHook"><span class="n">5</span><code>explain(scan_id, finding_id)</code> resolves the finding from the scan cache and returns a deep dive: its own description, technical detail, evidence and vulnerable snippet, then business impact, stack-tailored remediation and a step-by-step walkthrough.</p>
+      <p class="step" data-on="loopHook"><span class="n">6</span><code>fix(scan_id, finding_id)</code> reads the finding's source file and returns a <b>proposed patch</b>: a unified <code>diff</code>, the full <code>fixed_file</code>, an <code>explanation</code>, and <code>applied: false</code>.</p>
+      <p class="step" data-on="loopHook"><span class="n">7</span><b>The host applies it</b> with its own editor, inside your normal review flow. The MCP writes no files by default; the four reasons are in the panel.</p>
+      <p class="step" data-on="loopHook"><span class="n">8</span><code>verify(scan_id)</code> re-scans the same path and reports what cleared, what is still there, the grade before and after, and a fresh <code>scan_id</code>. <b>Only rule-based findings are verifiable</b>; LLM and DAST findings are reported as unverifiable and held constant.</p>
+      <p class="step" data-on="loopHook"><span class="n">9</span><code>export(scan_id, format)</code> renders the cached scan as html, sarif, json or markdown and returns the content. The host writes the file, same stance as <code>fix</code>.</p>
+    </div>
+  </div>
+</section>
+
+<section id="who-applies">
+  <h2>Who applies the fix</h2>
+  <p class="prose">Mutating the user's code is the riskiest capability here, so the decision is explicit. In the MCP context the host LLM holds the pen, and the quality gate is <code>verify</code>, not the act of applying.</p>
+  <div class="grid-2">
+    <div class="callout fix">
+      <div class="label">Quality comes from verify, not from applying</div>
+      <p>Whoever writes the file, <code>verify(scan_id)</code> re-scans and confirms the finding is actually gone for rule-based findings, and reports grade movement attributable to that change. This decouples the quality gate from who does the writing, which is what makes "let the host apply" safe. Success is never assumed.</p>
+    </div>
+    <div class="callout note">
+      <div class="label">apply=true: proposed, not built</div>
+      <p>For headless callers, or a user who explicitly wants the tool to do it, <code>fix(…, apply=true)</code> would write through the same safety-net pipeline the CLI uses: back up the working tree, write one finding's fix, re-scan. Still one finding at a time, never "fix everything" over MCP. This fallback is still a proposal in <code>docs/mcp.md</code>.</p>
+    </div>
+  </div>
+</section>
+
+<section id="dast">
+  <h2>Live-URL scans: a job handle, not a long call</h2>
+  <p class="prose">A DAST scan of a running app takes minutes, far longer than a tool call should block. So <code>scan_url</code> starts the scan in the background and returns a job id at once; <code>scan_status</code> is polled until the result is ready.</p>
+
+  <div class="scene" id="dast" data-scene data-interval="2600">
+    <figure class="stage">
+      <svg viewBox="0 0 960 250" role="img" aria-label="The host calls scan_url and immediately receives a job id; three scan_status polls show progress 0.25, 0.7, then done with the full result.">
+        <defs><marker id="arrD" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g class="node" transform="translate(20 20)"><rect width="170" height="210" rx="10"/><text class="ttl" x="14" y="26">Host LLM</text><text class="lbl" x="14" y="46">keeps the conversation</text><text class="lbl" x="14" y="61">going while it polls</text></g>
+        <g class="node" transform="translate(760 20)">
+          <rect width="180" height="210" rx="10"/>
+          <text class="ttl" x="14" y="26">isitsecure MCP</text>
+          <text class="lbl" x="14" y="46">background DAST job</text>
+          <g class="mono">
+            <text class="at-1" x="14" y="76">job_id: "3fa9c0d1e2b7"</text>
+            <text class="at-1 until-4 t-accent" x="14" y="96">status: running</text>
+            <text class="at-4 t-safe" x="14" y="96">status: done</text>
+          </g>
+          <rect class="track" x="14" y="110" width="150" height="10" rx="5"/>
+          <rect class="bar" x="14" y="110" width="150" height="10" rx="5"/>
+          <g class="mono">
+            <text class="only-1 lbl" x="14" y="140">progress 0.0</text>
+            <text class="only-2 lbl" x="14" y="140">progress 0.25</text>
+            <text class="only-3 lbl" x="14" y="140">progress 0.7</text>
+            <text class="only-4 lbl" x="14" y="140">progress 1.0</text>
+          </g>
+          <text class="lbl at-4" x="14" y="168">result: same shape as</text>
+          <text class="lbl at-4" x="14" y="184">scan, with a scan_id</text>
+          <text class="lbl at-4" x="14" y="200">for explain / export</text>
+        </g>
+
+        <g class="mono">
+          <text class="at-1" x="475" y="52" text-anchor="middle">scan_url("http://localhost:3000")</text>
+          <path id="dp1" class="wire at-1 lit-1" d="M190 58 H 758" marker-end="url(#arrD)"/>
+          <path id="dp1r" class="wire dashed at-1" d="M758 72 H 190" marker-end="url(#arrD)"/>
+          <text class="at-1 t-info" x="475" y="86" text-anchor="middle">returns immediately: job_id, status "running"</text>
+
+          <text class="at-2" x="475" y="108" text-anchor="middle">scan_status(job_id)</text>
+          <path id="dp2" class="wire at-2 lit-2" d="M190 114 H 758" marker-end="url(#arrD)"/>
+          <path id="dp2r" class="wire dashed at-2" d="M758 126 H 190" marker-end="url(#arrD)"/>
+          <text class="at-2 t-info" x="475" y="140" text-anchor="middle">running · progress 0.25 · result: null</text>
+
+          <text class="at-3" x="475" y="162" text-anchor="middle">scan_status(job_id)</text>
+          <path id="dp3" class="wire at-3 lit-3" d="M190 168 H 758" marker-end="url(#arrD)"/>
+          <path id="dp3r" class="wire dashed at-3" d="M758 180 H 190" marker-end="url(#arrD)"/>
+          <text class="at-3 t-info" x="475" y="194" text-anchor="middle">running · progress 0.7</text>
+
+          <text class="at-4" x="475" y="216" text-anchor="middle">scan_status(job_id)</text>
+          <path id="dp4" class="wire at-4 lit-4" d="M190 222 H 758" marker-end="url(#arrD)"/>
+          <path id="dp4r" class="wire dashed at-4 safe" d="M758 234 H 190" marker-end="url(#arrD)"/>
+          <text class="at-4 t-safe" x="475" y="248" text-anchor="middle">done · progress 1.0 · result: {grade, findings, path_to_next_grade, …}</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step" data-on="dastHook"><span class="n">1</span><code>scan_url(url)</code> validates that the URL is http(s), starts a url-only DAST scan as a background task and <b>returns a <code>job_id</code> immediately</b>. The URL must be reachable from the machine running the server.</p>
+      <p class="step" data-on="dastHook"><span class="n">2</span>The host polls <code>scan_status(job_id)</code>. It gets <code>running</code>, a 0 to 1 <code>progress</code>, a message and <code>result: null</code>.</p>
+      <p class="step" data-on="dastHook"><span class="n">3</span>Still running. Finished jobs are the only ones evicted when the job table is over its cap, so a running scan's handle never vanishes mid-flight.</p>
+      <p class="step" data-on="dastHook"><span class="n">4</span><code>done</code>. The full result has the same shape as <code>scan</code>, and its <code>scan_id</code> works with <code>explain</code> and <code>export</code>. Authenticated crawls and full SAST+DAST runs stay CLI-side for now.</p>
+    </div>
+  </div>
+</section>
+
+<section id="cache">
+  <h2>Stable finding ids across turns</h2>
+  <p class="prose">"Explain the SQLi one" and "fix #3" only work if a finding from an earlier turn can still be resolved. The server keeps the full report of each scan in an in-process cache keyed by <code>scan_id</code>; every later tool resolves its finding from there.</p>
+
+  <div class="scene" id="cache" data-scene data-interval="3000">
+    <figure class="stage">
+      <svg viewBox="0 0 960 250" role="img" aria-label="Conversation turns on the left resolve findings from an in-process scan cache inside the MCP server process; the cache is bounded to the 20 most recent scans and lost on restart.">
+        <defs><marker id="arrC" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <text class="lbl" x="20" y="24">Conversation turns</text>
+        <g class="node lit-1" transform="translate(20 36)"><rect width="250" height="40" rx="8"/><text class="mono" x="12" y="17">turn 1  scan(".")</text><text class="lbl" x="12" y="32">→ scan_id 9f2c…, findings with ids</text></g>
+        <g class="node at-2 lit-2" transform="translate(20 92)"><rect width="250" height="40" rx="8"/><text class="mono" x="12" y="17">turn 4  "fix #3"</text><text class="lbl" x="12" y="32">→ fix("9f2c…", finding_id)</text></g>
+        <g class="node at-3 lit-3" transform="translate(20 148)"><rect width="250" height="40" rx="8"/><text class="mono" x="12" y="17">turn 6  verify("9f2c…")</text><text class="lbl" x="12" y="32">→ re-scan cached as b7e1…</text></g>
+        <g class="node at-4 lit-4" transform="translate(20 204)"><rect width="250" height="40" rx="8"/><text class="mono" x="12" y="17">turn 40  scan #21</text><text class="lbl" x="12" y="32">→ the oldest entry is evicted</text></g>
+
+        <path class="wire at-1 accent" d="M270 56 C 310 56, 310 90, 348 90" marker-end="url(#arrC)"/>
+        <path class="wire at-2 accent" d="M270 112 C 310 112, 310 90, 348 90" marker-end="url(#arrC)"/>
+        <path class="wire at-3 accent" d="M270 168 C 310 168, 310 112, 348 112" marker-end="url(#arrC)"/>
+        <path class="wire at-4 attacker" d="M270 224 C 310 224, 310 134, 348 134" marker-end="url(#arrC)"/>
+
+        <g class="node" transform="translate(350 20)">
+          <rect width="330" height="210" rx="10"/>
+          <text class="ttl" x="14" y="24">MCP server process</text>
+          <text class="lbl" x="14" y="42">_SCAN_CACHE: OrderedDict, max 20 scans</text>
+          <g class="mono">
+            <g class="at-1 evict"><rect x="14" y="56" width="300" height="22" rx="5" class="soft-info"/><text x="22" y="71">9f2c…  → full report + repo_path</text></g>
+            <g class="at-3"><rect x="14" y="80" width="300" height="22" rx="5" class="soft-info"/><text x="22" y="95">b7e1…  → re-scan report + repo_path</text></g>
+            <g class="at-4"><rect x="14" y="104" width="300" height="22" rx="5" class="soft-accent"/><text x="22" y="119">… 18 more, newest last</text></g>
+          </g>
+          <text class="lbl at-2" x="14" y="150">get_finding(scan_id, finding_id)</text>
+          <text class="lbl at-2" x="14" y="166">resolves the finding and the path it was</text>
+          <text class="lbl at-2" x="14" y="182">scanned from, so fix can read the file</text>
+          <text class="lbl at-4 t-attacker" x="14" y="204">in-process only: gone on restart</text>
+        </g>
+
+        <g class="node at-2" transform="translate(700 60)">
+          <rect width="240" height="130" rx="10"/>
+          <text class="ttl" x="12" y="24">Why ids must be stable</text>
+          <text class="lbl" x="12" y="48">the scan list returns trimmed</text>
+          <text class="lbl" x="12" y="64">findings; the cache keeps the</text>
+          <text class="lbl" x="12" y="80">full report, so explain, fix and</text>
+          <text class="lbl" x="12" y="96">verify see everything the scan</text>
+          <text class="lbl" x="12" y="112">saw, turns later</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span><code>scan</code> stores the full report under a fresh 12-character <code>scan_id</code> together with the path that was scanned. The findings it returns carry ids that stay valid for the session.</p>
+      <p class="step"><span class="n">2</span>Turns later you say "fix #3". <code>get_finding(scan_id, finding_id)</code> resolves the finding from the cached report, and the cached path lets <code>fix</code> read the actual source file. <b>Every later tool builds on this one lookup.</b></p>
+      <p class="step"><span class="n">3</span><code>verify</code> caches its re-scan as a new entry and returns the new <code>scan_id</code>, so the next fix targets the current state of the code.</p>
+      <p class="step"><span class="n">4</span>The cache is bounded to the 20 most recent scans (oldest evicted first) and lives only in the server process. On-disk persistence under <code>~/.isitsecure/scans/</code> is a possible later add; in-process is enough for one session's loop.</p>
+    </div>
+  </div>
+</section>
+
+<section id="cli">
+  <h2>Why the CLI applies and the MCP does not</h2>
+  <p class="prose">Same fix generator, opposite right answer. The divergence is intentional and recorded so it is not mistaken for an inconsistency.</p>
+
+  <div class="scene" id="cli" data-scene data-interval="3200">
+    <figure class="stage">
+      <svg viewBox="0 0 960 240" role="img" aria-label="Two lanes from one fix generator: the CLI backs up, writes and re-scans itself because it has no host LLM; the MCP returns a diff the host applies, then verify re-scans.">
+        <defs><marker id="arrK" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g class="node lit-1" transform="translate(20 80)"><rect width="150" height="80" rx="10"/><text class="ttl" x="12" y="26">FixGenerator</text><text class="lbl" x="12" y="46">finding + full file</text><text class="lbl" x="12" y="62">→ fixed file + diff</text></g>
+
+        <g class="lane-cli">
+          <text class="mono t-accent" x="200" y="32">isitsecure fix --repo .   (CLI)</text>
+          <path class="wire at-2" d="M170 110 C 190 110, 190 70, 208 70" marker-end="url(#arrK)"/>
+          <g class="node at-2 lit-2" transform="translate(210 44)"><rect width="150" height="52" rx="8"/><text x="12" y="22">no host LLM</text><text class="lbl" x="12" y="40">nobody else can write</text></g>
+          <path class="wire at-2" d="M360 70 H 378" marker-end="url(#arrK)"/>
+          <g class="node at-2 lit-2" transform="translate(380 44)"><rect width="160" height="52" rx="8"/><text x="12" y="22">safety-net backup</text><text class="lbl" x="12" y="40">snapshot the working tree</text></g>
+          <path class="wire at-2" d="M540 70 H 558" marker-end="url(#arrK)"/>
+          <g class="node at-2 lit-2" transform="translate(560 44)"><rect width="150" height="52" rx="8"/><text x="12" y="22">write the fix</text><text class="lbl" x="12" y="40">one finding at a time</text></g>
+          <path class="wire at-2" d="M710 70 H 728" marker-end="url(#arrK)"/>
+          <g class="node at-2 lit-2" transform="translate(730 44)"><rect width="210" height="52" rx="8" class="soft-safe"/><text x="12" y="22">re-scan to verify</text><text class="lbl" x="12" y="40">fixed / needs review / couldn't fix</text></g>
+        </g>
+
+        <g class="lane-mcp">
+          <text class="mono t-info" x="200" y="140">fix(scan_id, finding_id)   (MCP)</text>
+          <path class="wire at-3" d="M170 130 C 190 130, 190 180, 208 180" marker-end="url(#arrK)"/>
+          <g class="node at-3 lit-3" transform="translate(210 154)"><rect width="150" height="52" rx="8"/><text x="12" y="22">host LLM present</text><text class="lbl" x="12" y="40">a capable writer exists</text></g>
+          <path class="wire at-3" d="M360 180 H 378" marker-end="url(#arrK)"/>
+          <g class="node at-3 lit-3" transform="translate(380 154)"><rect width="160" height="52" rx="8"/><text x="12" y="22">return the diff</text><text class="lbl" x="12" y="40">applied: false</text></g>
+          <path class="wire at-3" d="M540 180 H 558" marker-end="url(#arrK)"/>
+          <g class="node at-3 lit-3" transform="translate(560 154)"><rect width="150" height="52" rx="8" class="soft-accent"/><text x="12" y="22">host applies it</text><text class="lbl" x="12" y="40">its editor, its undo</text></g>
+          <path class="wire at-3" d="M710 180 H 728" marker-end="url(#arrK)"/>
+          <g class="node at-3 lit-3" transform="translate(730 154)"><rect width="210" height="52" rx="8" class="soft-safe"/><text x="12" y="22">verify(scan_id)</text><text class="lbl" x="12" y="40">re-scan, grade before → after</text></g>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Both paths start from the same <code>FixGenerator</code>: the finding plus its full source file go to the LLM, and a fixed file and unified diff come back.</p>
+      <p class="step"><span class="n">2</span><b>The CLI has no host LLM, so it must apply the fix itself.</b> It snapshots the working tree as a safety net, writes one finding's fix, then re-scans to confirm the finding is gone.</p>
+      <p class="step"><span class="n">3</span><b>The MCP always has a capable agent, so it defers the write.</b> It returns the diff with <code>applied: false</code>, the host applies it in your review flow, and <code>verify</code> closes the loop with the same re-scan proof.</p>
+    </div>
+  </div>
+</section>
+
+<section id="surface">
+  <h2>The tool surface</h2>
+  <p class="prose">Seven tools, as registered in <code>isitsecure/mcp_server.py</code>. Every tool after <code>scan</code> takes a <code>scan_id</code>, which is what makes the conversation stateful.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Tool</th><th>Parameters</th><th>Returns</th><th>Who writes</th></tr></thead>
+      <tbody>
+        <tr><td><code>scan</code></td><td><code>path</code>, <code>min_severity="medium"</code></td><td>scan_id, grade, launch verdict, counts, path_to_next_grade, themes, trimmed findings</td><td>nobody (code-only SAST, read only)</td></tr>
+        <tr><td><code>explain</code></td><td><code>scan_id</code>, <code>finding_id</code></td><td>the finding's own description, technical detail, evidence, snippet; business impact; remediation; walkthrough</td><td>nobody</td></tr>
+        <tr><td><code>fix</code></td><td><code>scan_id</code>, <code>finding_id</code></td><td>unified diff, fixed_file, explanation, <code>applied: false</code></td><td><b>the host LLM</b></td></tr>
+        <tr><td><code>verify</code></td><td><code>scan_id</code></td><td>resolved / still present / unverifiable, grade before → after, fresh scan_id</td><td>nobody (re-scan only)</td></tr>
+        <tr><td><code>export</code></td><td><code>scan_id</code>, <code>format="markdown"</code></td><td>content as html, sarif, json or markdown, suggested filename</td><td><b>the host LLM</b></td></tr>
+        <tr><td><code>scan_url</code></td><td><code>url</code>, <code>min_severity="medium"</code></td><td>job_id, status "running"</td><td>nobody</td></tr>
+        <tr><td><code>scan_status</code></td><td><code>job_id</code></td><td>status running | done | error, progress 0–1, result once done</td><td>nobody</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout note">
+    <div class="label">Design doc versus code</div>
+    <p><code>docs/mcp.md</code> now lists <code>scan(path, min_severity)</code>, matching the registered tool: there is no mode argument and the scan is always code-only. The <code>apply=true</code> fallback on <code>fix</code> is still only a proposal in the doc and is not implemented.</p>
+  </div>
+
+  <h3>Open questions from the design doc</h3>
+  <div class="callout note">
+    <div class="label">Still being argued in docs/mcp.md</div>
+    <ul>
+      <li><b>Scan-cache lifetime.</b> In-process only (simplest, lost on restart) or on disk under <code>~/.isitsecure/scans/</code> (survives, but needs cleanup and expiry).</li>
+      <li><b>verify cost.</b> A full re-scan with LLM review is slow. Could verification be scoped to changed files, or run rule-based only for speed?</li>
+      <li><b>Multi-file fixes.</b> Some findings span files (adding RLS across tables). How does <code>fix</code> present and apply those safely under the one-finding-at-a-time rule?</li>
+      <li><b>Grade-path shape.</b> The exact schema of <code>path_to_next_grade</code> that the LLM reads to answer "what gets me to a C?".</li>
+    </ul>
+  </div>
+
+  <div class="callout note">
+    <div class="label">Out of scope for now</div>
+    <p>No hosted or multi-user MCP: this is a local stdio server spawned per user by their own tool. No authenticated or full DAST over MCP: <code>scan_url</code> is url-only; authenticated crawls and SAST+DAST runs stay on the CLI.</p>
+  </div>
+</section>
+
+<footer class="foot">
+  <span>Source: <a href="../mcp.md">docs/mcp.md</a> · <a href="../../isitsecure/mcp_server.py">isitsecure/mcp_server.py</a></span>
+  <span>Related: <a href="llm-review-and-fixes.html">LLM review and AI fixes</a> · <a href="scan-pipeline.html">The scan pipeline</a> · <a href="triage-and-grading.html">Triage and grading</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+<script>
+(function () {
+  // Sequence-diagram packets: a call dot runs host → MCP, a return dot comes back.
+  const CALLS = { 1: ["lp1"], 2: ["lp2"], 3: ["lp3"], 4: ["lp4", "lp4r"], 5: ["lp5", "lp5r"], 6: ["lp6", "lp6r"], 8: ["lp8", "lp8r"], 9: ["lp9", "lp9r"] };
+  window.loopHook = function (scene, step, el) {
+    const svg = el.querySelector("svg");
+    IsDoc.clearPackets(svg);
+    (CALLS[step] || []).forEach((id, k) => {
+      const p = svg.getElementById(id);
+      if (!p) return;
+      const isReturn = id.endsWith("r") || id === "lp3";
+      IsDoc.packet(svg, p, { r: 5, cls: isReturn ? "f-info" : "f-accent", duration: 800, delay: k * 850, hold: 400 });
+    });
+  };
+  window.dastHook = function (scene, step, el) {
+    const svg = el.querySelector("svg");
+    IsDoc.clearPackets(svg);
+    const call = svg.getElementById("dp" + step), ret = svg.getElementById("dp" + step + "r");
+    if (call) IsDoc.packet(svg, call, { r: 5, cls: "f-accent", duration: 900, hold: 300 });
+    if (ret) IsDoc.packet(svg, ret, { r: 5, cls: step === 4 ? "f-safe" : "f-info", duration: 900, delay: 950, hold: 400 });
+  };
+})();
+</script>
+</body>
+</html>

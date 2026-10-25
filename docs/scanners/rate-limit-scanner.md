@@ -1,16 +1,16 @@
 # Rate Limit Scanner
 
-**Type:** DAST | **Severity:** Medium–High | **Category:** Auth Weakness
+**Type:** DAST | **Severity:** Info to High | **Category:** Auth Weakness
 
 ## What It Does
 
-Sends rapid bursts of requests to auth-sensitive endpoints (login, password reset, registration) without rate-limiting middleware and checks:
+Sends rapid bursts of requests to auth-sensitive endpoints (URLs containing `/login`, `/signin`, `/auth`, `/signup`, `/register`, `/password`, `/reset`, `/forgot`, `/token` or `/otp`) and checks:
 
-- **Threshold detection** — how many requests before a 429 (Too Many Requests)?
-- **Burst testing** — sends 10, 50, 100 concurrent requests to detect limits
-- **Per-IP vs per-user** — does changing the auth header bypass the rate limit?
+- **Threshold detection** — sends up to 150 sequential requests (0.05 s apart) and counts how many succeed before a 429 (Too Many Requests). A 429 gives an Info finding with the measured threshold (0.90); no 429 in 150 gives a High finding (0.85).
+- **Burst testing** — sends concurrent bursts of 10, 50, then 100 requests and stops at the first burst that returns a 429 (Medium, 0.90)
+- **Per-IP vs per-user** — after a 429 with one synthetic Authorization header, does a second synthetic header from the same address get through? If so, it is reported (Medium, 0.90).
 
-If the endpoint accepts all requests without returning 429, it has no rate limiting.
+If the endpoint accepts all 150 sequential requests without returning 429, it has no rate limiting.
 
 **Authenticated scans (#119):** on an authenticated deep scan the scanner carries the captured session so behind-login critical endpoints are reachable and the burst tests measure the authenticated user's rate limit. The per-IP-vs-per-user test is the one exception — it strips the session and uses two synthetic identities, since that test must vary who is making the request.
 

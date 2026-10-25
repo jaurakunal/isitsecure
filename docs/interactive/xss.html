@@ -1,0 +1,495 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Cross-Site Scripting · isitsecure</title>
+<meta name="description" content="How the isitsecure XSS scanner plants a canary with angle brackets, decides between confirmed, context-confirmed and possible XSS, tests POST bodies and stored read-back, and what quick vs deep depth changes. Animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  /* reflect: the verdict banner gets colour from the step */
+  #reflect .verdict { font-weight: 600; }
+  /* context: dim the chips that are not in play */
+  #context .chip > rect { fill: var(--surface); }
+  #context .chip text { fill: var(--muted); }
+  #context.s2 .chip.on text { fill: var(--fg); }
+  /* depth: skipped lane */
+  #depth .skipped text { fill: var(--muted); }
+  #depth .skipped > rect { stroke-dasharray: 5 4; }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› <a href="group-injection.html">Injection</a> › Cross-site scripting</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/xss-scanner.md" title="The markdown source for this page">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">DAST scanner</div>
+  <h1>Cross-Site Scripting</h1>
+  <p class="lede">The scanner plants a harmless canary with angle brackets in every parameter it can find and reads the HTML that comes back. If the brackets survive, the browser would parse them as markup, so the page is injectable. If only the text survives, it tries a breakout payload matched to where the canary landed. It also tests POST bodies and looks for stored copies on read-back.</p>
+  <div class="meta">
+    <span class="pill dast">DAST</span><span class="pill high">Low–Critical</span><span class="pill">Injection Risk</span><span class="pill">xss_scanner</span><span class="pill">deep: static sink pass</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#reflect-sec"><span class="n">01</span>Reflected: the canary test</a>
+  <a href="#context-sec"><span class="n">02</span>Context-aware breakouts</a>
+  <a href="#post-sec"><span class="n">03</span>POST bodies and stored XSS</a>
+  <a href="#depth-sec"><span class="n">04</span>Quick vs deep</a>
+  <a href="#why"><span class="n">05</span>Why it matters</a>
+  <a href="#breach"><span class="n">06</span>Breaches</a>
+  <a href="#fix-sec"><span class="n">07</span>The fix</a>
+  <a href="#limits"><span class="n">08</span>Limits</a>
+</nav>
+
+<section id="reflect-sec">
+  <h2>Reflected XSS: the canary test</h2>
+  <p class="prose">The scanner never fires a real exploit first. It sends a unique string wrapped in <code>&lt; &gt;</code> and checks whether the server hands those two characters back untouched. That is the whole signal: unescaped brackets in an HTML response.</p>
+
+  <div class="scene" id="reflect" data-scene data-interval="3600">
+    <figure class="stage">
+      <svg viewBox="0 0 960 340" role="img" aria-label="The scanner sends a GET with a canary in a query parameter. If the HTML response contains the canary with its angle brackets intact, the endpoint is reported as confirmed XSS. If the brackets come back encoded, the canary text alone leads to a context test. A JSON response is ignored.">
+        <defs><marker id="arrX1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+
+        <g class="node lit-1" transform="translate(20 20)">
+          <rect width="320" height="84" rx="10"/>
+          <text class="ttl" x="14" y="26">Scanner · xss_scanner</text>
+          <text class="lbl" x="14" y="46">params: in the URL, then discovered,</text>
+          <text class="lbl" x="14" y="62">then a fallback list; 5 per endpoint</text>
+        </g>
+        <g class="node lit-2" transform="translate(20 124)">
+          <rect width="320" height="78" rx="10"/>
+          <text class="ttl" x="14" y="24">Request</text>
+          <text class="mono" x="14" y="46">GET /search?q=<tspan class="t-attacker">&lt;canary_xss_8f3a&gt;</tspan></text>
+          <text class="lbl" x="14" y="64">auth headers or cookie when a session exists</text>
+        </g>
+
+        <g class="node at-2 lit-2" transform="translate(380 20)">
+          <rect width="300" height="182" rx="10"/>
+          <text class="ttl" x="14" y="26">Response</text>
+          <g class="only-2 only-3"><text class="mono" x="14" y="52">200 · text/html</text>
+            <text class="mono" x="14" y="82">&lt;h1&gt;Results for:</text>
+            <text class="mono t-attacker" x="14" y="100">&lt;canary_xss_8f3a&gt;&lt;/h1&gt;</text>
+            <text class="lbl" x="14" y="130">brackets arrive as brackets</text></g>
+          <g class="only-4"><text class="mono" x="14" y="52">200 · text/html</text>
+            <text class="mono" x="14" y="82">&lt;h1&gt;Results for:</text>
+            <text class="mono t-info" x="14" y="100">&amp;lt;canary_xss_8f3a&amp;gt;&lt;/h1&gt;</text>
+            <text class="lbl" x="14" y="130">brackets encoded, text survives</text></g>
+          <g class="only-5"><text class="mono" x="14" y="52">200 · application/json</text>
+            <text class="mono" x="14" y="82">{"q":"&lt;canary_xss_8f3a&gt;"}</text>
+            <text class="lbl" x="14" y="130">unescaped, but not HTML</text></g>
+          <text class="lbl" x="14" y="168">status 400 or higher: probe skipped</text>
+        </g>
+
+        <g class="node at-3 lit-3 lit-4 lit-5" transform="translate(720 20)">
+          <rect width="224" height="182" rx="10"/>
+          <text class="ttl" x="14" y="26">Decision</text>
+          <g class="only-3">
+            <text class="lbl" x="14" y="52">probe string in body:</text><text class="mono t-attacker" x="14" y="68">yes</text>
+            <text class="lbl" x="14" y="92">Content-Type has text/html:</text><text class="mono t-attacker" x="14" y="108">yes</text>
+            <text class="ttl t-attacker" x="14" y="146">High · 0.95</text>
+          </g>
+          <g class="only-4">
+            <text class="lbl" x="14" y="52">probe string in body:</text><text class="mono" x="14" y="68">no</text>
+            <text class="lbl" x="14" y="92">canary text (no brackets):</text><text class="mono t-info" x="14" y="108">yes</text>
+            <text class="ttl t-info" x="14" y="146">context test next</text>
+          </g>
+          <g class="only-5">
+            <text class="lbl" x="14" y="52">probe string in body:</text><text class="mono" x="14" y="68">yes</text>
+            <text class="lbl" x="14" y="92">Content-Type has text/html:</text><text class="mono t-safe" x="14" y="108">no</text>
+            <text class="ttl t-safe" x="14" y="146">no finding</text>
+          </g>
+        </g>
+
+        <path id="xw1" class="wire at-2 accent" d="M340 163 H 378" marker-end="url(#arrX1)"/>
+        <path id="xw1p" d="M342 163 H 372" fill="none" stroke="none"/>
+        <path id="xw1r" d="M378 185 H 344" fill="none" stroke="none"/>
+        <path class="wire at-3 info dashed" d="M680 110 H 718" marker-end="url(#arrX1)"/>
+
+        <g class="only-1"><text class="lbl" x="20" y="240">Probes tried in order, fresh 8-hex id per parameter:</text>
+          <g class="mono"><text x="20" y="262">&lt;canary_xss_8f3a&gt;</text><text x="260" y="262">"canary_xss_8f3a"</text><text x="500" y="262">'canary_xss_8f3a'</text></g></g>
+        <g class="only-3"><text class="ttl t-attacker" x="20" y="250">Confirmed reflected XSS · parameter q</text>
+          <text class="lbl" x="20" y="270">Evidence: the full probe value with &lt; and &gt; intact sits in an HTML response.</text></g>
+        <g class="only-4"><text class="ttl t-info" x="20" y="250">Not confirmed yet</text>
+          <text class="lbl" x="20" y="270">Framework encoding is active for this context. If no breakout confirms (next scene), the result is "Possible reflected XSS": Low, 0.40.</text></g>
+        <g class="only-5"><text class="ttl t-safe" x="20" y="250">Silent on purpose</text>
+          <text class="lbl" x="20" y="270">A browser does not parse JSON as markup. Only text/html responses can count.</text></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>For each GET endpoint and each parameter, the scanner builds a canary such as <code>&lt;canary_xss_8f3a&gt;</code>. Parameters come from the URL itself, then the ones discovery found, then a small fallback list (<code>q</code>, <code>search</code>, <code>name</code>, …), at most 5 per endpoint.</p>
+      <p class="step" data-on="reflectStep"><span class="n">2</span>The canary goes into the query string with the session's auth headers. A response with status 400 or higher is skipped.</p>
+      <p class="step"><span class="n">3</span><b>Flag only if the whole probe string, brackets included, is in the body and the Content-Type contains <code>text/html</code>.</b> That is reported as Confirmed reflected XSS, High, confidence 0.95.</p>
+      <p class="step"><span class="n">4</span>If the brackets were encoded to <code>&amp;lt;</code> but the bare text <code>canary_xss_8f3a</code> is still in the page, the scanner does not stop. It looks at where the text landed and tries a breakout for that spot.</p>
+      <p class="step"><span class="n">5</span>The guard: a JSON endpoint that echoes the canary raw produces nothing, because both checks require <code>text/html</code>. This keeps API echoes out of the report.</p>
+    </div>
+  </div>
+</section>
+
+<section id="context-sec">
+  <h2>Context-aware breakouts</h2>
+  <p class="prose">Encoding of <code>&lt;</code> and <code>&gt;</code> does not protect a canary that sits inside a quoted attribute or a script string, because there the attacker only needs a quote. The scanner reads the surrounding markup to find out which case it is in.</p>
+
+  <div class="scene" id="context" data-scene data-interval="3600">
+    <figure class="stage">
+      <svg viewBox="0 0 960 280" role="img" aria-label="A canary with encoded brackets is found inside a double-quoted HTML attribute. The scanner matches it against seven context patterns, sends the breakout payload for that context, and reports High only when the payload comes back unescaped. Otherwise other matching contexts are tried and the result stays Low.">
+        <defs><marker id="arrX2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+
+        <g class="node lit-1" transform="translate(20 20)">
+          <rect width="300" height="122" rx="10"/>
+          <text class="ttl" x="14" y="26">Reflected, brackets encoded</text>
+          <g class="mono"><text x="14" y="52">&lt;input type="text" name="q"</text>
+            <text x="14" y="70">  value="<tspan class="t-attacker">canary_xss_8f3a</tspan>"&gt;</text></g>
+          <text class="lbl" x="14" y="98">text survived, inside a quoted value</text>
+          <text class="lbl" x="14" y="112">parameter q, GET</text>
+        </g>
+
+        <g class="node at-3 lit-3" transform="translate(350 20)">
+          <rect width="290" height="122" rx="10"/>
+          <text class="ttl" x="14" y="26">Breakout for that context</text>
+          <text class="mono t-attacker" x="14" y="56">" onmouseover=alert(1) x="</text>
+          <text class="lbl" x="14" y="82">same parameter, new GET</text>
+          <text class="lbl" x="14" y="98">closes the value, adds an attribute</text>
+        </g>
+
+        <g class="node at-4 lit-4 lit-5" transform="translate(670 20)">
+          <rect width="274" height="122" rx="10"/>
+          <text class="ttl" x="14" y="26">Is the payload in the reply?</text>
+          <g class="only-4"><text class="lbl" x="14" y="52">yes, unescaped (status below 400)</text>
+            <text class="ttl t-attacker" x="14" y="84">High · 0.95</text>
+            <text class="lbl" x="14" y="104">Confirmed XSS, attribute breakout</text></g>
+          <g class="only-5"><text class="lbl" x="14" y="52">no, quotes were encoded too</text>
+            <text class="ttl t-info" x="14" y="84">next matching context</text>
+            <text class="lbl" x="14" y="104">none confirm: Low · 0.40</text></g>
+        </g>
+        <path class="wire at-3 attacker" d="M320 81 H 348" marker-end="url(#arrX2)"/>
+        <path id="cw1p" d="M322 81 H 346" fill="none" stroke="none"/>
+        <path class="wire at-4 info dashed" d="M640 81 H 668" marker-end="url(#arrX2)"/>
+
+        <text class="lbl until-2" x="20" y="172">Seven contexts are checked, each by a regex around the canary:</text>
+        <text class="lbl at-2 until-3" x="20" y="172">Checked in this order. The first whose regex matches gets its payload sent:</text>
+        <text class="lbl at-3" x="20" y="172">Context 1 matched, so its payload went out. The order continues only if that fails:</text>
+
+        <g transform="translate(20 184)">
+          <g class="node chip on lit-2 lit-3 lit-4"><rect x="0" y="0" width="124" height="34" rx="6"/><text class="lbl" x="10" y="21">attr "…"</text></g>
+          <g class="node chip"><rect x="132" y="0" width="124" height="34" rx="6"/><text class="lbl" x="142" y="21">attr '…'</text></g>
+          <g class="node chip on lit-5"><rect x="264" y="0" width="124" height="34" rx="6"/><text class="lbl" x="274" y="21">js string "…"</text></g>
+          <g class="node chip"><rect x="396" y="0" width="124" height="34" rx="6"/><text class="lbl" x="406" y="21">js string '…'</text></g>
+          <g class="node chip"><rect x="528" y="0" width="124" height="34" rx="6"/><text class="lbl" x="538" y="21">js template `…`</text></g>
+          <g class="node chip"><rect x="660" y="0" width="124" height="34" rx="6"/><text class="lbl" x="670" y="21">href="…"</text></g>
+          <g class="node chip"><rect x="792" y="0" width="124" height="34" rx="6"/><text class="lbl" x="802" y="21">&lt;!-- comment --&gt;</text></g>
+        </g>
+
+        <g class="only-5"><text class="lbl t-info" x="20" y="256">A canary in an attribute also matches the js-string pattern "[^"]*canary[^"]*", so that payload ";alert(1);// is tried next.</text></g>
+        <g class="only-4"><text class="lbl t-attacker" x="20" y="256">The check is containment: the payload text is in the response body. The scanner does not render the page.</text></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>A canary came back with its brackets encoded but its text intact, here inside a double-quoted <code>value="…"</code>. Brackets are not needed to break out of an attribute, so this is worth a second look.</p>
+      <p class="step"><span class="n">2</span>Seven patterns describe where text can sit: two attribute quote styles, two JavaScript string styles, a template literal, an <code>href</code>, and an HTML comment. They are tried in that order against the response.</p>
+      <p class="step" data-on="contextStep"><span class="n">3</span>The first pattern that matches decides the payload. For a double-quoted attribute it is <code>" onmouseover=alert(1) x="</code>, sent in the same parameter.</p>
+      <p class="step"><span class="n">4</span><b>Flag only if that exact payload comes back unescaped</b> in a response with status below 400. The result is "Confirmed XSS: HTML attribute breakout (double-quoted)", High, 0.95.</p>
+      <p class="step"><span class="n">5</span>If the payload was encoded, the loop moves on to the next context whose pattern also matches. When none confirm, the scanner reports "Possible reflected XSS" at Low, confidence 0.40, and says encoding appears to be active.</p>
+    </div>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Context</th><th>Pattern around the canary</th><th>Breakout payload sent</th></tr></thead>
+      <tbody>
+        <tr><td>Attribute, double-quoted</td><td><code>="[^"]*CANARY[^"]*"</code></td><td><code>" onmouseover=alert(1) x="</code></td></tr>
+        <tr><td>Attribute, single-quoted</td><td><code>='[^']*CANARY[^']*'</code></td><td><code>' onmouseover=alert(1) x='</code></td></tr>
+        <tr><td>JS string, double-quoted</td><td><code>"[^"]*CANARY[^"]*"</code></td><td><code>";alert(1);//</code></td></tr>
+        <tr><td>JS string, single-quoted</td><td><code>'[^']*CANARY[^']*'</code></td><td><code>';alert(1);//</code></td></tr>
+        <tr><td>JS template literal</td><td><code>`[^`]*CANARY[^`]*`</code></td><td><code>${alert(1)}</code></td></tr>
+        <tr><td>URL in href</td><td><code>href="[^"]*CANARY</code></td><td><code>javascript:alert(1)</code></td></tr>
+        <tr><td>HTML comment</td><td><code>&lt;!--[^&gt;]*CANARY</code></td><td><code>--&gt;&lt;script&gt;alert(1)&lt;/script&gt;&lt;!--</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="post-sec">
+  <h2>POST bodies and stored XSS</h2>
+  <p class="prose">Many injectable inputs are forms, not query strings. For every POST, PUT or PATCH endpoint the scanner canaries the form's own fields, and when the reply shows nothing it reads the resource back, which is where stored XSS shows up.</p>
+
+  <div class="scene" id="post" data-scene data-interval="3600">
+    <figure class="stage">
+      <svg viewBox="0 0 960 300" role="img" aria-label="The scanner takes the form fields discovered by the crawl, sends a canary in each as a form-urlencoded body, checks the POST response, and if nothing reflects, does a GET read-back. An unescaped canary in an HTML read-back is stored XSS, Critical. A JSON read-back is ignored.">
+        <defs><marker id="arrX3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+
+        <g class="node lit-1" transform="translate(20 20)">
+          <rect width="230" height="112" rx="10"/>
+          <text class="ttl" x="14" y="26">Crawled form</text>
+          <text class="mono" x="14" y="48">POST /profile</text>
+          <text class="lbl" x="14" y="68">inputs: firstName, lastName, bio</text>
+          <text class="lbl" x="14" y="84">taken from the real &lt;input name&gt;,</text>
+          <text class="lbl" x="14" y="98">at most 25 fields</text>
+        </g>
+        <g class="node at-2 lit-2" transform="translate(300 20)">
+          <rect width="330" height="112" rx="10"/>
+          <text class="ttl" x="14" y="26">Body, one canary per field</text>
+          <g class="mono"><text x="14" y="48">firstName=&lt;canary_xss_8f3a_firstName&gt;</text>
+          <text x="14" y="64">bio=&lt;canary_xss_8f3a_bio&gt;</text></g>
+          <text class="lbl" x="14" y="86">sent form-urlencoded first, then JSON</text>
+          <text class="lbl" x="14" y="100">the variant that reflects is kept</text>
+        </g>
+        <g class="node at-3 lit-3" transform="translate(680 20)">
+          <rect width="264" height="120" rx="10"/>
+          <text class="ttl" x="14" y="26">POST reply</text>
+          <text class="mono" x="14" y="48">200</text>
+          <text class="mono t-attacker" x="14" y="68">&lt;canary_xss_8f3a_bio&gt;</text>
+          <text class="lbl" x="14" y="92">full string back: High · 0.90</text>
+          <text class="lbl" x="14" y="108">text only: Low · 0.40</text>
+        </g>
+
+        <g class="node at-4 lit-4 lit-5" transform="translate(300 182)">
+          <rect width="330" height="84" rx="10"/>
+          <text class="ttl" x="14" y="26">Read back: GET /profile</text>
+          <text class="lbl" x="14" y="48">only when the POST reply had no canary</text>
+          <text class="lbl" x="14" y="64">and was below status 400</text>
+        </g>
+        <g class="node at-4 lit-4 lit-5" transform="translate(680 182)">
+          <rect width="264" height="84" rx="10"/>
+          <g class="only-4"><text class="mono" x="14" y="26">200 · text/html</text>
+            <text class="mono t-attacker" x="14" y="46">&lt;li&gt;&lt;canary_xss_8f3a_bio&gt;</text>
+            <text class="ttl t-attacker" x="14" y="70">Stored XSS · Critical 0.95</text></g>
+          <g class="only-5"><text class="mono" x="14" y="26">200 · application/json</text>
+            <text class="mono" x="14" y="46">[{"bio":"&lt;canary…&gt;"}]</text>
+            <text class="ttl t-safe" x="14" y="70">ignored: not HTML</text></g>
+        </g>
+
+        <path class="wire at-2 accent" d="M250 76 H 298" marker-end="url(#arrX3)"/>
+        <path id="pw1p" d="M252 76 H 296" fill="none" stroke="none"/>
+        <path class="wire at-3 accent" d="M630 76 H 678" marker-end="url(#arrX3)"/>
+        <path class="wire at-4 info" d="M465 132 V 180" marker-end="url(#arrX3)"/>
+        <path class="wire at-4 info dashed" d="M630 224 H 678" marker-end="url(#arrX3)"/>
+
+        <g class="only-1"><text class="lbl" x="20" y="180">No discovered fields? Eight generic names are used instead:</text>
+          <text class="mono" x="20" y="200">name · comment · description · title · message · bio · content · text</text></g>
+        <g class="only-3"><text class="lbl" x="20" y="180">Checked per field. A reply that is not HTML still counts here,</text><text class="lbl" x="20" y="196">because an API that echoes the field is itself the finding.</text></g>
+        <g class="only-5"><text class="lbl" x="20" y="180">A JSON API that returns the stored</text><text class="lbl" x="20" y="196">value is not flagged here.</text></g>
+        <g class="only-4"><text class="lbl" x="20" y="180">The value was saved, then rendered raw.</text></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Only POST, PUT and PATCH endpoints take part. The scanner uses the field names the crawler read from the real <code>&lt;form&gt;</code>, up to 25 of them, so app-specific names like <code>firstName</code> are covered. A fixed list of eight generic names is the fallback.</p>
+      <p class="step"><span class="n">2</span>Each field gets its own canary, <code>&lt;canary_xss_ID_field&gt;</code>. The body goes out form-urlencoded first because real forms use it, then as JSON. Whichever variant reflects a canary is the one recorded.</p>
+      <p class="step"><span class="n">3</span>If a canary appears whole in the POST reply, the finding is "Confirmed reflected XSS via POST body", High, 0.90. If only the text appears, it is Low, 0.40.</p>
+      <p class="step"><span class="n">4</span>Nothing in the reply? The value may be stored and rendered later. <b>Flag only if a GET of the same URL returns an HTML page containing the canary unescaped.</b> That is Stored XSS, Critical, 0.95.</p>
+      <p class="step"><span class="n">5</span>The read-back is restricted to <code>text/html</code>. A JSON list that returns the stored string is not a false positive here; the browser-side scanner is the one that decides if the app renders it unsafely.</p>
+    </div>
+  </div>
+</section>
+
+<section id="depth-sec">
+  <h2>Quick vs deep</h2>
+  <p class="prose">The scanner has three phases. What runs depends on the scan depth, and each network phase works against a time budget so a large site cannot starve the rest of the scan.</p>
+
+  <div class="scene" id="depth" data-scene data-interval="3600">
+    <figure class="stage">
+      <svg viewBox="0 0 960 300" role="img" aria-label="Three phases: reflected GET, POST body, and static DOM sinks. Quick depth runs the first two with a 15 minute budget each; deep depth uses 60 minutes and also runs the static sink pass, which reports a Low finding per dangerous sink pattern.">
+        <defs><marker id="arrX4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+
+        <g class="node lit-1" transform="translate(20 20)"><rect width="270" height="92" rx="10"/>
+          <text class="ttl" x="14" y="26">1 · Reflected GET</text>
+          <text class="lbl" x="14" y="48">canary per parameter</text>
+          <text class="lbl" x="14" y="64">context breakouts</text>
+          <text class="lbl t-info" x="14" y="82">network</text></g>
+        <path class="wire" d="M290 66 H 344" marker-end="url(#arrX4)"/>
+        <g class="node lit-1" transform="translate(345 20)"><rect width="270" height="92" rx="10"/>
+          <text class="ttl" x="14" y="26">2 · POST body</text>
+          <text class="lbl" x="14" y="48">form fields, stored read-back</text>
+          <text class="lbl" x="14" y="64">POST, PUT, PATCH</text>
+          <text class="lbl t-info" x="14" y="82">network</text></g>
+        <path class="wire" d="M615 66 H 669" marker-end="url(#arrX4)"/>
+        <g class="node lit-1 lit-3 lit-4" transform="translate(670 20)"><rect width="274" height="92" rx="10"/>
+          <text class="ttl" x="14" y="26">3 · Static DOM sinks</text>
+          <text class="lbl" x="14" y="48">regex over the JS bundles</text>
+          <text class="lbl" x="14" y="64">12 sink patterns</text>
+          <text class="lbl t-accent" x="14" y="82">deep only</text></g>
+
+        <g class="at-2 until-4">
+          <text class="lbl" x="20" y="148">QUICK (default)</text>
+          <rect class="soft-info" x="20" y="156" width="270" height="22" rx="4" fill-opacity=".5"/><text class="mono" x="30" y="171">budget 900 s</text>
+          <rect class="soft-info" x="345" y="156" width="270" height="22" rx="4" fill-opacity=".5"/><text class="mono" x="355" y="171">budget 900 s</text>
+          <g class="skipped"><rect class="wire dashed" x="670" y="156" width="274" height="22" rx="4" style="fill:none;stroke:var(--line)"/><text class="mono" x="680" y="171">skipped</text></g>
+        </g>
+        <g class="at-3 until-4">
+          <text class="lbl" x="20" y="208">DEEP</text>
+          <rect class="soft-accent" x="20" y="216" width="270" height="22" rx="4" fill-opacity=".6"/><text class="mono" x="30" y="231">budget 3600 s</text>
+          <rect class="soft-accent" x="345" y="216" width="270" height="22" rx="4" fill-opacity=".6"/><text class="mono" x="355" y="231">budget 3600 s</text>
+          <rect class="soft-accent" x="670" y="216" width="274" height="22" rx="4" fill-opacity=".6"/><text class="mono" x="680" y="231">runs</text>
+        </g>
+        <text class="lbl at-2 until-3" x="20" y="278">The Semgrep taint layer already gives a DOM-XSS floor at quick depth.</text>
+
+        <g class="at-4">
+          <text class="lbl" x="20" y="148">What the static pass does with each pattern:</text>
+          <g class="mono"><text x="20" y="176">el.innerHTML = "&lt;b&gt;Loading&lt;/b&gt;"</text><text x="20" y="200">el.innerHTML = params.get("q")</text></g>
+          <text class="lbl t-safe" x="360" y="176">static string right after the sink: safe, skipped</text>
+          <text class="lbl t-attacker" x="360" y="200">not provably static: counts as a match</text>
+          <text class="lbl" x="20" y="238">A pattern is reported only if at least one match is not safe, and only once per pattern.</text>
+          <text class="ttl t-info" x="20" y="268">DOM-based XSS risk: dangerous sink · Low · 0.60</text>
+          <text class="lbl" x="20" y="288">A hint that code exists. It proves nothing about a flow from user input.</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Three phases run in order against the discovered inventory: reflected GET, POST body, and a static pass over the JavaScript the crawler collected.</p>
+      <p class="step"><span class="n">2</span><b>At quick depth only the two network phases run</b>, each against a 900 second budget (<code>XSS_QUICK_SECONDS</code>). Reflected and stored XSS on protected endpoints are still caught in a fast scan.</p>
+      <p class="step"><span class="n">3</span>At <code>--depth deep</code> each network phase gets 3600 seconds and the static pass is added.</p>
+      <p class="step"><span class="n">4</span>The static pass looks for 12 sink patterns such as <code>.innerHTML =</code>, <code>eval(</code>, <code>document.write(</code> and <code>dangerouslySetInnerHTML</code>. A pattern whose every match is a plain string assignment is dropped. Anything else yields one Low finding per pattern.</p>
+    </div>
+  </div>
+  <div class="callout note">
+    <div class="label">Real browser confirmation lives elsewhere</div>
+    <p>This scanner's "DOM XSS" mode is a regex hint. The page that proves DOM XSS by running the app in Chromium and watching sinks is <a href="dom-xss.html">DOM XSS in a real browser</a>.</p>
+  </div>
+</section>
+
+<section id="why">
+  <h2>Why it matters</h2>
+  <div class="callout why">
+    <div class="label">Impact</div>
+    <p>XSS runs the attacker's JavaScript inside your users' sessions:</p>
+    <ul>
+      <li><b>Steal session tokens.</b> Read <code>localStorage</code> and cookies and send them to an attacker server.</li>
+      <li><b>Impersonate users.</b> Make API calls as the victim: transfer money, change passwords, delete data.</li>
+      <li><b>Deface the application.</b> Change what users see, inject fake login forms.</li>
+      <li><b>Deliver malware.</b> Redirect users to malicious downloads.</li>
+      <li><b>Bypass CSRF protections.</b> Script running in context can submit any form with valid tokens.</li>
+    </ul>
+  </div>
+</section>
+
+<section id="breach">
+  <h2>Real-world breaches</h2>
+  <div class="grid-2">
+    <div class="callout breach">
+      <div class="label">British Airways · 2018</div>
+      <p>The Magecart group injected malicious JavaScript into BA's payment page, skimming 380,000 customers' payment card details. BA was fined $26 million by the ICO. The attack was possible because there was no Content Security Policy and user input was rendered without sanitization.</p>
+    </div>
+    <div class="callout breach">
+      <div class="label">eBay · 2015–2016</div>
+      <p>Attackers injected malicious JavaScript into eBay product listings, redirecting users to phishing pages to steal credentials.</p>
+    </div>
+  </div>
+</section>
+
+<section id="fix-sec">
+  <h2>The fix: encode on output</h2>
+  <p class="prose">The scanner's signal disappears when untrusted text is turned into text before it reaches the page. Watch the same payload under three renderers.</p>
+
+  <div class="scene" id="fix" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 230" role="img" aria-label="The string script alert in a query parameter is rendered three ways: raw into HTML so the browser runs it, auto-escaped so the browser shows text, and sanitized with DOMPurify with a Content Security Policy as a second layer.">
+        <defs><marker id="arrX5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g class="node" transform="translate(20 50)"><rect width="250" height="76" rx="10"/>
+          <text class="ttl" x="14" y="26">User input</text>
+          <text class="mono t-attacker" x="14" y="52">&lt;script&gt;alert(1)&lt;/script&gt;</text></g>
+        <path class="wire" d="M270 88 H 318" marker-end="url(#arrX5)"/>
+        <g class="node lit-1 lit-2 lit-3" transform="translate(320 50)"><rect width="300" height="76" rx="10"/>
+          <g class="only-1"><text class="ttl" x="14" y="26">Template string</text><text class="mono" x="14" y="52">`&lt;h1&gt;${query}&lt;/h1&gt;`</text></g>
+          <g class="only-2"><text class="ttl" x="14" y="26">JSX auto-escape</text><text class="mono" x="14" y="52">&lt;div&gt;{text}&lt;/div&gt;</text></g>
+          <g class="only-3"><text class="ttl" x="14" y="26">DOMPurify + CSP</text><text class="mono" x="14" y="52">DOMPurify.sanitize(input)</text></g></g>
+        <path class="wire" d="M620 88 H 668" marker-end="url(#arrX5)"/>
+        <g class="node lit-1 lit-2 lit-3" transform="translate(670 50)"><rect width="274" height="76" rx="10"/>
+          <text class="ttl" x="14" y="26">Browser receives</text>
+          <g class="only-1"><text class="mono t-attacker" x="14" y="52">&lt;script&gt;alert(1)…</text></g>
+          <g class="only-2"><text class="mono t-safe" x="14" y="52">&amp;lt;script&amp;gt;alert…</text></g>
+          <g class="only-3"><text class="mono t-safe" x="14" y="52">(script tag removed)</text></g></g>
+        <g class="only-1"><text class="ttl t-attacker" x="20" y="170">Scanner: brackets intact in text/html → Confirmed XSS</text></g>
+        <g class="only-2"><text class="ttl t-safe" x="20" y="170">Scanner: brackets encoded → no confirmed finding</text>
+          <text class="lbl" x="20" y="192">At most a Low "possible" note if a quote context exists and a breakout is tried, which fails.</text></g>
+        <g class="only-3"><text class="ttl t-safe" x="20" y="170">Content-Security-Policy: default-src 'self' blocks inline script if a bug slips through</text>
+          <text class="lbl" x="20" y="192">The scanner does not rely on the header. It tests the page's output either way.</text></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The vulnerable pattern. User text is concatenated into HTML, the browser parses it, and the canary test succeeds.</p>
+      <p class="step"><span class="n">2</span><b>Escape by default.</b> React JSX turns <code>&lt;</code> into <code>&amp;lt;</code>. The probe string never matches, so there is no High finding.</p>
+      <p class="step"><span class="n">3</span>When raw HTML must be returned, sanitize it with DOMPurify, and add a Content Security Policy as a second line of defense.</p>
+    </div>
+  </div>
+
+  <h3>Vulnerable vs fixed</h3>
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true">BAD · raw HTML</button>
+      <button class="tab good" role="tab" aria-selected="false">GOOD · escape, sanitize, CSP</button>
+    </div>
+    <div role="tabpanel"><pre><code><span class="c">// BAD: User input reflected directly in HTML</span>
+export async function GET(request: Request) {
+  const query = new URL(request.url).searchParams.get(<span class="s">"q"</span>)
+<span class="hl bad">  return new Response(`&lt;h1&gt;Results for: ${query}&lt;/h1&gt;`, {</span>
+    headers: { <span class="s">"Content-Type"</span>: <span class="s">"text/html"</span> }
+  })
+}
+
+<span class="c">// BAD: React dangerouslySetInnerHTML with user data</span>
+function Comment({ text }) {
+<span class="hl bad">  return &lt;div dangerouslySetInnerHTML={{ __html: text }} /&gt;</span>
+}</code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c">// GOOD: JSX auto-escapes by default</span>
+function Comment({ text }) {
+<span class="hl good">  return &lt;div&gt;{text}&lt;/div&gt;  <span class="c">// React escapes HTML entities</span></span>
+}
+
+<span class="c">// GOOD: If you must return raw HTML, sanitize it</span>
+import DOMPurify from <span class="s">"dompurify"</span>
+<span class="hl good">const clean = DOMPurify.sanitize(userInput)</span>
+
+<span class="c">// GOOD: Set a Content Security Policy header (next.config.js)</span>
+headers: [{ key: <span class="s">"Content-Security-Policy"</span>, value: <span class="s">"default-src 'self'"</span> }]</code></pre></div>
+  </div>
+</section>
+
+<section id="limits">
+  <h2>Limits and what it deliberately stays quiet about</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Aspect</th><th>Behaviour</th></tr></thead>
+      <tbody>
+        <tr><td>Reflected scope</td><td>GET endpoints, or any endpoint whose URL already has a query string. Up to 5 parameters per endpoint, ranked by an XSS priority score. No endpoint cap, only the time budget.</td></tr>
+        <tr><td>Confirmed means</td><td>The payload string is in the response body. The scanner does not execute the page, so a CSP or an unusual parser could still stop a flagged payload.</td></tr>
+        <tr><td>Severity ladder</td><td>Stored read-back Critical (0.95) · confirmed reflected, context-confirmed High (0.95) · POST body High (0.90) · "possible" Low (0.40) · static sink Low (0.60).</td></tr>
+        <tr><td>Time budgets</td><td>Each network phase: 900 s at quick depth, 3600 s at deep. Endpoints are tried in priority order and the scanner returns what it has when time runs out.</td></tr>
+        <tr><td>Quiet on</td><td>JSON echoes (reflected and read-back both require <code>text/html</code>), responses with status 400 or higher, and fully encoded output.</td></tr>
+        <tr><td>Static pass</td><td>Deep only, regex only, LOW, one finding per sink pattern, no source-to-sink proof.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<footer class="foot">
+  <span>Source: <a href="../scanners/xss-scanner.md">docs/scanners/xss-scanner.md</a> · isitsecure/engine/scanners/xss_scanner.py</span>
+  <span>Group: <a href="group-injection.html">Injection</a> · Related: <a href="dom-xss.html">DOM XSS</a> · <a href="file-upload.html">File upload</a> · <a href="active-injection.html">Active injection</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+<script>
+(function () {
+  const sel = (el, id) => el.querySelector(id);
+  window.reflectStep = function (scene, i, el) {
+    const svg = el.querySelector("svg"); IsDoc.clearPackets(svg);
+    IsDoc.packet(svg, sel(svg, "#xw1p"), { cls: "f-accent", label: "?q=<canary_xss_8f3a>", duration: 1000 });
+    IsDoc.packet(svg, sel(svg, "#xw1r"), { cls: "f-info", label: "200", duration: 900, delay: 1000 });
+  };
+  window.contextStep = function (scene, i, el) {
+    const svg = el.querySelector("svg"); IsDoc.clearPackets(svg);
+    IsDoc.packet(svg, sel(svg, "#cw1p"), { cls: "f-attacker", duration: 900 });
+  };
+})();
+</script>
+</body>
+</html>

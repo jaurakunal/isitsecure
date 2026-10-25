@@ -1,0 +1,546 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Route Auth Tracing · isitsecure</title>
+<meta name="description" content="How isitsecure maps every API route, recognises an auth guard without being fooled by its name, reads the handler for a lookup and a refusal, and uses a language server to prove a guard really guards — animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  /* preview gate: faint from step 1 so the stage is never empty, full from step N on */
+  .scene svg [class*="pv-"] { opacity: .26; transition: opacity .45s ease, transform .5s ease; }
+  .scene.s2 svg .pv-2, .scene.s3 svg .pv-3, .scene.s4 svg .pv-4, .scene.s5 svg .pv-5 { opacity: 1; }
+  .scene svg .tag > rect { stroke-width: 1.2; }
+  .scene svg .tag.bad > rect { fill: var(--attacker-soft); stroke: var(--attacker); }
+  .scene svg .tag.ok > rect { fill: var(--safe-soft); stroke: var(--safe); }
+  .scene svg .tag.off > rect { fill: var(--surface); stroke: var(--line); }
+
+  /* mapping: framework boxes light in turn; the verdict column fills row by row */
+  #mapping .fw > rect { transition: opacity .4s, stroke .35s; }
+  #mapping .vrow { transition: opacity .4s; }
+
+  /* guard recognition: the argument under test gets a stroke, the path is struck through */
+  #guard .arg > rect { fill: var(--surface); stroke: var(--line); }
+  #guard .arg.path > rect { stroke-dasharray: 4 3; }
+  #guard .arg.hit > rect { fill: var(--safe-soft); stroke: var(--safe); }
+  #guard .arg.miss > rect { fill: var(--attacker-soft); stroke: var(--attacker); }
+  #guard .verdict.bad > rect { fill: var(--attacker-soft); stroke: var(--attacker); }
+  #guard .verdict.good > rect { fill: var(--safe-soft); stroke: var(--safe); }
+
+  /* handler scan: code lines dim until read */
+  #handler .code text.line { transition: opacity .35s; }
+
+  /* tracer: finding card flips from raised to suppressed */
+  #tracer .hop { stroke: var(--info); stroke-width: 2; stroke-dasharray: 6 5; animation: flow 1s linear infinite; }
+
+  /* exemptions */
+  #exempt .lst text { transition: fill .35s, opacity .35s; }
+  #exempt.s2 .lst .ex { fill: var(--safe); }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› Route Auth Tracing</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/route-auth-analyzer.md" title="The markdown source for this page">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">SAST scanner · LSP validation</div>
+  <h1>Route Auth Tracing</h1>
+  <p class="lede">Every API route is asked two questions: does anything check who is calling, and does anything validate what they sent? The cheap answer comes from the mount line. The real answer comes from reading the handler, and from a language server following the guard to its definition to see whether it refuses anyone at all.</p>
+  <div class="meta">
+    <span class="pill sast">SAST</span><span class="pill high">Medium to Critical</span><span class="pill">Auth weakness</span><span class="pill">Phase 7 → 7.5</span><span class="pill"><b>route_auth</b> + AuthFlowTracer</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#mapping-s"><span class="n">01</span>Mapping routes</a>
+  <a href="#guard-s"><span class="n">02</span>Recognising a guard</a>
+  <a href="#handler-s"><span class="n">03</span>Auth inside the handler</a>
+  <a href="#tracer-s"><span class="n">04</span>The LSP tracer</a>
+  <a href="#exempt-s"><span class="n">05</span>Staying quiet, deliberately</a>
+  <a href="#why"><span class="n">06</span>Why it matters</a>
+  <a href="#code"><span class="n">07</span>Vulnerable vs fixed</a>
+  <a href="#limits"><span class="n">08</span>Per-language tracing and limits</a>
+</nav>
+
+<section id="mapping-s">
+  <h2>Mapping routes, per framework</h2>
+  <p class="prose">A route is a file or a line, depending on the framework, so each framework has its own mapper. Next.js App Router routes are files named <code>route.ts</code> under <code>app/api/</code>; Express routes are <code>app.get()</code> and <code>router.post()</code> calls; tRPC routes are procedures. The mappers turn all three into the same shape, and the analyzer asks the same two questions of each.</p>
+
+  <div class="scene" id="mapping" data-scene data-interval="3000">
+    <figure class="stage">
+      <svg viewBox="0 0 960 330" role="img" aria-label="package.json selects framework mappers; a Next.js route file, an Express mount line and a tRPC procedure each become routes; a verdict table shows which routes have an auth call and input validation.">
+        <defs><marker id="arr-map" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+
+        <g class="node lit-1" transform="translate(20 20)">
+          <rect width="170" height="296" rx="10"/>
+          <text class="ttl" x="12" y="24">package.json</text>
+          <text class="lbl" x="12" y="44">framework detection</text>
+          <g class="mono">
+            <text x="12" y="76" class="t-info">next</text>
+            <text x="12" y="172" class="t-info">express</text>
+            <text x="12" y="262" class="t-info">@trpc/server</text>
+          </g>
+          <text class="lbl" x="12" y="94">NextJSRouteMapper</text>
+          <text class="lbl" x="12" y="190">ExpressRouteMapper</text>
+          <text class="lbl" x="12" y="280">TRPCRouteMapper</text>
+        </g>
+
+        <path class="wire pv-2" d="M 190 70 H 218" marker-end="url(#arr-map)"/>
+        <g class="fw node pv-2 lit-2" transform="translate(220 20)">
+          <rect width="390" height="86" rx="8"/>
+          <text class="ttl" x="12" y="20">Next.js · app/api/**/route.ts</text>
+          <g class="mono">
+            <text x="12" y="44">app/api/tasks/route.ts</text>
+            <text class="lbl" x="12" y="62">export async function GET(request) {…}</text>
+            <text class="lbl" x="12" y="78">export async function POST(request) {…}</text>
+          </g>
+        </g>
+
+        <path class="wire pv-3" d="M 190 166 H 218" marker-end="url(#arr-map)"/>
+        <g class="fw node pv-3 lit-3" transform="translate(220 120)">
+          <rect width="390" height="86" rx="8"/>
+          <text class="ttl" x="12" y="20">Express · app.get() / router.post()</text>
+          <g class="mono">
+            <text x="12" y="44">app.get('/orders', requireAuth, list)</text>
+            <text x="12" y="62">router.post('/orders', create)</text>
+            <text class="lbl" x="12" y="78">kept only if reachable through the import graph</text>
+          </g>
+        </g>
+
+        <path class="wire pv-4" d="M 190 264 H 218" marker-end="url(#arr-map)"/>
+        <g class="fw node pv-4 lit-4" transform="translate(220 220)">
+          <rect width="390" height="90" rx="8"/>
+          <text class="ttl" x="12" y="20">tRPC · procedures</text>
+          <g class="mono">
+            <text x="12" y="44">list:   protectedProcedure.query(…)</text>
+            <text x="12" y="62">create: publicProcedure.mutation(…)</text>
+            <text class="lbl" x="12" y="78">protectedProcedure vs publicProcedure</text>
+          </g>
+        </g>
+
+        <path class="wire pv-5" d="M 610 165 H 638" marker-end="url(#arr-map)"/>
+        <g class="node pv-5 lit-5" transform="translate(640 20)">
+          <rect width="300" height="296" rx="10"/>
+          <text class="ttl" x="12" y="24">Two checks per route</text>
+          <text class="lbl" x="12" y="44">route · auth call · input validation</text>
+          <g class="mono">
+            <g class="vrow" transform="translate(12 74)">
+              <text y="0">GET  /api/tasks</text>
+              <text class="lbl" y="16">auth <tspan class="t-attacker">none</tspan> · validation <tspan class="t-attacker">none</tspan></text>
+            </g>
+            <g class="vrow" transform="translate(12 118)">
+              <text y="0">POST /api/tasks</text>
+              <text class="lbl" y="16">auth <tspan class="t-attacker">none</tspan> · raw request.json()</text>
+            </g>
+            <g class="vrow" transform="translate(12 162)">
+              <text y="0">GET  /orders</text>
+              <text class="lbl" y="16">auth <tspan class="t-safe">requireAuth</tspan> · validation <tspan class="t-safe">zod</tspan></text>
+            </g>
+            <g class="vrow" transform="translate(12 206)">
+              <text y="0">POST /orders</text>
+              <text class="lbl" y="16">auth <tspan class="t-attacker">none</tspan> · validation <tspan class="t-safe">zod</tspan></text>
+            </g>
+            <g class="vrow" transform="translate(12 250)">
+              <text y="0">trpc.create</text>
+              <text class="lbl" y="16">auth <tspan class="t-attacker">publicProcedure</tspan></text>
+            </g>
+          </g>
+          <text class="lbl" x="12" y="284">red = a finding, pending the checks below</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Repo ingestion reads <code>package.json</code> to detect the framework, and a framework-specific mapper is chosen. The analyzers never parse framework syntax themselves.</p>
+      <p class="step"><span class="n">2</span><b>Next.js App Router.</b> Every <code>app/api/**/route.ts</code> is a route; its exported <code>GET</code>, <code>POST</code>, <code>PUT</code>, <code>PATCH</code> and <code>DELETE</code> functions are its methods.</p>
+      <p class="step"><span class="n">3</span><b>Express.</b> Mount lines such as <code>app.get('/path', …)</code> and <code>router.post()</code> are found everywhere, then filtered to the ones reachable through the import graph, so unused fixture routes are ignored.</p>
+      <p class="step"><span class="n">4</span><b>tRPC.</b> Each procedure is a route. Whether it is built on <code>protectedProcedure</code> or <code>publicProcedure</code> is the first auth signal.</p>
+      <p class="step"><span class="n">5</span>For every route: is there an <b>auth call</b> (<code>getUser</code>, <code>getSession</code>, <code>auth()</code>, <code>verifyToken</code>, <code>requireAuth</code>…) and is incoming data <b>validated</b> before use, or is <code>request.json()</code> / <code>searchParams.get()</code> consumed raw? A "none" is a candidate finding that the next three sections try to disprove.</p>
+    </div>
+  </div>
+</section>
+
+<section id="guard-s">
+  <h2>Recognising a guard on the mount line</h2>
+  <p class="prose">For Express, the mapper answers <code>has_auth_check</code> from the mount line alone, and a <b>True</b> suppresses the route's missing-auth finding outright. So the match is deliberately narrow: known guard names, on word boundaries, against the route's <b>arguments only</b>, with comments stripped. Each bound exists because it was once missing.</p>
+
+  <div class="scene" id="guard" data-scene data-interval="3200">
+    <figure class="stage">
+      <svg viewBox="0 0 960 300" role="img" aria-label="A mount line is split into its arguments. The path is excluded, each remaining argument is tested against known guard names on word boundaries, and the old substring match is shown clearing routes it should not have.">
+        <text class="lbl" x="20" y="26">mount line under test</text>
+
+        <!-- known guard list (always visible) -->
+        <g class="node" transform="translate(720 14)">
+          <rect width="220" height="132" rx="8"/>
+          <text class="ttl" x="12" y="22">Known guard names</text>
+          <text class="lbl" x="12" y="40">AUTH_MIDDLEWARE_INDICATORS</text>
+          <g class="mono">
+            <text class="lbl" x="12" y="62">requireAuth · verifyAuth</text>
+            <text class="lbl" x="12" y="78">authenticate · isAuthenticated</text>
+            <text class="lbl" x="12" y="94">jwt.verify · verifyToken</text>
+            <text class="lbl" x="12" y="110">checkAuth · ensureAuth · …</text>
+          </g>
+          <text class="lbl" x="12" y="126">14 names, word-boundary only</text>
+        </g>
+
+        <!-- case 1: a real guard -->
+        <g class="only-1">
+          <text class="mono" x="20" y="50">app.get('/api/users', checkAuth, listUsers)</text>
+          <g class="arg path" transform="translate(20 70)"><rect width="200" height="56" rx="8"/><text class="mono" x="12" y="22">'/api/users'</text><text class="lbl" x="12" y="44">path · never matched</text></g>
+          <g class="arg hit" transform="translate(240 70)"><rect width="240" height="56" rx="8"/><text class="mono" x="12" y="22">checkAuth</text><text class="lbl" x="12" y="44">\bcheckAuth\b matches</text></g>
+          <g class="arg" transform="translate(500 70)"><rect width="200" height="56" rx="8"/><text class="mono" x="12" y="22">listUsers</text><text class="lbl" x="12" y="44">handler · no match</text></g>
+          <g class="verdict good" transform="translate(20 160)"><rect width="680" height="56" rx="8"/><text class="ttl t-safe" x="14" y="22">has_auth_check = True</text><text class="lbl" x="14" y="44">a guard is applied to this route; the tracer will later read what checkAuth actually does</text></g>
+        </g>
+
+        <!-- case 2: checkAuthorEmail -->
+        <g class="only-2">
+          <text class="mono" x="20" y="50">app.get('/api/authors', checkAuthorEmail, listAuthors)</text>
+          <g class="arg path" transform="translate(20 70)"><rect width="200" height="56" rx="8"/><text class="mono" x="12" y="22">'/api/authors'</text><text class="lbl" x="12" y="44">path · never matched</text></g>
+          <g class="arg miss" transform="translate(240 70)"><rect width="240" height="56" rx="8"/><text class="mono" x="12" y="22">checkAuth<tspan class="t-attacker">orEmail</tspan></text><text class="lbl" x="12" y="44">\bcheckAuth\b does not match</text></g>
+          <g class="arg" transform="translate(500 70)"><rect width="200" height="56" rx="8"/><text class="mono" x="12" y="22">listAuthors</text><text class="lbl" x="12" y="44">handler · no match</text></g>
+          <g class="verdict bad" transform="translate(20 160)"><rect width="330" height="56" rx="8"/><text class="ttl t-attacker" x="14" y="22">Before: True (bug)</text><text class="lbl" x="14" y="44">substring "checkAuth" found inside the name; route cleared</text></g>
+          <g class="verdict good" transform="translate(370 160)"><rect width="330" height="56" rx="8"/><text class="ttl t-safe" x="14" y="22">Now: False</text><text class="lbl" x="14" y="44">word boundary: checkAuthorEmail is not checkAuth</text></g>
+        </g>
+
+        <!-- case 3: authenticatedUsers -->
+        <g class="only-3">
+          <text class="mono" x="20" y="50">app.get('/api/users', authenticatedUsers)</text>
+          <g class="arg path" transform="translate(20 70)"><rect width="200" height="56" rx="8"/><text class="mono" x="12" y="22">'/api/users'</text><text class="lbl" x="12" y="44">path · never matched</text></g>
+          <g class="arg miss" transform="translate(240 70)"><rect width="240" height="56" rx="8"/><text class="mono" x="12" y="22">authenticate<tspan class="t-attacker">dUsers</tspan></text><text class="lbl" x="12" y="44">\bauthenticate\b does not match</text></g>
+          <g class="arg" transform="translate(500 70)"><rect width="200" height="56" rx="8"/><text class="lbl" x="12" y="22">this IS the handler:</text><text class="lbl" x="12" y="44">it returns Juice Shop's user list</text></g>
+          <g class="verdict bad" transform="translate(20 160)"><rect width="330" height="56" rx="8"/><text class="ttl t-attacker" x="14" y="22">Before: True (bug)</text><text class="lbl" x="14" y="44">"authenticate" inside the handler's name cleared it</text></g>
+          <g class="verdict good" transform="translate(370 160)"><rect width="330" height="56" rx="8"/><text class="ttl t-safe" x="14" y="22">Now: False</text><text class="lbl" x="14" y="44">the user-list route is reported as unguarded</text></g>
+        </g>
+
+        <!-- case 4: guarded by its own URL -->
+        <g class="only-4">
+          <text class="mono" x="20" y="50">app.get('/api/authenticate', handler)</text>
+          <g class="arg path miss" transform="translate(20 70)"><rect width="200" height="56" rx="8"/><text class="mono" x="12" y="22">'/api/authenticate'</text><text class="lbl" x="12" y="44">path · excluded from the match</text></g>
+          <g class="arg" transform="translate(240 70)"><rect width="240" height="56" rx="8"/><text class="mono" x="12" y="22">handler</text><text class="lbl" x="12" y="44">no match</text></g>
+          <g class="arg" transform="translate(500 70)"><rect width="200" height="56" rx="8"/><text class="lbl" x="12" y="22">trailing comments</text><text class="lbl" x="12" y="44">stripped before matching</text></g>
+          <g class="verdict bad" transform="translate(20 160)"><rect width="330" height="56" rx="8"/><text class="ttl t-attacker" x="14" y="22">Before: True (bug)</text><text class="lbl" x="14" y="44">whole-line scan: "guarded by its own URL"</text></g>
+          <g class="verdict good" transform="translate(370 160)"><rect width="330" height="56" rx="8"/><text class="ttl t-safe" x="14" y="22">Now: False</text><text class="lbl" x="14" y="44">arguments only; the path is not evidence</text></g>
+        </g>
+
+        <!-- case 5: False is only absence of evidence -->
+        <g class="only-5">
+          <text class="mono" x="20" y="50">router.get('/orders', isLoggedIn, (req, res) =&gt; {…})</text>
+          <g class="arg path" transform="translate(20 70)"><rect width="200" height="56" rx="8"/><text class="mono" x="12" y="22">'/orders'</text><text class="lbl" x="12" y="44">path · never matched</text></g>
+          <g class="arg" transform="translate(240 70)"><rect width="240" height="56" rx="8"/><text class="mono" x="12" y="22">isLoggedIn</text><text class="lbl" x="12" y="44">your word; not on any list</text></g>
+          <g class="arg" transform="translate(500 70)"><rect width="200" height="56" rx="8"/><text class="mono" x="12" y="22">(req, res) =&gt; {…}</text><text class="lbl" x="12" y="44">anonymous handler</text></g>
+          <g class="verdict" transform="translate(20 160)"><rect width="680" height="56" rx="8" class="soft-info"/><text class="ttl t-info" x="14" y="22">has_auth_check = False · absence of evidence, not evidence of absence</text><text class="lbl" x="14" y="44">the route is still examined: its own handler body next, then the LSP tracer resolves isLoggedIn and reads it</text></g>
+        </g>
+
+        <text class="lbl" x="20" y="250">Comments are stripped first. "guarded by" was once read off a trailing <tspan class="mono">// vuln-code-snippet</tspan> comment.</text>
+        <text class="lbl" x="20" y="268">The list is the cheap answer for scans with no language server. What a guard does is decided by the tracer, which reads its body.</text>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The mount line is split into arguments. The path is set aside, and each remaining argument is tested against the known guard names with <code>\bname\b</code>. <code>checkAuth</code> is on the list, so <b>has_auth_check is True</b> and the missing-auth finding is suppressed.</p>
+      <p class="step"><span class="n">2</span><b>Past bug one.</b> A substring search found <code>checkAuth</code> inside <code>checkAuthorEmail</code> and cleared the route. Word-boundary matching sees a different identifier and answers False.</p>
+      <p class="step"><span class="n">3</span><b>Past bug two.</b> <code>authenticate</code> was found inside <code>authenticatedUsers</code>, the handler that returns Juice Shop's user list, so the one route that most needed a guard was marked as having one.</p>
+      <p class="step"><span class="n">4</span><b>Past bug three.</b> Scanning the whole line meant <code>app.get('/api/authenticate', handler)</code> was guarded by its own URL. Only arguments are matched now, and trailing comments are stripped first.</p>
+      <p class="step"><span class="n">5</span>A False is only an absence of evidence. The list cannot know a project's own vocabulary such as <code>isLoggedIn</code> or <code>ensureMember</code>, so the route goes on to the handler scan and the tracer <b>either way</b>.</p>
+    </div>
+  </div>
+</section>
+
+<section id="handler-s">
+  <h2>Auth checked inside the route's own handler</h2>
+  <p class="prose">Many routes carry no named guard and check auth in the body instead. An anonymous function has no name to recognise, so before a finding is raised the route's <b>own handler</b> is read. Two things must both be present: a lookup of who is calling, and a refusal when the answer is nobody.</p>
+
+  <div class="scene" id="handler" data-scene data-interval="3200">
+    <figure class="stage">
+      <svg viewBox="0 0 960 330" role="img" aria-label="Left: a handler that looks up the session and returns 401 when it is missing, counted as authenticated. Right: a handler that looks up a user by the caller's id and returns it with nobody refused, which is not counted. A footer notes that only the route's own handler is read, never the whole file.">
+        <g class="node lit-1" transform="translate(20 20)">
+          <rect width="440" height="150" rx="10"/>
+          <text class="ttl" x="14" y="24">routes/orders.js</text>
+          <g class="mono code">
+            <text class="line" x="14" y="52">router.get('/orders', (req, res) =&gt; {</text>
+            <text class="line" x="14" y="76">  const session = getServerSession(req)</text>
+            <text class="line" x="14" y="100">  if (!session) return res.status(401).end()</text>
+            <text class="line lbl" x="14" y="124">  …</text>
+          </g>
+          <g class="tag ok pv-2" transform="translate(340 62)"><rect width="86" height="20" rx="10"/><text class="lbl t-safe" x="43" y="14" text-anchor="middle">LOOKUP</text></g>
+          <g class="tag ok pv-3" transform="translate(340 86)"><rect width="86" height="20" rx="10"/><text class="lbl t-safe" x="43" y="14" text-anchor="middle">REFUSAL 401</text></g>
+        </g>
+        <g class="node pv-3 lit-3" transform="translate(20 184)">
+          <rect width="440" height="56" rx="8" class="soft-safe"/>
+          <text class="ttl t-safe" x="14" y="22">Authenticated: lookup AND refusal</text>
+          <text class="lbl" x="14" y="44">the missing-auth finding for GET /orders is not raised</text>
+        </g>
+
+        <g class="node pv-4 lit-4" transform="translate(500 20)">
+          <rect width="440" height="150" rx="10"/>
+          <text class="ttl" x="14" y="24">routes/users.js</text>
+          <g class="mono code">
+            <text class="line" x="14" y="52">router.get('/users/:id', (req, res) =&gt; {</text>
+            <text class="line" x="14" y="76">  const user = getUser(req.params.id)</text>
+            <text class="line" x="14" y="100">  res.json(user)</text>
+            <text class="line" x="14" y="124">})</text>
+          </g>
+          <g class="tag ok" transform="translate(340 62)"><rect width="86" height="20" rx="10"/><text class="lbl t-safe" x="43" y="14" text-anchor="middle">LOOKUP</text></g>
+          <g class="tag bad" transform="translate(330 86)"><rect width="96" height="20" rx="10"/><text class="lbl t-attacker" x="48" y="14" text-anchor="middle">NO REFUSAL</text></g>
+        </g>
+        <g class="node pv-4 lit-4" transform="translate(500 184)">
+          <rect width="440" height="56" rx="8" class="soft-attacker"/>
+          <text class="ttl t-attacker" x="14" y="22">Not counted: an id from the caller, nobody refused</text>
+          <text class="lbl" x="14" y="44">this is what an IDOR looks like; the finding stays</text>
+        </g>
+
+        <!-- scope note -->
+        <g class="pv-5" transform="translate(20 258)">
+          <g class="node lit-5"><rect width="920" height="54" rx="8"/>
+            <text class="ttl" x="14" y="22">Scope: the route's own handler, never the whole file</text>
+            <text class="lbl" x="14" y="42">one server.ts shares its content with a hundred routes; searching the file would let a single guarded neighbour clear all of them</text>
+          </g>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The Express mapper answers "no guard" for this route: the handler is an anonymous function and nothing on the mount line is a known name. That is not "no auth", so the handler body is read next.</p>
+      <p class="step"><span class="n">2</span><b>Lookup.</b> <code>getServerSession(req)</code> identifies the caller. On its own this proves nothing yet.</p>
+      <p class="step"><span class="n">3</span><b>Refusal.</b> <code>return res.status(401)</code> turns an anonymous caller away. Lookup and refusal together mean the handler authenticates, and <b>the finding is not raised</b>.</p>
+      <p class="step"><span class="n">4</span><b>The counterexample.</b> <code>getUser(req.params.id)</code> is a lookup too, but the id came from the caller and <code>res.json(user)</code> refuses nobody. Accepting a lookup alone would suppress the finding on a route whose whole problem is that it never asks who is calling. <b>This must not count.</b></p>
+      <p class="step"><span class="n">5</span>Only the route's own handler is read. A file like <code>server.ts</code> holds a hundred routes; reading the file would let one guarded route vouch for ninety-nine others.</p>
+    </div>
+  </div>
+</section>
+
+<section id="tracer-s">
+  <h2>The LSP auth-flow tracer</h2>
+  <p class="prose">Phase 7.5 runs when a language server is available (tsserver, pyright, jdtls, gopls). The <code>AuthFlowTracer</code> takes each guard the route applies, asks the server for its definition, and reads that function's own body for an auth terminal. A finding it disproves is removed. No pattern list can name <code>getUserFromRequest</code>, a helper your project invented; the tracer can, because it reads what the name resolves to.</p>
+
+  <div class="scene" id="tracer" data-scene data-interval="3000">
+    <figure class="stage">
+      <svg viewBox="0 0 960 344" role="img" aria-label="A route imports protectedProcedure; go-to-definition lands in trpc.ts at line 42, where supabase.auth.getUser is found; the missing-auth finding is suppressed for that route only, while other routes in a shared file are answered from their own mount lines.">
+        <defs><marker id="arr-tr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+
+        <g class="node lit-1" transform="translate(20 20)">
+          <rect width="320" height="150" rx="10"/>
+          <text class="ttl" x="14" y="24">app/api/tasks/[id]/route.ts</text>
+          <g class="mono">
+            <text x="14" y="52">import { protectedProcedure }</text>
+            <text x="14" y="68">  from "@/lib/trpc"</text>
+            <text x="14" y="96">get: protectedProcedure.query(…)</text>
+          </g>
+          <g class="tag bad until-4" transform="translate(190 118)"><rect width="116" height="20" rx="10"/><text class="lbl t-attacker" x="58" y="14" text-anchor="middle">MISSING AUTH?</text></g>
+          <g class="tag ok at-4" transform="translate(190 118)"><rect width="116" height="20" rx="10"/><text class="lbl t-safe" x="58" y="14" text-anchor="middle">VERIFIED</text></g>
+        </g>
+
+        <path class="hop pv-2" d="M 340 90 H 398" marker-end="url(#arr-tr)"/>
+        <text class="lbl pv-2" x="369" y="80" text-anchor="middle">go-to-def</text>
+
+        <g class="node pv-2 lit-2" transform="translate(400 20)">
+          <rect width="330" height="150" rx="10"/>
+          <text class="ttl" x="14" y="24">lib/trpc.ts</text>
+          <g class="mono">
+            <text class="lbl" x="14" y="52">42</text><text x="40" y="52">export const protectedProcedure =</text>
+            <text class="lbl" x="14" y="68">43</text><text x="40" y="68">  t.procedure.use(async ({ next }) =&gt; {</text>
+            <text class="lbl" x="14" y="84">44</text><text x="40" y="84">    const { data } = await</text>
+            <text x="40" y="100">      supabase.auth.getUser()</text>
+            <text class="lbl" x="14" y="116">45</text><text x="40" y="116">    if (!data.user) throw UNAUTHORIZED</text>
+          </g>
+          <g class="tag ok pv-3" transform="translate(40 124)"><rect width="110" height="20" rx="10"/><text class="lbl t-safe" x="55" y="14" text-anchor="middle">AUTH TERMINAL</text></g>
+        </g>
+
+        <path class="wire safe pv-4" d="M 730 90 H 768" marker-end="url(#arr-tr)"/>
+        <g class="node pv-4 lit-4" transform="translate(770 20)">
+          <rect width="170" height="150" rx="10" class="soft-safe"/>
+          <text class="ttl t-safe" x="12" y="24">Suppressed</text>
+          <text class="lbl" x="12" y="48">auth IS applied:</text>
+          <text class="lbl" x="12" y="64">the guard resolves to</text>
+          <text class="lbl" x="12" y="80">a real identity check</text>
+          <text class="lbl" x="12" y="104">removed from the report,</text>
+          <text class="lbl" x="12" y="120">for this route only</text>
+        </g>
+
+        <!-- per-route matching -->
+        <g class="node pv-5 lit-5" transform="translate(20 190)">
+          <rect width="920" height="136" rx="10"/>
+          <text class="ttl" x="14" y="24">server.ts · a hundred mounts, each answered from its own line</text>
+          <g class="mono">
+            <text x="14" y="52">app.use('/api/BasketItems', security.isAuthorized())</text><text class="t-safe" x="560" y="52">traced → verified · suppressed</text>
+            <text x="14" y="72">app.post('/api/Challenges', security.denyAll())</text><text class="t-safe" x="560" y="72">traced → verified · suppressed</text>
+            <text x="14" y="92">app.get('/api/Products', …)</text><text class="t-attacker" x="560" y="92">no guard → not verified · reported</text>
+            <text class="lbl" x="14" y="112">… 97 more, each with its own verdict, per method</text><text class="lbl" x="560" y="112">vouching is the dangerous direction</text>
+          </g>
+          <text class="lbl" x="14" y="128">a finding carries its route, so one guarded route in a file of a hundred cannot vouch for the rest</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The route file has no inline <code>getUser</code> call. The regex pass sees only an imported name, <code>protectedProcedure</code>, and raises a candidate missing-auth finding.</p>
+      <p class="step" data-on="tracerHop"><span class="n">2</span>The tracer asks the language server for the definition of <code>protectedProcedure</code>. Go-to-definition lands on <code>trpc.ts:42</code>. Only that function's own body is read, never the whole module, so a login route importing <code>signToken</code> from a file that also defines <code>verifyToken</code> cannot look authenticated.</p>
+      <p class="step"><span class="n">3</span>Inside it: <code>supabase.auth.getUser()</code> and a refusal on the failing branch. That is an <b>auth terminal</b>, which is what the tracer was looking for.</p>
+      <p class="step"><span class="n">4</span>Auth is genuinely applied, so the finding is a false positive and is <b>suppressed</b>. No commercial SAST tool uses compiler-level definition resolution to check that auth middleware actually works.</p>
+      <p class="step"><span class="n">5</span>Suppression is matched back <b>per route, per method</b>. In a <code>server.ts</code> that mounts a hundred routes, the two guarded mounts are cleared and <code>/api/Products</code> is still reported. One verdict for the file would either miss every guard or vouch for every unguarded neighbour, and a suppressed finding is a vulnerability the report no longer mentions.</p>
+    </div>
+  </div>
+
+  <div class="callout note">
+    <div class="label">What else the TypeScript tracer follows</div>
+    <p>Router-wide middleware found by <b>where it is applied</b> (a path-less <code>router.use(ensureMember)</code> guards every route below it, whatever its name). Middleware reached through a <b>local alias</b> (<code>const isLoggedIn = sessionHandler.isLoggedInMiddleware</code>) is followed to what it names, up to <code>MAX_TRACE_DEPTH</code> hops; when tsserver returns no definition (untyped CommonJS, <code>this.x = …</code> in a constructor) the route stays <b>unverified and reported</b>, never falsely cleared. A guard that only <b>rejects</b> (<code>else res.status(403)</code>) counts, but only when it is read from the arguments before the handler, since every handler has an error path of its own. Library middleware (<code>expressJwt</code>, <code>requiresAuth</code>, <code>ensureLoggedIn</code>) is a terminal because tracing never enters <code>node_modules</code>.</p>
+  </div>
+</section>
+
+<section id="exempt-s">
+  <h2>Routes it deliberately stays quiet about</h2>
+  <p class="prose">Some routes are meant to be open, and flagging them is noise. The exemption list is short, about what a route <b>is</b>, and matched exactly. Webhook receivers are not on it: they authenticate too, by verifying the sender's signature, and that is what gets recognised.</p>
+
+  <div class="scene" id="exempt" data-scene data-interval="3200">
+    <figure class="stage">
+      <svg viewBox="0 0 960 330" role="img" aria-label="A short list of exact exempt paths; /health is exempt while /api/health-records is examined; a Stripe webhook receiver is recognised by its signature check; the test app's /api/webhooks/test sends webhooks and is reported; a footer explains why no absence of a guard is ever grounds for silence.">
+        <g class="node lit-1" transform="translate(20 20)">
+          <rect width="250" height="200" rx="10"/>
+          <text class="ttl" x="14" y="24">Exempt · exact match only</text>
+          <g class="mono lst">
+            <text class="ex" x="14" y="52">/health  /ping  /status</text>
+            <text x="14" y="70">/ready  /livez  /readyz</text>
+            <text x="14" y="88">/docs  /swagger  /openapi</text>
+            <text x="14" y="106">/  (root)</text>
+          </g>
+          <text class="lbl" x="14" y="136">names standardised outside</text>
+          <text class="lbl" x="14" y="152">your project; no app words</text>
+          <text class="lbl" x="14" y="178">webhooks: NOT on the list</text>
+          <text class="lbl" x="14" y="194">GET routes: NOT on the list</text>
+        </g>
+
+        <g class="node pv-2 lit-2" transform="translate(300 20)">
+          <rect width="320" height="200" rx="10"/>
+          <text class="ttl" x="14" y="24">Routes under review</text>
+          <g class="mono">
+            <text x="14" y="56">GET /health</text><text class="t-safe lbl" x="200" y="56">exempt</text>
+            <text x="14" y="80">GET /api/health-records</text><text class="t-attacker lbl" x="200" y="80">examined</text>
+            <text class="lbl" x="14" y="96">patient data; a fragment match cannot tell</text>
+            <g class="pv-3"><text x="14" y="130">POST /api/webhooks/stripe</text><text class="t-safe lbl" x="200" y="130">by signature</text></g>
+            <g class="pv-4"><text x="14" y="162">POST /api/webhooks/test</text><text class="t-attacker lbl" x="200" y="162">reported</text>
+            <text class="lbl" x="14" y="178">it SENDS webhooks: an SSRF sink, no receiver</text></g>
+          </g>
+        </g>
+
+        <g class="node pv-3 lit-3" transform="translate(650 20)">
+          <rect width="290" height="200" rx="10"/>
+          <text class="ttl" x="14" y="24">A receiver proves itself</text>
+          <text class="lbl" x="14" y="44">signature verification, wherever it lives</text>
+          <g class="mono">
+            <text x="14" y="72">req.headers['stripe-signature']</text>
+            <text x="14" y="90">stripe.webhooks.constructEvent(…)</text>
+            <text x="14" y="108">crypto.timingSafeEqual(a, b)</text>
+            <text class="lbl" x="14" y="130">also: x-hub-signature (GitHub, Meta)</text>
+            <text class="lbl" x="14" y="146">svix-signature (Svix, Clerk)</text>
+          </g>
+          <text class="lbl" x="14" y="176">verified → counts as authenticated</text>
+          <text class="lbl" x="14" y="192">unverified → reported</text>
+        </g>
+
+        <g class="pv-5" transform="translate(20 240)">
+          <g class="node lit-5"><rect width="920" height="74" rx="8" class="soft-accent"/>
+            <text class="ttl t-accent" x="14" y="22">Not finding a guard is never itself grounds for staying quiet</text>
+            <text class="lbl" x="14" y="44">a rule once exempted any GET route the mapper reported no auth on: the exact condition a missing-auth finding exists to report.</text>
+            <text class="lbl" x="14" y="60">the Express mapper answers True or False and never "unknown", so no Express GET route could produce a missing-auth finding at all.</text>
+          </g>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The list: health and liveness probes, API documentation, and the root path. Every name is standardised outside your project. App-specific names are kept out on purpose, because a scanned app that reused one would have a real finding silently suppressed.</p>
+      <p class="step"><span class="n">2</span><b>Matching is exact.</b> <code>/health</code> is a liveness probe; <code>/api/health-records</code> is patient data. A fragment match cannot tell them apart, so the second is examined like any other route. A public-by-design route of your own is suppressed by fingerprint (<code>--suppress</code>), which is visible and reversible.</p>
+      <p class="step"><span class="n">3</span><b>Webhook receivers authenticate by signature</b>, the sender having no session to present. So they are recognised directly: <code>constructEvent</code>, <code>timingSafeEqual</code>, or a read of <code>stripe-signature</code> / <code>x-hub-signature</code> / <code>svix-signature</code>. A receiver that checks counts as authenticated wherever it lives.</p>
+      <p class="step"><span class="n">4</span>Exempting by path was the right idea checked the wrong way. A path is not evidence: an endpoint with "webhook" in its name may be one that <i>sends</i> them, an SSRF sink. The test app's <code>/api/webhooks/test</code> is exactly that, and it is reported.</p>
+      <p class="step"><span class="n">5</span>The same principle killed one more rule. Exempting "any GET route with no guard found" read the condition backwards, and because the Express mapper always answers True or False, no Express GET route could ever produce a missing-auth finding. Silence has to be earned by what the route is or does.</p>
+    </div>
+  </div>
+</section>
+
+<section id="why">
+  <h2>Why it matters</h2>
+  <div class="grid-2">
+    <div class="callout why"><div class="label">One route is enough</div><p>A single API route without authentication is often a full data breach. Unauthenticated reads expose all data to anyone; unauthenticated writes let attackers create, modify or delete records; an admin endpoint without auth lets any user perform admin actions. It is especially common in vibe-coded apps where routes are added quickly, or where auth went on the pages and not on the API routes behind them.</p></div>
+    <div class="callout breach"><div class="label">Real-world breaches</div><p><b>Optus Australia (2022):</b> an unauthenticated API endpoint exposed personal records of 9.8 million customers, including passport numbers and driver's licences. No API key or auth token was required.</p><p><b>Peloton (2021):</b> API endpoints lacked authentication, letting anyone query account data (age, gender, city, weight) for any Peloton user without logging in.</p></div>
+  </div>
+</section>
+
+<section id="code">
+  <h2>Vulnerable vs fixed</h2>
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true">BAD · flagged</button>
+      <button class="tab good" role="tab" aria-selected="false">GOOD · not flagged</button>
+    </div>
+    <div role="tabpanel"><pre><code><span class="c">// BAD: No auth check, anyone can list all users</span>
+<span class="hl bad">export async function GET() {</span>
+  const users = await db.select().from(profiles)
+  return NextResponse.json(users)
+}
+
+<span class="c">// BAD: Auth on the page but not the API route</span>
+<span class="c">// src/app/dashboard/page.tsx  → has auth check</span>
+<span class="c">// src/app/api/tasks/route.ts  → no auth check (accessible directly)</span></code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c">// GOOD: Check authentication on every API route</span>
+export async function GET(request: Request) {
+  const user = await <span class="k">getAuthUser</span>(request)
+<span class="hl good">  if (!user) {
+    return NextResponse.json({ error: <span class="s">"Unauthorized"</span> }, { status: <span class="k">401</span> })
+  }</span>
+
+  <span class="c">// Only return this user's data</span>
+  const tasks = await db.select().from(tasks).where(eq(tasks.userId, user.id))
+  return NextResponse.json(tasks)
+}
+
+<span class="c">// GOOD: Use middleware to protect all /api routes (middleware.ts)</span>
+export function middleware(request: NextRequest) {
+  if (request.nextUrl.pathname.startsWith(<span class="s">"/api"</span>)) {
+    const token = request.headers.get(<span class="s">"Authorization"</span>)
+    if (!token) return new Response(<span class="s">"Unauthorized"</span>, { status: <span class="k">401</span> })
+  }
+}</code></pre></div>
+  </div>
+</section>
+
+<section id="limits">
+  <h2>Per-language tracing and limits</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Server</th><th>What the tracer follows</th></tr></thead>
+      <tbody>
+        <tr><td>TypeScript (tsserver)</td><td>tRPC <code>protectedProcedure</code> → middleware → <code>getUser()</code>; Express chains <code>requireAuth</code> → <code>verifyToken</code> → <code>jwt.verify()</code>; Next.js inline helpers such as <code>getUserFromRequest</code> → <code>lib/auth.ts</code> → <code>verifyToken()</code>; path-less <code>router.use()</code>; local aliases; centrally mounted Express routes, per route and per method.</td></tr>
+        <tr><td>Python (pyright, or pylsp)</td><td>FastAPI <code>Depends(get_current_user)</code> → <code>verify_token</code> → <code>jwt.decode()</code>; Django <code>@login_required</code> → <code>django.contrib.auth</code> → session check.</td></tr>
+        <tr><td>Java / Kotlin (jdtls, kotlin-language-server)</td><td><code>@PreAuthorize("hasRole('ADMIN')")</code> → <code>SecurityConfig</code> → role hierarchy; <code>SecurityFilterChain</code> → request matcher → role check.</td></tr>
+        <tr><td>Go (gopls)</td><td>Group middleware (<code>api.Use(AuthMiddleware())</code>) guards every route on it; an inline handler that identifies the caller and refuses; a helper in another file (<code>mustAuth</code> in <code>mw.go</code>) followed by go-to-definition.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout note">
+    <div class="label">When the tracer does not run</div>
+    <p>Phase 7.5 needs a usable language server. The TypeScript server carries no TypeScript of its own and ingestion strips <code>node_modules</code>, so Phase 6.5 locates a TypeScript 5.x <code>tsserver.js</code> (<code>$ISITSECURE_TSSERVER_PATH</code>, the scanned project, <code>~/.isitsecure/lsp</code>, then the global npm root). Without one the phase is skipped entirely, and the route analyzer's own verdicts stand: the mount-line match and the handler scan, with nothing disproved by resolution. A route the tracer cannot resolve stays unverified and reported; it is never cleared by a failed lookup.</p>
+  </div>
+</section>
+
+<footer class="foot">
+  <span>Source: <a href="../scanners/route-auth-analyzer.md">docs/scanners/route-auth-analyzer.md</a> · <a href="../architecture.md">docs/architecture.md</a> · <a href="../lsp-setup.md">docs/lsp-setup.md</a></span>
+  <span>Related: <a href="scan-pipeline.html">The scan pipeline</a> · <a href="taint-analysis.html">Taint analysis</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+<script>
+(function () {
+  // tracer: a definition request hops from the import to trpc.ts:42
+  window.tracerHop = function (scene, i, el) {
+    const svg = el.querySelector("svg"); IsDoc.clearPackets(svg);
+    IsDoc.packet(svg, "M 340 90 H 398", { cls: "f-info", r: 5, duration: 900, hold: 600 });
+  };
+})();
+</script>
+</body>
+</html>

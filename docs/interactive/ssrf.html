@@ -1,0 +1,541 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Server-Side Request Forgery · isitsecure</title>
+<meta name="description" content="How SSRF turns your server into the attacker's proxy, how the isitsecure scanner probes URL-shaped parameters, how blind SSRF is proven with out-of-band callbacks, and how to fix it. Animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  /* attack shape: the internal network is a dashed region; the direct route is blocked */
+  #shape .vpc { fill: var(--info-soft); fill-opacity: .35; stroke: var(--info); stroke-dasharray: 6 5; stroke-width: 1.5; }
+  #shape .blocked { stroke: var(--attacker); stroke-dasharray: 4 5; stroke-width: 1.5; fill: none; opacity: .75; }
+  #shape.s3 .srv > rect { stroke: var(--attacker); stroke-width: 2.5; }
+  #shape.s5 .reach > rect { stroke: var(--attacker); }
+
+  /* probe: inventory rows fade in and classify */
+  #probe .row { opacity: .35; transition: opacity .4s; }
+  #probe.s2 .row { opacity: 1; }
+  #probe.s2 .row.skip text { fill: var(--muted); }
+  #probe.s4 .ind { fill: var(--attacker); font-weight: 500; }
+
+  /* oob: the target's reply is deliberately dull */
+  #oob .hit { fill: var(--attacker-soft); stroke: var(--attacker); }
+
+  /* fix: a red gate on the step that rejects */
+  #fix[data-step="2"] .g-allow > rect, #fix[data-step="3"] .g-priv > rect { stroke: var(--attacker) !important; stroke-width: 2.5 !important; }
+  #fix[data-step="2"] .after-allow, #fix[data-step="3"] .after-priv { opacity: .25; }
+  #fix .after-allow, #fix .after-priv { transition: opacity .4s; }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› Server-Side Request Forgery</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/ssrf-scanner.md" title="The markdown source for this page">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">DAST scanner</div>
+  <h1>Server-Side Request Forgery</h1>
+  <p class="lede">Your server fetches a URL that a user handed it. If nothing checks the host, the user can point it at addresses only your server can reach: localhost, the private network, and the cloud metadata service that hands out IAM credentials. The scanner probes every URL-shaped parameter with those addresses, and proves the blind cases with an out-of-band callback.</p>
+  <div class="meta">
+    <span class="pill dast">DAST</span><span class="pill high">High–Critical</span><span class="pill">Injection Risk</span><span class="pill">ssrf_scanner</span><span class="pill">OOB phases 3.5 + 5.6</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#shape-sec"><span class="n">01</span>The attack shape</a>
+  <a href="#probe-sec"><span class="n">02</span>How the scanner probes</a>
+  <a href="#oob-sec"><span class="n">03</span>Blind SSRF, out of band</a>
+  <a href="#why"><span class="n">04</span>Why it matters</a>
+  <a href="#breach"><span class="n">05</span>Breaches</a>
+  <a href="#fix-sec"><span class="n">06</span>The fix</a>
+  <a href="#limits"><span class="n">07</span>Limits</a>
+</nav>
+
+<section id="shape-sec">
+  <h2>The attack shape: your server as a proxy</h2>
+  <p class="prose">Three parties. The attacker is on the internet. The internal targets only accept connections from inside the network. Your server is on both sides, and it will fetch whatever URL it is given.</p>
+
+  <div class="scene" id="shape" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 330" role="img" aria-label="An attacker on the internet sends a URL to your server; the server fetches it from the internal network, reaching the cloud metadata service, Redis and a localhost admin panel, and relays the answer back.">
+        <defs><marker id="arrS1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+
+        <!-- internal network region -->
+        <rect class="vpc" x="596" y="14" width="348" height="302" rx="12"/>
+        <text class="lbl t-info" x="612" y="34">Internal network · no route from the internet</text>
+
+        <!-- blocked direct route -->
+        <path class="blocked" d="M95 118 C 95 50, 330 30, 560 60"/>
+        <text class="lbl t-attacker" x="330" y="30" text-anchor="middle">✕ no route from the attacker</text>
+
+        <!-- attacker -->
+        <g class="node lit-1" transform="translate(20 120)">
+          <rect width="150" height="90" rx="10"/>
+          <text class="ttl" x="14" y="26">Attacker</text>
+          <text class="lbl" x="14" y="48">on the internet</text>
+          <text class="lbl" x="14" y="64">no route to 10.x,</text>
+          <text class="lbl" x="14" y="78">127.0.0.1, 169.254.x</text>
+        </g>
+
+        <!-- your server -->
+        <g class="node srv lit-2" transform="translate(300 110)">
+          <rect width="200" height="110" rx="10"/>
+          <text class="ttl" x="14" y="26">Your server</text>
+          <text class="mono" x="14" y="50">GET /api/fetch?url=…</text>
+          <text class="lbl" x="14" y="70">fetch(url) with no check</text>
+          <text class="lbl" x="14" y="86">on both networks</text>
+          <text class="lbl t-attacker at-3" x="14" y="100">now the attacker's proxy</text>
+        </g>
+
+        <!-- internal targets -->
+        <g class="node lit-3" transform="translate(620 46)">
+          <rect width="304" height="74" rx="8"/>
+          <text class="ttl" x="12" y="22">169.254.169.254</text>
+          <text class="mono" x="12" y="42">/latest/meta-data/iam/security-…</text>
+          <text class="lbl" x="12" y="60">IMDSv1: returns the IAM role credentials</text>
+        </g>
+        <g class="node reach lit-5" transform="translate(620 140)">
+          <rect width="304" height="60" rx="8"/>
+          <text class="ttl" x="12" y="22">10.0.0.5:6379 · Redis</text>
+          <text class="lbl" x="12" y="44">cache with no auth, never exposed</text>
+        </g>
+        <g class="node reach lit-5" transform="translate(620 220)">
+          <rect width="304" height="60" rx="8"/>
+          <text class="ttl" x="12" y="22">127.0.0.1:8080 /admin</text>
+          <text class="lbl" x="12" y="44">admin panel bound to localhost</text>
+        </g>
+        <text class="lbl at-5" x="620" y="302">…and every other port: a map of the private network</text>
+
+        <!-- wires -->
+        <path id="sw1" class="wire at-2 attacker" d="M170 165 H 296" marker-end="url(#arrS1)"/>
+        <path id="sw1p" d="M172 165 H 250" fill="none" stroke="none"/>
+        <path id="sw1r" d="M298 190 H 220" fill="none" stroke="none"/>
+        <path id="sw2" class="wire at-3 attacker" d="M500 150 C 560 150, 560 83, 616 83" marker-end="url(#arrS1)"/>
+        <path id="sw2p" d="M500 150 C 530 150, 535 115, 548 104" fill="none" stroke="none"/>
+        <path id="sw2r" d="M580 110 C 560 120, 560 170, 540 175" fill="none" stroke="none"/>
+        <path class="wire at-5 attacker dashed" d="M500 165 C 560 165, 560 170, 616 170" marker-end="url(#arrS1)"/>
+        <path class="wire at-5 attacker dashed" d="M500 180 C 560 180, 560 250, 616 250" marker-end="url(#arrS1)"/>
+
+        <!-- stolen credentials land with the attacker -->
+        <g class="node at-4 lit-4" transform="translate(20 228)">
+          <rect width="250" height="86" rx="8" class="soft-attacker"/>
+          <text class="ttl" x="12" y="22">Credentials leave the VPC</text>
+          <g class="mono">
+            <text x="12" y="44">AccessKeyId:     ASIA…</text>
+            <text x="12" y="60">SecretAccessKey: wJal…</text>
+            <text x="12" y="76">Token: IQoJb3JpZ2lu…</text>
+          </g>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The attacker sits on the internet, the internal network only routes from inside, and your server is on both. There is no direct route from the attacker to <code>169.254.169.254</code>, Redis or the admin panel.</p>
+      <p class="step" data-on="shapeStep"><span class="n">2</span>The attacker sends your server a URL in a parameter it fetches: <code>url=http://169.254.169.254/latest/meta-data/iam/security-credentials/</code>. Nothing checks the host.</p>
+      <p class="step" data-on="shapeStep"><span class="n">3</span>Your server fetches it. To the metadata service the request comes from a trusted host inside the VPC. <b>The server has become the attacker's proxy.</b></p>
+      <p class="step" data-on="shapeStep"><span class="n">4</span>IMDSv1 answers with the instance's IAM role credentials and the server relays the body back. The Access Key and Secret Key now work from anywhere.</p>
+      <p class="step" data-on="shapeStep"><span class="n">5</span>The same move reaches anything the server can: Redis or Memcached with no auth, an admin panel bound to localhost, and by walking ports, a map of the private network. Some implementations also honour <code>file:///etc/passwd</code>.</p>
+    </div>
+  </div>
+</section>
+
+<section id="probe-sec">
+  <h2>How the scanner probes</h2>
+  <p class="prose">The scanner does the attacker's move with harmless addresses and reads the reply for proof. It only touches parameters whose <em>name</em> says they carry a URL, and it carries the authenticated session so server-rendered routes answer at all.</p>
+
+  <div class="scene" id="probe" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 344" role="img" aria-label="The scanner selects URL-shaped parameters from the endpoint inventory, sends six internal and cloud metadata URLs into each with the session cookie, and flags the endpoint only when the response body contains a metadata or internal-page indicator.">
+        <defs><marker id="arrS2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+
+        <!-- scanner -->
+        <g class="node lit-1" transform="translate(20 20)">
+          <rect width="230" height="80" rx="10"/>
+          <text class="ttl" x="14" y="26">Scanner</text>
+          <text class="lbl" x="14" y="48">ssrf_scanner · phase 4</text>
+          <text class="lbl" x="14" y="64">session: cookie and/or bearer</text>
+        </g>
+
+        <!-- inventory -->
+        <g class="node lit-2" transform="translate(20 120)">
+          <rect width="230" height="190" rx="10"/>
+          <text class="ttl" x="14" y="24">Endpoint inventory</text>
+          <g class="mono">
+            <g class="row"><text x="14" y="50">GET  /api/preview</text><text x="14" y="64" class="lbl">  url=          </text><text x="150" y="64" class="lbl t-safe at-2">url-shaped</text></g>
+            <g class="row"><text x="14" y="86">POST /profile/image/url</text><text x="14" y="100" class="lbl">  imageUrl</text><text x="150" y="100" class="lbl t-safe at-2">url-shaped</text></g>
+            <g class="row"><text x="14" y="122">POST /api/hooks</text><text x="14" y="136" class="lbl">  callbackUri</text><text x="150" y="136" class="lbl t-safe at-2">url-shaped</text></g>
+            <g class="row skip"><text x="14" y="158">GET  /api/search</text><text x="14" y="172" class="lbl">  q=</text><text x="150" y="172" class="lbl at-2">skipped</text></g>
+          </g>
+          <text class="lbl at-2" x="14" y="196">match by substring of the name</text>
+        </g>
+
+        <!-- probe list -->
+        <g class="node at-3 lit-3" transform="translate(290 112)">
+          <rect width="270" height="118" rx="10"/>
+          <text class="ttl" x="12" y="22">Six probe URLs</text>
+          <g class="mono">
+            <text x="12" y="42">http://127.0.0.1</text>
+            <text x="12" y="56">http://localhost</text>
+            <text x="12" y="70">http://0.0.0.0</text>
+            <text x="12" y="84">http://[::1]</text>
+            <text x="12" y="98">http://169.254.169.254/latest/meta-data/</text>
+            <text x="12" y="112">http://metadata.google.internal/</text>
+          </g>
+        </g>
+
+        <!-- request -->
+        <g class="node at-3 lit-3" transform="translate(290 240)">
+          <rect width="270" height="94" rx="10"/>
+          <text class="ttl" x="12" y="20">Request (form-encoded), per probe</text>
+          <g class="mono">
+            <text x="12" y="40">POST /profile/image/url</text>
+            <text x="12" y="54" class="t-accent">Cookie: session=eyJhbGci…</text>
+            <text x="12" y="68">imageUrl=http://169.254.169.254</text>
+            <text x="12" y="82">  /latest/meta-data/</text>
+          </g>
+        </g>
+
+        <!-- target -->
+        <g class="node lit-1" transform="translate(600 20)">
+          <rect width="344" height="80" rx="10"/>
+          <text class="ttl" x="14" y="26">Target</text>
+          <text class="lbl" x="14" y="48">app.example · server-rendered route</text>
+          <text class="lbl" x="14" y="64">authenticates by cookie, not bearer</text>
+        </g>
+
+        <!-- response -->
+        <g class="node at-4 lit-4" transform="translate(600 120)">
+          <rect width="344" height="190" rx="10"/>
+          <text class="ttl" x="14" y="24">Response body</text>
+          <g class="mono">
+            <text x="14" y="46">200 OK</text>
+            <text x="14" y="62" class="ind">ami-id</text>
+            <text x="14" y="78" class="ind">instance-id</text>
+            <text x="14" y="94" class="ind">iam/</text>
+            <text x="14" y="110" class="ind">meta-data/</text>
+          </g>
+          <text class="lbl" x="150" y="62">indicators: AWS ami-id ·</text>
+          <text class="lbl" x="150" y="76">instance-id · iam/ · meta-data</text>
+          <text class="lbl" x="150" y="90">GCP computeMetadata ·</text>
+          <text class="lbl" x="150" y="104">project/project-id</text>
+          <text class="lbl" x="150" y="118">any &lt;!DOCTYPE html&gt; page</text>
+          <text class="lbl" x="14" y="140">decision: body contains an indicator</text>
+          <text class="ttl t-attacker at-5" x="14" y="162">SSRF · imageUrl on /profile/image/url</text>
+          <text class="lbl at-5" x="14" y="178">no indicator at all → maybe blind → OOB</text>
+        </g>
+
+        <!-- wires -->
+        <path id="pw1" class="wire at-3 accent" d="M250 50 H 598" marker-end="url(#arrS2)"/>
+        <path id="pw1p" d="M250 50 H 430" fill="none" stroke="none"/>
+        <path id="pw1r" d="M598 80 H 330" fill="none" stroke="none"/>
+        <path class="wire at-4 info dashed" d="M598 80 H 254" marker-end="url(#arrS2)"/>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The scanner starts from the endpoint inventory and the authenticated session the crawl produced: a bearer token, a session cookie, or both.</p>
+      <p class="step"><span class="n">2</span>Only URL-shaped parameters are tested. A name qualifies if it contains a token such as <code>url</code>, <code>uri</code>, <code>link</code>, <code>href</code>, <code>src</code>, <code>image</code>, <code>avatar</code>, <code>callback</code>, <code>webhook</code>, <code>redirect</code>, <code>next</code> or <code>proxy</code>, so <code>imageUrl</code> and <code>callbackUri</code> match by substring while <code>q</code> is skipped. Query parameters and POST body fields both count.</p>
+      <p class="step" data-on="probeStep"><span class="n">3</span>Six probe URLs go into each such parameter: localhost in four spellings, the AWS metadata path and the GCP metadata host. The request carries the session cookie, because server-rendered routes often authenticate by cookie rather than a bearer header.</p>
+      <p class="step" data-on="probeStep"><span class="n">4</span><b>Flag only if the response body contains a success indicator</b>: <code>ami-id</code>, <code>instance-id</code>, <code>iam/</code> or <code>meta-data</code> for AWS, <code>computeMetadata</code> or <code>project/project-id</code> for GCP, or a full <code>&lt;!DOCTYPE html&gt;</code> page that came back from an internal address.</p>
+      <p class="step"><span class="n">5</span>A hit is reported as SSRF on that parameter, with the probe URL as evidence. A plain 200 proves nothing either way: the server may have fetched the URL and discarded the body. That is blind SSRF, and it is handled out of band.</p>
+    </div>
+  </div>
+</section>
+
+<section id="oob-sec">
+  <h2>Blind SSRF: proving a fetch the response never shows</h2>
+  <p class="prose">Many sinks fetch the URL and show nothing: an avatar is stored, a webhook is "registered", a 200 comes back. The scanner cannot see the fetch from the response, so it makes the fetch visible somewhere else. Two pipeline phases bracket the dynamic scanners for this.</p>
+
+  <div class="scene" id="oob" data-scene data-interval="3600">
+    <figure class="stage">
+      <svg viewBox="0 0 960 340" role="img" aria-label="Phase 3.5: the scanner registers with the OOB callback server and mints a unique callback URL. It POSTs the URL into the imageUrl form field with the session cookie. The target fetches it, which the OOB server records. Phase 5.6: the scanner polls the OOB server and the single recorded hit proves blind SSRF.">
+        <defs><marker id="arrS3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+
+        <text class="eyebrow until-5" x="20" y="24" style="font-size:10px;fill:var(--info)">PHASE 3.5 · OOB REGISTRATION → PHASE 4 · SCANNERS</text>
+        <text class="eyebrow at-5" x="20" y="24" style="font-size:10px;fill:var(--accent)">PHASE 5.6 · OOB COLLECTION</text>
+
+        <!-- scanner -->
+        <g class="node lit-1 lit-3 lit-5" transform="translate(20 110)">
+          <rect width="150" height="96" rx="10"/>
+          <text class="ttl" x="14" y="26">Scanner</text>
+          <text class="lbl" x="14" y="48">session cookie</text>
+          <text class="lbl" x="14" y="64">+ bearer, if any</text>
+          <text class="lbl at-5" x="14" y="84">polls, decrypts, matches</text>
+        </g>
+
+        <!-- OOB server -->
+        <g class="node lit-1 lit-4" transform="translate(385 34)">
+          <rect width="220" height="70" rx="10"/>
+          <text class="ttl" x="12" y="22">OOB callback server</text>
+          <text class="mono" x="12" y="42">oob.isitsecure.ai</text>
+          <text class="lbl" x="12" y="58">records DNS and HTTP hits</text>
+        </g>
+        <g class="at-4" transform="translate(385 112)">
+          <rect class="hit" width="220" height="40" rx="6"/>
+          <text class="mono" x="10" y="17">hit: dns + http  ←  203.0.113.7</text>
+          <text class="lbl" x="10" y="32">nonce k3x9q … → imageUrl</text>
+        </g>
+
+        <!-- target -->
+        <g class="node lit-4" transform="translate(690 110)">
+          <rect width="254" height="96" rx="10"/>
+          <text class="ttl" x="14" y="26">Target server</text>
+          <text class="lbl" x="14" y="48">203.0.113.7 · fetches imageUrl</text>
+          <text class="lbl" x="14" y="64">stores the avatar</text>
+          <text class="mono at-4" x="14" y="84">→ 200 OK, body says nothing</text>
+        </g>
+
+        <!-- callback url -->
+        <g class="node at-1 lit-1" transform="translate(200 226)">
+          <rect width="380" height="100" rx="8"/>
+          <text class="ttl" x="12" y="22">Callback URL, unique per payload</text>
+          <g class="mono">
+            <text x="12" y="46">http://&lt;session-id&gt;&lt;nonce&gt;.oob.isitsecure.ai</text>
+            <text x="12" y="64" class="t-accent">http://c8f2…k3x9q.oob.isitsecure.ai</text>
+          </g>
+          <text class="lbl" x="12" y="86">nonce ↔ endpoint + parameter, kept by the scanner</text>
+        </g>
+
+        <!-- finding the sink -->
+        <g class="node at-2 lit-2" transform="translate(600 226)">
+          <rect width="344" height="100" rx="8"/>
+          <text class="ttl" x="12" y="22">Finding the sink</text>
+          <g class="mono">
+            <text x="12" y="44">GET /profile  Cookie: session=…</text>
+            <text x="12" y="60">&lt;form action="/profile/image/url"&gt;</text>
+            <text x="12" y="76">  &lt;input name="imageUrl"&gt;</text>
+          </g>
+          <text class="lbl" x="12" y="92">crawler blocked? read the forms over HTTP</text>
+        </g>
+
+        <!-- verdict -->
+        <g class="node at-6 lit-6" transform="translate(20 226)">
+          <rect width="160" height="100" rx="8" class="soft-attacker"/>
+          <text class="ttl t-attacker" x="12" y="22">Blind SSRF</text>
+          <text class="lbl" x="12" y="42">confirmed via callback</text>
+          <text class="mono" x="12" y="62">imageUrl</text>
+          <text class="mono" x="12" y="78">/profile/image/url</text>
+          <text class="lbl" x="12" y="94">one hit is enough</text>
+        </g>
+
+        <!-- wires -->
+        <path id="ow1" class="wire at-1 info" d="M170 140 C 280 140, 280 69, 383 69" marker-end="url(#arrS3)"/>
+        <path id="ow1p" d="M170 140 C 280 140, 280 69, 340 69" fill="none" stroke="none"/>
+        <path id="ow1r" d="M340 84 C 300 84, 300 150, 200 150" fill="none" stroke="none"/>
+        <path id="ow2" class="wire at-3 accent" d="M170 165 H 688" marker-end="url(#arrS3)"/>
+        <path id="ow2p" d="M172 165 H 470" fill="none" stroke="none"/>
+        <path id="ow2r" d="M660 185 H 260" fill="none" stroke="none"/>
+        <path id="ow3" class="wire at-4 attacker" d="M760 110 C 760 80, 700 69, 607 69" marker-end="url(#arrS3)"/>
+        <path id="ow3p" d="M760 110 C 760 80, 720 69, 650 69" fill="none" stroke="none"/>
+        <path class="wire at-5 accent dashed" d="M383 84 C 300 84, 300 150, 172 150" marker-end="url(#arrS3)"/>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step" data-on="oobStep"><span class="n">1</span><b>Phase 3.5.</b> Before the dynamic scanners run, the scanner registers a session with the out-of-band callback server. Every callback URL it mints is unique: the session id plus a per-payload nonce form the subdomain, so a later hit can be traced to one endpoint and one parameter.</p>
+      <p class="step"><span class="n">2</span>The sink is usually a form field. Here the crawl found <code>POST /profile/image/url</code> with an <code>imageUrl</code> input. When the browser crawl cannot reach an auth-gated page, the scanner fetches the common authenticated pages (<code>/dashboard</code>, <code>/profile</code>, <code>/settings</code>, <code>/account</code>, …) over HTTP with the session and reads their <code>&lt;form&gt;</code> targets directly.</p>
+      <p class="step" data-on="oobStep"><span class="n">3</span>The callback URL is POSTed into the URL-shaped body field, form-encoded, with the session cookie. Only URL-shaped fields get it, and the number of POST registrations is capped (<code>MAX_OOB_POST_ENDPOINTS</code>) so the external service is not flooded.</p>
+      <p class="step" data-on="oobStep"><span class="n">4</span>The target fetches the URL. Its reply to the scanner is a plain 200 with nothing of the fetch in it. The fetch itself lands on the OOB server, which records the DNS lookup and the HTTP request together with the source address.</p>
+      <p class="step" data-on="oobStep"><span class="n">5</span><b>Phase 5.6.</b> After the dynamic scanners finish, the scanner polls the OOB server, decrypts the recorded interactions, and matches each nonce back to its endpoint and parameter.</p>
+      <p class="step"><span class="n">6</span><b>A single callback proves the server made the request.</b> The finding is reported as blind SSRF on <code>imageUrl</code>, even though no response body ever showed it.</p>
+    </div>
+  </div>
+
+  <div class="callout note">
+    <div class="label">Why the cookie matters</div>
+    <p>An SPA talks to its API with a bearer header, so a scanner that only forwards the bearer gets a 401 from a server-rendered form route and never reaches the sink. The OOB step sends the crawl's full session, cookie included, and is not gated on a bearer token being present.</p>
+  </div>
+</section>
+
+<section id="why">
+  <h2>Why it matters</h2>
+  <div class="callout why">
+    <div class="label">Impact</div>
+    <p>SSRF lets an attacker use your server as a proxy to reach what the internet cannot:</p>
+    <ul>
+      <li><b>Steal cloud credentials.</b> The AWS metadata endpoint returns the IAM role's Access Key and Secret Key.</li>
+      <li><b>Reach internal services.</b> Databases, admin panels, and caches like Redis and Memcached that were never exposed.</li>
+      <li><b>Port-scan the private network.</b> Map your infrastructure from outside.</li>
+      <li><b>Read local files.</b> <code>file:///etc/passwd</code> on some implementations.</li>
+    </ul>
+  </div>
+</section>
+
+<section id="breach">
+  <h2>Real-world breaches</h2>
+  <div class="grid-2">
+    <div class="callout breach">
+      <div class="label">Capital One · 2019</div>
+      <p>An SSRF vulnerability in a WAF configuration let an attacker reach the AWS metadata endpoint (IMDSv1), steal IAM credentials, and exfiltrate 100+ million customer records from S3. The attacker was convicted. Capital One was fined $80 million.</p>
+    </div>
+    <div class="callout breach">
+      <div class="label">Shopify · 2020</div>
+      <p>A bug bounty researcher found SSRF in Shopify's infrastructure that allowed access to internal cloud metadata endpoints. Patched via their bug bounty program.</p>
+    </div>
+  </div>
+</section>
+
+<section id="fix-sec">
+  <h2>The fix: two gates before the fetch</h2>
+  <p class="prose">An allowlist of hostnames stops arbitrary targets. Resolving the name and refusing private addresses stops an allowed name that points inside. Both gates run before <code>fetch</code>.</p>
+
+  <div class="scene" id="fix" data-scene data-interval="3200">
+    <figure class="stage">
+      <svg viewBox="0 0 960 230" role="img" aria-label="A user-supplied URL passes through: parse hostname, hostname allowlist, DNS resolution, private-IP check, then fetch. Three example URLs: an allowed CDN passes, the metadata IP fails the allowlist, an allowed name that resolves to 10.0.0.5 fails the private-IP check.">
+        <defs><marker id="arrS4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+
+        <text class="lbl" x="20" y="28">url =</text>
+        <g class="mono">
+          <text class="only-1 t-safe" x="60" y="28">https://images.example.com/a.png</text>
+          <text class="only-2 t-attacker" x="60" y="28">http://169.254.169.254/latest/meta-data/</text>
+          <text class="only-3 t-attacker" x="60" y="28">https://cdn.example.com/x   (cdn.example.com → 10.0.0.5)</text>
+        </g>
+
+        <g class="node lit-1 lit-2 lit-3" transform="translate(20 80)">
+          <rect width="160" height="64" rx="8"/>
+          <text class="ttl" x="12" y="24">Parse</text>
+          <text class="lbl" x="12" y="44">new URL(url).hostname</text>
+        </g>
+        <path class="wire" d="M180 112 H 218" marker-end="url(#arrS4)"/>
+        <g class="node g-allow lit-1 lit-3" transform="translate(220 80)">
+          <rect width="190" height="64" rx="8"/>
+          <text class="ttl" x="12" y="24">Hostname allowlist</text>
+          <text class="lbl" x="12" y="44">images.example.com,</text>
+          <text class="lbl" x="12" y="56">cdn.example.com</text>
+        </g>
+        <path class="wire after-allow" d="M410 112 H 448" marker-end="url(#arrS4)"/>
+        <g class="node after-allow lit-1 lit-3" transform="translate(450 80)">
+          <rect width="160" height="64" rx="8"/>
+          <text class="ttl" x="12" y="24">Resolve DNS</text>
+          <text class="lbl" x="12" y="44">dns.resolve(hostname)</text>
+        </g>
+        <path class="wire after-allow" d="M610 112 H 648" marker-end="url(#arrS4)"/>
+        <g class="node g-priv after-allow lit-1" transform="translate(650 80)">
+          <rect width="160" height="64" rx="8"/>
+          <text class="ttl" x="12" y="24">Private IP?</text>
+          <text class="lbl" x="12" y="44">10/8 · 172.16/12 · 127/8</text>
+          <text class="lbl" x="12" y="56">192.168/16 · 169.254/16</text>
+        </g>
+        <path class="wire after-allow after-priv" d="M810 112 H 848" marker-end="url(#arrS4)"/>
+        <g class="node after-allow after-priv lit-1" transform="translate(850 80)">
+          <rect width="94" height="64" rx="8" class="soft-safe"/>
+          <text class="ttl" x="12" y="24">fetch</text>
+          <text class="lbl" x="12" y="44">only now</text>
+        </g>
+
+        <g class="only-1"><text class="t-safe" x="20" y="196">images.example.com is allowlisted and resolves to a public address → fetched.</text></g>
+        <g class="only-2"><text class="t-attacker" x="20" y="196">169.254.169.254 is not an allowed hostname → 403 Forbidden. The metadata service is never contacted.</text></g>
+        <g class="only-3"><text class="t-attacker" x="20" y="196">cdn.example.com is allowed, but it resolves to 10.0.0.5 → isPrivateIP → 403. The allowlist alone would have let it through.</text></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The happy path. The hostname is on the allowlist, DNS gives a public address, and the fetch runs. Everything the attacker controls has been checked before any connection is opened.</p>
+      <p class="step"><span class="n">2</span><b>Gate one: the allowlist.</b> A raw metadata IP, localhost, or any other host not on the list is refused with 403. Compare hostnames, never substrings of the URL.</p>
+      <p class="step"><span class="n">3</span><b>Gate two: resolve, then refuse private ranges.</b> An allowed name can still point at an internal address, so the code resolves it and rejects anything in a private or link-local range before fetching.</p>
+    </div>
+  </div>
+
+  <h3>Vulnerable vs fixed</h3>
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true">BAD · fetches any URL</button>
+      <button class="tab good" role="tab" aria-selected="false">GOOD · allowlist + private-IP block</button>
+    </div>
+    <div role="tabpanel"><pre><code><span class="c">// BAD: Fetches any URL provided by the user</span>
+export async function GET(request: Request) {
+  const url = new URL(request.url).searchParams.get(<span class="s">"url"</span>)
+<span class="hl bad">  const response = await fetch(url!)  <span class="c">// No validation</span></span>
+  const data = await response.text()
+  return new Response(data)
+}</code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c">// GOOD: Validate URL against allowlist</span>
+const ALLOWED_DOMAINS = [<span class="s">"images.example.com"</span>, <span class="s">"cdn.example.com"</span>]
+
+export async function GET(request: Request) {
+  const url = new URL(request.url).searchParams.get(<span class="s">"url"</span>)
+  const parsed = new URL(url!)
+
+<span class="hl good">  if (!ALLOWED_DOMAINS.includes(parsed.hostname)) {</span>
+    return new Response(<span class="s">"Forbidden"</span>, { status: 403 })
+  }
+
+  <span class="c">// Also block internal IPs</span>
+  const ip = await dns.resolve(parsed.hostname)
+<span class="hl good">  if (isPrivateIP(ip)) {</span>
+    return new Response(<span class="s">"Forbidden"</span>, { status: 403 })
+  }
+
+  const response = await fetch(url!)
+  return new Response(await response.arrayBuffer())
+}</code></pre></div>
+  </div>
+</section>
+
+<section id="limits">
+  <h2>Limits and what it deliberately does not do</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Aspect</th><th>Behaviour</th></tr></thead>
+      <tbody>
+        <tr><td>Which parameters</td><td>Only names containing a URL-shaped token (<code>url</code>, <code>uri</code>, <code>link</code>, <code>href</code>, <code>src</code>, <code>source</code>, <code>redirect</code>, <code>next</code>, <code>return</code>, <code>callback</code>, <code>image</code>, <code>img</code>, <code>photo</code>, <code>avatar</code>, <code>webhook</code>, <code>endpoint</code>, <code>target</code>, <code>dest</code>, <code>fetch</code>, <code>load</code>, <code>proxy</code>). A URL sink behind a name like <code>q</code> is not probed.</td></tr>
+        <tr><td>Probes sent</td><td>Six: <code>127.0.0.1</code>, <code>localhost</code>, <code>0.0.0.0</code>, <code>[::1]</code>, the AWS metadata path, the GCP metadata host. No <code>file://</code> probe is sent.</td></tr>
+        <tr><td>In-band proof</td><td>A response body containing a metadata indicator or a full HTML page. A 200 with a neutral body is not a finding.</td></tr>
+        <tr><td>Blind proof</td><td>One DNS or HTTP interaction on the callback server, matched by nonce to the endpoint and parameter. Requires the OOB registration in phase 3.5 to have succeeded; if no callback server answers, the blind path is skipped and the scan continues.</td></tr>
+        <tr><td>POST-body registrations</td><td>Capped by <code>MAX_OOB_POST_ENDPOINTS</code>, one of the two caps kept because it bounds an external service.</td></tr>
+        <tr><td>Safety</td><td>Probes are reads of harmless addresses. Nothing is written to the target or to the internal services it may reach.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<footer class="foot">
+  <span>Source: <a href="../scanners/ssrf-scanner.md">docs/scanners/ssrf-scanner.md</a> · <a href="../architecture.md">docs/architecture.md</a> (phases 3.5, 5.6)</span>
+  <span>Related: <a href="active-injection.html">Active injection</a> · <a href="scan-pipeline.html">The scan pipeline</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+<script>
+(function () {
+  const sel = (el, id) => el.querySelector(id);
+
+  window.shapeStep = function (scene, i, el) {
+    const svg = el.querySelector("svg"); IsDoc.clearPackets(svg);
+    if (i === 2) IsDoc.packet(svg, sel(svg, "#sw1p"), { cls: "f-attacker", label: "?url=169.254.169.254", duration: 1100 });
+    if (i === 3) IsDoc.packet(svg, sel(svg, "#sw2p"), { cls: "f-attacker", label: "GET meta-data/", duration: 1100 });
+    if (i === 4) {
+      IsDoc.packet(svg, sel(svg, "#sw2r"), { cls: "f-info", label: "IAM creds", duration: 1000 });
+      IsDoc.packet(svg, sel(svg, "#sw1r"), { cls: "f-info", label: "200 OK", duration: 1000, delay: 1150 });
+    }
+    if (i === 5) IsDoc.packet(svg, sel(svg, "#sw1p"), { cls: "f-attacker", label: "?url=10.0.0.5:6379", duration: 1000 });
+  };
+
+  window.probeStep = function (scene, i, el) {
+    const svg = el.querySelector("svg"); IsDoc.clearPackets(svg);
+    if (i === 3) IsDoc.packet(svg, sel(svg, "#pw1p"), { cls: "f-attacker", label: "imageUrl=http://169.254.169.254/…", duration: 1100 });
+    if (i === 4) IsDoc.packet(svg, sel(svg, "#pw1r"), { cls: "f-info", label: "200 OK · ami-id · instance-id · iam/", duration: 1100 });
+  };
+
+  window.oobStep = function (scene, i, el) {
+    const svg = el.querySelector("svg"); IsDoc.clearPackets(svg);
+    if (i === 1) IsDoc.packet(svg, sel(svg, "#ow1p"), { cls: "f-info", label: "register", duration: 1000 });
+    if (i === 3) IsDoc.packet(svg, sel(svg, "#ow2p"), { cls: "f-accent", label: "POST imageUrl=<callback URL>", duration: 1200 });
+    if (i === 4) {
+      IsDoc.packet(svg, sel(svg, "#ow3p"), { cls: "f-attacker", label: "DNS + GET", duration: 1000 });
+      IsDoc.packet(svg, sel(svg, "#ow2r"), { cls: "f-muted", label: "200 OK", duration: 1000, delay: 900 });
+    }
+    if (i === 5) {
+      IsDoc.packet(svg, sel(svg, "#ow1p"), { cls: "f-accent", label: "poll", duration: 900 });
+      IsDoc.packet(svg, sel(svg, "#ow1r"), { cls: "f-attacker", label: "1 hit · k3x9q", duration: 900, delay: 1000 });
+    }
+  };
+})();
+</script>
+</body>
+</html>

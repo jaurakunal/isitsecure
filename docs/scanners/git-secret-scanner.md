@@ -4,15 +4,18 @@
 
 ## What It Does
 
-Scans your entire git history — not just the current files — for accidentally committed secrets. Checks every commit diff for patterns matching:
+Scans the files at HEAD, the lines added by past commits, and the names of every file ever committed, for accidentally committed secrets. The history pass runs `git log --all --diff-filter=A -p` (last 500 non-merge commits), so it reads the diffs of commits that **add files**. Each added line is checked against these patterns:
 
-- **API keys**: Stripe (sk_live/sk_test), AWS (AKIA...), Firebase, Supabase (service role key), SendGrid, Twilio
-- **Tokens**: GitHub (ghp_/gho_), GitLab, OAuth tokens
-- **Database credentials**: PostgreSQL/MySQL connection strings with passwords
-- **Private keys**: RSA/EC private key file contents (-----BEGIN PRIVATE KEY-----)
-- **Generic secrets**: High-entropy strings in variable assignments matching `SECRET`, `KEY`, `TOKEN`, `PASSWORD`
+- **API keys**: Stripe live secret keys (`sk_live_`) and restricted keys (`rk_live_`), AWS access key IDs (AKIA...), Firebase/Google (`AIza...`), SendGrid, Twilio, OpenAI, Anthropic
+- **Supabase service role key**: matched as any `eyJ...eyJ...sig` JWT-shaped string, whatever its role or issuer
+- **Tokens**: GitHub personal access (`ghp_`) and OAuth (`gho_`) tokens
+- **Database credentials**: `postgres://`, `mysql://` and `mongodb://` connection URLs
+- **Private keys**: `-----BEGIN [RSA |EC |DSA ]PRIVATE KEY-----` headers
+- **Sensitive file names**: `.env` (and `.local`/`.production`/`.staging`), `.pem`, `.key`, `credentials.json`, service-account JSON, reported as High even if no pattern matches inside
 
-The scanner checks **both HEAD (current files) and git history**. This matters because developers often commit secrets, then remove them in a later commit — but the secret is still in the git history and accessible to anyone who clones the repo.
+Matches shorter than 8 or longer than 500 characters are dropped. There is no entropy-based or variable-name-based generic secret detection, no Stripe `sk_test_` pattern and no GitLab token pattern.
+
+The scanner checks **both HEAD (current files) and git history**. This matters because developers often commit secrets, then remove them in a later commit, but the secret is still in the git history and accessible to anyone who clones the repo. A history finding is tagged "currently in the codebase" when the file path still exists in the HEAD index (the file, not the secret value).
 
 ## Why It Matters
 

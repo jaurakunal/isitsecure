@@ -1,22 +1,25 @@
 # File Upload Scanner
 
-**Type:** DAST | **Severity:** High | **Category:** Injection Risk
+**Type:** DAST | **Severity:** High–Critical | **Category:** Injection Risk
 
 ## What It Does
 
-Tests file upload endpoints by attempting to upload files with dangerous extensions and path traversal filenames:
+Tests file upload endpoints (found by upload-like path indicators) by attempting to upload files with dangerous types and path traversal filenames, as a multipart `file` field:
 
-- **Dangerous extensions**: `.html`, `.svg`, `.php`, `.jsp`, `.exe`, `.sh`
-- **Path traversal**: `../../../etc/passwd`, `..\\..\\windows\\system32`
-- **Content-type mismatch**: sends executable content with image content-type
+- **Dangerous types**: only `.html` (`text/html`) and `.svg` (`image/svg+xml`), each with a small script payload. An accepted upload is reported High (confidence 0.85).
+- **Path traversal**: filenames `../../../etc/passwd`, `..\\..\\..\\etc\\passwd` and `....//....//etc/passwd`, sent with `text/plain` content. The scanner stops at the first accepted name and reports Critical (confidence 0.90).
 
-If the server accepts the upload and returns a URL, the file may be served directly — allowing XSS (via HTML/SVG), code execution (via PHP/JSP), or system file overwrites (via path traversal).
+The decision is the HTTP status only: any 2xx response counts as acceptance. The scanner does not check that the file is stored, returned as a URL, or served back, so a 2xx from an endpoint that silently discards the file is still reported.
+
+Not covered today: executable extensions such as `.php`, `.jsp`, `.exe` and `.sh`, and content-type mismatch tests (executable content sent with an image content-type).
+
+If the server accepts an HTML or SVG upload and serves it back, the file may run script in the visitor's browser (stored XSS); an accepted traversal filename may allow writing outside the intended directory.
 
 ## Why It Matters
 
 Unrestricted file uploads let attackers:
 
-- **Execute code on your server** — uploading `.php`, `.jsp`, or `.sh` files that the server executes
+- **Execute code on your server** — uploading `.php`, `.jsp`, or `.sh` files that the server executes (a risk of unrestricted uploads in general; this scanner does not probe those extensions)
 - **Stored XSS** — uploading `.html` or `.svg` files with JavaScript that executes when viewed
 - **Overwrite system files** — path traversal (`../../etc/cron.d/backdoor`) can write anywhere on the filesystem
 - **Serve malware** — your domain becomes a malware distribution point

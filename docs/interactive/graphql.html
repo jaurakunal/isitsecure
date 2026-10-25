@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>GraphQL Scanner · isitsecure</title>
+<meta name="description" content="How the GraphQL scanner picks endpoints from the inventory, sends three probes (introspection, a deeply nested query, a batch) and decides on a string in each response.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  /* find scene */
+  #find-s .kept { opacity: .25; transition: opacity .4s ease; }
+  #find-s.s1 .kept.k1, #find-s.s1 .kept.k2, #find-s.s1 .kept.k3 { opacity: 1; }
+  #find-s .skip { opacity: .55; }
+  #find-s .probe-line { opacity: 0; transition: opacity .4s ease; }
+  #find-s.s2 .probe-line { opacity: 1; }
+
+  /* probes scene: one row at a time */
+  #probes-s .row { transition: opacity .4s ease; }
+  #probes-s[data-step="2"] .row:not(.r1), #probes-s[data-step="3"] .row:not(.r2), #probes-s[data-step="4"] .row:not(.r3) { opacity: .3; }
+  #probes-s[data-step="2"] .r1 .req > rect, #probes-s[data-step="3"] .r2 .req > rect, #probes-s[data-step="4"] .r3 .req > rect,
+  #probes-s[data-step="2"] .r1 .rule > rect, #probes-s[data-step="3"] .r2 .rule > rect, #probes-s[data-step="4"] .r3 .rule > rect { stroke: var(--accent); stroke-width: 2.5; }
+  #probes-s .rule > rect { fill: var(--accent-soft); }
+
+  /* depth scene: cards */
+  #depth-s .card-r { transition: opacity .4s ease; }
+  #depth-s[data-step="2"] .cb, #depth-s[data-step="2"] .cc,
+  #depth-s[data-step="3"] .ca, #depth-s[data-step="3"] .cc,
+  #depth-s[data-step="4"] .ca, #depth-s[data-step="4"] .cb { opacity: .3; }
+  #depth-s[data-step="2"] .ca > rect.frame, #depth-s[data-step="3"] .cb > rect.frame, #depth-s[data-step="4"] .cc > rect.frame { stroke: var(--accent); stroke-width: 2.5; }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› <a href="group-surface.html">Attack surface and exposure</a> › GraphQL</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/graphql-scanner.md" title="The markdown source for this page">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">DAST scanner</div>
+  <h1>GraphQL Scanner</h1>
+  <p class="lede">GraphQL puts the whole API behind one URL, which means the questions to ask are also few. The scanner finds that URL in the endpoint inventory, then sends three small POST requests: ask for the schema, ask for a deeply nested query, ask for two queries at once. Each answer is judged by a string in the response body.</p>
+  <div class="meta">
+    <span class="pill dast">DAST</span><span class="pill med">Low to Medium</span><span class="pill">Info disclosure / API exposure</span><span class="pill">quick depth</span><span class="pill">no credentials needed</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#find"><span class="n">01</span>Finding the endpoint</a>
+  <a href="#probes"><span class="n">02</span>Three probes, three rules</a>
+  <a href="#depth"><span class="n">03</span>Reading the depth answer</a>
+  <a href="#why"><span class="n">04</span>Why it matters</a>
+  <a href="#fix"><span class="n">05</span>Vulnerable vs fixed</a>
+  <a href="#limits"><span class="n">06</span>Limits</a>
+</nav>
+
+<section id="find">
+  <h2>Finding the endpoint</h2>
+  <p class="prose">The scanner does not crawl or guess. It reads the inventory built by <a href="endpoint-discovery.html">endpoint discovery</a> and keeps every entry whose lowercased URL path contains <code>/graphql</code>, <code>/api/graphql</code> or <code>/gql</code>. Everything else is ignored, and if nothing matches, no request is sent at all.</p>
+
+  <div class="scene" id="find-s" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 300" role="img" aria-label="The endpoint inventory is filtered by path. Three entries containing graphql or gql are kept, two are skipped. Each kept endpoint then receives three probes in order: introspection, depth, batch.">
+        <defs><marker id="arr-gq1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g class="node" transform="translate(10 16)"><rect width="270" height="220" rx="10"/>
+          <text class="ttl" x="14" y="26">Endpoint inventory</text>
+          <g class="mono">
+            <text class="kept k1" x="14" y="62">POST /graphql</text><text class="lbl kept k1" x="246" y="62" text-anchor="end" style="fill:var(--safe)">keep</text>
+            <text class="skip" x="14" y="92">GET  /api/Users</text><text class="lbl skip" x="246" y="92" text-anchor="end">skip</text>
+            <text class="kept k2" x="14" y="122">POST /api/graphql</text><text class="lbl kept k2" x="246" y="122" text-anchor="end" style="fill:var(--safe)">keep</text>
+            <text class="skip" x="14" y="152">GET  /rest/v1/tasks</text><text class="lbl skip" x="246" y="152" text-anchor="end">skip</text>
+            <text class="kept k3" x="14" y="182">POST /v2/gql</text><text class="lbl kept k3" x="246" y="182" text-anchor="end" style="fill:var(--safe)">keep</text>
+          </g>
+          <text class="lbl" x="14" y="208">method and query string do not matter</text>
+        </g>
+        <path class="wire" d="M280 126 H 318" marker-end="url(#arr-gq1)"/>
+        <g class="node lit-1" transform="translate(320 46)"><rect width="270" height="164" rx="10"/>
+          <text class="ttl" x="14" y="26">Path filter</text>
+          <text class="lbl" x="14" y="50">lowercase the URL path, then test</text>
+          <text class="lbl" x="14" y="66">whether it contains any of</text>
+          <g class="mono t-accent"><text x="14" y="92">/graphql</text><text x="14" y="110">/api/graphql</text><text x="14" y="128">/gql</text></g>
+          <text class="lbl" x="14" y="152">no match: log it, send nothing</text>
+        </g>
+        <path class="wire" d="M590 126 H 628" marker-end="url(#arr-gq1)"/>
+        <g class="node" transform="translate(630 16)"><rect width="320" height="220" rx="10"/>
+          <text class="ttl" x="14" y="26">Probes per kept endpoint</text>
+          <g class="mono">
+            <text x="14" y="62">POST /graphql</text>
+            <text class="probe-line lbl" x="14" y="80">1 introspection · 2 depth · 3 batch</text>
+            <text x="14" y="122">POST /api/graphql</text>
+            <text class="probe-line lbl" x="14" y="140">1 introspection · 2 depth · 3 batch</text>
+            <text x="14" y="182">POST /v2/gql</text>
+            <text class="probe-line lbl" x="14" y="200">1 introspection · 2 depth · 3 batch</text>
+          </g>
+        </g>
+        <g class="at-3"><text class="t-accent" x="10" y="270" style="font-size:12px">Before each endpoint: budget.expired()? If so, stop and return what was found.</text></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The filter looks at the <b>path only</b>. <code>/graphql</code>, <code>/api/graphql</code> and <code>/gql/…</code> pass; <code>/api/Users</code> and <code>/rest/v1/tasks</code> do not. The entry's HTTP method is irrelevant because the scanner will POST to it regardless.</p>
+      <p class="step"><span class="n">2</span>Every kept endpoint gets the same three probes, strictly in order, each a JSON POST with a 10 s timeout. A non-2xx status ends that probe with no finding. So does a network error, which is only logged at debug level.</p>
+      <p class="step"><span class="n">3</span>Between endpoints the scanner checks its time budget so a large inventory cannot push it into the hard cancel. If the login crawl produced a session, its headers go on every probe, so a GraphQL endpoint that is only reachable behind login is tested too.</p>
+    </div>
+  </div>
+</section>
+
+<section id="probes">
+  <h2>Three probes, three rules</h2>
+  <p class="prose">Each probe is one request. What differs is what the response body must contain before a finding is raised.</p>
+
+  <div class="scene" id="probes-s" data-scene data-interval="3600">
+    <figure class="stage">
+      <svg viewBox="0 0 960 296" role="img" aria-label="Three rows. Introspection: POST a __schema query, the response must be 2xx and contain __schema, __type or types; Medium at 0.90. Depth: POST a ten level nested query, the response must be 2xx with no error text or with the word data; Medium at 0.80. Batch: POST an array of two queries, the response must be 2xx and an array containing __typename; Low at 0.70.">
+        <defs><marker id="arr-gq2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g class="lbl"><text x="8" y="16">probe</text><text x="150" y="16">sends</text><text x="424" y="16">response must satisfy</text><text x="806" y="16">finding</text></g>
+
+        <g class="row r1" transform="translate(0 26)">
+          <g class="node"><rect x="8" width="118" height="76" rx="8"/><text class="ttl" x="18" y="28">Introspection</text><text class="lbl" x="18" y="48">probe 1</text><text class="lbl" x="18" y="64">schema is public</text></g>
+          <path class="wire" d="M126 38 H 148" marker-end="url(#arr-gq2)"/>
+          <g class="node req"><rect x="150" width="252" height="76" rx="8"/><text class="mono" x="162" y="28">{ __schema { types {</text><text class="mono" x="162" y="46">  name fields { name }}}}</text><text class="lbl" x="162" y="64">POST · Content-Type: application/json</text></g>
+          <path class="wire" d="M402 38 H 424" marker-end="url(#arr-gq2)"/>
+          <g class="node rule"><rect x="426" width="360" height="76" rx="8"/><text x="438" y="28" style="font-size:12.5px">status 2xx AND body contains</text><text class="mono" x="438" y="46" style="font-size:11.5px">__schema  or  __type  or  "types"</text><text class="lbl" x="438" y="64">a substring test on the raw text; no JSON parsing</text></g>
+          <path class="wire" d="M786 38 H 806" marker-end="url(#arr-gq2)"/>
+          <g class="node"><rect x="808" width="144" height="76" rx="8"/><text class="t-accent" x="820" y="28" style="font-weight:600">MEDIUM</text><text class="lbl" x="820" y="48">confidence 0.90</text><text class="lbl" x="820" y="64">info disclosure</text></g>
+        </g>
+
+        <g class="row r2" transform="translate(0 114)">
+          <g class="node"><rect x="8" width="118" height="76" rx="8"/><text class="ttl" x="18" y="28">Depth</text><text class="lbl" x="18" y="48">probe 2</text><text class="lbl" x="18" y="64">no nesting limit</text></g>
+          <path class="wire" d="M126 38 H 148" marker-end="url(#arr-gq2)"/>
+          <g class="node req"><rect x="150" width="252" height="76" rx="8"/><text class="mono" x="162" y="28">{ a { a { a { … a {</text><text class="mono" x="162" y="46">    __typename }}}…}}</text><text class="lbl" x="162" y="64">10 levels of a field named "a"</text></g>
+          <path class="wire" d="M402 38 H 424" marker-end="url(#arr-gq2)"/>
+          <g class="node rule"><rect x="426" width="360" height="76" rx="8"/><text x="438" y="28" style="font-size:12.5px">status 2xx AND ( no "error" in the body</text><text x="438" y="46" style="font-size:12.5px">OR the word "data" appears )</text><text class="lbl" x="438" y="64">case-insensitive; read as "the server did not reject it"</text></g>
+          <path class="wire" d="M786 38 H 806" marker-end="url(#arr-gq2)"/>
+          <g class="node"><rect x="808" width="144" height="76" rx="8"/><text class="t-accent" x="820" y="28" style="font-weight:600">MEDIUM</text><text class="lbl" x="820" y="48">confidence 0.80</text><text class="lbl" x="820" y="64">exposed API</text></g>
+        </g>
+
+        <g class="row r3" transform="translate(0 202)">
+          <g class="node"><rect x="8" width="118" height="76" rx="8"/><text class="ttl" x="18" y="28">Batch</text><text class="lbl" x="18" y="48">probe 3</text><text class="lbl" x="18" y="64">many queries, 1 call</text></g>
+          <path class="wire" d="M126 38 H 148" marker-end="url(#arr-gq2)"/>
+          <g class="node req"><rect x="150" width="252" height="76" rx="8"/><text class="mono" x="162" y="28">[ {"query":"{__typename}"},</text><text class="mono" x="162" y="46">  {"query":"{__typename}"} ]</text><text class="lbl" x="162" y="64">a JSON array of two queries</text></g>
+          <path class="wire" d="M402 38 H 424" marker-end="url(#arr-gq2)"/>
+          <g class="node rule"><rect x="426" width="360" height="76" rx="8"/><text x="438" y="28" style="font-size:12.5px">status 2xx AND body starts with [</text><text x="438" y="46" style="font-size:12.5px">AND contains "__typename"</text><text class="lbl" x="438" y="64">an array back means the server ran both queries</text></g>
+          <path class="wire" d="M786 38 H 806" marker-end="url(#arr-gq2)"/>
+          <g class="node"><rect x="808" width="144" height="76" rx="8"/><text class="t-info" x="820" y="28" style="font-weight:600">LOW</text><text class="lbl" x="820" y="48">confidence 0.70</text><text class="lbl" x="820" y="64">exposed API</text></g>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Three rows, three string tests. Severity is fixed per probe: the schema leak and the missing depth limit are Medium, batching is Low.</p>
+      <p class="step"><span class="n">2</span><b>Introspection.</b> A standard schema query. If a 2xx body contains <code>__schema</code>, <code>__type</code> or <code>"types"</code>, the full list of types, fields, queries and mutations is public: a complete map of the API, including admin mutations and deprecated fields.</p>
+      <p class="step"><span class="n">3</span><b>Depth.</b> A query nested ten levels deep. Without a depth limit, <code>{ user { friends { friends { … } } } }</code> style queries cost exponentially more at each level, which is a cheap denial of service. The rule asks whether the response looks like <b>the server did not refuse</b>; <a href="#depth">section 03</a> shows how that is decided.</p>
+      <p class="step"><span class="n">4</span><b>Batch.</b> Two <code>__typename</code> queries in one array. A <b>body starting with <code>[</code></b> and containing <code>__typename</code> means the server executed both, so one HTTP request can carry a thousand queries and slip under a per-request rate limit.</p>
+    </div>
+  </div>
+
+  <div class="callout note">
+    <div class="label">What a string match can and cannot see</div>
+    <p>The introspection rule is a substring test on the raw body. A 2xx response whose error message merely quotes the word <code>__schema</code> would match too, and a server that blocks introspection with a non-2xx status is correctly left alone. The scanner never parses the JSON, so confidence reflects the check (0.90) rather than a validated schema.</p>
+  </div>
+</section>
+
+<section id="depth">
+  <h2>Reading the depth answer</h2>
+  <p class="prose">The depth probe is the one place where the rule needs care. The nested field is called <code>a</code>, which will not exist in a real schema, so a server that validates queries will usually answer with an error whatever its depth policy is. The decision therefore rests on three possible bodies.</p>
+
+  <div class="scene" id="depth-s" data-scene data-interval="3800">
+    <figure class="stage">
+      <svg viewBox="0 0 960 304" role="img" aria-label="Three response bodies to the depth query. A 2xx body with no error text is flagged. A body with error text and no data is clean. A body with both an error and the word data is also flagged by the rule.">
+        <g class="card-r ca"><rect class="frame node-f" x="10" y="14" width="300" height="190" rx="10" style="fill:var(--surface-2);stroke:var(--line);stroke-width:1.5"/>
+          <text class="ttl" x="26" y="42">A · no error text</text>
+          <g class="mono" style="font-size:11px"><text x="26" y="72">200 OK</text><text x="26" y="92">{"data":{"__typename":</text><text x="26" y="110">  "Query"}}</text></g>
+          <text class="lbl" x="26" y="140">the nesting went through</text>
+          <rect x="26" y="156" width="268" height="30" rx="6" class="soft-attacker"/><text class="t-attacker" x="38" y="176" style="font-weight:600;font-size:12.5px">FINDING · no depth limit</text>
+        </g>
+        <g class="card-r cb"><rect class="frame node-f" x="330" y="14" width="300" height="190" rx="10" style="fill:var(--surface-2);stroke:var(--line);stroke-width:1.5"/>
+          <text class="ttl" x="346" y="42">B · error, no "data"</text>
+          <g class="mono" style="font-size:11px"><text x="346" y="72">200 OK</text><text x="346" y="92">{"errors":[{"message":</text><text x="346" y="110">  "Query depth exceeds 10"}]}</text></g>
+          <text class="lbl" x="346" y="140">the server refused it</text>
+          <rect x="346" y="156" width="268" height="30" rx="6" class="soft-safe"/><text class="t-safe" x="358" y="176" style="font-weight:600;font-size:12.5px">clean · nothing reported</text>
+        </g>
+        <g class="card-r cc"><rect class="frame node-f" x="650" y="14" width="300" height="190" rx="10" style="fill:var(--surface-2);stroke:var(--line);stroke-width:1.5"/>
+          <text class="ttl" x="666" y="42">C · error and "data"</text>
+          <g class="mono" style="font-size:11px"><text x="666" y="72">200 OK</text><text x="666" y="92">{"data":null,"errors":[</text><text x="666" y="110">  {"message":"…"}]}</text></g>
+          <text class="lbl" x="666" y="140">refused, but the word is present</text>
+          <rect x="666" y="156" width="268" height="30" rx="6" class="soft-attacker"/><text class="t-attacker" x="678" y="176" style="font-weight:600;font-size:12.5px">FINDING · the rule says accepted</text>
+        </g>
+        <text class="lbl" x="10" y="232">query sent, ten levels deep:</text>
+        <text class="mono" x="10" y="252" style="font-size:11.5px">{ a { a { a { a { a { a { a { a { a { a { __typename } } } } } } } } } } }</text>
+        <text class="lbl t-accent" x="10" y="282">rule: status 2xx AND ( "error" not in body OR "data" in body )</text>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>One query, three kinds of answer. The same two-clause rule sorts them: <b>flag when there is no error text, or when the word <code>data</code> is present</b>.</p>
+      <p class="step"><span class="n">2</span><b>Body A.</b> No <code>error</code> anywhere in a 2xx body. The server ran the nested query without complaint, which is exactly what a missing depth limit looks like.</p>
+      <p class="step"><span class="n">3</span><b>Body B.</b> An error that does not contain <code>data</code>, such as a depth-limit refusal. This is the guard: a server that enforces a limit says so, and the scanner stays quiet.</p>
+      <p class="step"><span class="n">4</span><b>Body C.</b> The second clause lets a body through when it contains both an error and the word <code>data</code>, for example a <code>"data":null</code> next to a validation error. The rule counts that as accepted. Treat a Medium depth finding as a prompt to check the server's depth setting by hand.</p>
+    </div>
+  </div>
+</section>
+
+<section id="why">
+  <h2>Why it matters</h2>
+  <div class="callout why">
+    <div class="label">Why it matters</div>
+    <p>GraphQL gives clients flexible query power, which is also its security risk. Introspection returns the entire schema, including internal types, admin mutations and deprecated fields with sensitive data. Deeply nested queries cause exponential database joins. Batching a thousand queries into one POST bypasses per-request rate limits. Once an attacker knows the schema, they craft queries to extract the data.</p>
+  </div>
+  <div class="callout breach">
+    <div class="label">Real-world breach</div>
+    <p><b>GitLab, 2019.</b> GraphQL introspection was enabled by default, which let researchers enumerate private project information and user data. GitLab subsequently restricted introspection in production.</p>
+  </div>
+</section>
+
+<section id="fix">
+  <h2>Vulnerable vs fixed</h2>
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true">BAD · defaults left on</button>
+      <button class="tab good" role="tab" aria-selected="false">GOOD · introspection off, depth and rate limited</button>
+    </div>
+    <div role="tabpanel"><pre><code><span class="c">// BAD: playground and introspection on in production, no limits</span>
+const yoga = createYoga({
+  schema,
+<span class="hl bad">  graphiql: true,</span>
+  <span class="c">// no depth limit, no rate limiter, introspection answers anyone</span>
+})</code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c">// GOOD: disable introspection in production</span>
+const yoga = createYoga({
+  schema,
+<span class="hl good">  graphiql: false,</span>  <span class="c">// disable playground</span>
+  maskedErrors: true,
+  plugins: [
+<span class="hl good">    useDisableIntrospection(),</span>  <span class="c">// block __schema queries</span>
+<span class="hl good">    useDepthLimit({ maxDepth: 10 }),</span>
+    useRateLimiter({ max: 100, window: <span class="s">"1m"</span> })
+  ]
+})</code></pre></div>
+  </div>
+  <p class="prose">With a depth limit in place the second probe comes back as body B above, and with introspection disabled the first probe no longer sees <code>__schema</code>. Note that a batch is still accepted unless it is limited separately.</p>
+</section>
+
+<section id="limits">
+  <h2>Limits</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Setting</th><th>Value</th></tr></thead>
+    <tbody>
+      <tr><td>Depth and timeout</td><td>Quick depth. 600 s scanner timeout, 10 s per request. Stops itself at 85 % of the scanner timeout.</td></tr>
+      <tr><td>Selecting endpoints</td><td>Path contains <code>/graphql</code>, <code>/api/graphql</code> or <code>/gql</code>. No match, no requests.</td></tr>
+      <tr><td>Findings per endpoint</td><td>At most one per probe: introspection (Medium, 0.90), depth (Medium, 0.80), batch (Low, 0.70).</td></tr>
+      <tr><td>Auth</td><td>Uses the login session's headers when one exists; works without one.</td></tr>
+      <tr><td>Not tested</td><td>Field suggestions, alias overloading, directive abuse and authorisation inside resolvers. The scanner sends three fixed requests and never reads the schema it may receive.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<footer class="foot">
+  <span>Source: <a href="../scanners/graphql-scanner.md">graphql-scanner.md</a></span>
+  <span>Related: <a href="group-surface.html">Attack surface and exposure</a> · <a href="http-probe.html">HTTP probe</a> · <a href="openapi.html">OpenAPI spec</a> · <a href="endpoint-discovery.html">Endpoint discovery</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+</body>
+</html>

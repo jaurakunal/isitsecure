@@ -178,9 +178,8 @@ sast-injection`. Baseline **46/46 recall, 0 FP** across JS/TS, Python, Java, and
 - **Semgrep licensing** — OSS engine + our own rules are fine; confirm no
   reliance on registry rules with restrictive terms (we ship our own packs).
 - **Language coverage** — JS/TS (#4), Python/Flask/Django (#93), Java/Spring
-  (#102), and Kotlin/Spring (#104) ship today — matching the languages isitsecure
-  supports for the rest of the scan. Go/Ruby/Rust are DAST-only (no SAST support),
-  so no taint pack.
+  (#102), Kotlin/Spring (#104), and Go (`injection-go.yaml`) ship today. Ruby and Rust
+  have no taint pack.
 
 ## Phasing
 
@@ -195,5 +194,6 @@ sast-injection`. Baseline **46/46 recall, 0 FP** across JS/TS, Python, Java, and
    pack (Spring MVC/servlet sources; JDBC/JPA/JdbcTemplate, Runtime/ProcessBuilder,
    URL/RestTemplate, java.io.File; SQLi/cmdi/SSRF/path); #104 adds the **Kotlin/Spring**
    pack (same shape, Kotlin syntax — separate pack since a rule's patterns must be
-   valid in every language it lists). Further stacks continue here.
+   valid in every language it lists); a **Go** pack (`database/sql`, `os/exec`,
+   `net/http`; SQLi/XSS/cmdi/SSRF/path/open-redirect) followed. Further stacks continue here.
 5. **Keep the LLM layer** as the long-tail + business-logic backstop throughout.

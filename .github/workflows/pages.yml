@@ -1,0 +1,70 @@
+name: Docs site
+
+# Publishes docs/interactive/ as the project's GitHub Pages site.
+# One-time setup: repo Settings > Pages > Source = "GitHub Actions".
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/interactive/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Assemble site
+        run: |
+          set -euo pipefail
+          mkdir _site
+          cp -R docs/interactive/. _site/
+          touch _site/.nojekyll
+          # The pages link to the markdown sources with relative paths
+          # (../architecture.md). Those files are not part of the site, so
+          # point them at the rendered copies on GitHub.
+          repo="https://github.com/${GITHUB_REPOSITORY}/blob/main"
+          find _site -name '*.html' -print0 | xargs -0 sed -i \
+            -e "s#href=\"\.\./\.\./#href=\"${repo}/#g" \
+            -e "s#href=\"\.\./#href=\"${repo}/docs/#g"
+          # Fail the build if a relative link to a missing file slipped in.
+          python3 - <<'PY'
+          import pathlib, re, sys
+          root = pathlib.Path("_site")
+          bad = []
+          for page in root.glob("*.html"):
+              for href in re.findall(r'href="([^"#]+)(?:#[^"]*)?"', page.read_text()):
+                  # Only path-shaped links are checked; code samples that
+                  # contain the text href="…" are not links.
+                  if not re.fullmatch(r"[A-Za-z0-9_./-]+", href) or href.startswith("/"):
+                      continue
+                  if not (root / href).exists():
+                      bad.append((page.name, href))
+          if bad:
+              print("Broken relative links:", *bad, sep="\n  ")
+              sys.exit(1)
+          PY
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

@@ -1,16 +1,21 @@
 # IaC Scanner
 
-**Type:** SAST | **Severity:** High–Critical | **Category:** Infrastructure Misconfiguration
+**Type:** SAST | **Severity:** Low–Critical | **Category:** Infrastructure Misconfiguration
 
 ## What It Does
 
-Scans Infrastructure as Code files (Terraform, CloudFormation) for:
+Scans Terraform files (`.tf` and `.tfvars`; AWS resources only, CloudFormation is not read) with regular expressions over the file text:
 
-- **Public S3 buckets** — `acl = "public-read"` or missing public access blocks
-- **Unencrypted storage** — S3 buckets and RDS instances without encryption at rest
-- **Overly permissive IAM** — `Action: "*"` or `Resource: "*"` in IAM policies
-- **Missing logging** — CloudTrail, VPC Flow Logs, S3 access logging disabled
-- **Default VPC usage** — resources deployed in the default VPC
+- **Open security group ingress** — `0.0.0.0/0` or `::/0` on any port except 80 and 443 (High)
+- **Overly permissive IAM** — wildcard action `"*"` (High) or wildcard resource `"*"` (Medium)
+- **Hardcoded secrets** — secret-shaped values (cloud keys, API keys, database URLs, JWTs) in variable `default` values (Critical)
+- **Public S3 buckets** — `acl = "public-read"` or `"public-read-write"` (High)
+- **Secrets Manager** — `recovery_window_in_days = 0` (Medium)
+- **ALB HTTP listener** — an HTTP listener that forwards instead of redirecting to HTTPS (Medium)
+- **ECS public IP** — `assign_public_ip = true` (Low)
+- **Short log retention** — CloudWatch `retention_in_days` of 7 or fewer (Low)
+
+Not covered today: unencrypted storage, missing S3 public access blocks, CloudTrail/VPC Flow Log checks and default VPC usage.
 
 ## Why It Matters
 

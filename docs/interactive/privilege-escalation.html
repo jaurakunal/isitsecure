@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Privilege Escalation · isitsecure</title>
+<meta name="description" content="Eight probes that ask whether a regular user can reach admin data or admin actions: tables, routes, role self-elevation, the admin-versus-regular differential, replayed writes and RPC calls. Animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  .topbar-inner .crumb a { color: inherit; text-decoration: none; }
+  .topbar-inner .crumb a:hover { color: var(--accent); }
+  .scene svg text.mono, .scene svg .mono text { white-space: pre; }
+  /* probes: the rows being discussed stay bright, the others step back */
+  #probes .row { transition: opacity .35s ease; }
+  #probes:not([data-step="1"]) .row { opacity: .38; }
+  #probes[data-step="2"] .row.g2, #probes[data-step="3"] .row.g3, #probes[data-step="4"] .row.g4,
+  #probes[data-step="5"] .row.g5, #probes[data-step="6"] .row.g6 { opacity: 1; }
+  /* differential: size bars */
+  #diff .track { fill: var(--surface-2); stroke: var(--line); }
+  #diff .bar { fill: var(--info); }
+  #diff .bar.reg { fill: var(--attacker); }
+  #diff .gate > rect { transition: fill .35s, stroke .35s; }
+  #diff[data-step="2"] .gate.g12 > rect, #diff[data-step="3"] .gate.g3 > rect, #diff[data-step="4"] .gate.g4 > rect { fill: var(--accent-soft); }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› <a href="group-access-control.html">Access control</a> › Privilege escalation</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/privilege-escalation-scanner.md" title="The markdown source for this page">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">DAST scanner · special</div>
+  <h1>Privilege Escalation</h1>
+  <p class="lede">A free account should not be able to read admin tables, open admin routes, promote itself, replay an admin's writes or call server functions. The scanner logs in as a regular user and tries each of those eight things in turn. Most probes decide on the status code alone; the admin-versus-regular comparison is the one that reads the bodies.</p>
+  <div class="meta">
+    <span class="pill dast">DAST</span><span class="pill med">Medium</span><span class="pill high">High</span><span class="pill crit">Critical</span><span class="pill">Privilege escalation</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#probes-sec"><span class="n">01</span>Eight probes</a>
+  <a href="#diff-sec"><span class="n">02</span>Admin vs regular</a>
+  <a href="#writes-sec"><span class="n">03</span>The three writes</a>
+  <a href="#why"><span class="n">04</span>Why it matters</a>
+  <a href="#code"><span class="n">05</span>Vulnerable vs fixed code</a>
+  <a href="#limits"><span class="n">06</span>Limits</a>
+</nav>
+
+<section id="probes-sec">
+  <h2>Eight probes, one identity</h2>
+  <p class="prose">Every request carries the regular user's token. With two accounts that is User B; with one account it is User A. The probes run top to bottom and share one time budget: when it runs out the scanner stops and keeps the findings it already has instead of being cancelled and losing them.</p>
+
+  <div class="scene" id="probes" data-scene data-interval="3600">
+    <figure class="stage">
+      <svg viewBox="0 0 960 442" role="img" aria-label="Eight privilege escalation probes listed with the request each one sends, what selects its targets, the status codes that count as success and the severity and confidence of the finding.">
+        <text class="ttl" x="20" y="22">All eight use the regular user's token</text>
+
+        <g class="node row g1" transform="translate(20 34)"><rect width="920" height="46" rx="8"/>
+          <text class="ttl" x="12" y="19">1 · Admin table read</text>
+          <text class="mono" x="206" y="19">GET /rest/v1/{table}?select=id&amp;limit=1</text>
+          <text class="ttl t-accent" x="908" y="19" text-anchor="end">HIGH · 0.90</text>
+          <text class="lbl" x="12" y="36">table name contains admin, roles, permissions, settings, config, system…</text>
+          <text class="lbl" x="490" y="36">success: 200 or 201 and the body is not []</text></g>
+
+        <g class="node row g2 lit-2" transform="translate(20 84)"><rect width="920" height="46" rx="8"/>
+          <text class="ttl" x="12" y="19">2 · Role self-elevation</text>
+          <text class="mono" x="206" y="19">PATCH /rest/v1/{table}?user_id=eq.{me}  {"role":"admin"}</text>
+          <text class="ttl t-attacker" x="908" y="19" text-anchor="end">CRITICAL · 0.95</text>
+          <text class="lbl" x="12" y="36">table name contains role or permission</text>
+          <text class="lbl" x="490" y="36">success: 200 or 204, one finding per accepted field</text></g>
+
+        <g class="node row g3 lit-3" transform="translate(20 134)"><rect width="920" height="46" rx="8"/>
+          <text class="ttl" x="12" y="19">3 · Admin route</text>
+          <text class="mono" x="206" y="19">GET {endpoint url}</text>
+          <text class="ttl t-accent" x="908" y="19" text-anchor="end">HIGH · 0.90</text>
+          <text class="lbl" x="12" y="36">path contains /admin, /api/admin, /settings, /config or /system</text>
+          <text class="lbl" x="490" y="36">success: 200 or 201</text></g>
+
+        <g class="node row g3 lit-3" transform="translate(20 184)"><rect width="920" height="46" rx="8"/>
+          <text class="ttl" x="12" y="19">4 · Protected endpoint</text>
+          <text class="mono" x="206" y="19">GET {endpoint url}   (POST/PUT/PATCH send body {})</text>
+          <text class="ttl t-info" x="908" y="19" text-anchor="end">MEDIUM · 0.75</text>
+          <text class="lbl" x="12" y="36">needs a login and is not an admin path</text>
+          <text class="lbl" x="490" y="36">success: 200 or 201</text></g>
+
+        <g class="node row g4 lit-4" transform="translate(20 234)"><rect width="920" height="46" rx="8"/>
+          <text class="ttl" x="12" y="19">5 · Admin vs regular</text>
+          <text class="mono" x="206" y="19">GET {endpoint url} as User A, then as User B</text>
+          <text class="ttl t-accent" x="908" y="19" text-anchor="end">HIGH · 0.80</text>
+          <text class="lbl" x="12" y="36">login-protected GETs; needs two sessions</text>
+          <text class="lbl" x="490" y="36">success: admin body is 1.5x larger with more records</text></g>
+
+        <g class="node row g5 lit-5" transform="translate(20 284)"><rect width="920" height="46" rx="8"/>
+          <text class="ttl" x="12" y="19">6 · Mutation replay</text>
+          <text class="mono" x="206" y="19">{captured method} {captured url} + captured body</text>
+          <text class="ttl t-accent" x="908" y="19" text-anchor="end">HIGH · 0.85</text>
+          <text class="lbl" x="12" y="36">writes User A made that got 200, 201 or 204; first 20</text>
+          <text class="lbl" x="490" y="36">success: 200, 201 or 204</text></g>
+
+        <g class="node row g6 lit-6" transform="translate(20 334)"><rect width="920" height="46" rx="8"/>
+          <text class="ttl" x="12" y="19">7 · Object-level write</text>
+          <text class="mono" x="206" y="19">PATCH /rest/v1/{table}?id=eq.{A's row id}  body {}</text>
+          <text class="ttl t-attacker" x="908" y="19" text-anchor="end">CRITICAL · 0.90</text>
+          <text class="lbl" x="12" y="36">row ids User A owns; plain tables only; first 15</text>
+          <text class="lbl" x="490" y="36">success: 200 or 204</text></g>
+
+        <g class="node row g6 lit-6" transform="translate(20 384)"><rect width="920" height="46" rx="8"/>
+          <text class="ttl" x="12" y="19">8 · RPC call</text>
+          <text class="mono" x="206" y="19">POST /rest/v1/rpc/{function}  body {}</text>
+          <text class="ttl t-accent" x="908" y="19" text-anchor="end">HIGH · 0.80</text>
+          <text class="lbl" x="12" y="36">function names found in the JavaScript bundle</text>
+          <text class="lbl" x="490" y="36">success: 200 or 201</text></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span><b>Eight probes, each with its own success rule.</b> The right-hand column is the whole decision for most of them: a status code. Tests 1, 2, 7 and 8 also need a Supabase URL and anon key, because they talk to the REST layer directly.</p>
+      <p class="step"><span class="n">2</span><b>Tables are chosen by name.</b> A table that looks like admin data is read with <code>select=id&amp;limit=1</code>. A table with <code>role</code> or <code>permission</code> in its name gets five PATCH bodies against the user's own row: <code>role=admin</code>, <code>is_admin</code>, <code>is_verified</code>, <code>plan=enterprise</code>, <code>permissions=all</code>.</p>
+      <p class="step"><span class="n">3</span><b>Endpoints are chosen by path.</b> Anything that looks like an admin route is requested directly. Every other login-protected endpoint is requested too, at lower severity, because a plain 200 for a regular user is only a hint that nothing checks the role.</p>
+      <p class="step"><span class="n">4</span><b>The only probe that compares bodies.</b> It fetches the same URL with both tokens and asks whether the admin's response is a bigger list of records. The next scene walks through it.</p>
+      <p class="step"><span class="n">5</span><b>Replay.</b> Writes that User A made during the crawl are sent again with the regular user's token. If the server accepts them, the endpoint never checked who was calling. Up to 20 are replayed.</p>
+      <p class="step"><span class="n">6</span><b>Row writes and RPC.</b> The row probe patches User A's real rows with an empty body so nothing changes. The RPC probe posts <code>{}</code> to every function name found in the bundle. Both need the Supabase URL and anon key.</p>
+    </div>
+  </div>
+</section>
+
+<section id="diff-sec">
+  <h2>Admin versus regular: four gates before a finding</h2>
+  <p class="prose">A bigger response is not proof by itself. A page can be longer because of formatting, a timestamp or a verbose error. The scanner only reports when the admin's response is both larger and contains more records than the regular user's.</p>
+
+  <div class="scene" id="diff" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 350" role="img" aria-label="The same URL is fetched with an admin token and a regular token. Four gates compare status, minimum size, a 1.5 times size ratio and record counts. A larger page with the same record count is not reported.">
+        <defs><marker id="arr-pe2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g id="diff-wires">
+          <path class="wire accent at-1" d="M160 148 C 190 148, 190 74, 220 74" marker-end="url(#arr-pe2)"/>
+          <path class="wire accent at-1" d="M160 182 C 190 182, 190 210, 220 210" marker-end="url(#arr-pe2)"/>
+          <path class="wire at-2" d="M556 142 H 584" marker-end="url(#arr-pe2)"/>
+        </g>
+        <g class="node lit-1" transform="translate(20 110)"><rect width="140" height="110" rx="10"/>
+          <text class="ttl" x="12" y="24">Scanner</text>
+          <text class="mono" x="12" y="48">GET /api/orders</text>
+          <text class="lbl" x="12" y="68">same URL,</text>
+          <text class="lbl" x="12" y="84">two tokens</text></g>
+
+        <g class="node" transform="translate(220 14)"><rect width="330" height="120" rx="10"/>
+          <text class="ttl" x="12" y="24">User A token (admin side)</text>
+          <text class="lbl until-2" x="12" y="48">request in flight…</text>
+          <g class="at-2 until-6"><text class="mono" x="12" y="48">200 · 4800 B</text></g>
+          <g class="at-6"><text class="mono" x="12" y="48">200 · 900 B</text></g>
+          <g class="at-4 until-6"><text class="mono t-info" x="150" y="48">12 records</text></g>
+          <g class="at-6"><text class="mono t-info" x="150" y="48">1 record</text></g>
+          <rect class="track at-3" x="12" y="62" width="300" height="14" rx="3"/>
+          <rect class="bar at-3" x="12" y="62" width="300" height="14" rx="3"/>
+          <text class="lbl at-4" x="12" y="104">records = list length, or the list under data / result / items</text></g>
+
+        <g class="node" transform="translate(220 150)"><rect width="330" height="120" rx="10"/>
+          <text class="ttl" x="12" y="24">User B token (regular)</text>
+          <text class="lbl until-2" x="12" y="48">request in flight…</text>
+          <g class="at-2 until-6"><text class="mono" x="12" y="48">200 · 1900 B</text></g>
+          <g class="at-6"><text class="mono" x="12" y="48">200 · 500 B</text></g>
+          <g class="at-4 until-6"><text class="mono t-attacker" x="150" y="48">3 records</text></g>
+          <g class="at-6"><text class="mono t-attacker" x="150" y="48">1 record</text></g>
+          <rect class="track at-3" x="12" y="62" width="300" height="14" rx="3"/>
+          <rect class="bar reg at-3 until-6" x="12" y="62" width="119" height="14" rx="3"/>
+          <rect class="bar reg at-6" x="12" y="62" width="167" height="14" rx="3"/></g>
+
+        <g class="gate g12 node at-2" transform="translate(590 14)"><rect width="350" height="60" rx="8"/>
+          <text class="ttl" x="12" y="22">1 · both answer 200 or 201</text>
+          <text class="ttl t-safe" x="338" y="22" text-anchor="end">pass</text>
+          <text class="mono" x="12" y="44">A: 200   B: 200</text></g>
+        <g class="gate g12 node at-2" transform="translate(590 80)"><rect width="350" height="60" rx="8"/>
+          <text class="ttl" x="12" y="22">2 · both bodies over 50 bytes</text>
+          <text class="ttl t-safe" x="338" y="22" text-anchor="end">pass</text>
+          <g class="until-6"><text class="mono" x="12" y="44">4800 B and 1900 B</text></g>
+          <g class="at-6"><text class="mono" x="12" y="44">900 B and 500 B</text></g></g>
+        <g class="gate g3 node at-3" transform="translate(590 146)"><rect width="350" height="60" rx="8"/>
+          <text class="ttl" x="12" y="22">3 · admin size over 1.5 × regular</text>
+          <text class="ttl t-safe" x="338" y="22" text-anchor="end">pass</text>
+          <g class="until-6"><text class="mono" x="12" y="44">4800 &gt; 1.5 × 1900 = 2850</text></g>
+          <g class="at-6"><text class="mono" x="12" y="44">900 &gt; 1.5 × 500 = 750</text></g></g>
+        <g class="gate g4 node at-4" transform="translate(590 212)"><rect width="350" height="60" rx="8"/>
+          <text class="ttl" x="12" y="22">4 · admin records &gt; regular &gt; 0</text>
+          <g class="until-6"><text class="ttl t-safe" x="338" y="22" text-anchor="end">pass</text><text class="mono" x="12" y="44">12 &gt; 3, and 3 &gt; 0</text></g>
+          <g class="at-6"><text class="ttl t-attacker" x="338" y="22" text-anchor="end">fail</text><text class="mono" x="12" y="44">1 &gt; 1 is false</text></g></g>
+
+        <g class="node at-5 until-6" transform="translate(20 288)"><rect class="soft-attacker" width="920" height="52" rx="8"/>
+          <text class="ttl t-attacker" x="12" y="22">Finding · HIGH · confidence 0.80</text>
+          <text class="mono" x="12" y="42">Admin (12 records, 4800B) vs Regular (3 records, 1900B)</text></g>
+        <g class="node at-6" transform="translate(20 288)"><rect class="soft-safe" width="920" height="52" rx="8"/>
+          <text class="ttl t-safe" x="12" y="22">No finding</text>
+          <text class="lbl" x="12" y="42">The admin page is only bigger. Both users see one record, so size alone is not treated as extra data.</text></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step" data-on="peDiff"><span class="n">1</span><b>One URL, two tokens.</b> For every login-protected GET endpoint the scanner fetches the URL with User A's token, then with User B's. The scanner is handed User A as the admin side and does not verify that A really is an admin.</p>
+      <p class="step" data-on="peDiff"><span class="n">2</span><b>Status and size floor.</b> If either response is not 200 or 201 the pair is skipped. If either body is 50 bytes or less it is skipped too: an error page or an empty reply proves nothing.</p>
+      <p class="step"><span class="n">3</span><b>Size gate.</b> The admin body must be more than 1.5 times the regular body. The 1.5 factor is the constant <code>DIFFERENTIAL_SIZE_RATIO</code>.</p>
+      <p class="step"><span class="n">4</span><b>Record gate.</b> Records are counted as the length of a top-level list, or of the list under <code>data</code>, <code>result</code>, <code>results</code> or <code>items</code>; any other JSON object counts as 1. The admin count must be greater than the regular count, and the regular count must be above zero.</p>
+      <p class="step"><span class="n">5</span><b>All four pass.</b> The finding records both sizes and counts as evidence, so the reader can see exactly what the admin got that the regular user did not.</p>
+      <p class="step"><span class="n">6</span><b>The false-positive guard.</b> Here the admin page is 900 bytes against 500, so the size gate passes, but both users get one record. Gate 4 fails and nothing is reported.</p>
+    </div>
+  </div>
+</section>
+
+<section id="writes-sec">
+  <h2>The three probes that write</h2>
+  <p class="prose">Tests 2, 6 and 7 change state or try to. They differ in how much they risk: the role probe really sends a role value to the user's own row, the replay sends what was captured, and the row probe sends an empty patch.</p>
+
+  <div class="scene" id="writes" data-scene data-interval="3600">
+    <figure class="stage">
+      <svg viewBox="0 0 960 362" role="img" aria-label="Three write probes side by side: role self-elevation with five PATCH bodies, mutation replay of captured writes, and object-level write with an empty body. All three decide on the status code.">
+        <g class="node lit-1" transform="translate(20 14)"><rect width="296" height="270" rx="10"/>
+          <text class="ttl" x="12" y="24">2 · Role self-elevation</text>
+          <text class="lbl" x="12" y="44">table name has role or permission</text>
+          <text class="mono" x="12" y="68">PATCH /rest/v1/{table}</text>
+          <text class="mono" x="12" y="86">  ?user_id=eq.{my id}</text>
+          <g class="at-1">
+            <text class="lbl" x="12" y="112">five bodies, one request each:</text>
+            <text class="mono t-attacker" x="12" y="132">{"role": "admin"}</text>
+            <text class="mono t-attacker" x="12" y="150">{"is_admin": "true"}</text>
+            <text class="mono t-attacker" x="12" y="168">{"is_verified": "true"}</text>
+            <text class="mono t-attacker" x="12" y="186">{"plan": "enterprise"}</text>
+            <text class="mono t-attacker" x="12" y="204">{"permissions": "all"}</text>
+            <text class="lbl" x="12" y="232">200 or 204 means success</text>
+            <text class="ttl t-attacker" x="12" y="252">CRITICAL · 0.95</text></g></g>
+
+        <g class="node lit-2" transform="translate(332 14)"><rect width="296" height="270" rx="10"/>
+          <text class="ttl" x="12" y="24">6 · Mutation replay</text>
+          <text class="lbl" x="12" y="44">writes User A made while crawling</text>
+          <text class="mono" x="12" y="68">{method} {captured url}</text>
+          <text class="mono" x="12" y="86">body: the captured body</text>
+          <g class="at-2">
+            <text class="lbl" x="12" y="112">kept if captured with 200, 201, 204</text>
+            <text class="lbl" x="12" y="130">first 20 are replayed as User B</text>
+            <text class="lbl" x="12" y="158">for example</text>
+            <text class="mono" x="12" y="178">DELETE /api/projects/9</text>
+            <text class="mono" x="12" y="196">Authorization: User B</text>
+            <text class="lbl" x="12" y="232">200, 201 or 204 means success</text>
+            <text class="ttl t-accent" x="12" y="252">HIGH · 0.85</text></g></g>
+
+        <g class="node lit-3" transform="translate(644 14)"><rect width="296" height="270" rx="10"/>
+          <text class="ttl" x="12" y="24">7 · Object-level write</text>
+          <text class="lbl" x="12" y="44">rows User A owns, plain tables</text>
+          <text class="mono" x="12" y="68">PATCH /rest/v1/{table}</text>
+          <text class="mono" x="12" y="86">  ?id=eq.{A's row id}</text>
+          <g class="at-3">
+            <text class="lbl" x="12" y="112">the body is empty, so nothing changes:</text>
+            <text class="mono t-safe" x="12" y="132">{}</text>
+            <text class="mono t-safe" x="12" y="150">Prefer: return=minimal</text>
+            <text class="lbl" x="12" y="178">first 15 rows across all tables</text>
+            <text class="lbl" x="12" y="232">200 or 204 means success</text>
+            <text class="ttl t-attacker" x="12" y="252">CRITICAL · 0.90</text></g></g>
+
+        <g class="node at-4" transform="translate(20 298)"><rect class="soft-info" width="920" height="52" rx="8"/>
+          <text class="ttl" x="12" y="22">All three decide on the status code</text>
+          <text class="lbl" x="12" y="42">The scanner does not read the row back to confirm the value changed, and it does not inspect the response body.</text></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span><b>Role self-elevation writes a real value.</b> For each of the five fields it PATCHes the user's own row. A 200 or 204 on any of them is a Critical finding for that field. This is the one probe that can actually promote the test account, so run it against accounts you can reset.</p>
+      <p class="step"><span class="n">2</span><b>Replay uses what the crawl captured.</b> Only POST, PUT, PATCH and DELETE requests that succeeded for User A are kept. They go out again with the regular token and the captured body. A success means the endpoint never checked the caller's role.</p>
+      <p class="step"><span class="n">3</span><b>The row probe is designed to be harmless.</b> It targets rows User A owns, sends <code>{}</code> with <code>Prefer: return=minimal</code>, and stops after 15 rows. If User B's token is accepted for A's row, row-level security is not protecting it.</p>
+      <p class="step"><span class="n">4</span><b>Status only.</b> None of the three confirms the change by reading the row afterwards, so each finding says the server accepted the request, not that data changed.</p>
+    </div>
+  </div>
+</section>
+
+<section id="why">
+  <h2>Why it matters</h2>
+  <div class="grid-2">
+    <div class="callout why"><div class="label">Why it matters</div><p>Privilege escalation turns a $0 account into full admin access. Admin endpoints typically return every record, so one missing role check exposes all user data. Beyond reading, an attacker can change app settings, disable security features, delete anything and create new admin accounts to keep access.</p></div>
+    <div class="callout breach"><div class="label">Real-world breach</div><p><b>Microsoft Exchange, ProxyLogon (2021).</b> CVE-2021-26855 allowed attackers to authenticate as the Exchange server, escalate to admin and install web shells. Tens of thousands of organisations worldwide were affected.</p></div>
+  </div>
+</section>
+
+<section id="code">
+  <h2>Vulnerable vs fixed code</h2>
+  <p class="prose">The vulnerable handler authenticates the caller but never asks what role they hold. The fix checks the role on every admin endpoint, and a database policy makes the same rule hold even if a route is missed.</p>
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true">BAD · no role check</button>
+      <button class="tab good" role="tab" aria-selected="false">GOOD · check the role</button>
+      <button class="tab good" role="tab" aria-selected="false">GOOD · Supabase RLS</button>
+    </div>
+    <div role="tabpanel"><pre><code><span class="c">// BAD: any logged-in user reaches the admin logic</span>
+export async function GET(request: Request) {
+  const user = await getAuthUser(request)
+<span class="hl bad">  if (!user) return NextResponse.json({ error: <span class="s">"Unauthorized"</span> }, { status: 401 })</span>
+  <span class="c">// ... admin logic runs for every authenticated user</span>
+}</code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c">// GOOD: Check role on every admin endpoint</span>
+export async function GET(request: Request) {
+  const user = await getAuthUser(request)
+<span class="hl good">  if (!user || user.role !== <span class="s">"admin"</span>) {</span>
+    return NextResponse.json({ error: <span class="s">"Forbidden"</span> }, { status: 403 })
+  }
+  <span class="c">// ... admin logic</span>
+}</code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c">-- GOOD: Use Supabase RLS for role-based access</span>
+<span class="k">CREATE POLICY</span> <span class="s">"Admins only"</span> <span class="k">ON</span> admin_settings
+  <span class="k">FOR ALL USING</span> (
+<span class="hl good">    auth.uid() <span class="k">IN</span> (<span class="k">SELECT</span> id <span class="k">FROM</span> profiles <span class="k">WHERE</span> role = <span class="s">'admin'</span>)</span>
+  );</code></pre></div>
+  </div>
+</section>
+
+<section id="limits">
+  <h2>Limits and what each probe needs</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Probe</th><th>Needs</th><th>Success</th><th>Severity</th></tr></thead>
+    <tbody>
+      <tr><td>1 Admin table read</td><td>Supabase URL, anon key, table list</td><td>200/201, body not <code>[]</code></td><td>High · 0.90</td></tr>
+      <tr><td>2 Role self-elevation</td><td>Supabase; the user's own id</td><td>200/204</td><td>Critical · 0.95</td></tr>
+      <tr><td>3 Admin route</td><td>Endpoint inventory</td><td>200/201</td><td>High · 0.90</td></tr>
+      <tr><td>4 Protected endpoint</td><td>Endpoints flagged as login-protected</td><td>200/201</td><td>Medium · 0.75</td></tr>
+      <tr><td>5 Admin vs regular</td><td>Two sessions</td><td>four gates</td><td>High · 0.80</td></tr>
+      <tr><td>6 Mutation replay</td><td>Writes captured by the authenticated crawl</td><td>200/201/204</td><td>High · 0.85</td></tr>
+      <tr><td>7 Object-level write</td><td>Supabase; row ids the crawl saw User A own</td><td>200/204</td><td>Critical · 0.90</td></tr>
+      <tr><td>8 RPC call</td><td>Supabase; function names found in JS</td><td>200/201</td><td>High · 0.80</td></tr>
+    </tbody>
+  </table></div>
+  <div class="callout note"><div class="label">What the status code cannot tell</div><p>Probes 3, 4 and 6 to 8 accept a 200 without checking the body (probe 1 only checks it is not an empty list), so a single-page app that answers 200 for every path, or a server that returns 204 without acting, can look like access. The confidence values are all below 1 for this reason. The scanner also trusts the session roles it is given: it assumes User A is the admin side, so with two ordinary accounts the differential compares two ordinary users.</p></div>
+</section>
+
+<footer class="foot">
+  <span>Source: <a href="../scanners/privilege-escalation-scanner.md">docs/scanners/privilege-escalation-scanner.md</a></span>
+  <span>Group: <a href="group-access-control.html">Access control</a> · Related: <a href="idor-bola.html">IDOR and BOLA</a> · <a href="mass-assignment.html">Mass assignment</a> · <a href="body-param-fuzzer.html">Body param fuzzer</a> · <a href="rls-supabase.html">Row Level Security</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+<script>
+(function () {
+  const A = "M160 148 C 190 148, 190 74, 220 74", AB = "M220 74 C 190 74, 190 148, 160 148";
+  const B = "M160 182 C 190 182, 190 210, 220 210", BB = "M220 210 C 190 210, 190 182, 160 182";
+  window.peDiff = function (scene, step, el) {
+    const svg = el.querySelector("svg");
+    IsDoc.clearPackets(svg);
+    const layer = svg.querySelector("#diff-wires");
+    if (step === 1) {
+      IsDoc.packet(svg, A, { cls: "f-info", duration: 900, hold: 300, layer: layer });
+      IsDoc.packet(svg, B, { cls: "f-attacker", duration: 900, hold: 300, layer: layer, delay: 250 });
+    } else if (step === 2) {
+      IsDoc.packet(svg, AB, { cls: "f-info", duration: 900, hold: 300, layer: layer });
+      IsDoc.packet(svg, BB, { cls: "f-attacker", duration: 900, hold: 300, layer: layer, delay: 250 });
+    }
+  };
+})();
+</script>
+</body>
+</html>

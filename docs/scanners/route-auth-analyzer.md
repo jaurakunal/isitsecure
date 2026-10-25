@@ -1,14 +1,18 @@
 # Route Auth Analyzer
 
-**Type:** SAST | **Severity:** High | **Category:** Auth Weakness
+**Type:** SAST | **Severity:** Medium–Critical | **Category:** Auth Weakness
 
 ## What It Does
 
-Analyzes every API route file in your codebase for two things:
+Analyzes every API route and Server Action in your codebase for:
 
-1. **Missing Authentication** — Checks if the route calls any authentication function (`getUser`, `getSession`, `auth()`, `verifyToken`, `requireAuth`, etc.). Routes without these calls are flagged as unprotected.
+1. **Missing Authentication** (High) — Checks if the route calls any authentication function (`getUser`, `getSession`, `auth()`, `verifyToken`, `requireAuth`, etc.). Routes without these calls are flagged as unprotected. Server Actions (`"use server"` files) with no auth call are flagged per exported function (High).
 
-2. **Missing Input Validation** — Checks if the route validates incoming data before processing it. Routes that directly use `request.json()` or `searchParams.get()` without validation are flagged.
+2. **IDOR risk and missing ownership** (Critical / High) — For single-route files (Next.js `route.ts`, `pages/api`) that do check auth: a user-supplied id (`params.x`, `searchParams.get(`, `req.query.`) used with no ownership filter is Critical; Supabase operations with no ownership filter are High.
+
+3. **Missing Input Validation** (Medium) — Once per file: flagged when the file has a mutating method (POST/PUT/PATCH/DELETE), uses a user-supplied id or Supabase operations, and shows no zod/yup/joi-style validation.
+
+4. **Service role usage** (Medium) — Once per file: use of the Supabase `service_role` key, which bypasses Row Level Security.
 
 The analyzer is **framework-aware**:
 - **Next.js App Router**: Scans `app/api/**/route.ts` files, understands `GET`, `POST`, `PUT`, `PATCH`, `DELETE` exports

@@ -1,17 +1,17 @@
 # Race Condition Scanner
 
-**Type:** DAST (Special) | **Severity:** High–Critical | **Category:** Business Logic
+**Type:** DAST (Special) | **Severity:** High | **Category:** Business Logic
 
 ## What It Does
 
 Tests for Time-of-Check-to-Time-of-Use (TOCTOU) vulnerabilities by sending multiple identical mutation requests concurrently and checking if more than one succeeds.
 
 Technique:
-1. Identifies state-changing endpoints (POST, PUT, PATCH, DELETE)
-2. Fires N concurrent copies of the same request using a shared HTTP connection (maximizing timing overlap)
-3. If 2+ requests return success (200/201/204), the endpoint likely has a race condition
+1. Takes the authenticated POST, PUT and PATCH requests captured during the crawl that carried a body and already succeeded once, de-duplicated by URL path, up to 10 endpoints
+2. Fires N = 10 concurrent copies of the same request using a shared HTTP client (maximizing timing overlap)
+3. If 2+ requests return success (200/201/204), the endpoint is flagged (High, confidence 0.80). A correct server with enough balance for two legitimate redemptions would also be flagged, so the finding reports the success count for the reader to judge
 
-The scanner targets endpoints that involve:
+There is no keyword targeting: every captured mutation is replayed regardless of what it does. The classes of bug this is meant to surface are:
 - Balance deductions (credits, wallet, gift cards)
 - Coupon/code redemption (one-time use)
 - Voting / rating (one vote per user)

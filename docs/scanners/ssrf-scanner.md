@@ -4,12 +4,13 @@
 
 ## What It Does
 
-Tests for Server-Side Request Forgery by injecting internal/cloud IP addresses into URL parameters and checking if the server fetches them. Probes include:
+Tests for Server-Side Request Forgery by injecting internal/cloud addresses into URL parameters (exact names such as `url`, `uri`, `link`, `src`, `redirect`, `callback`, `image`, `avatar`, `webhook`, `proxy`) and checking if the response shows the server fetched them. There are six probes, tried in order until one hits:
 
-- **Internal IPs**: `127.0.0.1`, `192.168.x.x`, `10.x.x.x`, `172.16.x.x`
-- **AWS metadata**: `169.254.169.254/latest/meta-data/` (IMDSv1)
-- **Cloud endpoints**: GCP, Azure metadata services
-- **Localhost variations**: `0.0.0.0`, `[::1]`, `localhost`
+- **Localhost**: `http://127.0.0.1`, `http://localhost`, `http://0.0.0.0`, `http://[::1]`
+- **AWS metadata**: `http://169.254.169.254/latest/meta-data/` (IMDSv1)
+- **GCP metadata**: `http://metadata.google.internal/`
+
+The in-band check passes on a 2xx response whose body contains a metadata marker (`ami-id`, `instance-id`, `iam/`, `meta-data`, `computeMetadata`, `project/project-id`) or `<!DOCTYPE html>`; it is reported as High (0.80). Not probed today: RFC1918 ranges (`10.x.x.x`, `172.16.x.x`, `192.168.x.x`) and the Azure metadata endpoint. Blind (OOB) hits are reported as Critical.
 
 The scanner also integrates with **OOB callbacks** for blind SSRF — where the server fetches the URL but doesn't return the response content. OOB detection proves the fetch happened via DNS/HTTP interaction with the callback server.
 
@@ -17,8 +18,8 @@ The scanner also integrates with **OOB callbacks** for blind SSRF — where the 
 
 Many real SSRF sinks are a **form field**, not a query parameter — e.g. an
 `imageUrl` a profile page POSTs so the server fetches a remote avatar. The
-scanner recognises URL-shaped param names by substring (`imageUrl`, `avatarUrl`,
-`callbackUri`, …), and the OOB path POSTs the callback URL into those body
+OOB path recognises URL-shaped param names by substring (`imageUrl`, `avatarUrl`,
+`callbackUri`, …; the in-band probe above matches names exactly) and POSTs the callback URL into those body
 fields, form-encoded, using the authenticated session (including its **cookie** —
 server-rendered routes often authenticate by cookie, not a bearer header). When
 the crawler can't reach an auth-gated page, the OOB SSRF step fetches the common

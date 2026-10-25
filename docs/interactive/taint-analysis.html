@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Taint Analysis · isitsecure</title>
+<meta name="description" content="How isitsecure's Semgrep taint layer follows attacker-controlled data from a source to a dangerous sink, why it sits beneath the LLM reviewer, and how rule packs are chosen per stack — animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  /* preview gate: faint from step 1 so the stage is never empty, full from step N on */
+  .scene svg [class*="pv-"] { opacity: .26; transition: opacity .45s ease, transform .5s ease; }
+  .scene.s2 svg .pv-2, .scene.s3 svg .pv-3, .scene.s4 svg .pv-4, .scene.s5 svg .pv-5 { opacity: 1; }
+
+  /* source → sink flow: code lines light up as taint reaches them */
+  #flow .line { transition: opacity .35s; }
+  #flow .tag > rect { transition: opacity .35s; }
+  #flow .src-tag > rect { fill: var(--attacker-soft); stroke: var(--attacker); }
+  #flow .sink-tag > rect { fill: var(--surface); stroke: var(--line); }
+  #flow.s3 .sink-tag > rect { fill: var(--attacker-soft); stroke: var(--attacker); }
+  #flow .safe-tag > rect { fill: var(--safe-soft); stroke: var(--safe); }
+  #flow .lane { stroke: var(--line); stroke-width: 2; stroke-dasharray: 2 4; }
+  #flow.s2 .lane.l1 { stroke: var(--attacker); stroke-dasharray: none; }
+  #flow.s3 .lane.l2 { stroke: var(--attacker); stroke-dasharray: none; }
+  #flow.s4 .lane.r1 { stroke: var(--attacker); stroke-dasharray: none; }
+  #flow .stop { stroke: var(--safe); stroke-width: 4; stroke-linecap: round; }
+
+  /* layered design: bars grow, the floor slides in under the LLM */
+  #layers .bar { transform-box: fill-box; transform-origin: left center; transform: scaleX(0); transition: transform 1.1s cubic-bezier(.4,0,.2,1); }
+  #layers.s3 .bar.tuned { transform: scaleX(1); }
+  #layers.s5 .bar.bench { transform: scaleX(1); }
+  #layers .track { fill: var(--surface); stroke: var(--line); }
+  #layers .floor > rect { transform: translateY(24px); transition: transform .6s ease, opacity .45s; }
+  #layers.s4 .floor > rect { transform: translateY(0); }
+  #layers .wobble { animation: wobble 2.4s steps(1) infinite; }
+  @keyframes wobble { 0% { opacity: 1 } 33% { opacity: .35 } 66% { opacity: .7 } }
+
+  /* rule packs: registry rows that match the repo light, the rest fade */
+  #packs .row > rect { fill: var(--surface); stroke: var(--line); transition: fill .35s, stroke .35s, opacity .4s; }
+  #packs.s2 .row.pick > rect { fill: var(--info-soft); stroke: var(--info); }
+  #packs.s2 .row.skip { opacity: .35; }
+  #packs .cls { transition: opacity .4s; }
+  #packs.s3 .cls.skip { opacity: .35; }
+
+  /* intra-file: the boundary wall */
+  #intrafile .wall { stroke: var(--attacker); stroke-width: 2; stroke-dasharray: 6 5; }
+
+  .prose code, .callout code, td code { overflow-wrap: anywhere; }
+  .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 14px; margin: 1.2rem 0 2rem; }
+  .fact { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); padding: 14px 16px; min-width: 0; }
+  .fact .k { font-family: var(--font-mono); font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  .fact .v { font-family: var(--font-display); font-size: 1.5rem; font-weight: 700; margin: .25rem 0 .2rem; }
+  .fact p { margin: 0; font-size: .9rem; color: var(--muted); line-height: 1.4; }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› Taint Analysis</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/semgrep-taint.md" title="The markdown source for this page">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">SAST scanner</div>
+  <h1>Taint Analysis</h1>
+  <p class="lede">One question, asked deterministically: can attacker-controlled data reach a dangerous operation without passing through a sanitizer? Semgrep answers it with isitsecure's own rule packs, instantly and for free, and the LLM reviewer covers what the rules cannot name.</p>
+  <div class="meta">
+    <span class="pill sast">SAST</span><span class="pill crit">High – Critical</span><span class="pill">Injection risk</span><span class="pill"><b>semgrep_taint</b> · confidence 0.85</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#flow-s"><span class="n">01</span>Source to sink</a>
+  <a href="#layers-s"><span class="n">02</span>The floor under the LLM</a>
+  <a href="#packs-s"><span class="n">03</span>Packs per stack</a>
+  <a href="#intrafile-s"><span class="n">04</span>Intra-file limit</a>
+  <a href="#code"><span class="n">05</span>Vulnerable vs fixed</a>
+  <a href="#degrade"><span class="n">06</span>Degradation and limits</a>
+</nav>
+
+<section id="flow-s">
+  <h2>Source to sink, with and without a sanitizer</h2>
+  <p class="prose">Three moving parts. A <b>source</b> is where attacker-controlled data enters (<code>searchParams.get</code>, <code>req.query</code>, <code>location.hash</code>). A <b>sink</b> is an operation that must never see raw input (<code>sql.unsafe</code>, <code>innerHTML</code>, <code>fetch</code>, <code>exec</code>). A <b>sanitizer</b> is what makes the data safe on the way (a parameterized query, an escaper, an allow-list). Taint analysis follows the data line by line and reports only when it arrives at a sink untouched.</p>
+
+  <div class="scene" id="flow" data-scene data-interval="3000">
+    <figure class="stage">
+      <svg viewBox="0 0 960 340" role="img" aria-label="Left: three lines of a Next.js route where an id from searchParams flows into sql.unsafe and a finding is raised. Right: the same route using a parameterized tagged template, where the flow is stopped and nothing is flagged.">
+        <!-- vulnerable route -->
+        <g class="node lit-1" transform="translate(20 20)">
+          <rect width="440" height="200" rx="10"/>
+          <text class="ttl" x="14" y="24">app/api/users/route.ts</text>
+          <g class="mono">
+            <text class="lbl" x="14" y="62">1</text>
+            <text class="line" x="46" y="62">const id = searchParams.get("id")</text>
+            <text class="lbl" x="14" y="104">2</text>
+            <text class="line" x="46" y="104">const q = `SELECT * FROM users</text>
+            <text class="line" x="46" y="120">           WHERE id = ${id}`</text>
+            <text class="lbl" x="14" y="162">3</text>
+            <text class="line" x="46" y="162">const rows = await sql.unsafe(q)</text>
+          </g>
+          <!-- taint lane -->
+          <line class="lane l1" x1="32" y1="66" x2="32" y2="92"/>
+          <line class="lane l2" x1="32" y1="108" x2="32" y2="150"/>
+          <!-- tags -->
+          <g class="tag src-tag" transform="translate(340 46)"><rect width="86" height="22" rx="11"/><text class="lbl t-attacker" x="43" y="15" text-anchor="middle">SOURCE</text></g>
+          <g class="tag sink-tag" transform="translate(340 146)"><rect width="86" height="22" rx="11"/><text class="lbl t-attacker" x="43" y="15" text-anchor="middle">SINK</text></g>
+          <text class="lbl at-2" x="46" y="186">taint: id → q (template literal keeps it tainted)</text>
+        </g>
+
+        <!-- fixed route -->
+        <g class="node pv-4 lit-4" transform="translate(500 20)">
+          <rect width="440" height="200" rx="10"/>
+          <text class="ttl" x="14" y="24">the same route, parameterized</text>
+          <g class="mono">
+            <text class="lbl" x="14" y="62">1</text>
+            <text class="line" x="46" y="62">const id = searchParams.get("id")</text>
+            <text class="lbl" x="14" y="104">2</text>
+            <text class="line" x="46" y="104">const rows = await sql`SELECT *</text>
+            <text class="line" x="46" y="120">  FROM users WHERE id = ${id}`</text>
+          </g>
+          <line class="lane r1" x1="32" y1="66" x2="32" y2="88"/>
+          <line class="stop" x1="22" y1="94" x2="42" y2="94"/>
+          <g class="tag src-tag" transform="translate(340 46)"><rect width="86" height="22" rx="11"/><text class="lbl t-attacker" x="43" y="15" text-anchor="middle">SOURCE</text></g>
+          <g class="tag safe-tag" transform="translate(300 88)"><rect width="126" height="22" rx="11"/><text class="lbl t-safe" x="63" y="15" text-anchor="middle">SANITIZER</text></g>
+          <text class="lbl" x="46" y="162">sql`…${id}` sends id as a bound parameter,</text>
+          <text class="lbl" x="46" y="178">never as SQL text. Taint ends here.</text>
+        </g>
+
+        <!-- verdict cards -->
+        <g class="node at-3 lit-3" transform="translate(20 234)">
+          <rect width="440" height="58" rx="8" class="soft-attacker"/>
+          <text class="ttl t-attacker" x="14" y="22">FINDING · injection_risk · critical</text>
+          <text class="lbl mono" x="14" y="44">semgrep_taint · confidence 0.85 · route.ts:3 sql.unsafe(q)</text>
+        </g>
+        <g class="node at-4 lit-4" transform="translate(500 234)">
+          <rect width="440" height="58" rx="8" class="soft-safe"/>
+          <text class="ttl t-safe" x="14" y="22">NOT FLAGGED</text>
+          <text class="lbl" x="14" y="44">the rule names the parameterized query as a sanitizer</text>
+        </g>
+
+        <!-- legend, step 5 only -->
+        <g class="only-5" transform="translate(20 318)">
+          <text class="lbl"><tspan class="t-attacker">sources</tspan> searchParams.get · req.query · location.hash</text>
+          <text class="lbl" x="330"><tspan class="t-attacker">sinks</tspan> sql.unsafe · innerHTML · fetch · writeFile · exec</text>
+          <text class="lbl" x="660"><tspan class="t-safe">sanitizers</tspan> parameterized query · escaper · allow-list</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step" data-on="taintReset"><span class="n">1</span>The rule knows <code>searchParams.get()</code> is a Next.js request value, so <code>id</code> is <b>tainted</b>: the caller chose it.</p>
+      <p class="step" data-on="taintStep2"><span class="n">2</span>Line 2 builds <code>q</code> from <code>id</code>. Interpolating a tainted value into a string keeps the result tainted, so the taint moves with it.</p>
+      <p class="step" data-on="taintStep3"><span class="n">3</span><code>sql.unsafe(q)</code> is a catalogued sink for the <code>postgres</code> library. Tainted data arrived with nothing in between, so <b>a critical finding is raised</b> at line 3, deterministic and the same on every run.</p>
+      <p class="step" data-on="taintStep4"><span class="n">4</span>The fix keeps the same source. The tagged template <code>sql`…${id}`</code> is a <b>parameterized query</b>, which the rule recognises as a sanitizer: the flow stops there and <b>nothing is flagged</b>.</p>
+      <p class="step"><span class="n">5</span>Every rule is this triple. Sources come from the framework, sinks from the library, sanitizers from the library too, which is why a rule written once applies to every app on that stack.</p>
+    </div>
+  </div>
+</section>
+
+<section id="layers-s">
+  <h2>A deterministic floor beneath the LLM</h2>
+  <p class="prose">Before this layer, every injection verdict (SQLi, XSS, SSRF, path traversal, command injection) came from the LLM code reviewer alone: approximate, non-deterministic, paid per token. A spike on <code>test-app</code> showed what a small set of tuned rules could take off its plate.</p>
+
+  <div class="scene" id="layers" data-scene data-interval="3200">
+    <figure class="stage">
+      <svg viewBox="0 0 960 330" role="img" aria-label="Left: the LLM reviewer sits alone, then a Semgrep floor slides in beneath it. Right: spike results on test-app, off-the-shelf packs zero findings versus tuned rules eleven, then the benchmark score of 46 of 46 with zero false positives.">
+        <defs><marker id="arr-layers" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+
+        <!-- stack -->
+        <g class="node lit-1" transform="translate(20 20)">
+          <rect width="380" height="124" rx="10"/>
+          <text class="ttl" x="14" y="24">LLM code reviewer</text>
+          <text class="lbl" x="14" y="46">reads the route, reasons about data flow in its head</text>
+          <g class="until-4">
+            <text class="lbl" x="14" y="74">carries ALL injection detection</text>
+            <text class="mono" x="14" y="96">findings per run: <tspan class="wobble t-accent">6</tspan> · <tspan class="wobble t-accent" style="animation-delay:.8s">9</tspan> · <tspan class="wobble t-accent" style="animation-delay:1.6s">7</tspan></text>
+            <text class="lbl" x="14" y="116">non-deterministic · tokens · seconds to minutes</text>
+          </g>
+          <g class="at-4">
+            <text x="14" y="76">business-logic flaws</text>
+            <text x="14" y="96">libraries no rule has catalogued yet</text>
+            <text x="14" y="116">the nuanced long tail</text>
+          </g>
+        </g>
+        <g class="node floor pv-4 lit-4" transform="translate(20 176)">
+          <rect width="380" height="124" rx="10" class="soft-info"/>
+          <text class="ttl t-info" x="14" y="24">Semgrep taint floor · semgrep_taint</text>
+          <text class="lbl" x="14" y="46">shells out to the semgrep binary with our rule packs</text>
+          <text x="14" y="76">mechanical source → sink injections</text>
+          <text class="lbl mono" x="14" y="96">SQLi · XSS · SSRF · path · cmdi · SSTI</text>
+          <text class="lbl" x="14" y="116">deterministic · instant · $0 · same every run</text>
+        </g>
+        <g class="at-4">
+          <path class="wire info" d="M 40 150 V 170" marker-end="url(#arr-layers)"/>
+          <text class="lbl" x="50" y="164">dedup: a finding both layers raise counts once</text>
+        </g>
+
+        <!-- spike panel -->
+        <g class="node pv-2 lit-2" transform="translate(430 20)">
+          <rect width="510" height="124" rx="10"/>
+          <text class="ttl" x="14" y="24">Spike: Semgrep on test-app (27 files)</text>
+          <text class="lbl" x="14" y="52">p/typescript · p/javascript · p/security-audit</text>
+          <rect class="track" x="14" y="60" width="300" height="12" rx="6"/>
+          <text class="mono t-attacker" x="324" y="71">0 findings</text>
+          <g class="at-3">
+            <text class="lbl" x="14" y="98">~50 lines of stack-tuned rules</text>
+            <rect class="track" x="14" y="106" width="300" height="12" rx="6"/>
+            <rect class="bar tuned f-info" x="14" y="106" width="300" height="12" rx="6"/>
+            <text class="mono t-info" x="324" y="117"><tspan class="n-tuned">11</tspan> findings · every class</text>
+          </g>
+        </g>
+        <g class="at-3" transform="translate(430 156)">
+          <text class="lbl mono" x="14" y="0">6 SQLi · DOM XSS · reflected XSS · SSRF · path traversal</text>
+          <text class="lbl mono" x="14" y="16">cmdi: 0 (none in the app, no false positive)</text>
+        </g>
+
+        <!-- benchmark -->
+        <g class="node pv-5 lit-5" transform="translate(430 190)">
+          <rect width="510" height="110" rx="10"/>
+          <text class="ttl" x="14" y="24">Benchmark gate · sast-injection fixtures</text>
+          <text class="lbl" x="14" y="46">python benchmarks/run_benchmarks.py sast-injection</text>
+          <rect class="track" x="14" y="58" width="300" height="12" rx="6"/>
+          <rect class="bar bench f-safe" x="14" y="58" width="300" height="12" rx="6"/>
+          <text class="mono t-safe" x="324" y="69"><tspan class="n-bench">46</tspan>/46 recall · 0 FP</text>
+          <text class="lbl" x="14" y="94">JS/TS · Python · Java · Kotlin fixtures with known source→sink bugs</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The starting point: regexes flag injection-looking files and the LLM reviewer decides. It works, but the count wobbles from run to run, every verdict costs tokens, and it is sometimes wrong in both directions.</p>
+      <p class="step"><span class="n">2</span><b>Off-the-shelf Semgrep packs found nothing.</b> They scanned all 27 files cleanly and missed every blatant injection, because stock packs do not know this stack's sinks, such as the <code>postgres</code> library's <code>.unsafe()</code>.</p>
+      <p class="step" data-on="layersCount"><span class="n">3</span><b>About 50 lines of tuned rules found 11.</b> Six SQLi in <code>db.ts</code>, DOM XSS from <code>location.hash</code>, reflected XSS and SSRF from <code>searchParams.get</code>, and a path-traversal upload. The command-injection rule fired nowhere, correctly. One spot was double-labelled (SSRF and reflected XSS), a real bug counted twice.</p>
+      <p class="step"><span class="n">4</span>So the design keeps the LLM and puts a floor under it. Semgrep takes the mechanical source-to-sink cases on catalogued stacks; the LLM keeps business logic, uncatalogued libraries and nuance. Dedup collapses anything both raise.</p>
+      <p class="step" data-on="layersBench"><span class="n">5</span>Detection changes ship only through the benchmark. On the <code>sast-injection</code> fixture set the layer scores <b>46/46 recall with 0 false positives</b> across JS/TS, Python, Java and Kotlin.</p>
+    </div>
+  </div>
+
+  <div class="facts">
+    <div class="fact"><div class="k">stock packs</div><div class="v">0</div><p>findings on test-app from p/typescript, p/javascript, p/security-audit</p></div>
+    <div class="fact"><div class="k">tuned rules</div><div class="v">11</div><p>findings from about 50 lines, covering every injection class present</p></div>
+    <div class="fact"><div class="k">benchmark</div><div class="v">46/46</div><p>recall, 0 false positives, on the sast-injection fixtures</p></div>
+  </div>
+</section>
+
+<section id="packs-s">
+  <h2>Rule packs are per stack, not per app</h2>
+  <p class="prose">A rule names a library API, never an app's own code. <code>searchParams.get()</code> is Next.js, <code>sql.unsafe()</code> is the <code>postgres</code> library, <code>writeFile</code> is Node's <code>fs</code>. Written once, the rule catches the bug in every app on that stack. The analyzer picks the packs to load from the languages it finds in the clone; there is no configuration.</p>
+
+  <div class="scene" id="packs" data-scene data-interval="3000">
+    <figure class="stage">
+      <svg viewBox="0 0 960 330" role="img" aria-label="A cloned repo with TypeScript and Python files selects the matching rule packs from the registry; the chosen packs' injection classes are listed; an app on an uncatalogued library falls through to the LLM reviewer.">
+        <defs><marker id="arr-packs" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+
+        <g class="node lit-1" transform="translate(20 20)">
+          <rect width="190" height="130" rx="10"/>
+          <text class="ttl" x="14" y="24">Cloned repo</text>
+          <text class="lbl" x="14" y="44">extensions seen on disk</text>
+          <g class="mono">
+            <text x="14" y="72" class="t-info">.ts .tsx</text>
+            <text x="14" y="92" class="t-info">.py</text>
+            <text x="14" y="112" class="lbl">no .java .kt .go</text>
+          </g>
+        </g>
+        <path class="wire at-2 info" d="M 210 85 H 248" marker-end="url(#arr-packs)"/>
+
+        <!-- registry -->
+        <g class="node at-1 lit-2" transform="translate(250 20)">
+          <rect width="260" height="200" rx="10"/>
+          <text class="ttl" x="14" y="24">_RULE_PACKS registry</text>
+          <g class="row pick" transform="translate(14 36)"><rect width="232" height="26" rx="6"/><text class="mono" x="10" y="17">JS/TS      injection-js.yaml</text></g>
+          <g class="row pick" transform="translate(14 68)"><rect width="232" height="26" rx="6"/><text class="mono" x="10" y="17">Python     injection-python.yaml</text></g>
+          <g class="row skip" transform="translate(14 100)"><rect width="232" height="26" rx="6"/><text class="mono" x="10" y="17">Java       injection-java.yaml</text></g>
+          <g class="row skip" transform="translate(14 132)"><rect width="232" height="26" rx="6"/><text class="mono" x="10" y="17">Kotlin     injection-kotlin.yaml</text></g>
+          <g class="row skip" transform="translate(14 164)"><rect width="232" height="26" rx="6"/><text class="mono" x="10" y="17">Go         injection-go.yaml</text></g>
+        </g>
+        <path class="wire at-3 info" d="M 510 85 H 548" marker-end="url(#arr-packs)"/>
+
+        <!-- classes -->
+        <g class="node pv-3 lit-3" transform="translate(550 20)">
+          <rect width="390" height="200" rx="10"/>
+          <text class="ttl" x="14" y="24">What each pack catches</text>
+          <g class="cls">
+            <text x="14" y="52">JS/TS</text>
+            <text class="lbl mono" x="14" y="68">SQLi · reflected XSS · DOM XSS · SSRF · path · cmdi</text>
+          </g>
+          <g class="cls">
+            <text x="14" y="94">Python (Flask / Django sources)</text>
+            <text class="lbl mono" x="14" y="110">SQLi · cmdi · SSRF · path · SSTI</text>
+          </g>
+          <g class="cls skip">
+            <text x="14" y="136">Java · Kotlin (Spring MVC / servlet sources)</text>
+            <text class="lbl mono" x="14" y="152">SQLi · cmdi · SSRF · path</text>
+          </g>
+          <g class="cls skip">
+            <text x="14" y="178">Go</text>
+            <text class="lbl mono" x="14" y="194">SQLi · template XSS · cmdi · SSRF · path · redirect</text>
+          </g>
+        </g>
+
+        <!-- step 4: library mapping -->
+        <g class="only-4" transform="translate(20 240)">
+          <text class="ttl" y="0">A rule names the library, so it fits every app that uses it</text>
+          <g class="mono">
+            <text class="lbl" y="22">searchParams.get()  → Next.js source</text>
+            <text class="lbl" y="40">sql.unsafe()        → postgres library sink</text>
+            <text class="lbl" y="58">writeFile(path.join)→ Node fs sink</text>
+            <text class="lbl" x="330" y="22">req.query / req.body → Express source</text>
+            <text class="lbl" x="330" y="40">$queryRawUnsafe      → Prisma sink</text>
+            <text class="lbl" x="330" y="58">cursor.execute(f"…") → DB-API sink</text>
+          </g>
+        </g>
+
+        <!-- step 5: fall-through -->
+        <g class="at-5" transform="translate(20 240)">
+          <g class="node lit-5"><rect width="420" height="70" rx="8"/>
+            <text class="ttl" x="14" y="24">App on a library with no rule yet</text>
+            <text class="lbl mono" x="14" y="46">some-orm.rawQuery(`… ${id}`)  → no sink catalogued</text>
+          </g>
+          <path class="wire accent" d="M 440 275 H 478" marker-end="url(#arr-packs)"/>
+          <g class="node lit-5" transform="translate(480 0)"><rect width="300" height="70" rx="8" class="soft-accent"/>
+            <text class="ttl t-accent" x="14" y="24">LLM reviewer backstop</text>
+            <text class="lbl" x="14" y="46">falls through; this is the point of the layering</text>
+          </g>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The analyzer walks the clone (skipping <code>node_modules</code> and <code>.git</code>) and notes which file extensions exist. Here: TypeScript and Python.</p>
+      <p class="step"><span class="n">2</span><b>Packs are selected by language present.</b> The JS/TS and Python packs load; Java, Kotlin and Go are skipped because nothing on disk would match them. A JS-only repo would load one pack.</p>
+      <p class="step"><span class="n">3</span>Each pack covers the injection classes that stack actually exposes. Sources are the framework's request objects; sinks are the library calls that take raw strings.</p>
+      <p class="step"><span class="n">4</span>Rules name library APIs, never application code. A rule for the <code>postgres.unsafe</code> sink catches injection in any app that uses that library, which is how Semgrep, CodeQL and Snyk packs scale too.</p>
+      <p class="step"><span class="n">5</span>An app built on a library no pack has catalogued gets no deterministic finding for it. That case <b>falls through to the LLM reviewer</b>, which is why the LLM layer stays.</p>
+    </div>
+  </div>
+</section>
+
+<section id="intrafile-s">
+  <h2>The intra-file limit, and why sink rules recover most of it</h2>
+  <p class="prose">OSS Semgrep tracks taint within one file. A route that passes user input to a helper in another file, where the helper reaches the sink, is a path it cannot follow (inter-file taint is Semgrep Pro). In practice the sink itself usually gives the game away.</p>
+
+  <div class="scene" id="intrafile" data-scene data-interval="3000">
+    <figure class="stage">
+      <svg viewBox="0 0 960 300" role="img" aria-label="Taint from a route file moves toward a helper in another file and stops at the file boundary; a sink-focused rule in the helper file still flags sql.unsafe with interpolation.">
+        <g class="node lit-1" transform="translate(20 20)">
+          <rect width="420" height="150" rx="10"/>
+          <text class="ttl" x="14" y="24">app/api/search/route.ts</text>
+          <g class="mono">
+            <text class="lbl" x="14" y="62">1</text>
+            <text x="46" y="62">const q = searchParams.get("q")</text>
+            <text class="lbl" x="14" y="104">2</text>
+            <text x="46" y="104">const rows = await findUsers(q)</text>
+          </g>
+          <g class="tag" transform="translate(320 46)"><rect width="86" height="22" rx="11" class="soft-attacker"/><text class="lbl t-attacker" x="43" y="15" text-anchor="middle">SOURCE</text></g>
+          <text class="lbl at-2" x="46" y="138">q leaves the file through a call</text>
+        </g>
+
+        <line class="wall at-2" x1="480" y1="20" x2="480" y2="170"/>
+        <g class="at-2"><text class="lbl t-attacker" x="480" y="190" text-anchor="middle">file boundary: OSS taint stops</text></g>
+
+        <g class="node lit-3" transform="translate(520 20)">
+          <rect width="420" height="150" rx="10"/>
+          <text class="ttl" x="14" y="24">lib/db.ts</text>
+          <g class="mono">
+            <text class="lbl" x="14" y="62">7</text>
+            <text x="46" y="62">export async function findUsers(q) {</text>
+            <text class="lbl" x="14" y="104">8</text>
+            <text x="46" y="104">  return sql.unsafe(`… name LIKE '${q}'`)</text>
+          </g>
+          <g class="tag at-3" transform="translate(340 88)"><rect width="66" height="22" rx="11" class="soft-attacker"/><text class="lbl t-attacker" x="33" y="15" text-anchor="middle">SINK</text></g>
+          <text class="lbl at-3" x="46" y="138">sink rule: unsafe() with interpolation</text>
+        </g>
+
+        <g class="node at-3 lit-3" transform="translate(520 210)">
+          <rect width="420" height="56" rx="8" class="soft-attacker"/>
+          <text class="ttl t-attacker" x="14" y="22">FINDING · db.ts:8 · needs no taint path</text>
+          <text class="lbl" x="14" y="44">an interpolated sql.unsafe() is essentially always wrong</text>
+        </g>
+        <g class="node at-4 lit-4" transform="translate(20 210)">
+          <rect width="420" height="56" rx="8" class="soft-accent"/>
+          <text class="ttl t-accent" x="14" y="22">The cross-file path itself → LLM reviewer</text>
+          <text class="lbl" x="14" y="44">route → helper → sink is only tracked by Semgrep Pro</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step" data-on="intraReset"><span class="n">1</span>The route reads <code>q</code> from the request and hands it to <code>findUsers()</code>, which lives in another file.</p>
+      <p class="step" data-on="intraStep2"><span class="n">2</span>The taint rule follows <code>q</code> to the call and <b>stops at the file boundary</b>. OSS Semgrep does not cross files, so no source-to-sink flow is reported from this side.</p>
+      <p class="step"><span class="n">3</span>The packs also carry <b>sink-focused rules</b> that need no source. <code>sql.unsafe()</code> with an interpolated string is flagged on its own in <code>db.ts</code>, so the bug is still reported, at the line that must change.</p>
+      <p class="step"><span class="n">4</span>What is lost is the cross-file path itself, which matters when a helper reaches a sink in a shape no sink rule names. That case falls back to the LLM reviewer; it is the spike's lesson that flagging the sink recovers most of the value without Semgrep Pro.</p>
+    </div>
+  </div>
+</section>
+
+<section id="code">
+  <h2>What the rule sees</h2>
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true">BAD · flagged</button>
+      <button class="tab good" role="tab" aria-selected="false">GOOD · not flagged</button>
+    </div>
+    <div role="tabpanel"><pre><code><span class="c">// BAD: user input interpolated into a raw SQL query (flagged: critical)</span>
+const id = <span class="k">searchParams.get("id")</span>;
+<span class="hl bad">const rows = await <span class="k">sql.unsafe</span>(`SELECT * FROM users WHERE id = ${id}`);</span>
+
+<span class="c">// BAD: user-controlled URL fetched server-side (flagged: high, SSRF)</span>
+const target = <span class="k">searchParams.get("url")</span>;
+<span class="hl bad">const res = await <span class="k">fetch</span>(target);</span></code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c">// GOOD: parameterized query, id travels as a bound value, never as SQL</span>
+const id = searchParams.get("id");
+<span class="hl good">const rows = await sql<span class="s">`SELECT * FROM users WHERE id = ${id}`</span>;</span></code></pre></div>
+  </div>
+  <p class="prose">Findings carry <code>scanner_name = "semgrep_taint"</code>, <code>confidence = 0.85</code> and category <code>injection_risk</code>, then pass through the same triage, dedup, plain-English and grading pipeline as every other scanner's.</p>
+</section>
+
+<section id="degrade">
+  <h2>Graceful degradation and known limits</h2>
+  <div class="callout note">
+    <div class="label">Best-effort and self-contained</div>
+    <p>The analyzer needs the <code>semgrep</code> binary from the optional extra (<code>pip install -e ".[taint]"</code>, or an isolated <code>pipx install semgrep</code>; only the binary on PATH matters). Without it the layer <b>no-ops and returns nothing</b>, and the LLM reviewer runs exactly as before. A Semgrep crash or timeout <b>never fails the scan</b>: it logs and returns no findings, and the subprocess is always killed and reaped even if the scan is cancelled. It runs only when the repo holds files a pack covers, ships its own rules, and makes <b>no network calls</b> (<code>--metrics off</code>).</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Limit</th><th>What happens instead</th></tr></thead>
+      <tbody>
+        <tr><td>Intra-file only</td><td>A route → helper → sink path across files is not tracked; the sink rule in the helper file usually still fires, and the path falls to the LLM reviewer.</td></tr>
+        <tr><td>Languages</td><td>JS/TS, Python, Java, Kotlin and Go packs ship; other stacks (Ruby, Rust, ...) have no taint pack. Python, Java and Kotlin server-side XSS (template autoescaping nuance) is not yet covered, and Go covers only the <code>template.HTML</code>-style safe-string cast.</td></tr>
+        <tr><td>Python sources</td><td>Flask and Django <code>request.*</code>. FastAPI endpoint parameters are not tracked, so FastAPI cmdi/SSRF/path/SSTI fall to the LLM; string-built SQL is still caught on any stack.</td></tr>
+        <tr><td>Java and Kotlin sources</td><td>Spring MVC and servlet (<code>@RequestParam</code>, <code>@PathVariable</code>, <code>getParameter</code>). JAX-RS and <code>@RequestBody</code> fields fall to the LLM. Concatenated SQL on unambiguous DB verbs is caught source-free; generic verbs need a recognised Spring source.</td></tr>
+        <tr><td>Per-stack catalogue</td><td>A library with no rule produces no deterministic finding; the LLM backstops it.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="prose">No configuration. The packs live in <code>isitsecure/engine/code_analysis/semgrep_rules/</code>; a new one is registered in <code>_RULE_PACKS</code> in <code>semgrep_analyzer.py</code>.</p>
+</section>
+
+<footer class="foot">
+  <span>Source: <a href="../scanners/semgrep-taint.md">docs/scanners/semgrep-taint.md</a> · <a href="../taint-analysis.md">docs/taint-analysis.md</a></span>
+  <span>Related: <a href="scan-pipeline.html">The scan pipeline</a> · <a href="route-auth-lsp.html">Route auth tracing</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+<script>
+(function () {
+  const svgOf = el => el.querySelector("svg");
+  // scene 1: a tainted value moves down the lane, line to line
+  window.taintReset = function (scene, i, el) { IsDoc.clearPackets(svgOf(el)); };
+  window.taintStep2 = function (scene, i, el) {
+    const svg = svgOf(el); IsDoc.clearPackets(svg);
+    IsDoc.packet(svg, "M52 78 V 118", { cls: "f-attacker", r: 5, duration: 900, keep: true });
+  };
+  window.taintStep3 = function (scene, i, el) {
+    const svg = svgOf(el); IsDoc.clearPackets(svg);
+    IsDoc.packet(svg, "M52 118 V 176", { cls: "f-attacker", r: 5, duration: 900, keep: true });
+  };
+  window.taintStep4 = function (scene, i, el) {
+    const svg = svgOf(el); IsDoc.clearPackets(svg);
+    IsDoc.packet(svg, "M52 176 V 176", { cls: "f-attacker", r: 5, duration: 1, keep: true });
+    IsDoc.packet(svg, "M532 78 V 106", { cls: "f-attacker", r: 5, duration: 900, delay: 200, keep: true });
+  };
+  // scene 2: counters
+  window.layersCount = function (scene, i, el) {
+    const n = el.querySelector(".n-tuned"); if (n) { n.textContent = "0"; IsDoc.count(n, 11, 900); }
+  };
+  window.layersBench = function (scene, i, el) {
+    const n = el.querySelector(".n-bench"); if (n) { n.textContent = "0"; IsDoc.count(n, 46, 900); }
+  };
+  // scene 4: taint leaves the route and halts at the file boundary
+  window.intraReset = function (scene, i, el) { IsDoc.clearPackets(svgOf(el)); };
+  window.intraStep2 = function (scene, i, el) {
+    const svg = svgOf(el); IsDoc.clearPackets(svg);
+    IsDoc.packet(svg, "M52 78 V 124 H 472", { cls: "f-attacker", r: 5, duration: 1300, keep: true });
+  };
+})();
+</script>
+</body>
+</html>

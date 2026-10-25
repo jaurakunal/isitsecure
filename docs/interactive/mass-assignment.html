@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Mass Assignment · isitsecure</title>
+<meta name="description" content="How isitsecure sends one escalation field at a time to every write endpoint, why the reflection check walks the whole JSON envelope, and the bare-body limit. Animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  .topbar-inner .crumb a { color: inherit; text-decoration: none; }
+  .topbar-inner .crumb a:hover { color: var(--accent); }
+  .scene svg text.mono, .scene svg .mono text { white-space: pre; }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› <a href="group-access-control.html">Access control</a> › Mass assignment</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/mass-assignment-scanner.md" title="The markdown source for this page">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">DAST scanner</div>
+  <h1>Mass Assignment</h1>
+  <p class="lede">If an API copies every field in the request body onto the record, a client can set fields it was never meant to control: a role, a price, a paid flag. The scanner adds one such field to a write request and reads the reply. If the field comes back with the value that was sent, the server took it.</p>
+  <div class="meta">
+    <span class="pill dast">DAST</span><span class="pill high">High</span><span class="pill">Privilege escalation</span><span class="pill">Mass assignment</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#probe-sec"><span class="n">01</span>The probe</a>
+  <a href="#envelope-sec"><span class="n">02</span>Finding it in the reply</a>
+  <a href="#limit-sec"><span class="n">03</span>The bare-body limit</a>
+  <a href="#why"><span class="n">04</span>Why it matters</a>
+  <a href="#code"><span class="n">05</span>Vulnerable vs fixed code</a>
+  <a href="#limits"><span class="n">06</span>Limits</a>
+</nav>
+
+<section id="probe-sec">
+  <h2>One field per request, every write endpoint</h2>
+  <p class="prose">The scanner does not need to know what the endpoint expects. It picks every endpoint that writes, sends a body that contains only an escalation field, and checks whether the server echoes it back with the same value.</p>
+
+  <div class="scene" id="probe" data-scene data-interval="3600">
+    <figure class="stage">
+      <svg viewBox="0 0 960 396" role="img" aria-label="The scanner picks POST, PUT and PATCH endpoints, sends seven escalation fields one at a time, and flags a field that comes back in a 2xx response with the value it sent.">
+        <defs><marker id="arr-ma1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g id="probe-wires">
+          <path class="wire" d="M160 110 C 180 110, 180 70, 196 70" marker-end="url(#arr-ma1)"/>
+          <path class="wire at-2" d="M450 100 H 474" marker-end="url(#arr-ma1)"/>
+          <path class="wire at-2" d="M710 100 H 734" marker-end="url(#arr-ma1)"/>
+          <path class="wire at-3" d="M840 170 V 190" marker-end="url(#arr-ma1)"/>
+        </g>
+        <g class="node" transform="translate(20 60)"><rect width="140" height="100" rx="10"/>
+          <text class="ttl" x="12" y="24">Scanner</text>
+          <text class="lbl" x="12" y="46">session headers</text>
+          <text class="lbl" x="12" y="62">if logged in</text></g>
+
+        <g class="node lit-1" transform="translate(200 20)"><rect width="250" height="170" rx="10"/>
+          <text class="ttl" x="12" y="24">Endpoint inventory</text>
+          <text class="mono" x="12" y="50" opacity=".4">GET    /api/items</text>
+          <text class="lbl" x="170" y="50">skipped</text>
+          <text class="mono t-accent" x="12" y="76">POST   /api/Users</text>
+          <text class="mono t-accent" x="12" y="102">PUT    /api/profile</text>
+          <text class="mono t-accent" x="12" y="128">PATCH  /rest/v1/profiles</text>
+          <text class="lbl" x="12" y="154">only POST, PUT and PATCH are tested</text></g>
+
+        <g class="node at-2 lit-2" transform="translate(480 20)"><rect width="230" height="214" rx="10"/>
+          <text class="ttl" x="12" y="24">7 fields, one per request</text>
+          <text class="mono" x="12" y="52">role         "admin"</text>
+          <text class="mono" x="12" y="72">is_admin     true</text>
+          <text class="mono" x="12" y="92">is_verified  true</text>
+          <text class="mono" x="12" y="112">email_verified true</text>
+          <text class="mono" x="12" y="132">plan         "enterprise"</text>
+          <text class="mono" x="12" y="152">credits      99999</text>
+          <text class="mono" x="12" y="172">permissions  "all"</text>
+          <text class="lbl" x="12" y="198">each body holds that field alone</text></g>
+
+        <g class="node at-2" transform="translate(480 250)"><rect width="230" height="72" rx="10"/>
+          <text class="ttl" x="12" y="22">URL has supabase or rest/v1</text>
+          <text class="mono" x="12" y="42">role · is_admin ·</text>
+          <text class="mono" x="12" y="58">stripe_customer_id</text></g>
+
+        <g class="node at-2" transform="translate(740 20)"><rect width="200" height="150" rx="10"/>
+          <text class="ttl" x="12" y="24">Request</text>
+          <text class="mono" x="12" y="48">POST /api/Users</text>
+          <text class="mono t-attacker" x="12" y="68">{"role": "admin"}</text>
+          <text class="lbl" x="12" y="96">Prefer:</text>
+          <text class="lbl" x="12" y="112">return=representation</text>
+          <text class="lbl" x="12" y="134">nothing else in the body</text></g>
+
+        <g class="node at-3 lit-3" transform="translate(740 196)"><rect width="200" height="128" rx="10"/>
+          <text class="ttl" x="12" y="24">Response</text>
+          <text class="mono t-safe" x="12" y="46">201 Created</text>
+          <text class="mono" x="12" y="68">{"data": {</text>
+          <text class="mono t-attacker" x="12" y="86">  "role": "admin"}}</text>
+          <text class="lbl" x="12" y="112">the field is in the reply</text></g>
+
+        <g class="node at-4" transform="translate(20 338)"><rect class="soft-attacker" width="920" height="46" rx="8"/>
+          <text class="ttl t-attacker" x="12" y="19">Finding · HIGH · confidence 0.85</text>
+          <text class="lbl" x="12" y="36">status 200 to 299, and the field is anywhere in the body with a value equal to the one sent</text></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span><b>Pick the writes.</b> Every POST, PUT and PATCH endpoint in the inventory is a candidate. GET endpoints are skipped. If the inventory holds no write endpoint the scanner stops without sending anything.</p>
+      <p class="step"><span class="n">2</span><b>One field at a time.</b> Seven requests per endpoint, each with a JSON body holding only that field. The <code>Prefer: return=representation</code> header asks PostgREST-style APIs to send the row back. When the URL contains <code>supabase</code> or <code>rest/v1</code> the list is replaced by three fields, not extended.</p>
+      <p class="step"><span class="n">3</span><b>Read the reply.</b> The server answers. A non-2xx status ends the check for that field straight away, so a rejected request can never become a finding.</p>
+      <p class="step"><span class="n">4</span><b>The decision.</b> The status is 200 to 299 <b>and</b> the field appears in the decoded body with a matching value. The finding is High with confidence 0.85, whatever the field, and it quotes the request and the status as evidence.</p>
+    </div>
+  </div>
+</section>
+
+<section id="envelope-sec">
+  <h2>Finding the field when the API wraps its reply</h2>
+  <p class="prose">Most APIs wrap the object they just created: <code>{"status": "success", "data": {...}}</code>, <code>{"result": {...}}</code>, or JSON:API's <code>{"data": {"attributes": {...}}}</code>. A check that only reads the top level calls every one of those clean. That is how a confirmed, reproducible mass assignment once reported as no finding.</p>
+
+  <div class="scene" id="envelope" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 398" role="img" aria-label="A response body is searched level by level for the injected field. The root keys do not contain it, the data object does not, the user object does. The value has to equal the value sent, so a role of customer is not a match.">
+        <g class="node" transform="translate(20 14)"><rect width="400" height="240" rx="10"/>
+          <rect class="soft-accent only-1" x="8" y="58" width="384" height="40" rx="4"/>
+          <rect class="soft-accent only-2" x="8" y="98" width="384" height="20" rx="4"/>
+          <rect class="soft-accent only-3" x="8" y="118" width="384" height="40" rx="4"/>
+          <rect class="soft-safe only-4" x="8" y="138" width="384" height="20" rx="4"/>
+          <text class="ttl" x="12" y="24">Response body sent back</text>
+          <g class="mono">
+            <text x="16" y="52">{</text>
+            <text x="16" y="72">  "status": "success",</text>
+            <text x="16" y="92">  "data": {</text>
+            <text x="16" y="112">    "user": {</text>
+            <text x="16" y="132">      "id": 7,</text>
+            <g class="until-4"><text class="t-attacker" x="16" y="152">      "role": "admin"</text></g>
+            <g class="at-4"><text class="t-safe" x="16" y="152">      "role": "customer"</text></g>
+            <text x="16" y="172">    }</text>
+            <text x="16" y="192">  }</text>
+            <text x="16" y="212">}</text></g></g>
+
+        <g class="node lit-1" transform="translate(450 14)"><rect width="490" height="72" rx="8"/>
+          <text class="ttl" x="12" y="22">level 0 · the root object</text>
+          <text class="mono" x="12" y="42">keys: status, data</text>
+          <g class="only-1"><text class="lbl" x="12" y="60">role is not here. A top-level-only check stops now and calls the endpoint clean.</text></g>
+          <g class="at-2"><text class="lbl" x="12" y="60">role is not here, so keep descending</text></g></g>
+        <g class="node at-2 lit-2" transform="translate(450 96)"><rect width="490" height="72" rx="8"/>
+          <text class="ttl" x="12" y="22">level 1 · inside data</text>
+          <text class="mono" x="12" y="42">keys: user</text>
+          <text class="lbl" x="12" y="60">role is not here, so keep descending</text></g>
+        <g class="node at-3" transform="translate(450 178)"><rect width="490" height="72" rx="8"/>
+          <text class="ttl" x="12" y="22">level 2 · inside user</text>
+          <text class="mono" x="12" y="42">keys: id, role</text>
+          <g class="only-3"><text class="lbl t-attacker" x="12" y="60">role is here and "admin" equals the value sent: finding</text></g>
+          <g class="at-4"><text class="lbl t-safe" x="12" y="60">role is here but "customer" is not "admin": no finding</text></g></g>
+
+        <g class="node at-5" transform="translate(20 268)"><rect width="920" height="118" rx="10"/>
+          <text class="ttl" x="12" y="24">How the value is compared</text>
+          <text class="mono" x="12" y="48">sent true: the reply must hold true (or 1); the string "true" does not match</text>
+          <text class="mono" x="12" y="68">anything else: str(reply) == str(sent), so 99999 matches "99999"</text>
+          <text class="mono" x="12" y="88">search depth: 8 levels; arrays are searched item by item</text>
+          <text class="mono" x="12" y="108">body is not JSON: the field name and the value both appear somewhere in the text</text></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span><b>Top level.</b> The scanner sent <code>{"role": "admin"}</code>. The root object has <code>status</code> and <code>data</code>, no <code>role</code>. A top-level-only check would end here.</p>
+      <p class="step"><span class="n">2</span><b>Descend.</b> Instead of guessing envelope names such as <code>data</code> or <code>result</code>, the scanner walks every value that is an object or a list. Next level: <code>data</code> holds <code>user</code>.</p>
+      <p class="step"><span class="n">3</span><b>Found, and the value matches.</b> <code>role</code> is inside <code>user</code> and equals <code>"admin"</code>. That is the evidence: the server stored or at least echoed what the client chose.</p>
+      <p class="step"><span class="n">4</span><b>The value is part of the test.</b> If the same field came back as <code>"customer"</code>, the server ignored the input and set its own default. Finding the key somewhere proves nothing, so this is not reported.</p>
+      <p class="step"><span class="n">5</span><b>Comparison rules.</b> Booleans must come back as a boolean, other values are compared as strings so a number and its quoted form agree, and the walk stops at 8 levels. A body that is not JSON falls back to a text search for both the name and the value.</p>
+    </div>
+  </div>
+</section>
+
+<section id="limit-sec">
+  <h2>What it cannot reach yet: endpoints that validate first</h2>
+  <p class="prose">The probe sends the escalation field on its own, with no valid base payload. An endpoint that checks its required fields rejects that request outright, so the escalation is never evaluated. The Juice Shop benchmark shows both sides of this.</p>
+
+  <div class="scene" id="limit" data-scene data-interval="3600">
+    <figure class="stage">
+      <svg viewBox="0 0 960 336" role="img" aria-label="Two endpoints receive the same bare escalation field. One accepts it and reflects it, producing a finding. The other validates its required fields, including a captcha, rejects the request and is never evaluated.">
+        <defs><marker id="arr-ma3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g class="at-1">
+          <g class="node lit-1" transform="translate(20 10)"><rect width="260" height="112" rx="10"/>
+            <text class="ttl" x="12" y="24">POST /api/Users</text>
+            <text class="mono t-attacker" x="12" y="50">{"role": "admin"}</text>
+            <text class="lbl" x="12" y="72">the field alone, no other keys</text>
+            <text class="lbl" x="12" y="92">registerAdminChallenge</text></g>
+          <path class="wire" d="M280 66 H 316" marker-end="url(#arr-ma3)"/>
+          <g class="node" transform="translate(320 10)"><rect width="220" height="112" rx="10"/>
+            <text class="ttl" x="12" y="24">Accepts a bare body</text>
+            <text class="lbl" x="12" y="48">nothing else is required</text>
+            <text class="lbl" x="12" y="66">to create the record</text></g>
+          <path class="wire" d="M540 66 H 576" marker-end="url(#arr-ma3)"/>
+          <g class="node" transform="translate(580 10)"><rect width="190" height="112" rx="10"/>
+            <text class="ttl" x="12" y="24">201</text>
+            <text class="mono t-attacker" x="12" y="50">"role": "admin"</text>
+            <text class="lbl" x="12" y="72">reflected, value matches</text></g>
+          <path class="wire" d="M770 66 H 806" marker-end="url(#arr-ma3)"/>
+          <g class="node" transform="translate(810 10)"><rect class="soft-attacker" width="130" height="112" rx="10"/>
+            <text class="ttl t-attacker" x="12" y="24">Finding</text>
+            <text class="lbl" x="12" y="46">HIGH · 0.85</text></g>
+        </g>
+
+        <g class="at-2">
+          <g class="node lit-2" transform="translate(20 140)"><rect width="260" height="112" rx="10"/>
+            <text class="ttl" x="12" y="24">POST /api/Feedbacks</text>
+            <text class="mono t-attacker" x="12" y="50">{"role": "admin"}</text>
+            <text class="lbl" x="12" y="72">the field alone, no other keys</text>
+            <text class="lbl" x="12" y="92">feedbackChallenge</text></g>
+          <path class="wire" d="M280 196 H 316" marker-end="url(#arr-ma3)"/>
+          <g class="node" transform="translate(320 140)"><rect width="220" height="112" rx="10"/>
+            <text class="ttl" x="12" y="24">Validates first</text>
+            <text class="lbl" x="12" y="48">also demands a captcha</text>
+            <text class="lbl" x="12" y="66">required fields are missing</text></g>
+          <path class="wire" d="M540 196 H 576" marker-end="url(#arr-ma3)"/>
+          <g class="node" transform="translate(580 140)"><rect width="190" height="112" rx="10"/>
+            <text class="ttl" x="12" y="24">Rejected</text>
+            <text class="mono" x="12" y="50">status is not 2xx</text>
+            <text class="lbl" x="12" y="72">the check ends here</text></g>
+          <path class="wire" d="M770 196 H 806" marker-end="url(#arr-ma3)"/>
+          <g class="node" transform="translate(810 140)"><rect class="soft-info" width="130" height="112" rx="10"/>
+            <text class="ttl t-info" x="12" y="24">Not evaluated</text>
+            <text class="lbl" x="12" y="46">reads as clean</text></g>
+        </g>
+
+        <g class="node at-3" transform="translate(20 268)"><rect class="soft-info" width="920" height="56" rx="8"/>
+          <text class="ttl" x="12" y="22">The gap is the missing base payload</text>
+          <text class="lbl" x="12" y="42">Reaching Feedbacks would need a valid body with the escalation field added to it. The scanner does not build one yet.</text></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span><b>A bare body is enough.</b> <code>POST /api/Users</code> accepts a body that carries only the escalation field, so the server creates the record, echoes <code>role: admin</code>, and the scanner reports it. This is the Juice Shop <code>registerAdminChallenge</code>.</p>
+      <p class="step"><span class="n">2</span><b>Validation gets there first.</b> <code>POST /api/Feedbacks</code> also demands a captcha and its own required fields. The same bare body is refused before any assignment happens, the status is not 2xx, and the scanner moves on.</p>
+      <p class="step"><span class="n">3</span><b>A real gap, stated openly.</b> A clean result means "no bare-body escalation", not "no mass assignment". Endpoints with mandatory fields need a valid base payload that the probe does not yet supply.</p>
+    </div>
+  </div>
+</section>
+
+<section id="why">
+  <h2>Why it matters</h2>
+  <div class="grid-2">
+    <div class="callout why"><div class="label">Why it matters</div><p>If your API blindly accepts all fields from the request body, an attacker can promote themselves to admin with <code>{"role": "admin"}</code> or <code>{"is_admin": true}</code>, set <code>{"price": 0.01}</code> on an order update, change ownership with <code>{"user_id": "other-user"}</code>, or mark an order paid with <code>{"status": "paid"}</code> without paying.</p></div>
+    <div class="callout breach"><div class="label">Real-world breaches</div><p><b>GitHub (2012).</b> Egor Homakov exploited a Rails mass assignment vulnerability to add his SSH key to the Rails core repository by manipulating the <code>user_id</code> attribute, gaining commit access to one of the most important open source projects. <b>HackerOne (2015).</b> A mass assignment flaw allowed adding yourself as a member of any bug bounty program by manipulating group membership parameters.</p></div>
+  </div>
+</section>
+
+<section id="code">
+  <h2>Vulnerable vs fixed code</h2>
+  <p class="prose">The vulnerable handler writes whatever the client sent. The fix names the fields a client may set and leaves everything else out, so <code>role</code> and <code>is_admin</code> can only be changed by code that decides to.</p>
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true">BAD · write the whole body</button>
+      <button class="tab good" role="tab" aria-selected="false">GOOD · allow-list fields</button>
+    </div>
+    <div role="tabpanel"><pre><code><span class="c">// BAD: Accept all fields from request body</span>
+const body = await request.json()
+<span class="hl bad">await db.update(<span class="s">"profiles"</span>, userId, body)  <span class="c">// Whatever the client sends gets written</span></span></code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c">// GOOD: Explicitly pick allowed fields</span>
+const body = await request.json()
+const allowedUpdate = {
+<span class="hl good">  display_name: body.display_name,</span>
+<span class="hl good">  avatar_url: body.avatar_url,</span>
+  <span class="c">// role and is_admin are NOT included</span>
+}
+await db.update(<span class="s">"profiles"</span>, userId, allowedUpdate)</code></pre></div>
+  </div>
+</section>
+
+<section id="limits">
+  <h2>Limits</h2>
+  <div class="callout note"><div class="label">What a finding means</div><p>The scanner checks reflection in the reply. It does not fetch the record afterwards to see whether the value was stored, and the probe itself is a real POST, PUT or PATCH that may create or change a record. The severity is always High at confidence 0.85, whatever the field.</p></div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Setting</th><th>Value</th></tr></thead>
+    <tbody>
+      <tr><td>Endpoints tested</td><td>POST, PUT, PATCH</td></tr>
+      <tr><td>Fields per endpoint</td><td>7 (3 for Supabase-style URLs)</td></tr>
+      <tr><td>Success status</td><td>200 to 299</td></tr>
+      <tr><td>Search depth in the reply</td><td>8 levels</td></tr>
+      <tr><td>Authentication</td><td>session headers added when the scan is logged in</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<footer class="foot">
+  <span>Source: <a href="../scanners/mass-assignment-scanner.md">docs/scanners/mass-assignment-scanner.md</a></span>
+  <span>Group: <a href="group-access-control.html">Access control</a> · Related: <a href="privilege-escalation.html">Privilege escalation</a> · <a href="body-param-fuzzer.html">Body param fuzzer</a> · <a href="idor-bola.html">IDOR and BOLA</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+</body>
+</html>

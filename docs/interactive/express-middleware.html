@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Express Middleware Analyzer · isitsecure</title>
+<meta name="description" content="How isitsecure reads an Express backend for authentication gaps: routes with no guard in their arguments, weak token checks, and the rate limit, header, CORS and tenant checks. Animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  .code text { white-space: pre; }
+  #route .panel > rect, #auth .panel > rect, #also .panel > rect { fill: var(--surface); }
+  .topbar-inner .crumb a { color: inherit; text-decoration: none; }
+  .topbar-inner .crumb a:hover { color: var(--accent); }
+  footer.foot span { min-width: 0; overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› <a href="group-schema-middleware.html">Schemas and middleware</a> › Express middleware</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/express-middleware-analyzer.md" title="The markdown source for this page">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">SAST scanner · reads the Express source</div>
+  <h1>Express Middleware Analyzer</h1>
+  <p class="lede">Express has no file that declares what is protected. Protection is whatever the route lines and middleware files say. This analyzer reads both: it checks each route for a guard among its own arguments, judges the auth middleware files, and then looks for rate limiting, security headers, CORS and tenant isolation.</p>
+  <div class="meta">
+    <span class="pill sast">SAST</span><span class="pill high">up to High</span><span class="pill">Auth Weakness</span><span class="pill">6 checks</span><span class="pill">Express only</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#route"><span class="n">01</span>Route coverage</a>
+  <a href="#auth"><span class="n">02</span>Auth middleware quality</a>
+  <a href="#also"><span class="n">03</span>The four hygiene checks</a>
+  <a href="#why"><span class="n">04</span>Why it matters</a>
+  <a href="#code"><span class="n">05</span>Vulnerable vs fixed code</a>
+  <a href="#limits"><span class="n">06</span>Limits and scope</a>
+</nav>
+<section id="route">
+  <h2>Route coverage</h2>
+  <p class="prose">The analyzer runs only when the repository contains an Express app: a file that mentions <code>express</code> together with <code>app.listen(</code>, <code>express()</code> or <code>express.Router()</code>. Four routes below go through three gates in order.</p>
+  <div class="scene" id="route" data-scene data-interval="3800">
+    <figure class="stage">
+      <svg viewBox="0 0 960 292" role="img" aria-label="An Express app.js on the left and a table of its four routes on the right with three gates, guard present, public path and sensitive path, ending in one finding.">
+
+
+        <g class="node panel"><rect x="20" y="14" width="440" height="262" rx="10"/></g>
+        <text class="lbl" x="36" y="34">app.js</text>
+        <rect class="only-1 soft-info" x="26" y="46" width="428" height="20" rx="4"/><rect class="only-2 soft-accent" x="26" y="70" width="428" height="20" rx="4"/><rect class="only-3 soft-info" x="26" y="94" width="428" height="20" rx="4"/><rect class="only-4 soft-safe" x="26" y="118" width="428" height="20" rx="4"/><rect class="only-5 soft-info" x="26" y="142" width="428" height="20" rx="4"/>
+        <g class="mono code" style="white-space:pre">
+          <text x="36" y="60">app.use("/api", authMiddleware)</text>
+          <text x="36" y="84">app.get("/api/admin/users", getUsers)</text>
+          <text x="36" y="108">app.get("/api/health", ping)</text>
+          <text x="36" y="132">app.post("/api/tasks", requireAuth, createTask)</text>
+          <text x="36" y="156">app.get("/", home)</text>
+        </g>
+        <line class="wire" x1="34" x2="446" y1="178" y2="178"/>
+        <g class="only-1">
+          <text class="lbl" x="36" y="200">only the arguments after a route's path count as guards</text>
+          <text class="lbl" x="36" y="220">app.use("/api", ...) is kept as a mount point and covers</text>
+          <text class="lbl" x="36" y="240">no route in this check</text>
+        </g>
+        <g class="only-2">
+          <text class="lbl" x="36" y="200">args: getUsers. No guard name among them.</text>
+          <text class="lbl" x="36" y="220">path /api/admin/users contains /api/ and /admin.</text>
+          <text class="t-accent" x="36" y="246" style="font-weight:600">GET /api/admin/users has no auth middleware</text>
+        </g>
+        <g class="only-3">
+          <text class="lbl" x="36" y="200">args: ping. No guard, but the path contains /health,</text>
+          <text class="lbl" x="36" y="220">which is on the public list. Not examined further.</text>
+        </g>
+        <g class="only-4">
+          <text class="lbl" x="36" y="200">args: requireAuth, createTask. requireAuth is a known</text>
+          <text class="lbl" x="36" y="220">guard name, matched on word boundaries, so the route</text>
+          <text class="lbl" x="36" y="240">is skipped.</text>
+        </g>
+        <g class="only-5">
+          <text class="lbl" x="36" y="200">args: home. No guard, not public, but the path "/"</text>
+          <text class="lbl" x="36" y="220">holds none of the sensitive words, so it is not judged.</text>
+          <text class="t-accent" x="36" y="246" style="font-weight:600">4 routes read, 1 finding</text>
+        </g>
+
+        <g class="node panel"><rect x="480" y="14" width="460" height="262" rx="10"/></g>
+        <text class="lbl" x="496" y="36">route</text><text class="lbl" x="646" y="36">guard</text><text class="lbl" x="718" y="36">public</text><text class="lbl" x="790" y="36">sensitive</text>
+        <g class="node lit-2" transform="translate(496 46)"><rect width="428" height="46" rx="6"/>
+          <text class="mono" x="12" y="20">/api/admin/users</text><text class="lbl" x="12" y="37">GET</text>
+          <g class="at-2"><text class="t-attacker" x="150" y="25">no</text><text class="" x="222" y="25">no</text><text class="t-attacker" x="294" y="25">yes</text>
+          <text class="t-accent" x="414" y="25" text-anchor="end" style="font-weight:600">MEDIUM · 0.85</text></g>
+        </g>
+        <g class="node lit-3" transform="translate(496 100)"><rect width="428" height="46" rx="6"/>
+          <text class="mono" x="12" y="20">/api/health</text><text class="lbl" x="12" y="37">GET</text>
+          <g class="at-3"><text class="t-attacker" x="150" y="25">no</text><text class="t-info" x="222" y="25">yes</text><text class="" x="294" y="25">-</text>
+          <text class="" x="414" y="25" text-anchor="end" style="font-weight:600">skipped</text></g>
+        </g>
+        <g class="node lit-4" transform="translate(496 154)"><rect width="428" height="46" rx="6"/>
+          <text class="mono" x="12" y="20">/api/tasks</text><text class="lbl" x="12" y="37">POST</text>
+          <g class="at-4"><text class="t-safe" x="150" y="25">yes</text><text class="" x="222" y="25">-</text><text class="" x="294" y="25">-</text>
+          <text class="" x="414" y="25" text-anchor="end" style="font-weight:600">skipped</text></g>
+        </g>
+        <g class="node lit-5" transform="translate(496 208)"><rect width="428" height="46" rx="6"/>
+          <text class="mono" x="12" y="20">/</text><text class="lbl" x="12" y="37">GET</text>
+          <g class="at-5"><text class="t-attacker" x="150" y="25">no</text><text class="" x="222" y="25">no</text><text class="" x="294" y="25">no</text>
+          <text class="" x="414" y="25" text-anchor="end" style="font-weight:600">skipped</text></g>
+        </g>
+
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The route mapper reads each <code>app.get(path, ...args)</code> line. <b>Only the arguments after the path count as guards.</b> The <code>app.use("/api", authMiddleware)</code> line is recorded as a mount point and covers no route in this check.</p>
+      <p class="step"><span class="n">2</span><code>/api/admin/users</code>: no guard in its arguments, not a public path, and the path holds <code>/api/</code> and <code>/admin</code>. <b>Medium, 0.85, one finding per HTTP method.</b> The global <code>app.use</code> above it does not rescue it.</p>
+      <p class="step"><span class="n">3</span><code>/api/health</code> has no guard either, but <code>/health</code> is on the public list with <code>/ping</code>, <code>/status</code>, <code>/docs</code>, <code>/swagger</code>, <code>/openapi</code> and <code>/webhook</code>. <b>It is skipped.</b></p>
+      <p class="step"><span class="n">4</span><code>/api/tasks</code> names <code>requireAuth</code> among its arguments. Guard names are matched on word boundaries, so <code>checkAuthorEmail</code> would not pass for <code>checkAuth</code>. <b>Skipped.</b></p>
+      <p class="step"><span class="n">5</span><code>/</code> has no guard and is not public, but nothing in its path says it is sensitive: the list is <code>/api/</code>, <code>/trpc</code>, <code>/graphql</code>, <code>/admin</code>, <code>/user</code>, <code>/account</code>, <code>/settings</code>, <code>/payment</code>, <code>/billing</code>, <code>/profile</code>, <code>/dashboard</code>. <b>One finding in all.</b></p>
+    </div>
+  </div>
+</section>
+
+<section id="auth">
+  <h2>Auth middleware quality</h2>
+  <p class="prose">A guard that exists can still be useless. Two middleware files, one that only checks a header is present and one that verifies a token.</p>
+  <div class="scene" id="auth" data-scene data-interval="3800">
+    <figure class="stage">
+      <svg viewBox="0 0 960 336" role="img" aria-label="Two Express middleware files side by side, one with a weak header existence test and one with jwt.verify, and the finding or absence of a finding for each.">
+
+
+        <g class="until-4">
+        <g class="node panel"><rect x="20" y="14" width="450" height="196" rx="10"/></g>
+        <text class="lbl" x="36" y="34">middleware/auth.js</text>
+        <rect class="only-2 soft-attacker" x="26" y="68" width="438" height="20" rx="4"/>
+        <g class="mono code" style="white-space:pre">
+          <text x="36" y="60">function auth(req, res, next) {</text>
+          <text x="36" y="82">  if (req.headers.authorization) {</text>
+          <text x="36" y="104">    return next()</text>
+          <text x="36" y="126">  }</text>
+          <text x="36" y="148">  return res.status(401).end()</text>
+          <text x="36" y="170">}</text>
+        </g>
+        <g class="node panel"><rect x="490" y="14" width="450" height="196" rx="10"/></g>
+        <text class="lbl" x="506" y="34">middleware/jwt.js</text>
+        <rect class="only-3 soft-safe" x="496" y="90" width="438" height="20" rx="4"/>
+        <g class="mono code" style="white-space:pre">
+          <text x="506" y="60">function auth(req, res, next) {</text>
+          <text x="506" y="82">  try {</text>
+          <text x="506" y="104">    req.user = jwt.verify(token, SECRET)</text>
+          <text x="506" y="126">    return next()</text>
+          <text x="506" y="148">  } catch { return res.status(401).end() }</text>
+          <text x="506" y="170">}</text>
+        </g>
+        <g class="node" transform="translate(20 226)"><rect width="920" height="94" rx="10"/>
+          <g class="only-1"><text class="ttl" x="16" y="28">Files scanned</text>
+            <text class="lbl" x="16" y="52">every file whose path holds middleware/ or middlewares/, or whose name contains "middleware"</text>
+            <text class="lbl" x="16" y="70">three buckets of patterns: strong (a token is verified), weak (a header or cookie merely exists), enforcement (401 or 403)</text></g>
+          <g class="only-2"><text class="t-attacker" x="16" y="28" style="font-weight:600">HIGH · 0.80  Auth middleware checks token existence but not validity</text>
+            <text class="lbl" x="16" y="52">weak pattern: req.headers.authorization followed by ) or &amp;&amp; : the header is tested for truth only</text>
+            <text class="lbl" x="16" y="70">no strong pattern has been seen yet, so the file is reported. Any string would pass as a Bearer token.</text></g>
+          <g class="only-3"><text class="t-safe" x="16" y="28" style="font-weight:600">No finding</text>
+            <text class="lbl" x="16" y="52">jwt.verify( is a strong pattern. A file with both patterns is not reported, and neither is a weak file that comes after it.</text>
+            <text class="lbl" x="16" y="70">The check is order-sensitive across files: a weak file scanned before the strong one is reported.</text></g>
+        </g>
+        </g>
+        <g class="at-4">
+          <g class="node panel"><rect x="20" y="14" width="920" height="306" rx="10"/></g>
+          <text class="ttl" x="40" y="46">No guard found anywhere</text>
+          <text class="lbl" x="40" y="76">1. every middleware file: no strong or weak pattern</text>
+          <text class="lbl" x="40" y="96">2. every other file in the repo (main.js, app.js ...): none of the strong patterns either</text>
+          <text class="mono" x="40" y="130">supabase.auth.getUser(   jwt.verify(   jsonwebtoken ... verify   getUser(token</text>
+          <text class="mono" x="40" y="152">verifyToken(   getSession(   passport.authenticate(</text>
+          <text class="lbl" x="40" y="186">If Express routes exist, the scanner reports one finding for the whole backend:</text>
+          <text class="t-attacker" x="40" y="214" style="font-weight:600">HIGH · 0.90  No auth verification middleware found</text>
+          <text class="lbl" x="40" y="244">Without it each route must do its own authentication, which is error-prone and inconsistent.</text>
+        </g>
+
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The analyzer collects the middleware files of an Express app and reads them for three kinds of pattern: <b>strong</b> verification, <b>weak</b> existence tests, and 401 or 403 enforcement.</p>
+      <p class="step"><span class="n">2</span><code>if (req.headers.authorization)</code> only asks whether the header is truthy. With no verification pattern yet seen, <b>the file is a High finding, 0.80</b>: any string sent as a Bearer token gets through.</p>
+      <p class="step"><span class="n">3</span><code>jwt.verify(</code> is a strong pattern: the token is checked, not just present. <b>This file is clean</b>, and a strong hit also protects weak files that come after it in the scan.</p>
+      <p class="step"><span class="n">4</span>If no strong pattern exists in any file at all, and the repository has Express routes, <b>one High finding, 0.90</b> reports that there is no verifying middleware anywhere.</p>
+    </div>
+  </div>
+</section>
+
+<section id="also">
+  <h2>The four hygiene checks</h2>
+  <p class="prose">These checks have no per-route logic. Each searches the middleware files, and for some checks the main files too, for a named tool.</p>
+  <div class="scene" id="also" data-scene data-interval="3800">
+    <figure class="stage">
+      <svg viewBox="0 0 960 352" role="img" aria-label="Four Express checks as table rows, rate limiting, security headers, CORS and tenant isolation, each with what it searches for and the finding it reports.">
+
+
+        <g class="node panel"><rect x="20" y="14" width="920" height="324" rx="10"/></g>
+        <text class="lbl" x="34" y="38">check</text><text class="lbl" x="190" y="38">what it looks for</text><text class="lbl" x="624" y="38">what it reports</text>
+        <g class="node lit-2" transform="translate(34 48)"><rect width="892" height="64" rx="8"/>
+          <text class="ttl" x="14" y="36">Rate limiting</text>
+          <text x="156" y="26">looks for rateLimit(, express-rate-limit, createRateLimiter(, slowDown(</text><text class="lbl" x="156" y="46">a Map or memoryStore with no Redis import counts as in-memory</text>
+          <g class="at-2"><text class="t-accent" x="590" y="26" style="font-weight:600">MEDIUM · 0.80</text><text x="590" y="44" style="font-size:11.5px">No rate limiting middleware found</text></g>
+        </g>
+        <g class="node lit-3" transform="translate(34 120)"><rect width="892" height="64" rx="8"/>
+          <text class="ttl" x="14" y="36">Security headers</text>
+          <text x="156" y="26">helmet anywhere clears every header check</text><text class="lbl" x="156" y="46">else the four recommended names are searched as text</text>
+          <g class="at-3"><text class="t-info" x="590" y="26" style="font-weight:600">LOW · 0.85 per header</text><text x="590" y="44" style="font-size:11.5px">HSTS, X-Frame-Options, X-Content-Type-Options, CSP</text></g>
+        </g>
+        <g class="node lit-4" transform="translate(34 192)"><rect width="892" height="64" rx="8"/>
+          <text class="ttl" x="14" y="36">CORS</text>
+          <text x="156" y="26">origin: '*' and credentials: true in one file</text><text class="lbl" x="156" y="46">two files each holding one half do not count</text>
+          <g class="at-4"><text class="t-attacker" x="590" y="26" style="font-weight:600">HIGH · 0.85</text><text x="590" y="44" style="font-size:11.5px">CORS allows all origins with credentials</text></g>
+        </g>
+        <g class="node lit-5" transform="translate(34 264)"><rect width="892" height="64" rx="8"/>
+          <text class="ttl" x="14" y="36">Tenant isolation</text>
+          <text x="156" y="26">only if the code mentions tenant_id and a tenants table</text><text class="lbl" x="156" y="46">looks for req.tenantId, tenantContext(, requireTenant( ...</text>
+          <g class="at-5"><text class="t-attacker" x="590" y="26" style="font-weight:600">HIGH · 0.75</text><text x="590" y="44" style="font-size:11.5px">No tenant isolation middleware found</text></g>
+        </g>
+
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Besides auth, the Express analyzer runs four hygiene checks on the same files. They share one pattern: <b>look for the protective tool by name, and report its absence</b>.</p>
+      <p class="step"><span class="n">2</span>Rate limiting. No limiter anywhere is <b>Medium, 0.80</b>. A limiter that keeps counters in a <code>Map</code> without a shared store is <b>Medium, 0.70</b>, because each instance counts separately and an attacker multiplies the limit by the instance count.</p>
+      <p class="step"><span class="n">3</span>Security headers. <code>helmet</code> clears all of them. Without it, <b>each of four missing headers is its own Low finding, 0.85</b>: Strict-Transport-Security, X-Frame-Options, X-Content-Type-Options and Content-Security-Policy.</p>
+      <p class="step"><span class="n">4</span>CORS. Both halves have to sit in <b>one file</b>: <code>origin: '*'</code> and <code>credentials: true</code>. <b>High, 0.85.</b> It lets any website make credentialed requests.</p>
+      <p class="step"><span class="n">5</span>Tenant isolation. A repository that mentions <code>tenant_id</code> and defines tenants is multi-tenant; if no tenant middleware name appears anywhere, <b>High, 0.75</b>.</p>
+    </div>
+  </div>
+</section>
+
+<section id="why">
+  <h2>Why it matters</h2>
+  <div class="grid-2">
+    <div class="callout why"><div class="label">Why it matters</div><p>Express runs its functions in the order they are registered, and a guard only protects the routes that name it. <b>A single route without the guard is open to anyone</b>, and the rest of the API looking protected hides it. This is the Express counterpart of the Next.js matcher gap.</p></div>
+    <div class="callout breach"><div class="label">Real-world breach</div><p><b>Peloton (2021).</b> Unauthenticated API endpoints exposed user data. The markdown reads this as an API that likely had auth middleware which was not applied to every route, the pattern this scanner looks for.</p></div>
+  </div>
+</section>
+
+<section id="code">
+  <h2>Vulnerable vs fixed code</h2>
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true" type="button">BAD · flagged</button>
+      <button class="tab good" role="tab" aria-selected="false" type="button">GOOD · clean</button>
+    </div>
+    <div role="tabpanel"><pre><code><span class="c">// BAD: no guard among this route's arguments</span>
+<span class="hl bad">app.get(<span class="s">"/api/admin/users"</span>, getUsers)</span>
+
+<span class="c">// BAD: middleware that only tests that a header exists</span>
+function auth(req, res, next) {
+  <span class="hl bad">if (req.headers.authorization) return next()</span>
+  return res.status(401).end()
+}
+
+<span class="c">// BAD: auth applied after the routes it was meant to cover</span>
+app.use(authMiddleware)</code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c">// GOOD: apply auth middleware before the routes</span>
+app.use(<span class="s">"/api"</span>, authMiddleware)
+
+<span class="c">// GOOD: name the guard on the route, which is what this analyzer reads</span>
+<span class="hl good">app.get(<span class="s">"/api/admin/users"</span>, requireAuth, getUsers)</span>
+
+<span class="c">// GOOD: the middleware verifies the token</span>
+function authMiddleware(req, res, next) {
+  <span class="hl good">req.user = jwt.verify(token, SECRET)</span>
+  next()
+}</code></pre></div>
+  </div>
+  <div class="callout note"><div class="label">Scope note</div><p><b>The analyzer does not model registration order or wildcard bypass by route specificity.</b> It treats a route as guarded only when a guard name appears in that route's own arguments, so <code>app.use("/api", authMiddleware)</code> placed correctly above the routes still leaves per-route findings.</p></div>
+</section>
+
+<section id="limits">
+  <h2>Limits and scope</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Behaviour</th><th>Detail</th></tr></thead>
+    <tbody>
+      <tr><td>Input</td><td>The repository source. Runs only when a file mentions <code>express</code> with <code>app.listen(</code>, <code>express()</code> or <code>express.Router()</code>. tRPC and Next.js <code>route.ts</code> files are excluded from the route list.</td></tr>
+      <tr><td>Severity and confidence</td><td>No verifying middleware: High 0.90. Weak token check: High 0.80. Route without guard: Medium 0.85 per method. Rate limit: Medium 0.80, in-memory 0.70. Headers: Low 0.85 each. CORS: High 0.85. Tenant isolation: High 0.75.</td></tr>
+      <tr><td>Route guard</td><td>A known guard name (such as requireAuth, verifyAuth, authenticate, isAuthenticated, verifyToken, authMiddleware) among the route's arguments on its line. Global <code>app.use</code> is not counted.</td></tr>
+      <tr><td>Which routes are judged</td><td>Not public (/health, /ping, /status, /docs, /swagger, /openapi, /webhook) and sensitive (/api/, /trpc, /graphql, /admin, /user, /account, /settings, /payment, /billing, /profile, /dashboard).</td></tr>
+      <tr><td>Not implemented</td><td>Middleware ordering, and bypass by route specificity.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<footer class="foot">
+  <span>Source: <a href="../scanners/express-middleware-analyzer.md">docs/scanners/express-middleware-analyzer.md</a> · <a href="https://github.com/jaurakunal/isitsecure/blob/main/isitsecure/engine/code_analysis/express_middleware_analyzer.py">isitsecure/engine/code_analysis/express_middleware_analyzer.py</a></span>
+  <span>Group: <a href="group-schema-middleware.html">Schemas and middleware</a> · Related: <a href="middleware.html">Next.js middleware</a> · <a href="route-auth-lsp.html">Route auth tracing</a> · <a href="rate-limit.html">Rate limit</a> · <a href="cors.html">CORS</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+</body>
+</html>

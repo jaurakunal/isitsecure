@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>HTTP Probe · isitsecure</title>
+<meta name="description" content="Five cheap checks for leaked error pages, exposed .git and .env files, TRACE, Host header reflection and CRLF injection, and how the scanner returns its findings before the hard timeout.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  /* order scene: boxes dim except the ones the step is about */
+  #order-s .box { transition: opacity .4s ease; }
+  #order-s[data-step="2"] .b3, #order-s[data-step="2"] .b4, #order-s[data-step="2"] .b5 { opacity: .35; }
+  #order-s[data-step="3"] .b1, #order-s[data-step="3"] .b2 { opacity: .35; }
+  #order-s[data-step="2"] .b1 > rect, #order-s[data-step="2"] .b2 > rect,
+  #order-s[data-step="3"] .b3 > rect, #order-s[data-step="3"] .b4 > rect, #order-s[data-step="3"] .b5 > rect { stroke: var(--accent); stroke-width: 2.5; }
+  #order-s .gate { opacity: 0; transition: opacity .4s ease; }
+  #order-s.s4 .gate { opacity: 1; }
+  #order-s .gate > circle { fill: var(--surface); stroke: var(--accent); stroke-width: 1.8; }
+
+  /* rules scene: one row at a time */
+  #rules-s .row { transition: opacity .4s ease; }
+  #rules-s[data-step="2"] .row:not(.r1), #rules-s[data-step="3"] .row:not(.r2), #rules-s[data-step="4"] .row:not(.r3),
+  #rules-s[data-step="5"] .row:not(.r4), #rules-s[data-step="6"] .row:not(.r5) { opacity: .3; }
+  #rules-s[data-step="2"] .r1 .req > rect, #rules-s[data-step="3"] .r2 .req > rect, #rules-s[data-step="4"] .r3 .req > rect,
+  #rules-s[data-step="5"] .r4 .req > rect, #rules-s[data-step="6"] .r5 .req > rect,
+  #rules-s[data-step="2"] .r1 .rule > rect, #rules-s[data-step="3"] .r2 .rule > rect, #rules-s[data-step="4"] .r3 .rule > rect,
+  #rules-s[data-step="5"] .r4 .rule > rect, #rules-s[data-step="6"] .r5 .rule > rect { stroke: var(--accent); stroke-width: 2.5; }
+  #rules-s .rule > rect { fill: var(--accent-soft); }
+
+  /* budget scene */
+  #budget .seg { fill: var(--info); }
+  #budget .seg.s-safe { fill: var(--safe); }
+  #budget .grow { fill: var(--info); transform-box: fill-box; transform-origin: left center; transform: scaleX(.42); transition: transform 1.6s cubic-bezier(.4,0,.2,1); }
+  #budget.s3 .grow { transform: scaleX(1); }
+  #budget .before { fill: var(--attacker-soft); stroke: var(--attacker); stroke-width: 1.5; }
+  #budget .skipped { fill: none; stroke: var(--muted); stroke-dasharray: 4 4; stroke-width: 1.5; }
+  #budget .limit-soft { stroke: var(--accent); stroke-dasharray: 4 4; stroke-width: 1.5; }
+  #budget .limit-hard { stroke: var(--attacker); stroke-dasharray: 4 4; stroke-width: 1.5; }
+  #budget .axis { stroke: var(--line); stroke-width: 2; }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› <a href="group-surface.html">Attack surface and exposure</a> › HTTP probe</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/http-probe-scanner.md" title="The markdown source for this page">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">DAST scanner</div>
+  <h1>HTTP Probe</h1>
+  <p class="lede">Five cheap checks that ask a server what it gives away by default: a stack trace on a bad URL, a readable <code>.git</code> or <code>.env</code>, TRACE switched on, a Host header it repeats back, a newline it lets into a header. Each check sends one small request and decides on a string in what comes back.</p>
+  <div class="meta">
+    <span class="pill dast">DAST</span><span class="pill high">Medium to High</span><span class="pill">Info disclosure / auth weakness</span><span class="pill">quick depth</span><span class="pill">no credentials needed</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#order"><span class="n">01</span>Five checks, in order</a>
+  <a href="#rules"><span class="n">02</span>What each one decides on</a>
+  <a href="#clock"><span class="n">03</span>When the clock runs out</a>
+  <a href="#why"><span class="n">04</span>Why it matters</a>
+  <a href="#fix"><span class="n">05</span>Vulnerable vs fixed</a>
+  <a href="#limits"><span class="n">06</span>Limits</a>
+</nav>
+
+<section id="order">
+  <h2>Five checks, in a fixed order</h2>
+  <p class="prose">The scanner takes the endpoint inventory from discovery, builds a base URL from the first entry (scheme plus host), and ranks the inventory on the CSRF dimension. It then runs five checks. The order is a decision, not an accident: the two that probe a handful of known paths come first, because their cost does not depend on how big the app is.</p>
+
+  <div class="scene" id="order-s" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 290" role="img" aria-label="The endpoint inventory feeds five checks in a fixed order: verbose errors, sensitive files, method tampering, host header, CRLF. The first two have a fixed cost; the last three grow with the inventory. A clock gate sits before each check.">
+        <defs><marker id="arr-hp1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g class="node" transform="translate(279 6)"><rect width="400" height="44" rx="8"/><text class="ttl" x="14" y="20">Endpoint inventory</text><text class="lbl mono" x="14" y="36">base URL = scheme + host of entry 1</text></g>
+        <path class="wire" d="M95 62 H 863" />
+        <path class="wire" d="M479 50 V 62" />
+        <path class="wire" d="M95 62 V 82" marker-end="url(#arr-hp1)"/>
+        <path class="wire" d="M287 62 V 82" marker-end="url(#arr-hp1)"/>
+        <path class="wire" d="M479 62 V 82" marker-end="url(#arr-hp1)"/>
+        <path class="wire" d="M671 62 V 82" marker-end="url(#arr-hp1)"/>
+        <path class="wire" d="M863 62 V 82" marker-end="url(#arr-hp1)"/>
+
+        <g class="node box b1" transform="translate(10 84)"><rect width="170" height="100" rx="10"/><text class="mono t-accent" x="12" y="24">1</text><text class="ttl" x="30" y="24">Verbose errors</text><text class="lbl" x="12" y="50">4 trigger paths</text><text class="lbl" x="12" y="68">on the base URL</text><text class="lbl t-attacker" x="12" y="86">stack trace → MEDIUM</text></g>
+        <path class="wire" d="M180 134 H 200" marker-end="url(#arr-hp1)"/>
+        <g class="node box b2" transform="translate(202 84)"><rect width="170" height="100" rx="10"/><text class="mono t-accent" x="12" y="24">2</text><text class="ttl" x="30" y="24">Sensitive files</text><text class="lbl" x="12" y="50">9 known paths</text><text class="lbl" x="12" y="68">on the base URL</text><text class="lbl t-attacker" x="12" y="86">.git / .env → HIGH</text></g>
+        <path class="wire" d="M372 134 H 392" marker-end="url(#arr-hp1)"/>
+        <g class="node box b3" transform="translate(394 84)"><rect width="170" height="100" rx="10"/><text class="mono t-accent" x="12" y="24">3</text><text class="ttl" x="30" y="24">Method tampering</text><text class="lbl" x="12" y="50">OPTIONS, then TRACE</text><text class="lbl" x="12" y="68">every ranked endpoint</text><text class="lbl t-attacker" x="12" y="86">TRACE echo → HIGH</text></g>
+        <path class="wire" d="M564 134 H 584" marker-end="url(#arr-hp1)"/>
+        <g class="node box b4" transform="translate(586 84)"><rect width="170" height="100" rx="10"/><text class="mono t-accent" x="12" y="24">4</text><text class="ttl" x="30" y="24">Host header</text><text class="lbl" x="12" y="50">Host + X-Forwarded-Host</text><text class="lbl" x="12" y="68">base URL + 2 endpoints</text><text class="lbl t-attacker" x="12" y="86">reflected → HIGH</text></g>
+        <path class="wire" d="M756 134 H 776" marker-end="url(#arr-hp1)"/>
+        <g class="node box b5" transform="translate(778 84)"><rect width="170" height="100" rx="10"/><text class="mono t-accent" x="12" y="24">5</text><text class="ttl" x="30" y="24">CRLF injection</text><text class="lbl" x="12" y="50">9 params × 3 payloads</text><text class="lbl" x="12" y="68">every ranked endpoint</text><text class="lbl t-attacker" x="12" y="86">canary header → HIGH</text></g>
+
+        <g class="gate"><circle cx="95" cy="72" r="8"/><text x="95" y="76" text-anchor="middle" style="font-size:11px">?</text></g>
+        <g class="gate"><circle cx="287" cy="72" r="8"/><text x="287" y="76" text-anchor="middle" style="font-size:11px">?</text></g>
+        <g class="gate"><circle cx="479" cy="72" r="8"/><text x="479" y="76" text-anchor="middle" style="font-size:11px">?</text></g>
+        <g class="gate"><circle cx="671" cy="72" r="8"/><text x="671" y="76" text-anchor="middle" style="font-size:11px">?</text></g>
+        <g class="gate"><circle cx="863" cy="72" r="8"/><text x="863" y="76" text-anchor="middle" style="font-size:11px">?</text></g>
+
+        <g class="at-2"><rect x="10" y="202" width="362" height="26" rx="6" class="soft-safe"/><text class="t-safe" x="22" y="219" style="font-size:12px">fixed cost: same few requests for any app</text></g>
+        <g class="at-3"><rect x="394" y="202" width="554" height="26" rx="6" class="soft-info"/><text class="t-info" x="406" y="219" style="font-size:12px">grows with the inventory: methods and CRLF loop over every ranked endpoint</text></g>
+        <g class="at-4"><text class="t-accent" x="10" y="262" style="font-size:12px">? = budget.expired(). If true: log it, emit "out of time before &lt;check&gt;", stop. Findings so far are returned.</text></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Five checks, always in this order, over a client that sends at most 3 requests at once with a 0.2 s delay. If the session from the authenticated crawl exists, its headers ride along. There is no cap on how many ranked endpoints are used.</p>
+      <p class="step"><span class="n">2</span><b>Checks 1 and 2</b> fetch fixed paths on the base URL: four that should 404 and nine that should not be readable. They cost the same on a 10-endpoint app and a 1,000-endpoint app, so they run first.</p>
+      <p class="step"><span class="n">3</span><b>Checks 3 to 5</b> come after. Method tampering and CRLF walk every ranked endpoint; the Host check tries the base URL plus the first two. A large app cannot spend its whole budget on method tampering and never reach the check that finds an exposed <code>.env</code>.</p>
+      <p class="step"><span class="n">4</span>Before each check the scanner asks whether its time budget is spent. If it is, the remaining checks are skipped and what has been found is returned. <a href="#clock">Section 03</a> shows why that matters.</p>
+    </div>
+  </div>
+</section>
+
+<section id="rules">
+  <h2>What each check sends and what must come back</h2>
+  <p class="prose">Every rule is a string or header test on the response. Nothing is parsed and nothing is exploited, so confidence is fixed per check (0.80 to 0.90) instead of measured. Step through the five rows.</p>
+
+  <div class="scene" id="rules-s" data-scene data-interval="3600">
+    <figure class="stage">
+      <svg viewBox="0 0 960 352" role="img" aria-label="Five rows. Each row shows a check, the request it sends, the rule the response must satisfy, and the finding it produces.">
+        <defs><marker id="arr-hp2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g class="lbl"><text x="8" y="16">check</text><text x="164" y="16">sends</text><text x="450" y="16">response must satisfy</text><text x="796" y="16">finding</text></g>
+
+        <g class="row r1" transform="translate(0 26)">
+          <g class="node"><rect x="8" width="132" height="56" rx="8"/><text class="ttl" x="20" y="25">Verbose errors</text><text class="lbl" x="20" y="43">check 1</text></g>
+          <path class="wire" d="M140 28 H 162" marker-end="url(#arr-hp2)"/>
+          <g class="node req"><rect x="164" width="262" height="56" rx="8"/><text class="mono" x="176" y="24">GET /nonexistent-path-…</text><text class="lbl" x="176" y="43">4 paths, incl. /%00 and a 500-char URL</text></g>
+          <path class="wire" d="M426 28 H 448" marker-end="url(#arr-hp2)"/>
+          <g class="node rule"><rect x="450" width="330" height="56" rx="8"/><text x="462" y="24" style="font-size:12.5px">status ≥ 400 AND body matches a leak pattern</text><text class="lbl" x="462" y="43">at fn ( · Traceback · /usr/ · /home/ · node_modules/ …</text></g>
+          <path class="wire" d="M780 28 H 794" marker-end="url(#arr-hp2)"/>
+          <g class="node"><rect x="796" width="156" height="56" rx="8"/><text class="t-accent" x="808" y="24" style="font-weight:600">MEDIUM · 0.80</text><text class="lbl" x="808" y="43">first hit stops</text></g>
+        </g>
+
+        <g class="row r2" transform="translate(0 90)">
+          <g class="node"><rect x="8" width="132" height="56" rx="8"/><text class="ttl" x="20" y="25">Sensitive files</text><text class="lbl" x="20" y="43">check 2</text></g>
+          <path class="wire" d="M140 28 H 162" marker-end="url(#arr-hp2)"/>
+          <g class="node req"><rect x="164" width="262" height="56" rx="8"/><text class="mono" x="176" y="24">GET /.git/HEAD  /.env …</text><text class="lbl" x="176" y="43">9 paths: 4 files, 5 directories</text></g>
+          <path class="wire" d="M426 28 H 448" marker-end="url(#arr-hp2)"/>
+          <g class="node rule"><rect x="450" width="330" height="56" rx="8"/><text x="462" y="24" style="font-size:12.5px">200 AND indicator in the first 5000 chars</text><text class="lbl" x="462" y="43">"ref:" · "=" · "Disallow" · or "Index of /" for listings</text></g>
+          <path class="wire" d="M780 28 H 794" marker-end="url(#arr-hp2)"/>
+          <g class="node"><rect x="796" width="156" height="56" rx="8"/><text class="t-attacker" x="808" y="24" style="font-weight:600">HIGH or MEDIUM</text><text class="lbl" x="808" y="43">.git, .env are HIGH</text></g>
+        </g>
+
+        <g class="row r3" transform="translate(0 154)">
+          <g class="node"><rect x="8" width="132" height="56" rx="8"/><text class="ttl" x="20" y="25">Method tamper</text><text class="lbl" x="20" y="43">check 3</text></g>
+          <path class="wire" d="M140 28 H 162" marker-end="url(#arr-hp2)"/>
+          <g class="node req"><rect x="164" width="262" height="56" rx="8"/><text class="mono" x="176" y="24">OPTIONS, then TRACE</text><text class="lbl" x="176" y="43">each ranked endpoint, once per URL</text></g>
+          <path class="wire" d="M426 28 H 448" marker-end="url(#arr-hp2)"/>
+          <g class="node rule"><rect x="450" width="330" height="56" rx="8"/><text x="462" y="24" style="font-size:12.5px">Allow lists TRACE/CONNECT, or TRACE echoes</text><text class="lbl" x="462" y="43">echo = 200 and body has "TRACE" or "Host:" (first 500)</text></g>
+          <path class="wire" d="M780 28 H 794" marker-end="url(#arr-hp2)"/>
+          <g class="node"><rect x="796" width="156" height="56" rx="8"/><text class="t-attacker" x="808" y="24" style="font-weight:600">HIGH · 0.90</text><text class="lbl" x="808" y="43">CONNECT is MEDIUM</text></g>
+        </g>
+
+        <g class="row r4" transform="translate(0 218)">
+          <g class="node"><rect x="8" width="132" height="56" rx="8"/><text class="ttl" x="20" y="25">Host header</text><text class="lbl" x="20" y="43">check 4</text></g>
+          <path class="wire" d="M140 28 H 162" marker-end="url(#arr-hp2)"/>
+          <g class="node req"><rect x="164" width="262" height="56" rx="8"/><text class="mono" x="176" y="24">Host: evil-host-…-test.com</text><text class="lbl" x="176" y="43">then X-Forwarded-Host, on 3 URLs</text></g>
+          <path class="wire" d="M426 28 H 448" marker-end="url(#arr-hp2)"/>
+          <g class="node rule"><rect x="450" width="330" height="56" rx="8"/><text x="462" y="24" style="font-size:12.5px">forged host appears in the body or Location</text><text class="lbl" x="462" y="43">body is read up to 5000 chars; first hit stops</text></g>
+          <path class="wire" d="M780 28 H 794" marker-end="url(#arr-hp2)"/>
+          <g class="node"><rect x="796" width="156" height="56" rx="8"/><text class="t-attacker" x="808" y="24" style="font-weight:600">HIGH · 0.85</text><text class="lbl" x="808" y="43">one finding, then stop</text></g>
+        </g>
+
+        <g class="row r5" transform="translate(0 282)">
+          <g class="node"><rect x="8" width="132" height="56" rx="8"/><text class="ttl" x="20" y="25">CRLF injection</text><text class="lbl" x="20" y="43">check 5</text></g>
+          <path class="wire" d="M140 28 H 162" marker-end="url(#arr-hp2)"/>
+          <g class="node req"><rect x="164" width="262" height="56" rx="8"/><text class="mono" x="176" y="24">?url=%0d%0aX-CRLF-Test:…</text><text class="lbl" x="176" y="43">9 param names × 3 payloads per endpoint</text></g>
+          <path class="wire" d="M426 28 H 448" marker-end="url(#arr-hp2)"/>
+          <g class="node rule"><rect x="450" width="330" height="56" rx="8"/><text x="462" y="24" style="font-size:12.5px">header X-CRLF-Test: crlf_injected is present</text><text class="lbl" x="462" y="43">as a real response header, not just in the body</text></g>
+          <path class="wire" d="M780 28 H 794" marker-end="url(#arr-hp2)"/>
+          <g class="node"><rect x="796" width="156" height="56" rx="8"/><text class="t-attacker" x="808" y="24" style="font-weight:600">HIGH · 0.90</text><text class="lbl" x="808" y="43">one finding, then stop</text></g>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Five rows, five rules. Each ends in a fixed severity and confidence, and three of them stop at their first hit so a noisy app is not reported twenty times.</p>
+      <p class="step"><span class="n">2</span><b>Verbose errors.</b> Four paths that should not exist, one of them a 500-character URL. Only a response with <b>status 400 or above</b> is read, and only a match against one of 12 patterns (stack frames, <code>Traceback</code>, <code>/usr/</code>, <code>/home/</code>, <code>/var/www/</code>, <code>node_modules/</code>, <code>.py", line N</code>, <code>.java:N)</code> and a few more) counts. A friendly 404 page matches none.</p>
+      <p class="step"><span class="n">3</span><b>Sensitive files.</b> A file path needs <b>200 and its marker</b>: <code>ref:</code> for <code>/.git/HEAD</code>, <code>=</code> for <code>/.env</code> and <code>/.env.local</code>, <code>Disallow</code> for <code>/robots.txt</code>. A directory path needs a listing banner such as <code>Index of /</code>. A <code>.git</code> or <code>.env</code> hit is HIGH at 0.90; a <code>robots.txt</code> hit or a listing is MEDIUM (listing 0.80).</p>
+      <p class="step"><span class="n">4</span><b>Method tampering.</b> OPTIONS reads the <code>Allow</code> header (or <code>Access-Control-Allow-Methods</code>). TRACE listed is HIGH at 0.80, CONNECT listed is MEDIUM. Then a real TRACE request: <b>200 whose body contains "TRACE" or "Host:"</b> proves the server echoes requests back, HIGH at 0.90, and ends the check.</p>
+      <p class="step"><span class="n">5</span><b>Host header.</b> The forged name <code>evil-host-injection-test.com</code> is sent as <code>Host</code> and then as <code>X-Forwarded-Host</code>. <b>Seeing it echoed</b> in the body or in <code>Location</code> means a password-reset email or cached page could carry an attacker's host.</p>
+      <p class="step"><span class="n">6</span><b>CRLF.</b> A payload with a line break and a canary header (<code>X-CRLF-Test: crlf_injected</code>) goes into query parameters named <code>url</code>, <code>redirect</code>, <code>next</code>, <code>return</code>, <code>callback</code>, <code>path</code>, <code>ref</code>, <code>location</code>, <code>goto</code>. Only <b>the canary showing up as a response header</b> confirms it; a body that merely repeats the text does not.</p>
+    </div>
+  </div>
+
+  <div class="callout note">
+    <div class="label">Worth knowing</div>
+    <p>The sensitive-file list includes <code>/robots.txt</code>. Any site whose <code>robots.txt</code> contains a <code>Disallow</code> line is reported as an exposed file at MEDIUM, because the rule is the string match and not a judgement about whether the file is sensitive. The same single-string logic is why a <code>.env</code> check needs the <code>=</code>: a 200 that serves the SPA shell for every path does not contain one in its first 5000 characters.</p>
+  </div>
+</section>
+
+<section id="clock">
+  <h2>When the clock runs out</h2>
+  <p class="prose">This scanner is the worked example of a bug that looked like a trade-off. It ran 901 s against a 900 s timeout holding four real findings, an exposed <code>/.env</code> among them, and reported none of them, because a cancelled coroutine returns nothing. The animation below shows the fix. The general mechanism, with eight scanners side by side, is on the <a href="scan-pipeline.html#parallel-dast">scan pipeline page</a>; this page only shows the part specific to the HTTP probe.</p>
+
+  <div class="scene" id="budget" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 290" role="img" aria-label="A time axis from 0 to 900 seconds with a soft deadline at 765 seconds and a hard cancel at 900. Before the fix, the scan is cancelled at the hard limit and the held findings are lost. Now the fixed-cost checks run first and the per-endpoint loop stops itself at 765 seconds, returning everything it found.">
+        <line class="axis" x1="60" y1="250" x2="900" y2="250"/>
+        <text class="lbl" x="60" y="270" text-anchor="middle">0</text>
+        <text class="lbl t-accent" x="774" y="270" text-anchor="middle">765 s</text>
+        <text class="lbl t-attacker" x="900" y="270" text-anchor="middle">900 s</text>
+        <line class="limit-soft" x1="774" y1="40" x2="774" y2="250"/>
+        <line class="limit-hard" x1="900" y1="40" x2="900" y2="250"/>
+        <text class="t-accent" x="768" y="32" text-anchor="end" style="font-size:12px">soft deadline: 900 × (1 − 0.15)</text>
+        <text class="t-attacker" x="900" y="14" text-anchor="end" style="font-size:12px">hard cancel</text>
+
+        <!-- Before -->
+        <text class="lbl" x="60" y="64">Before: hard cancel, measured 901 s against a 900 s timeout</text>
+        <rect class="before" x="60" y="72" width="840" height="26" rx="6"/>
+        <text x="72" y="89" style="font-size:12px">running… holding 4 findings, an exposed /.env among them</text>
+        <text class="t-attacker" x="766" y="116" text-anchor="end" style="font-size:12px;font-weight:600">cancelled: 0 findings reported</text>
+
+        <!-- Now -->
+        <g class="at-2">
+          <text class="lbl" x="60" y="152">Now: fixed-cost checks first, clock checked inside the loop</text>
+          <text class="mono t-accent" x="69" y="172" text-anchor="middle" style="font-size:11px">1</text>
+          <text class="mono t-accent" x="92" y="172" text-anchor="middle" style="font-size:11px">2</text>
+          <rect class="seg s-safe" x="60" y="178" width="18" height="26" rx="3"/>
+          <rect class="seg s-safe" x="80" y="178" width="24" height="26" rx="3"/>
+          <text class="lbl" x="60" y="224">checks 1 and 2 are done within moments: their findings are already in hand</text>
+        </g>
+        <g class="at-2">
+          <rect class="grow" x="106" y="178" width="668" height="26" rx="3"/>
+          <text class="mono" x="118" y="195" style="font-size:11px;fill:#fff">3 method tampering: loop over ranked endpoints</text>
+        </g>
+        <g class="at-3">
+          <rect class="skipped" x="774" y="178" width="126" height="26" rx="3"/>
+          <text class="lbl" x="837" y="195" text-anchor="middle">4, 5 skipped</text>
+          <text class="t-safe" x="60" y="242" style="font-size:12px;font-weight:600">budget.expired() at 765 s: break, return everything found so far</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Measured, before the fix: the scanner ran 901 s against a 900 s timeout, holding four findings. The hard cancel killed the coroutine and all four were discarded. It also hid a regression: on Juice Shop a measurement read as a wash (six categories gained, six lost) because the six lost, <code>exposed_data</code> and <code>info_disclosure</code>, score off this scanner, which a doubled inventory had pushed one second over.</p>
+      <p class="step"><span class="n">2</span>The runner now publishes the deadline it enforces and <code>TimeBudget()</code> picks it up, keeping a 15 % margin. Checks 1 and 2 run first, so even a huge inventory cannot stop the <code>.env</code> check from running. Method tampering then starts its loop over every ranked endpoint.</p>
+      <p class="step"><span class="n">3</span>The clock is checked <b>per endpoint</b>, inside the loop, not only between checks. An earlier version checked only between phases, entered one before the deadline, ran 800 s and was cancelled with everything in it. Now the loop breaks at 765 s, checks 4 and 5 are skipped, and every finding is returned. The hard cancel stays as a backstop for a hung scanner and logs loudly if it ever fires.</p>
+    </div>
+  </div>
+  <p class="prose small">Bar lengths are illustrative; the 900 s timeout, the 15 % margin and the order of the checks are the real values.</p>
+</section>
+
+<section id="why">
+  <h2>Why it matters</h2>
+  <div class="callout why">
+    <div class="label">Why it matters</div>
+    <p>These issues look low-risk one by one and chain dangerously. An exposed <code>.env</code> hands over database credentials. An exposed <code>.git</code> lets an attacker reconstruct the source. A stack trace reveals the framework version, file paths and query structure. TRACE reflects auth cookies into a response body, which is the basis of cross-site tracing. A reflected Host header turns a password-reset email into a phishing link.</p>
+  </div>
+  <div class="callout breach">
+    <div class="label">Real-world context</div>
+    <p>Exposed <code>.env</code> files and <code>.git</code> directories are among the most common findings in bug bounty programs. Automated scanners continuously probe the internet for these paths, and thousands of production sites have leaked database credentials and API keys through exposed <code>.env</code> files.</p>
+  </div>
+</section>
+
+<section id="fix">
+  <h2>Vulnerable vs fixed</h2>
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true">BAD · dotfiles are served</button>
+      <button class="tab good" role="tab" aria-selected="false">GOOD · sensitive paths rewritten to 404</button>
+    </div>
+    <div role="tabpanel"><pre><code><span class="c">// BAD: the project root is a static directory, so /.env and /.git/HEAD are just files</span>
+<span class="hl bad">app.use(express.static(<span class="s">"."</span>))  <span class="c">// GET /.env → 200  DB_PASSWORD=…</span></span>
+
+<span class="c">// and the default error handler prints the stack</span>
+app.use((err, req, res, next) =&gt; res.status(500).send(err.stack))</code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c">// GOOD: block sensitive paths in middleware or hosting config</span>
+<span class="c">// vercel.json</span>
+{
+  <span class="s">"headers"</span>: [
+    { <span class="s">"source"</span>: <span class="s">"/.env"</span>, <span class="s">"headers"</span>: [{ <span class="s">"key"</span>: <span class="s">"x-robots-tag"</span>, <span class="s">"value"</span>: <span class="s">"noindex"</span> }] }
+  ],
+  <span class="s">"rewrites"</span>: [
+<span class="hl good">    { "source": "/.env", "destination": "/404" },</span>
+<span class="hl good">    { "source": "/.git/(.*)", "destination": "/404" }</span>
+  ]
+}</code></pre></div>
+  </div>
+  <p class="prose">The rewrites do the blocking; the header only asks crawlers not to index the path. After changing the config, the probe's rule is easy to re-run by hand: <code>GET /.env</code> must stop returning a 200 with an <code>=</code> in the body.</p>
+</section>
+
+<section id="limits">
+  <h2>Limits</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Setting</th><th>Value</th></tr></thead>
+    <tbody>
+      <tr><td>Depth and timeout</td><td>Runs at quick depth. 900 s timeout; stops itself at 765 s.</td></tr>
+      <tr><td>Requests</td><td>3 at a time, 0.2 s between them. Endpoint cap is one million, in effect none.</td></tr>
+      <tr><td>Base URL</td><td>Scheme plus host of the first inventory entry. An empty inventory returns nothing.</td></tr>
+      <tr><td>Auth</td><td>Uses the login session's headers when one exists; works without one.</td></tr>
+      <tr><td>One finding or many</td><td>Errors, Host, CRLF and the TRACE echo stop at the first hit. Files and listings report each path that matches. The Allow-header test reports once per dangerous method per endpoint.</td></tr>
+      <tr><td>Failed request</td><td>An exception on one URL is logged at debug level and skipped; it never fails the scan.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<footer class="foot">
+  <span>Source: <a href="../scanners/http-probe-scanner.md">http-probe-scanner.md</a> · <a href="../architecture.md">architecture.md</a></span>
+  <span>Related: <a href="group-surface.html">Attack surface and exposure</a> · <a href="graphql.html">GraphQL</a> · <a href="openapi.html">OpenAPI spec</a> · <a href="endpoint-discovery.html">Endpoint discovery</a> · <a href="scan-pipeline.html#parallel-dast">Parallel scanners</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+</body>
+</html>

@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Open Redirect Scanner · isitsecure</title>
+<meta name="description" content="How isitsecure finds open redirects: it picks redirect-like parameters and paths, injects four evil.com payloads and reads the Location header and the body, animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  .topbar-inner .crumb a { color: inherit; text-decoration: none; }
+  .topbar-inner .crumb a:hover { color: var(--accent); }
+  /* page-specific */
+  #cand-scene .row > rect { fill: var(--surface-2); stroke: var(--line); stroke-width: 1.2; }
+  #cand-scene .row.ignored { opacity: .55; }
+  #judge-scene .card > rect { fill: var(--surface-2); stroke: var(--line); stroke-width: 1.2; }
+
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› <a href="group-browser-defenses.html">Browser-side defenses</a> › Open redirect</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/open-redirect-scanner.md" title="The markdown source for this page">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">DAST scanner · active probe</div>
+  <h1>Open Redirect Scanner</h1>
+  <p class="lede">A login or callback URL that sends the user wherever a parameter says turns your domain into a phishing launcher. The scanner finds parameters that look like redirect targets, puts an attacker URL in them and checks whether the server obeys.</p>
+  <div class="meta">
+    <span class="pill dast">DAST</span><span class="pill high">Medium–High</span><span class="pill">Auth Weakness</span><span class="pill">4 payloads</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#cand"><span class="n">01</span>Which endpoints get tested</a>
+  <a href="#judge"><span class="n">02</span>Probing and judging</a>
+  <a href="#why"><span class="n">03</span>Why it matters</a>
+  <a href="#code"><span class="n">04</span>Vulnerable vs fixed code</a>
+  <a href="#limits"><span class="n">05</span>Limits and what it needs</a>
+</nav>
+
+
+<section id="cand">
+  <h2>Which endpoints get tested</h2>
+  <p class="prose">An open redirect needs a place where a URL goes in and a redirect comes out. The scanner does not try every endpoint. It selects the ones that look like they accept a destination, by parameter name or by path, and tests each (endpoint, parameter) pair.</p>
+
+  <div class="scene" id="cand-scene" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 290" role="img" aria-label="Four endpoints. Three are selected: one by a query parameter named next, one by a declared parameter returnUrl, one by its login path with the default parameter redirect. The fourth, with a page parameter, is ignored.">
+        <defs><marker id="arrOr1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <text class="lbl" x="34" y="22">endpoint from discovery</text>
+        <text class="lbl at-2" x="320" y="22">why it is selected</text>
+        <text class="lbl at-2" x="760" y="22">parameter tested</text>
+
+        <g class="row node lit-2" transform="translate(20 32)"><rect width="920" height="48" rx="8"/>
+          <text class="mono" x="14" y="29">GET /app/jump?next=/home</text>
+          <text class="at-2" x="300" y="29">URL has a query parameter named <tspan class="mono">next</tspan></text>
+          <text class="mono at-2 t-accent" x="740" y="29">next</text></g>
+        <g class="row node lit-2" transform="translate(20 90)"><rect width="920" height="48" rx="8"/>
+          <text class="mono" x="14" y="29">GET /go</text>
+          <text class="at-2" x="300" y="29">declared parameter <tspan class="mono">returnUrl</tspan> (lowercased, in the list)</text>
+          <text class="mono at-2 t-accent" x="740" y="29">returnUrl</text></g>
+        <g class="row node lit-3" transform="translate(20 148)"><rect width="920" height="48" rx="8"/>
+          <text class="mono" x="14" y="29">GET /login</text>
+          <text class="at-3" x="300" y="29">path contains a redirect indicator: <tspan class="mono">/login</tspan></text>
+          <text class="mono at-3 t-accent" x="740" y="29">redirect (default)</text></g>
+        <g class="row ignored node lit-4" transform="translate(20 206)"><rect width="920" height="48" rx="8"/>
+          <text class="mono" x="14" y="29">GET /search?page=2</text>
+          <text class="at-4" x="300" y="29">no redirect-like name, path not on the list</text>
+          <text class="mono at-4 t-safe" x="740" y="29">not tested</text></g>
+        <text class="lbl at-4" x="34" y="278">Parameter names are compared in lower case.</text>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Discovery produced a list of endpoints. Most of them have nothing to do with redirects, and sending payloads at them would only add noise.</p>
+      <p class="step"><span class="n">2</span><b>Parameter name.</b> A query parameter, in the URL or declared by discovery, is selected if its lower-cased name is one of 17: <code>redirect, url, next, return, returnto, continue, goto, dest, destination, redir, redirect_uri, callback, to, returnurl, return_url, forward, location</code>.</p>
+      <p class="step"><span class="n">3</span><b>Path.</b> A path that contains <code>/login</code>, <code>/logout</code>, <code>/auth/callback</code>, <code>/oauth/authorize</code>, <code>/sso</code>, <code>/signin</code> or <code>/signout</code> is tested with the parameter <code>redirect</code>, even when no parameter is visible yet.</p>
+      <p class="step"><span class="n">4</span>Everything else is left alone. There is no endpoint cap, but the scan stops cooperatively when its time budget runs out.</p>
+    </div>
+  </div>
+</section>
+
+<section id="judge">
+  <h2>Probing and judging the response</h2>
+  <p class="prose">Each selected parameter receives up to four payloads, in order. The client does not follow redirects, so the scanner sees the server's own first answer instead of wherever it points.</p>
+
+  <div class="scene" id="judge-scene" data-scene data-interval="3600">
+    <figure class="stage">
+      <svg viewBox="0 0 960 320" role="img" aria-label="Four payloads are tried in order. A 302 with Location pointing at evil.com is High. A 200 body with a JavaScript or meta refresh to evil.com is Medium. A 302 to the site's own dashboard is silent.">
+        <defs><marker id="arrOr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g class="node lit-1" transform="translate(20 20)">
+          <rect width="300" height="290" rx="10"/>
+          <text class="ttl" x="14" y="26">Payloads, in order</text>
+          <text class="lbl" x="14" y="44">GET /login?redirect=&lt;payload&gt;</text>
+          <g class="mono">
+            <text x="14" y="82">https://evil.com</text><text class="lbl" x="30" y="98">absolute_url</text>
+            <text x="14" y="128">//evil.com</text><text class="lbl" x="30" y="144">protocol_relative</text>
+            <text x="14" y="174">/\/evil.com</text><text class="lbl" x="30" y="190">path_confusion</text>
+            <text x="14" y="220">https://evil.com%00.target.com</text><text class="lbl" x="30" y="236">null_byte</text>
+          </g>
+          <text class="lbl" x="14" y="268">If the parameter already has a value,</text>
+          <text class="lbl" x="14" y="282">https://evil.com/?_=&lt;value&gt; goes first.</text>
+        </g>
+        <path class="wire" d="M320 160 H350" marker-end="url(#arrOr2)"/>
+        <g class="node" transform="translate(350 20)">
+          <rect width="290" height="290" rx="10"/>
+          <text class="ttl" x="14" y="26">What the target answers</text>
+          <text class="lbl only-1" x="14" y="62">first response of each probe</text>
+          <g class="card lit-2 at-2" transform="translate(14 44)"><rect width="262" height="68" rx="8"/>
+            <text class="mono" x="12" y="26">302 Found</text>
+            <text class="mono" x="12" y="50">Location: https://evil.com</text></g>
+          <g class="card lit-3 at-3" transform="translate(14 122)"><rect width="262" height="68" rx="8"/>
+            <text class="mono" x="12" y="26">200 OK, body contains:</text>
+            <text class="mono" x="12" y="50">window.location="https://evil.com"</text></g>
+          <g class="card lit-4 at-4" transform="translate(14 200)"><rect width="262" height="68" rx="8"/>
+            <text class="mono" x="12" y="26">302 Found</text>
+            <text class="mono" x="12" y="50">Location: /dashboard</text></g>
+        </g>
+        <path class="wire" d="M640 160 H670" marker-end="url(#arrOr2)"/>
+        <g class="node" transform="translate(670 20)">
+          <rect width="270" height="290" rx="10"/>
+          <text class="ttl" x="14" y="26">Verdict</text>
+          <text class="lbl only-1" x="14" y="62">decided from that response</text>
+          <g class="at-2" transform="translate(14 44)"><rect width="242" height="68" rx="8" class="soft-attacker"/>
+            <text class="mono t-attacker" x="12" y="26">HIGH · 0.90</text><text class="lbl" x="12" y="48">Open redirect via Location</text></g>
+          <g class="at-3" transform="translate(14 122)"><rect width="242" height="68" rx="8" class="soft-accent"/>
+            <text class="mono t-accent" x="12" y="26">MEDIUM · 0.75</text><text class="lbl" x="12" y="48">JS or meta redirect in body</text></g>
+          <g class="at-4" transform="translate(14 200)"><rect width="242" height="68" rx="8" class="soft-safe"/>
+            <text class="mono t-safe" x="12" y="26">silent</text><text class="lbl" x="12" y="48">stays on the app's own site</text></g>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Payloads are sent one at a time into the redirect parameter: an absolute URL, a protocol-relative URL, a backslash trick and a null-byte variant. Redirects are <b>not followed</b>, so the first response is the evidence.</p>
+      <p class="step"><span class="n">2</span><b>Header check.</b> The status must be 3xx and a <code>Location</code> header must be present. The location counts as external if it starts with <code>//</code>, or is an http(s) URL whose hostname contains <code>evil.com</code>. That is <b>HIGH, confidence 0.90</b>.</p>
+      <p class="step"><span class="n">3</span><b>Body check.</b> If the header check found nothing, the lower-cased body is searched for <code>window.location =</code>, <code>window.location.href =</code>, <code>window.location.replace(</code> or a meta refresh, each pointing at <code>http(s)://evil.com</code>. That is <b>MEDIUM, confidence 0.75</b>.</p>
+      <p class="step"><span class="n">4</span>A redirect to the app's own page is silent. The check looks for the scanner's own marker host, so a redirect to some other external host is not reported either. <b>The first hit stops the loop: one finding per parameter.</b></p>
+    </div>
+  </div>
+</section>
+
+<section id="why">
+  <h2>Why it matters</h2>
+  <div class="callout why">
+    <div class="label">Why it matters</div>
+    <p>A link on your domain that bounces to an attacker's page borrows your reputation. A user sees <code>yourapp.com/auth/callback?redirect_to=evil.com/fake-login</code>, trusts the domain and types credentials into the copy. The same flaw can be chained with OAuth flows to steal authorization codes, or used to deliver malware downloads from a trusted domain.</p>
+  </div>
+  <div class="callout breach">
+    <div class="label">Google redirect endpoints (ongoing)</div>
+    <p>Google's redirect endpoints (<code>google.com/url?q=...</code>) have been repeatedly abused in phishing campaigns to make malicious links appear to originate from google.com.</p>
+  </div>
+</section>
+
+<section id="code">
+  <h2>Vulnerable vs fixed code</h2>
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true" type="button">BAD · trusts the parameter</button>
+      <button class="tab good" role="tab" aria-selected="false" type="button">GOOD · same-origin only</button>
+    </div>
+    <div role="tabpanel"><pre><code><span class="c">// BAD: whatever arrives in redirect_to is where the user lands</span>
+const redirectTo = searchParams.get(<span class="s">"redirect_to"</span>) || <span class="s">"/"</span>
+<span class="hl bad">return NextResponse.redirect(redirectTo)</span></code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c">// GOOD: resolve against your own origin, then compare origins</span>
+const redirectTo = searchParams.get(<span class="s">"redirect_to"</span>) || <span class="s">"/"</span>
+const target = new URL(redirectTo, request.url)
+<span class="hl good">if (target.origin !== new URL(request.url).origin) {</span>
+  return NextResponse.redirect(new URL(<span class="s">"/"</span>, request.url))
+}
+return NextResponse.redirect(target)</code></pre></div>
+  </div>
+  <div class="callout note">
+    <div class="label">Why the origin comparison</div>
+    <p>A fix that only rejects values starting with <code>http</code> or <code>//</code> is not enough. The scanner's third payload, <code>/\/evil.com</code>, starts with neither, and browsers treat the backslash as a slash. Resolving the value with <code>new URL</code> and comparing origins covers all four payload shapes the scanner sends, and the markdown fix uses the same approach.</p>
+  </div>
+</section>
+
+<section id="limits">
+  <h2>Limits and what it needs</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Check</th><th>Reads</th><th>Reports when</th><th>Severity · confidence</th></tr></thead>
+      <tbody>
+        <tr><td>Header redirect</td><td>status and <code>Location</code></td><td>3xx and Location starts with <code>//</code> or is an http(s) URL whose host contains <code>evil.com</code></td><td>High · 0.90</td></tr>
+        <tr><td>Body redirect</td><td>response body, lower-cased</td><td>JavaScript location assignment, <code>replace(</code> or meta refresh to <code>http(s)://evil.com</code></td><td>Medium · 0.75</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout note">
+    <div class="label">What it deliberately stays quiet about</div>
+    <p>Only GET requests are sent, and only to parameters and paths that look like redirects, so a destination hidden in a POST body or in a parameter named something else is not tested. Redirects through an unusual hostname are invisible to the check because it looks for <code>evil.com</code> specifically. Credentials are optional: with them, the probes carry the scan's auth headers.</p>
+  </div>
+</section>
+
+
+<footer class="foot">
+  <span>Source: <a href="../scanners/open-redirect-scanner.md">docs/scanners/open-redirect-scanner.md</a> · <code>isitsecure/engine/scanners/open_redirect_scanner.py</code></span>
+  <span>Group: <a href="group-browser-defenses.html">Browser-side defenses</a> · Related: <a href="ssrf.html">SSRF</a> · <a href="csrf.html">CSRF</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+</body>
+</html>

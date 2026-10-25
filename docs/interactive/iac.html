@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>IaC Scanner · isitsecure</title>
+<meta name="description" content="How isitsecure reads Terraform files: which files are picked, which rule fires on which line, what it skips, and the fixed line, animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+
+  .topbar-inner .crumb a { color: inherit; text-decoration: none; }
+  .topbar-inner .crumb a:hover { color: var(--accent); }
+  .wbar { fill: transparent; transition: fill .3s; }
+  .wmark, .wflag { opacity: 0; transition: opacity .3s; }
+  .scene .stage svg text.mono { white-space: pre; }
+  .wrow > rect { transition: fill .3s, stroke .3s; }
+  #ic-disc.s2 .fr0 > rect { stroke: var(--safe); }
+  #ic-disc.s2 .fr0 { opacity: 1; }
+  #ic-disc[data-step="2"] .fr0 > rect { fill: var(--accent-soft); }
+  #ic-disc.s2 .fr1 > rect { stroke: var(--safe); }
+  #ic-disc.s2 .fr1 { opacity: 1; }
+  #ic-disc[data-step="2"] .fr1 > rect { fill: var(--accent-soft); }
+  #ic-disc.s2 .fr2 > rect { stroke: var(--safe); }
+  #ic-disc.s2 .fr2 { opacity: 1; }
+  #ic-disc[data-step="2"] .fr2 > rect { fill: var(--accent-soft); }
+  #ic-disc.s3 .fr3 { opacity: .55; }
+  #ic-disc.s3 .fr3 > rect { stroke: var(--line); }
+  #ic-disc[data-step="3"] .fr3 > rect { fill: var(--accent-soft); }
+  #ic-disc.s3 .fr4 { opacity: .55; }
+  #ic-disc.s3 .fr4 > rect { stroke: var(--line); }
+  #ic-disc[data-step="3"] .fr4 > rect { fill: var(--accent-soft); }
+  #ic-disc.s3 .fr5 { opacity: .55; }
+  #ic-disc.s3 .fr5 > rect { stroke: var(--line); }
+  #ic-disc[data-step="3"] .fr5 > rect { fill: var(--accent-soft); }
+  #ic-disc.s3 .fr6 { opacity: .55; }
+  #ic-disc.s3 .fr6 > rect { stroke: var(--line); }
+  #ic-disc[data-step="3"] .fr6 > rect { fill: var(--accent-soft); }
+  #ic-walk[data-step="2"] .ln4 .wbar { fill: var(--attacker-soft); }
+  #ic-walk.s2 .ln4 .wmark { opacity: 1; }
+  #ic-walk[data-step="2"] .ln5 .wbar { fill: var(--attacker-soft); }
+  #ic-walk.s2 .ln5 .wmark { opacity: 1; }
+  #ic-walk[data-step="2"] .ln6 .wbar { fill: var(--attacker-soft); }
+  #ic-walk.s2 .ln6 .wmark { opacity: 1; }
+  #ic-walk[data-step="2"] .rr0 > rect { stroke: var(--accent); fill: var(--accent-soft); }
+  #ic-walk.s2 .rr0 .wflag { opacity: 1; }
+  #ic-walk[data-step="3"] .ln13 .wbar { fill: var(--attacker-soft); }
+  #ic-walk.s3 .ln13 .wmark { opacity: 1; }
+  #ic-walk[data-step="3"] .rr1 > rect { stroke: var(--accent); fill: var(--accent-soft); }
+  #ic-walk.s3 .rr1 .wflag { opacity: 1; }
+  #ic-walk[data-step="4"] .ln13 .wbar { fill: var(--attacker-soft); }
+  #ic-walk.s4 .ln13 .wmark { opacity: 1; }
+  #ic-walk[data-step="4"] .rr2 > rect { stroke: var(--accent); fill: var(--accent-soft); }
+  #ic-walk.s4 .rr2 .wflag { opacity: 1; }
+  #ic-walk[data-step="5"] .ln1 .wbar { fill: var(--attacker-soft); }
+  #ic-walk.s5 .ln1 .wmark { opacity: 1; }
+  #ic-walk[data-step="5"] .rr3 > rect { stroke: var(--accent); fill: var(--accent-soft); }
+  #ic-walk.s5 .rr3 .wflag { opacity: 1; }
+  #ic-walk[data-step="6"] .ln10 .wbar { fill: var(--attacker-soft); }
+  #ic-walk.s6 .ln10 .wmark { opacity: 1; }
+  #ic-walk[data-step="6"] .rr4 > rect { stroke: var(--accent); fill: var(--accent-soft); }
+  #ic-walk.s6 .rr4 .wflag { opacity: 1; }
+  #ic-walk[data-step="7"] .ln16 .wbar { fill: var(--attacker-soft); }
+  #ic-walk.s7 .ln16 .wmark { opacity: 1; }
+  #ic-walk[data-step="7"] .rr5 > rect { stroke: var(--accent); fill: var(--accent-soft); }
+  #ic-walk.s7 .rr5 .wflag { opacity: 1; }
+  #ic-walk[data-step="8"] .ln19 .wbar { fill: var(--attacker-soft); }
+  #ic-walk.s8 .ln19 .wmark { opacity: 1; }
+  #ic-walk[data-step="8"] .rr8 > rect { stroke: var(--accent); fill: var(--accent-soft); }
+  #ic-walk.s8 .rr8 .wflag { opacity: 1; }
+
+  #ic-fix[data-step="2"] .fx0 > rect { stroke: var(--safe); fill: var(--safe-soft); }
+  #ic-fix[data-step="3"] .fx1 > rect { stroke: var(--safe); fill: var(--safe-soft); }
+  #ic-fix[data-step="4"] .fx2 > rect { stroke: var(--safe); fill: var(--safe-soft); }
+  #ic-fix[data-step="5"] .fx3 > rect { stroke: var(--safe); fill: var(--safe-soft); }
+  #ic-fix[data-step="6"] .fx4 > rect { stroke: var(--safe); fill: var(--safe-soft); }
+  #ic-fix[data-step="7"] .fx5 > rect { stroke: var(--safe); fill: var(--safe-soft); }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› <a href="group-infrastructure.html">Infrastructure configuration</a> › IaC</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/iac-scanner.md" title="The markdown source for this page">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">SAST scanner · reads the file text</div>
+  <h1>IaC Scanner</h1>
+  <p class="lede">Infrastructure as code turns a cloud account into a text file, so a misconfiguration is a line you can search for. This scanner reads every <code>.tf</code> and <code>.tfvars</code> file and runs eight AWS-oriented regular expressions over the raw text: open security groups, wildcard IAM, secrets in variable defaults, public buckets, and a few others.</p>
+  <div class="meta">
+    <span class="pill sast">SAST</span><span class="pill crit">Low to Critical</span><span class="pill ">Infrastructure Misconfiguration</span><span class="pill ">8 checks</span><span class="pill ">Terraform, AWS</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#discovery"><span class="n">01</span>Which files it reads</a>
+  <a href="#walk"><span class="n">02</span>Walking a Terraform file</a>
+  <a href="#guards"><span class="n">03</span>What it deliberately skips</a>
+  <a href="#fix"><span class="n">04</span>The fix, line by line</a>
+  <a href="#why"><span class="n">05</span>Why it matters</a>
+  <a href="#code"><span class="n">06</span>Vulnerable vs fixed code</a>
+  <a href="#limits"><span class="n">07</span>Checks and limits</a>
+</nav>
+
+<section id="discovery">
+  <h2>Which files it reads</h2>
+  <p class="prose">The simplest discovery in the group: file extension only.</p>
+  <div class="scene" id="ic-disc" data-scene data-interval="3600">
+    <figure class="stage">
+      <svg viewBox="0 0 960 310" role="img" aria-label="A list of repository paths; .tf and .tfvars files are picked and the rest are left out.">
+<defs><marker id="arr-ic-disc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+<text class="lbl" x="20" y="24">Path in the repository</text><text class="lbl" x="372" y="24">Decision</text><text class="lbl" x="702" y="24">Goes to</text>
+<g class="node wrow fr0"><rect x="8" y="34" width="944" height="30" rx="6"/><text class="mono" x="20" y="53">infra/main.tf</text>
+<g class="at-2"><text class="lbl" x="372" y="53">extension .tf</text><rect class="soft-safe" x="698" y="38" width="242" height="20" rx="10"/><text class="lbl t-safe" x="712" y="52">Terraform checks (8)</text></g>
+</g>
+<g class="node wrow fr1"><rect x="8" y="70" width="944" height="30" rx="6"/><text class="mono" x="20" y="89">infra/variables.tf</text>
+<g class="at-2"><text class="lbl" x="372" y="89">extension .tf</text><rect class="soft-safe" x="698" y="74" width="242" height="20" rx="10"/><text class="lbl t-safe" x="712" y="88">Terraform checks (8)</text></g>
+</g>
+<g class="node wrow fr2"><rect x="8" y="106" width="944" height="30" rx="6"/><text class="mono" x="20" y="125">infra/prod.tfvars</text>
+<g class="at-2"><text class="lbl" x="372" y="125">extension .tfvars, where secrets often land</text><rect class="soft-safe" x="698" y="110" width="242" height="20" rx="10"/><text class="lbl t-safe" x="712" y="124">Terraform checks (8)</text></g>
+</g>
+<g class="node wrow fr3"><rect x="8" y="142" width="944" height="30" rx="6"/><text class="mono" x="20" y="161">modules/vpc/main.tf.json</text>
+<g class="at-3"><text class="lbl" x="372" y="161">ends in .json, not .tf</text><text class="lbl" x="702" y="161">not scanned</text></g>
+</g>
+<g class="node wrow fr4"><rect x="8" y="178" width="944" height="30" rx="6"/><text class="mono" x="20" y="197">cfn/stack.yaml</text>
+<g class="at-3"><text class="lbl" x="372" y="197">CloudFormation is not read</text><text class="lbl" x="702" y="197">not scanned</text></g>
+</g>
+<g class="node wrow fr5"><rect x="8" y="214" width="944" height="30" rx="6"/><text class="mono" x="20" y="233">terraform.tfstate</text>
+<g class="at-3"><text class="lbl" x="372" y="233">state files are not read</text><text class="lbl" x="702" y="233">not scanned</text></g>
+</g>
+<g class="node wrow fr6"><rect x="8" y="250" width="944" height="30" rx="6"/><text class="mono" x="20" y="269">infra/README.md</text>
+<g class="at-3"><text class="lbl" x="372" y="269">not infrastructure code</text><text class="lbl" x="702" y="269">not scanned</text></g>
+</g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The scanner looks at the repository file index. Infrastructure as Code has a clear file extension, so <b>extension is the only test</b>.</p>
+      <p class="step"><span class="n">2</span>Files ending in <code>.tf</code> or <code>.tfvars</code> are Terraform. Every one gets all eight checks, with no per-file routing. The <code>.tfvars</code> files matter because that is where people paste real values.</p>
+      <p class="step"><span class="n">3</span>Everything else is passed over. <b>CloudFormation templates are not read</b>, nor are JSON Terraform, state files or documentation.</p>
+    </div>
+  </div>
+</section>
+
+<section id="walk">
+  <h2>Walking a Terraform file</h2>
+  <p class="prose">Eight checks, nine rules. The IAM check reports actions and resources as separate findings.</p>
+  <div class="scene" id="ic-walk" data-scene data-interval="3600">
+    <figure class="stage">
+      <svg viewBox="0 0 960 499" role="img" aria-label="A twenty-one line Terraform file on the left; nine checks on the right light up on the lines that trigger them.">
+<defs><marker id="arr-ic-walk" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+<g class="node"><rect x="8" y="10" width="592" height="453" rx="8"/></g>
+<text class="ttl" x="20" y="32">infra/main.tf</text><text class="lbl" x="588" y="32" text-anchor="end">read as one string, never parsed</text>
+<g class="ln ln0"><rect class="wbar" x="14" y="44" width="580" height="18" rx="3"/><text class="lbl" x="40" y="58" text-anchor="end">1</text><circle class="wmark f-attacker" cx="52" cy="54" r="3.5"/><text class="mono" x="64" y="58" xml:space="preserve">variable &quot;stripe_key&quot; {</text></g>
+<g class="ln ln1"><rect class="wbar" x="14" y="63" width="580" height="18" rx="3"/><text class="lbl" x="40" y="77" text-anchor="end">2</text><circle class="wmark f-attacker" cx="52" cy="73" r="3.5"/><text class="mono" x="64" y="77" xml:space="preserve">  default = &quot;sk_live_abc123def456&quot;</text></g>
+<g class="ln ln2"><rect class="wbar" x="14" y="82" width="580" height="18" rx="3"/><text class="lbl" x="40" y="96" text-anchor="end">3</text><circle class="wmark f-attacker" cx="52" cy="92" r="3.5"/><text class="mono" x="64" y="96" xml:space="preserve">}</text></g>
+<g class="ln ln3"><rect class="wbar" x="14" y="101" width="580" height="18" rx="3"/><text class="lbl" x="40" y="115" text-anchor="end">4</text><circle class="wmark f-attacker" cx="52" cy="111" r="3.5"/><text class="mono" x="64" y="115" xml:space="preserve">resource &quot;aws_security_group&quot; &quot;db&quot; {</text></g>
+<g class="ln ln4"><rect class="wbar" x="14" y="120" width="580" height="18" rx="3"/><text class="lbl" x="40" y="134" text-anchor="end">5</text><circle class="wmark f-attacker" cx="52" cy="130" r="3.5"/><text class="mono" x="64" y="134" xml:space="preserve">  ingress {</text></g>
+<g class="ln ln5"><rect class="wbar" x="14" y="139" width="580" height="18" rx="3"/><text class="lbl" x="40" y="153" text-anchor="end">6</text><circle class="wmark f-attacker" cx="52" cy="149" r="3.5"/><text class="mono" x="64" y="153" xml:space="preserve">    from_port   = 5432</text></g>
+<g class="ln ln6"><rect class="wbar" x="14" y="158" width="580" height="18" rx="3"/><text class="lbl" x="40" y="172" text-anchor="end">7</text><circle class="wmark f-attacker" cx="52" cy="168" r="3.5"/><text class="mono" x="64" y="172" xml:space="preserve">    cidr_blocks = [&quot;0.0.0.0/0&quot;]</text></g>
+<g class="ln ln7"><rect class="wbar" x="14" y="177" width="580" height="18" rx="3"/><text class="lbl" x="40" y="191" text-anchor="end">8</text><circle class="wmark f-attacker" cx="52" cy="187" r="3.5"/><text class="mono" x="64" y="191" xml:space="preserve">  }</text></g>
+<g class="ln ln8"><rect class="wbar" x="14" y="196" width="580" height="18" rx="3"/><text class="lbl" x="40" y="210" text-anchor="end">9</text><circle class="wmark f-attacker" cx="52" cy="206" r="3.5"/><text class="mono" x="64" y="210" xml:space="preserve">}</text></g>
+<g class="ln ln9"><rect class="wbar" x="14" y="215" width="580" height="18" rx="3"/><text class="lbl" x="40" y="229" text-anchor="end">10</text><circle class="wmark f-attacker" cx="52" cy="225" r="3.5"/><text class="mono" x="64" y="229" xml:space="preserve">resource &quot;aws_s3_bucket&quot; &quot;data&quot; {</text></g>
+<g class="ln ln10"><rect class="wbar" x="14" y="234" width="580" height="18" rx="3"/><text class="lbl" x="40" y="248" text-anchor="end">11</text><circle class="wmark f-attacker" cx="52" cy="244" r="3.5"/><text class="mono" x="64" y="248" xml:space="preserve">  acl = &quot;public-read&quot;</text></g>
+<g class="ln ln11"><rect class="wbar" x="14" y="253" width="580" height="18" rx="3"/><text class="lbl" x="40" y="267" text-anchor="end">12</text><circle class="wmark f-attacker" cx="52" cy="263" r="3.5"/><text class="mono" x="64" y="267" xml:space="preserve">}</text></g>
+<g class="ln ln12"><rect class="wbar" x="14" y="272" width="580" height="18" rx="3"/><text class="lbl" x="40" y="286" text-anchor="end">13</text><circle class="wmark f-attacker" cx="52" cy="282" r="3.5"/><text class="mono" x="64" y="286" xml:space="preserve">resource &quot;aws_iam_policy&quot; &quot;p&quot; {</text></g>
+<g class="ln ln13"><rect class="wbar" x="14" y="291" width="580" height="18" rx="3"/><text class="lbl" x="40" y="305" text-anchor="end">14</text><circle class="wmark f-attacker" cx="52" cy="301" r="3.5"/><text class="mono" x="64" y="305" xml:space="preserve">  policy = jsonencode({ Statement = [{ &quot;Action&quot; : &quot;*&quot;, &quot;Resource&quot; : &quot;*&quot; }] })</text></g>
+<g class="ln ln14"><rect class="wbar" x="14" y="310" width="580" height="18" rx="3"/><text class="lbl" x="40" y="324" text-anchor="end">15</text><circle class="wmark f-attacker" cx="52" cy="320" r="3.5"/><text class="mono" x="64" y="324" xml:space="preserve">}</text></g>
+<g class="ln ln15"><rect class="wbar" x="14" y="329" width="580" height="18" rx="3"/><text class="lbl" x="40" y="343" text-anchor="end">16</text><circle class="wmark f-attacker" cx="52" cy="339" r="3.5"/><text class="mono" x="64" y="343" xml:space="preserve">resource &quot;aws_secretsmanager_secret&quot; &quot;s&quot; {</text></g>
+<g class="ln ln16"><rect class="wbar" x="14" y="348" width="580" height="18" rx="3"/><text class="lbl" x="40" y="362" text-anchor="end">17</text><circle class="wmark f-attacker" cx="52" cy="358" r="3.5"/><text class="mono" x="64" y="362" xml:space="preserve">  recovery_window_in_days = 0</text></g>
+<g class="ln ln17"><rect class="wbar" x="14" y="367" width="580" height="18" rx="3"/><text class="lbl" x="40" y="381" text-anchor="end">18</text><circle class="wmark f-attacker" cx="52" cy="377" r="3.5"/><text class="mono" x="64" y="381" xml:space="preserve">}</text></g>
+<g class="ln ln18"><rect class="wbar" x="14" y="386" width="580" height="18" rx="3"/><text class="lbl" x="40" y="400" text-anchor="end">19</text><circle class="wmark f-attacker" cx="52" cy="396" r="3.5"/><text class="mono" x="64" y="400" xml:space="preserve">resource &quot;aws_cloudwatch_log_group&quot; &quot;l&quot; {</text></g>
+<g class="ln ln19"><rect class="wbar" x="14" y="405" width="580" height="18" rx="3"/><text class="lbl" x="40" y="419" text-anchor="end">20</text><circle class="wmark f-attacker" cx="52" cy="415" r="3.5"/><text class="mono" x="64" y="419" xml:space="preserve">  retention_in_days = 3</text></g>
+<g class="ln ln20"><rect class="wbar" x="14" y="424" width="580" height="18" rx="3"/><text class="lbl" x="40" y="438" text-anchor="end">21</text><circle class="wmark f-attacker" cx="52" cy="434" r="3.5"/><text class="mono" x="64" y="438" xml:space="preserve">}</text></g>
+<text class="ttl" x="640" y="32">Checks</text>
+<g class="node wrow rr0"><rect x="640" y="44" width="304" height="32" rx="6"/><text x="652" y="58" style="font-size:12px">Open ingress on a non-web port</text><text class="lbl" x="652" y="71">High · conf 0.90</text>
+<text class="wflag t-attacker" x="934" y="64" text-anchor="end" style="font-weight:600">FLAG</text>
+</g>
+<g class="node wrow rr1"><rect x="640" y="82" width="304" height="32" rx="6"/><text x="652" y="96" style="font-size:12px">IAM Action: *</text><text class="lbl" x="652" y="109">High · conf 0.90</text>
+<text class="wflag t-attacker" x="934" y="102" text-anchor="end" style="font-weight:600">FLAG</text>
+</g>
+<g class="node wrow rr2"><rect x="640" y="120" width="304" height="32" rx="6"/><text x="652" y="134" style="font-size:12px">IAM Resource: *</text><text class="lbl" x="652" y="147">Medium · conf 0.90</text>
+<text class="wflag t-attacker" x="934" y="140" text-anchor="end" style="font-weight:600">FLAG</text>
+</g>
+<g class="node wrow rr3"><rect x="640" y="158" width="304" height="32" rx="6"/><text x="652" y="172" style="font-size:12px">Secret in a variable default</text><text class="lbl" x="652" y="185">Critical · conf 0.95</text>
+<text class="wflag t-attacker" x="934" y="178" text-anchor="end" style="font-weight:600">FLAG</text>
+</g>
+<g class="node wrow rr4"><rect x="640" y="196" width="304" height="32" rx="6"/><text x="652" y="210" style="font-size:12px">S3 bucket with public ACL</text><text class="lbl" x="652" y="223">High · conf 0.90</text>
+<text class="wflag t-attacker" x="934" y="216" text-anchor="end" style="font-weight:600">FLAG</text>
+</g>
+<g class="node wrow rr5"><rect x="640" y="234" width="304" height="32" rx="6"/><text x="652" y="248" style="font-size:12px">Secret deleted with no recovery</text><text class="lbl" x="652" y="261">Medium · conf 0.80</text>
+<text class="wflag t-attacker" x="934" y="254" text-anchor="end" style="font-weight:600">FLAG</text>
+</g>
+<g class="node wrow rr6"><rect x="640" y="272" width="304" height="32" rx="6"/><text x="652" y="286" style="font-size:12px">ALB forwards HTTP</text><text class="lbl" x="652" y="299">Medium · conf 0.85</text>
+<text class="lbl at-9" x="934" y="292" text-anchor="end">clear</text>
+</g>
+<g class="node wrow rr7"><rect x="640" y="310" width="304" height="32" rx="6"/><text x="652" y="324" style="font-size:12px">ECS task with a public IP</text><text class="lbl" x="652" y="337">Low · conf 0.70</text>
+<text class="lbl at-9" x="934" y="330" text-anchor="end">clear</text>
+</g>
+<g class="node wrow rr8"><rect x="640" y="348" width="304" height="32" rx="6"/><text x="652" y="362" style="font-size:12px">Short log retention</text><text class="lbl" x="652" y="375">Low · conf 0.65</text>
+<text class="wflag t-attacker" x="934" y="368" text-anchor="end" style="font-weight:600">FLAG</text>
+</g>
+<path class="wire only-2 accent" d="M600 130 C 620 130, 620 60, 638 60" marker-end="url(#arr-ic-walk)"/>
+<text class="lbl only-2" x="16" y="487">High, conf 0.90. The title carries the port: &quot;Security group allows 0.0.0.0/0 ingress on port 5432&quot;.</text>
+<path class="wire only-3 accent" d="M600 301 C 620 301, 620 98, 638 98" marker-end="url(#arr-ic-walk)"/>
+<text class="lbl only-3" x="16" y="487">High, conf 0.90.</text>
+<path class="wire only-4 accent" d="M600 301 C 620 301, 620 136, 638 136" marker-end="url(#arr-ic-walk)"/>
+<text class="lbl only-4" x="16" y="487">Medium, conf 0.90. Same line, second finding.</text>
+<path class="wire only-5 accent" d="M600 73 C 620 73, 620 174, 638 174" marker-end="url(#arr-ic-walk)"/>
+<text class="lbl only-5" x="16" y="487">Critical, conf 0.95. One finding per match.</text>
+<path class="wire only-6 accent" d="M600 244 C 620 244, 620 212, 638 212" marker-end="url(#arr-ic-walk)"/>
+<text class="lbl only-6" x="16" y="487">High, conf 0.90. Anyone on the internet can read every object.</text>
+<path class="wire only-7 accent" d="M600 358 C 620 358, 620 250, 638 250" marker-end="url(#arr-ic-walk)"/>
+<text class="lbl only-7" x="16" y="487">Medium, conf 0.80.</text>
+<path class="wire only-8 accent" d="M600 415 C 620 415, 620 364, 638 364" marker-end="url(#arr-ic-walk)"/>
+<text class="lbl only-8" x="16" y="487">Low, conf 0.65.</text>
+<text class="lbl only-9" x="16" y="487">Real output for this file: 7 findings.</text>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>One Terraform file, twenty-one lines. Eight checks run in a fixed order over the raw text; the HCL is never parsed. Two checks (ALB and ECS) will find nothing here.</p>
+      <p class="step"><span class="n">2</span><b>Security group.</b> A regular expression finds an <code>ingress {</code> block that holds <code>0.0.0.0/0</code> (or <code>::/0</code>), then reads <code>from_port</code> out of the same block. Ports 80 and 443 are allowed; 5432 is not.</p>
+      <p class="step"><span class="n">3</span><b>IAM action.</b> <code>"Action" : "*"</code> in JSON form, <code>actions = ["*"]</code> or <code>action = "*"</code> in HCL. The policy can call every AWS API.</p>
+      <p class="step"><span class="n">4</span><b>IAM resource.</b> The same shapes for <code>Resource</code>. Reported separately and one level lower, because a wildcard resource with narrow actions is less dangerous.</p>
+      <p class="step"><span class="n">5</span><b>Hardcoded secret.</b> A <code>default =</code> value shaped like a Stripe live key, Anthropic key, AWS access key, GitHub token, OpenAI key, a database URL or a JWT. The value must look like the secret; a word like <code>changeme</code> does not match.</p>
+      <p class="step"><span class="n">6</span><b>Public S3.</b> <code>acl = "public-read"</code> or <code>public-read-write</code> anywhere in the file.</p>
+      <p class="step"><span class="n">7</span><b>Secrets Manager.</b> <code>recovery_window_in_days = 0</code> deletes a secret immediately and permanently. A mistake cannot be undone.</p>
+      <p class="step"><span class="n">8</span><b>Log retention.</b> Any <code>retention_in_days</code> of 7 or fewer is flagged. The title carries the number.</p>
+      <p class="step"><span class="n">9</span>Seven findings. The ALB and ECS checks stayed quiet because this file has neither a plain HTTP forward nor <code>assign_public_ip = true</code>. <b>Missing encryption and missing public access blocks are not checked.</b></p>
+    </div>
+  </div>
+</section>
+
+<section id="guards">
+  <h2>What it deliberately skips</h2>
+  <p class="prose">Each row is a line the scanner meets. Step through for the verdict and the reason.</p>
+  <div class="scene" id="ic-guard" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 380" role="img" aria-label="Seven Terraform lines, each with the scanner&#x27;s verdict and the reason.">
+<text class="lbl" x="20" y="22">What the scanner meets</text><text class="lbl" x="482" y="22">Verdict</text><text class="lbl" x="572" y="22">Why</text>
+<g class="node wrow lit-1"><rect x="8" y="28" width="944" height="42" rx="6"/><text class="mono" x="20" y="46" xml:space="preserve">from_port = 443</text><text class="lbl" x="20" y="62">ingress block open to 0.0.0.0/0</text><g class="at-1"><rect class="soft-safe" x="482" y="38" width="64" height="22" rx="11"/><text class="lbl t-safe" x="514" y="53" text-anchor="middle" style="font-weight:600">SKIP</text>
+<text class="lbl" x="572" y="46">Ports 80 and 443 may be public.</text>
+<text class="lbl" x="572" y="62">Only other ports are reported.</text>
+</g></g>
+<g class="node wrow lit-2"><rect x="8" y="76" width="944" height="42" rx="6"/><text class="mono" x="20" y="94" xml:space="preserve">cidr_blocks = [&quot;0.0.0.0/0&quot;]</text><text class="lbl" x="20" y="110">ingress block with no from_port line</text><g class="at-2"><rect class="soft-safe" x="482" y="86" width="64" height="22" rx="11"/><text class="lbl t-safe" x="514" y="101" text-anchor="middle" style="font-weight:600">SKIP</text>
+<text class="lbl" x="572" y="94">The port is read from the same block. With no</text>
+<text class="lbl" x="572" y="110">port found the match is dropped.</text>
+</g></g>
+<g class="node wrow lit-3"><rect x="8" y="124" width="944" height="42" rx="6"/><text class="mono" x="20" y="142" xml:space="preserve">from_port = 22 / ipv6_cidr_blocks = [&quot;::/0&quot;]</text><text class="lbl" x="20" y="158">ingress block open to the IPv6 world</text><g class="at-3"><rect class="soft-attacker" x="482" y="134" width="64" height="22" rx="11"/><text class="lbl t-attacker" x="514" y="149" text-anchor="middle" style="font-weight:600">FLAG</text>
+<text class="lbl" x="572" y="142">IPv6 has its own pattern, so ::/0 on a</text>
+<text class="lbl" x="572" y="158">non-web port is reported like 0.0.0.0/0.</text>
+</g></g>
+<g class="node wrow lit-4"><rect x="8" y="172" width="944" height="42" rx="6"/><text class="mono" x="20" y="190" xml:space="preserve">retention_in_days = 7</text><text class="lbl" x="20" y="206">CloudWatch log group</text><g class="at-4"><rect class="soft-attacker" x="482" y="182" width="64" height="22" rx="11"/><text class="lbl t-attacker" x="514" y="197" text-anchor="middle" style="font-weight:600">FLAG</text>
+<text class="lbl" x="572" y="190">The threshold is 7 and the test is less-than-or-equal.</text>
+<text class="lbl" x="572" y="206">30 or 90 days would pass.</text>
+</g></g>
+<g class="node wrow lit-5"><rect x="8" y="220" width="944" height="42" rx="6"/><text class="mono" x="20" y="238" xml:space="preserve">default = &quot;changeme&quot;</text><text class="lbl" x="20" y="254">variable default</text><g class="at-5"><rect class="soft-safe" x="482" y="230" width="64" height="22" rx="11"/><text class="lbl t-safe" x="514" y="245" text-anchor="middle" style="font-weight:600">SKIP</text>
+<text class="lbl" x="572" y="238">Only known key shapes match: sk_live_, AKIA...,</text>
+<text class="lbl" x="572" y="254">ghp_..., sk-ant-..., database URLs, JWTs.</text>
+</g></g>
+<g class="node wrow lit-6"><rect x="8" y="268" width="944" height="42" rx="6"/><text class="mono" x="20" y="286" xml:space="preserve">default = &quot;AKIAIOSFODNN7EXAMPLE&quot;</text><text class="lbl" x="20" y="302">variable default</text><g class="at-6"><rect class="soft-attacker" x="482" y="278" width="64" height="22" rx="11"/><text class="lbl t-attacker" x="514" y="293" text-anchor="middle" style="font-weight:600">FLAG</text>
+<text class="lbl" x="572" y="286">AKIA followed by 16 upper-case letters or digits</text>
+<text class="lbl" x="572" y="302">is an AWS access key id.</text>
+</g></g>
+<g class="node wrow lit-7"><rect x="8" y="316" width="944" height="42" rx="6"/><text class="mono" x="20" y="334" xml:space="preserve">protocol = &quot;HTTP&quot; ... type = &quot;forward&quot;</text><text class="lbl" x="20" y="350">ALB listener, file also has &quot;redirect&quot; or &quot;HTTPS&quot;</text><g class="at-7"><rect class="soft-safe" x="482" y="326" width="64" height="22" rx="11"/><text class="lbl t-safe" x="514" y="341" text-anchor="middle" style="font-weight:600">SKIP</text>
+<text class="lbl" x="572" y="334">If the same file mentions an HTTPS listener or a</text>
+<text class="lbl" x="572" y="350">redirect action, the forward is assumed conditional.</text>
+</g></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span><b>Web ports are allowed.</b> The check exists to catch databases, SSH and application ports, not the load balancer's front door.</p>
+      <p class="step"><span class="n">2</span><b>No port, no finding.</b> The port is part of the title and the decision. A block without a <code>from_port</code> is skipped, which can hide an all-ports rule.</p>
+      <p class="step"><span class="n">3</span><b>IPv6 is covered.</b> The IPv4 and IPv6 patterns are separate, so opening a port to <code>::/0</code> is not a way around the check.</p>
+      <p class="step"><span class="n">4</span><b>Seven days or fewer is short.</b> The scanner suggests 30 to 90 days for investigation and compliance.</p>
+      <p class="step"><span class="n">5</span><b>Only known secret shapes.</b> A weak password in a default is not detected here. This keeps the check at Critical, conf 0.95, without noise.</p>
+      <p class="step"><span class="n">6</span><b>A real key shape does match.</b> This is the documented AWS example key id, and it is flagged all the same.</p>
+      <p class="step"><span class="n">7</span><b>The ALB check is file-wide.</b> A redirect or an HTTPS listener anywhere in the same file turns the finding off, even if it belongs to another load balancer.</p>
+    </div>
+  </div>
+</section>
+
+<section id="fix">
+  <h2>The fix, line by line</h2>
+  <p class="prose">The fixed form is the one the regular expressions do not match.</p>
+  <div class="scene" id="ic-fix" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 354" role="img" aria-label="Six rows, each showing the flagged Terraform line turning into the fixed line.">
+<text class="lbl" x="20" y="24">Line the check matched, and the line after the fix</text>
+<text class="ttl only-1 t-attacker" x="940" y="24" text-anchor="end">findings in this file: 7</text>
+<text class="ttl only-2 t-attacker" x="940" y="24" text-anchor="end">findings in this file: 6</text>
+<text class="ttl only-3 t-attacker" x="940" y="24" text-anchor="end">findings in this file: 4</text>
+<text class="ttl only-4 t-attacker" x="940" y="24" text-anchor="end">findings in this file: 3</text>
+<text class="ttl only-5 t-attacker" x="940" y="24" text-anchor="end">findings in this file: 2</text>
+<text class="ttl only-6 t-attacker" x="940" y="24" text-anchor="end">findings in this file: 1</text>
+<text class="ttl only-7 t-safe" x="940" y="24" text-anchor="end">findings in this file: 0</text>
+<g class="node wrow fx0"><rect x="8" y="36" width="944" height="44" rx="6"/><text class="lbl" x="20" y="52">Open ingress on a non-web port</text><text class="mono t-attacker until-2" x="20" y="70" xml:space="preserve">cidr_blocks = [&quot;0.0.0.0/0&quot;]</text><text class="mono t-safe at-2" x="20" y="70" xml:space="preserve">cidr_blocks = [&quot;10.0.0.0/16&quot;]</text><g class="until-2"><rect class="soft-attacker" x="870" y="47" width="64" height="22" rx="11"/><text class="lbl t-attacker" x="902" y="62" text-anchor="middle" style="font-weight:600">FLAG</text></g><g class="at-2"><rect class="soft-safe" x="870" y="47" width="64" height="22" rx="11"/><text class="lbl t-safe" x="902" y="62" text-anchor="middle" style="font-weight:600">clear</text></g></g>
+<g class="node wrow fx1"><rect x="8" y="86" width="944" height="44" rx="6"/><text class="lbl" x="20" y="102">IAM Action and Resource: *</text><text class="mono t-attacker until-3" x="20" y="120" xml:space="preserve">&quot;Action&quot; : &quot;*&quot;, &quot;Resource&quot; : &quot;*&quot;</text><text class="mono t-safe at-3" x="20" y="120" xml:space="preserve">&quot;Action&quot; : &quot;s3:GetObject&quot;, &quot;Resource&quot; : &quot;arn:aws:s3:::app-data/*&quot;</text><g class="until-3"><rect class="soft-attacker" x="870" y="97" width="64" height="22" rx="11"/><text class="lbl t-attacker" x="902" y="112" text-anchor="middle" style="font-weight:600">FLAG</text></g><g class="at-3"><rect class="soft-safe" x="870" y="97" width="64" height="22" rx="11"/><text class="lbl t-safe" x="902" y="112" text-anchor="middle" style="font-weight:600">clear</text></g></g>
+<g class="node wrow fx2"><rect x="8" y="136" width="944" height="44" rx="6"/><text class="lbl" x="20" y="152">Secret in a variable default</text><text class="mono t-attacker until-4" x="20" y="170" xml:space="preserve">default = &quot;sk_live_abc123def456&quot;</text><text class="mono t-safe at-4" x="20" y="170" xml:space="preserve"># no default: pass TF_VAR_stripe_key or read from Secrets Manager</text><g class="until-4"><rect class="soft-attacker" x="870" y="147" width="64" height="22" rx="11"/><text class="lbl t-attacker" x="902" y="162" text-anchor="middle" style="font-weight:600">FLAG</text></g><g class="at-4"><rect class="soft-safe" x="870" y="147" width="64" height="22" rx="11"/><text class="lbl t-safe" x="902" y="162" text-anchor="middle" style="font-weight:600">clear</text></g></g>
+<g class="node wrow fx3"><rect x="8" y="186" width="944" height="44" rx="6"/><text class="lbl" x="20" y="202">S3 bucket with public ACL</text><text class="mono t-attacker until-5" x="20" y="220" xml:space="preserve">acl = &quot;public-read&quot;</text><text class="mono t-safe at-5" x="20" y="220" xml:space="preserve">acl = &quot;private&quot;</text><g class="until-5"><rect class="soft-attacker" x="870" y="197" width="64" height="22" rx="11"/><text class="lbl t-attacker" x="902" y="212" text-anchor="middle" style="font-weight:600">FLAG</text></g><g class="at-5"><rect class="soft-safe" x="870" y="197" width="64" height="22" rx="11"/><text class="lbl t-safe" x="902" y="212" text-anchor="middle" style="font-weight:600">clear</text></g></g>
+<g class="node wrow fx4"><rect x="8" y="236" width="944" height="44" rx="6"/><text class="lbl" x="20" y="252">Secret deleted with no recovery</text><text class="mono t-attacker until-6" x="20" y="270" xml:space="preserve">recovery_window_in_days = 0</text><text class="mono t-safe at-6" x="20" y="270" xml:space="preserve">recovery_window_in_days = 7</text><g class="until-6"><rect class="soft-attacker" x="870" y="247" width="64" height="22" rx="11"/><text class="lbl t-attacker" x="902" y="262" text-anchor="middle" style="font-weight:600">FLAG</text></g><g class="at-6"><rect class="soft-safe" x="870" y="247" width="64" height="22" rx="11"/><text class="lbl t-safe" x="902" y="262" text-anchor="middle" style="font-weight:600">clear</text></g></g>
+<g class="node wrow fx5"><rect x="8" y="286" width="944" height="44" rx="6"/><text class="lbl" x="20" y="302">Short log retention</text><text class="mono t-attacker until-7" x="20" y="320" xml:space="preserve">retention_in_days = 3</text><text class="mono t-safe at-7" x="20" y="320" xml:space="preserve">retention_in_days = 90</text><g class="until-7"><rect class="soft-attacker" x="870" y="297" width="64" height="22" rx="11"/><text class="lbl t-attacker" x="902" y="312" text-anchor="middle" style="font-weight:600">FLAG</text></g><g class="at-7"><rect class="soft-safe" x="870" y="297" width="64" height="22" rx="11"/><text class="lbl t-safe" x="902" y="312" text-anchor="middle" style="font-weight:600">clear</text></g></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Before: the seven findings from the walk. Each step fixes one line and the matching checks go quiet.</p>
+      <p class="step"><span class="n">2</span><b>Narrow the source range.</b> Only the load balancer or the VPC should reach a database port.</p>
+      <p class="step"><span class="n">3</span><b>Grant what is needed.</b> One action, one resource ARN. Both IAM findings clear with this one edit.</p>
+      <p class="step"><span class="n">4</span><b>Remove the value from the file.</b> The variable stays, the secret does not.</p>
+      <p class="step"><span class="n">5</span><b>Make the bucket private</b> and put CloudFront in front if the objects should be public.</p>
+      <p class="step"><span class="n">6</span><b>Allow recovery.</b> Seven days is the minimum the scanner accepts.</p>
+      <p class="step"><span class="n">7</span><b>Keep logs long enough to investigate.</b> Six edits clear all seven findings.</p>
+    </div>
+  </div>
+</section>
+
+<section id="why">
+  <h2>Why it matters</h2>
+  <div class="grid-2">
+    <div class="callout why"><div class="label">Why it matters</div><p>Infrastructure misconfigurations are the root cause of most cloud data breaches. Public S3 buckets have leaked data from hundreds of companies. Overly permissive IAM roles let an attacker escalate from one compromised service to full account control. A secret committed in a Terraform default is in version control for good.</p></div>
+    <div class="callout breach"><div class="label">Real-world breaches</div><p><b>Twitch (2021).</b> An AWS misconfiguration contributed to the leak of Twitch's entire source code and payout data. <b>Accenture (2017).</b> Four AWS S3 buckets were left public, exposing secret API data, authentication credentials and decryption keys.</p></div>
+  </div>
+</section>
+
+<section id="code">
+  <h2>Vulnerable vs fixed code</h2>
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true" type="button">BAD · vulnerable</button>
+      <button class="tab good" role="tab" aria-selected="false" type="button">GOOD · fixed</button>
+    </div>
+    <div role="tabpanel"><pre><code><span class="c"># BAD: the walk above</span>
+variable "stripe_key" {
+  <span class="hl bad">default = <span class="s">"sk_live_abc123def456"</span></span>
+}
+resource "aws_security_group" "db" {
+  ingress {
+    from_port   = 5432
+    <span class="hl bad">cidr_blocks = ["0.0.0.0/0"]</span>
+  }
+}
+resource "aws_s3_bucket" "data" {
+  <span class="hl bad">acl = <span class="s">"public-read"</span></span>
+}</code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c"># GOOD: private S3 bucket with encryption</span>
+resource "aws_s3_bucket" "data" {
+  bucket = "my-app-data"
+}
+
+resource "aws_s3_bucket_public_access_block" "data" {
+  bucket = aws_s3_bucket.data.id
+  <span class="hl good">block_public_acls       = true</span>
+  <span class="hl good">block_public_policy     = true</span>
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "data" {
+  bucket = aws_s3_bucket.data.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = <span class="s">"aws:kms"</span>
+    }
+  }
+}</code></pre></div>
+  </div>
+</section>
+
+<section id="limits">
+  <h2>Checks and limits</h2>
+  <p class="prose">Every check, with the severity and confidence the code assigns.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Check</th><th>Fires when</th><th>Severity</th><th>Conf.</th></tr></thead>
+    <tbody>
+      <tr><td>Open ingress</td><td><code>ingress</code> block with <code>0.0.0.0/0</code> or <code>::/0</code> and a port other than 80 or 443</td><td>High</td><td>0.90</td></tr>
+      <tr><td>IAM Action</td><td><code>"Action" : "*"</code>, <code>actions = ["*"]</code>, <code>action = "*"</code></td><td>High</td><td>0.90</td></tr>
+      <tr><td>IAM Resource</td><td>the same three shapes for resource</td><td>Medium</td><td>0.90</td></tr>
+      <tr><td>Secret default</td><td><code>default =</code> value shaped like a known key, URL or JWT</td><td>Critical</td><td>0.95</td></tr>
+      <tr><td>Public S3</td><td><code>acl</code> of <code>public-read</code> or <code>public-read-write</code></td><td>High</td><td>0.90</td></tr>
+      <tr><td>Recovery window</td><td><code>recovery_window_in_days = 0</code></td><td>Medium</td><td>0.80</td></tr>
+      <tr><td>ALB HTTP forward</td><td><code>protocol = "HTTP"</code> then <code>type = "forward"</code>, with no "HTTPS" or "redirect" in the file</td><td>Medium</td><td>0.85</td></tr>
+      <tr><td>ECS public IP</td><td><code>assign_public_ip = true</code></td><td>Low</td><td>0.70</td></tr>
+      <tr><td>Log retention</td><td><code>retention_in_days</code> of 7 or fewer</td><td>Low</td><td>0.65</td></tr>
+    </tbody>
+  </table></div>
+  <div class="callout note"><div class="label">Docs and code</div><p>The scanner reads only <code>.tf</code> and <code>.tfvars</code> and does not check unencrypted storage, a missing public access block, disabled CloudTrail and flow logs, or default VPC use. It checks open security groups, secret defaults, Secrets Manager recovery, ALB HTTP, ECS public IPs and log retention. It is AWS only. Severity runs from Low to Critical. Findings carry the file path only.</p></div>
+</section>
+
+<footer class="foot">
+  <span>Source: <a href="../scanners/iac-scanner.md">docs/scanners/iac-scanner.md</a> · <code>isitsecure/engine/code_analysis/iac_scanner.py</code></span>
+  <span>Group: <a href="group-infrastructure.html">Infrastructure configuration</a> · Related: <a href="docker.html">Docker</a> · <a href="kubernetes.html">Kubernetes</a> · <a href="shell-scripts.html">Shell scripts</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+</body>
+</html>

@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Auth Bypass Scanner · isitsecure</title>
+<meta name="description" content="How isitsecure probes login and reset endpoints with no session: username enumeration, missing lockout, default credentials, reset token leaks and Authorization header bypass, animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  /* page-specific: comparison cards and attempt tiles */
+  .topbar-inner .crumb a { color: inherit; text-decoration: none; }
+  .topbar-inner .crumb a:hover { color: var(--accent); }
+  .sq > rect { fill: var(--attacker-soft); stroke: var(--attacker); stroke-width: 1; }
+  .sq.q > rect { fill: none; stroke: var(--muted); stroke-dasharray: 3 3; }
+  #lock .sq { transition: opacity .3s; }
+  .dim { opacity: .45; }
+  #noauthscene .panel-bad > rect { fill: var(--attacker-soft); }
+  #noauthscene .panel-good > rect { fill: var(--safe-soft); }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› <a href="group-auth-sessions.html">Authentication and sessions</a> › Auth bypass</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/auth-bypass-scanner.md" title="The markdown source for this page">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">DAST scanner · deep depth · unauthenticated by design</div>
+  <h1>Auth Bypass Scanner</h1>
+  <p class="lede">Authentication is the front door. This scanner knocks on it without a session and reads what the server gives away: which accounts exist, whether guessing is ever slowed down, whether <code>admin/admin</code> works, whether a reset token comes back in the HTTP reply, and whether a protected endpoint opens for a missing or fake Authorization header.</p>
+  <div class="meta">
+    <span class="pill dast">DAST</span><span class="pill crit">Critical</span><span class="pill high">High</span><span class="pill">Auth Weakness</span><span class="pill">5 phases</span><span class="pill">--depth deep only</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#enum"><span class="n">01</span>Username enumeration</a>
+  <a href="#lockout"><span class="n">02</span>Lockout and default credentials</a>
+  <a href="#leak"><span class="n">03</span>Token leak and header bypass</a>
+  <a href="#noauth"><span class="n">04</span>Why it carries no session</a>
+  <a href="#why"><span class="n">05</span>Why it matters</a>
+  <a href="#code"><span class="n">06</span>Vulnerable vs fixed code</a>
+  <a href="#limits"><span class="n">07</span>Limits and configuration</a>
+</nav>
+
+<section id="enum">
+  <h2>Username enumeration</h2>
+  <p class="prose">The scanner first picks endpoints by URL: login endpoints contain <code>/login</code>, <code>/signin</code>, <code>/sign-in</code>, <code>/auth/login</code>, <code>/api/auth</code>, <code>/api/login</code> or <code>/api/signin</code>. Each one gets two logins that differ only in the email. Three independent comparisons then decide whether the server told the two apart.</p>
+
+  <div class="scene" id="enumscene" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 336" role="img" aria-label="Two login probes, one for an account that cannot exist and one for admin@test.com, both with a wrong password, and the three comparisons on their replies: error message, response time and status code.">
+        <defs><marker id="arrAbEnum" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <!-- request rows -->
+        <g class="node" transform="translate(20 16)">
+          <rect width="350" height="74" rx="8"/>
+          <text class="ttl" x="12" y="22">Probe 1 · an account that cannot exist</text>
+          <text class="mono" x="12" y="44">email: nonexistent_user_test_00@test.invalid</text>
+          <text class="lbl" x="12" y="62">password: definitely_wrong_password_12345!</text>
+        </g>
+        <g class="node" transform="translate(20 100)">
+          <rect width="350" height="74" rx="8"/>
+          <text class="ttl" x="12" y="22">Probe 2 · looks like a real admin</text>
+          <text class="mono" x="12" y="44">email: admin@test.com</text>
+          <text class="lbl" x="12" y="62">password: definitely_wrong_password_12345!</text>
+        </g>
+        <path class="wire attacker at-1" d="M370 53 H 440" marker-end="url(#arrAbEnum)"/>
+        <path class="wire attacker at-1" d="M370 137 H 440" marker-end="url(#arrAbEnum)"/>
+        <text class="lbl at-1" x="378" y="46">POST</text>
+        <text class="lbl at-1" x="378" y="130">POST</text>
+        <!-- responses -->
+        <g class="node at-2" transform="translate(440 16)">
+          <rect width="480" height="74" rx="8"/>
+          <text class="lbl" x="12" y="22">reply to probe 1</text>
+          <text class="mono" x="12" y="44">401  {"error":"User not found"}</text>
+          <text class="lbl" x="12" y="62">98 ms</text>
+        </g>
+        <g class="node at-2" transform="translate(440 100)">
+          <rect width="480" height="74" rx="8"/>
+          <text class="lbl" x="12" y="22">reply to probe 2</text>
+          <text class="mono" x="12" y="44">401  {"error":"Invalid password"}</text>
+          <text class="lbl" x="12" y="62">612 ms</text>
+        </g>
+        <!-- comparison cards -->
+        <g class="node lit-3" transform="translate(20 192)">
+          <rect width="300" height="130" rx="8"/>
+          <text class="ttl" x="12" y="24">1 · Error message</text>
+          <text class="lbl" x="12" y="44">equal bodies: silent</text>
+          <text class="lbl" x="12" y="60">else needs a known phrase pair:</text>
+          <text class="mono" x="12" y="82">user not found | invalid password</text>
+          <text class="mono t-attacker at-3" x="12" y="112">HIGH · 0.85</text>
+        </g>
+        <g class="node lit-4" transform="translate(330 192)">
+          <rect width="300" height="130" rx="8"/>
+          <text class="ttl" x="12" y="24">2 · Response time</text>
+          <text class="lbl" x="12" y="44">one sample for each probe</text>
+          <text class="lbl" x="12" y="60">flag if the gap exceeds 0.5 s</text>
+          <text class="mono" x="12" y="82">612 - 98 = 514 ms</text>
+          <text class="mono t-accent at-4" x="12" y="112">MEDIUM · 0.65</text>
+        </g>
+        <g class="node lit-5" transform="translate(640 192)">
+          <rect width="300" height="130" rx="8"/>
+          <text class="ttl" x="12" y="24">3 · Status code</text>
+          <text class="lbl" x="12" y="44">compare the two codes</text>
+          <text class="lbl" x="12" y="60">different codes: flag</text>
+          <text class="mono" x="12" y="82">401 vs 401: same</text>
+          <text class="mono t-safe at-5" x="12" y="112">silent · no finding</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The scanner sends two logins with no session. One uses <code>nonexistent_user_test_00@test.invalid</code>, which cannot be a real account, the other <code>admin@test.com</code>. <b>Both carry the same wrong password</b>, so any difference in the reply comes from the email alone.</p>
+      <p class="step"><span class="n">2</span>The server answers both with 401, but the bodies and the timings differ. The scanner keeps the first 500 characters of each body, the status and the elapsed time.</p>
+      <p class="step"><span class="n">3</span><b>Message check.</b> Identical bodies end it. Otherwise one body must hold a phrase from a known pair and the other body the matching partner: "user not found" with "invalid password", "no account" with "incorrect password", "does not exist" with "invalid credentials", and five more. Two bodies that merely differ (a request id, a timestamp) do not count. HIGH, confidence 0.85.</p>
+      <p class="step"><span class="n">4</span><b>Timing check.</b> A gap above 0.5 s between the two replies suggests the server only hashes a password when the account exists. It is one sample each, so confidence is lower: MEDIUM, 0.65.</p>
+      <p class="step"><span class="n">5</span><b>Status check.</b> Two different status codes would be MEDIUM, 0.70. Here both are 401, so this check stays quiet. One endpoint can raise zero, one, two or all three findings.</p>
+    </div>
+  </div>
+</section>
+
+<section id="lockout">
+  <h2>Lockout and default credentials</h2>
+  <p class="prose">These two phases hit the same login endpoints. One repeats a wrong login to see whether the server ever pushes back; the other tries seven well-known credential pairs.</p>
+
+  <div class="scene" id="lock" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 336" role="img" aria-label="Left: eleven login attempts as tiles, with the rule that only a 423 status counts as a lockout. Right: seven default credential pairs tried in order, the third accepted, the last four never sent.">
+        <!-- lockout -->
+        <g class="node lit-1 lit-2" transform="translate(20 20)">
+          <rect width="440" height="300" rx="10"/>
+          <text class="ttl" x="14" y="26">Account lockout</text>
+          <text class="lbl" x="14" y="46">admin@test.com with a wrong password, 0.2 s apart</text>
+          <g class="sq" transform="translate(14 62)"><rect width="28" height="28" rx="4"/><text class="mono" x="14" y="19" text-anchor="middle" style="font-size:10px">401</text></g>
+          <g class="sq" transform="translate(52 62)"><rect width="28" height="28" rx="4"/><text class="mono" x="14" y="19" text-anchor="middle" style="font-size:10px">401</text></g>
+          <g class="sq" transform="translate(90 62)"><rect width="28" height="28" rx="4"/><text class="mono" x="14" y="19" text-anchor="middle" style="font-size:10px">401</text></g>
+          <g class="sq" transform="translate(128 62)"><rect width="28" height="28" rx="4"/><text class="mono" x="14" y="19" text-anchor="middle" style="font-size:10px">401</text></g>
+          <g class="sq" transform="translate(166 62)"><rect width="28" height="28" rx="4"/><text class="mono" x="14" y="19" text-anchor="middle" style="font-size:10px">401</text></g>
+          <g class="sq" transform="translate(204 62)"><rect width="28" height="28" rx="4"/><text class="mono" x="14" y="19" text-anchor="middle" style="font-size:10px">401</text></g>
+          <g class="sq" transform="translate(242 62)"><rect width="28" height="28" rx="4"/><text class="mono" x="14" y="19" text-anchor="middle" style="font-size:10px">401</text></g>
+          <g class="sq" transform="translate(280 62)"><rect width="28" height="28" rx="4"/><text class="mono" x="14" y="19" text-anchor="middle" style="font-size:10px">401</text></g>
+          <g class="sq" transform="translate(318 62)"><rect width="28" height="28" rx="4"/><text class="mono" x="14" y="19" text-anchor="middle" style="font-size:10px">401</text></g>
+          <g class="sq" transform="translate(356 62)"><rect width="28" height="28" rx="4"/><text class="mono" x="14" y="19" text-anchor="middle" style="font-size:10px">401</text></g>
+          <g class="sq q at-2" transform="translate(394 62)"><rect width="28" height="28" rx="4"/><text class="mono" x="14" y="19" text-anchor="middle" style="font-size:10px">401</text></g>
+          <text class="lbl" x="14" y="112">10 attempts, then the scanner reads the last status.</text>
+          <g class="at-2">
+            <text class="mono" x="14" y="146">last status 423?</text>
+            <text class="mono t-safe" x="14" y="166">yes: the lockout works, silent</text>
+            <text class="mono" x="14" y="190">no: send an 11th attempt</text>
+            <text class="mono t-attacker" x="14" y="210">still not 423: MEDIUM · 0.60</text>
+            <text class="lbl" x="14" y="244">Only 423 counts as a lock. Any other status, a 429</text>
+            <text class="lbl" x="14" y="260">included, is reported as no lockout.</text>
+          </g>
+        </g>
+        <!-- default creds -->
+        <g class="node lit-3 lit-4" transform="translate(480 20)">
+          <rect width="460" height="300" rx="10"/>
+          <text class="ttl" x="14" y="26">Default credentials</text>
+          <text class="lbl" x="14" y="46">7 pairs in order, 0.5 s apart, same login endpoint</text>
+          <g class="mono">
+            <text x="14" y="74">admin@admin.com / admin</text><text class="at-3 t-safe" x="270" y="74">401</text>
+            <text x="14" y="96">admin@admin.com / password</text><text class="at-3 t-safe" x="270" y="96">401</text>
+            <text x="14" y="118">admin@admin.com / admin123</text><text class="at-4 t-attacker" x="270" y="118">200 {"token":…}</text>
+            <g class="at-4"><text class="dim" x="14" y="140">test@test.com / test</text></g><text class="at-4 lbl" x="270" y="140">not sent</text>
+            <g class="at-4"><text class="dim" x="14" y="162">root@root.com / root</text></g><text class="at-4 lbl" x="270" y="162">not sent</text>
+            <g class="at-4"><text class="dim" x="14" y="184">admin@admin.com / changeme</text></g><text class="at-4 lbl" x="270" y="184">not sent</text>
+            <g class="at-4"><text class="dim" x="14" y="206">user@user.com / password123</text></g><text class="at-4 lbl" x="270" y="206">not sent</text>
+            <text class="until-4 lbl" x="14" y="140">(the remaining four wait their turn)</text>
+          </g>
+          <text class="lbl at-3" x="14" y="240">success = 2xx and a word such as access_token,</text>
+          <text class="lbl at-3" x="14" y="256">jwt, bearer, session_id or "token" in the body</text>
+          <text class="mono t-attacker at-4" x="14" y="284">CRITICAL · 0.95 · stops at the first hit</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span><b>Lockout.</b> The scanner sends the same wrong login ten times, 0.2 s apart. A server that locks accounts would start answering 423 (Locked).</p>
+      <p class="step"><span class="n">2</span>It reads the <b>last status</b>. A 423 means the lock works and the scanner reports nothing. Anything else earns an 11th attempt, and if that is still not 423 the finding is MEDIUM, confidence 0.60. A rate limiter that answers 429 does not satisfy this check; the <a href="rate-limit.html">rate limit scanner</a> covers that.</p>
+      <p class="step"><span class="n">3</span><b>Default credentials.</b> Seven pairs run in a fixed order, half a second apart. A pair succeeds only when the reply is 2xx <b>and</b> the body contains a token-like word. A 200 that just says <code>{"error":"bad login"}</code> is not a success.</p>
+      <p class="step"><span class="n">4</span>The third pair, <code>admin@admin.com / admin123</code>, returns a token. That is <b>CRITICAL, confidence 0.95</b>, with the request and reply saved as evidence. The scanner stops at the first hit, so the last four pairs are never sent.</p>
+    </div>
+  </div>
+</section>
+
+<section id="leak">
+  <h2>Token leak and header bypass</h2>
+  <p class="prose">Two more phases look at endpoints other than the login form: password-reset endpoints (<code>/forgot-password</code>, <code>/reset-password</code>, <code>/password-reset</code> and four more spellings), and endpoints that ought to require a login.</p>
+
+  <div class="scene" id="leakbypass" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 340" role="img" aria-label="Left: a reset request for a nonexistent email whose reply is searched for token strings. Right: three Authorization header variants sent to a protected endpoint, the Basic admin:admin one answered with 200.">
+        <g class="node lit-2" transform="translate(20 20)">
+          <rect width="450" height="310" rx="10"/>
+          <text class="ttl" x="14" y="26">Reset token leak</text>
+          <text class="mono" x="14" y="50">POST /api/forgot-password</text>
+          <text class="lbl" x="14" y="68">email: nonexistent_user_test_00@test.invalid</text>
+          <text class="lbl" x="14" y="98">a safe reply</text>
+          <text class="mono" x="14" y="116">200 {"message":"Check your email"}</text>
+          <text class="mono t-safe at-2" x="14" y="134">no match: silent</text>
+          <text class="lbl" x="14" y="160">a leaking reply</text>
+          <text class="mono" x="14" y="178">200 {"reset_token":"9f3a1c…"}</text>
+          <text class="mono t-attacker at-2" x="14" y="196">match: "reset_token"</text>
+          <text class="lbl at-2" x="14" y="222">looks in the first 500 body characters, then the headers,</text>
+          <text class="lbl at-2" x="14" y="238">for any of 7 strings: reset_token, resettoken, token=,</text>
+          <text class="lbl at-2" x="14" y="254">reset-token, password_reset_token, verification_token,</text>
+          <text class="lbl at-2" x="14" y="270">verify_token</text>
+          <text class="mono t-attacker at-2" x="14" y="296">HIGH · 0.90 · evidence saved</text>
+        </g>
+        <g class="node lit-3 lit-4" transform="translate(490 20)">
+          <rect width="450" height="310" rx="10"/>
+          <text class="ttl" x="14" y="26">Auth header bypass</text>
+          <text class="mono" x="14" y="50">GET /api/me</text>
+          <text class="lbl" x="14" y="68">an endpoint that should require a login</text>
+          <text class="mono" x="14" y="98">1 · no Authorization header</text><text class="mono t-safe at-3" x="370" y="98">401</text>
+          <text class="mono" x="14" y="130">2 · "Authorization: Bearer "</text><text class="mono t-safe at-3" x="370" y="130">401</text>
+          <text class="lbl" x="34" y="146">an empty bearer token</text>
+          <text class="mono" x="14" y="178">3 · "Basic YWRtaW46YWRtaW4="</text><text class="mono t-attacker at-4" x="370" y="178">200</text>
+          <text class="lbl" x="34" y="194">admin:admin, base64 encoded</text>
+          <g class="at-4">
+            <text class="mono t-attacker" x="14" y="228">HIGH · 0.85 · evidence saved</text>
+            <text class="lbl" x="14" y="254">Stops at the first 2xx. Only the status is read,</text>
+            <text class="lbl" x="14" y="270">not the body.</text>
+          </g>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Reset endpoints get one POST for an email that cannot exist. A well-built reset form answers every email the same way and sends the link by mail. The page shows a safe reply and a leaking one side by side.</p>
+      <p class="step"><span class="n">2</span><b>Leak check.</b> The scanner lower-cases the first 500 characters of the body, then the response headers, and looks for seven token-like strings. A hit is <b>HIGH, confidence 0.90</b>, because anyone who can submit the form can then reset that account. The check is a plain substring search, so a header such as <code>Set-Cookie: csrftoken=…</code> also contains <code>token=</code>.</p>
+      <p class="step"><span class="n">3</span><b>Header bypass.</b> Endpoints with <code>requires_auth</code> set, or a path containing <code>/api/user</code>, <code>/api/account</code>, <code>/api/profile</code>, <code>/api/settings</code>, <code>/api/admin</code>, <code>/dashboard/api</code> or <code>/api/me</code>, are tried with three headers, in order. The first two are refused.</p>
+      <p class="step"><span class="n">4</span>The third, a Basic header for <code>admin:admin</code>, is answered 200. <b>Any 2xx counts</b>: that is HIGH, confidence 0.85, and one bypass per endpoint is enough evidence. The endpoints are ranked by the shared prioritizer so the most auth-looking ones go first.</p>
+    </div>
+  </div>
+</section>
+
+<section id="noauth">
+  <h2>Why it carries no session</h2>
+  <p class="prose">Most deep scanners get the crawl's login session injected into every request. This one is the exception, on purpose (issue #119). Every phase depends on the absence or forging of authentication.</p>
+
+  <div class="scene" id="noauthscene" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 336" role="img" aria-label="Two panels. If the scanner inherited the crawl session, the 'no Authorization header' probe would still send the session and get a 200, a false finding. As built, the client holds only a User-Agent, the probe is anonymous and the reply is a 401.">
+        <g class="node panel-bad lit-2" transform="translate(20 20)">
+          <rect width="450" height="260" rx="10"/>
+          <text class="ttl" x="14" y="26">If it inherited the session</text>
+          <text class="lbl" x="14" y="50">client base headers</text>
+          <text class="mono t-info" x="14" y="70">Authorization: Bearer &lt;crawl session&gt;</text>
+          <text class="lbl only-1" x="14" y="150">every probe would inherit this session</text>
+          <text class="lbl" x="14" y="100">probe 1 sets: { }   (no Authorization header)</text>
+          <g class="at-2">
+            <text class="lbl" x="14" y="122">the request actually sent:</text>
+            <text class="mono t-info" x="14" y="142">Authorization: Bearer &lt;crawl session&gt;</text>
+            <text class="mono t-attacker" x="14" y="172">GET /api/me → 200</text>
+            <text class="mono t-attacker" x="14" y="198">FALSE FINDING · HIGH · 0.85</text>
+            <text class="lbl" x="14" y="228">the session rode along on a probe</text>
+            <text class="lbl" x="14" y="244">that was meant to be anonymous</text>
+          </g>
+        </g>
+        <g class="node panel-good lit-3" transform="translate(490 20)">
+          <rect width="450" height="260" rx="10"/>
+          <text class="ttl" x="14" y="26">As built: a bare client</text>
+          <text class="lbl" x="14" y="50">client base headers</text>
+          <text class="mono" x="14" y="70">User-Agent only</text>
+          <text class="lbl only-1" x="14" y="150">nothing to inherit</text>
+          <text class="lbl" x="14" y="100">probe 1 sets: { }   (no Authorization header)</text>
+          <g class="at-3">
+            <text class="lbl" x="14" y="122">the request actually sent:</text>
+            <text class="mono" x="14" y="142">(no Authorization header)</text>
+            <text class="mono t-safe" x="14" y="172">GET /api/me → 401</text>
+            <text class="mono t-safe" x="14" y="198">no finding</text>
+            <text class="lbl" x="14" y="228">the probe really is anonymous, so a 2xx</text>
+            <text class="lbl" x="14" y="244">means the endpoint is open</text>
+          </g>
+        </g>
+        <g class="at-4">
+          <text class="mono" x="20" y="304">orchestrator: does the scanner expose _auth_headers?</text>
+          <text class="lbl" x="20" y="322">no → skipped, no session is handed over. The other deep scanners (rate limit, password reset) do expose it and are given one.</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>An authenticated deep scan captures a session during the crawl and hands it to every HTTP scanner that carries the auth mixin. That is right for injection or CSRF probes, which must get past the login wall.</p>
+      <p class="step"><span class="n">2</span>Here it would break the test. The "no Authorization header" probe sends an empty header set, but the client's base headers still apply, so the session would be sent anyway and the endpoint would answer 200. <b>The probe would report a bypass that does not exist.</b> The empty-Bearer and Basic probes overwrite Authorization but a session cookie would still ride along.</p>
+      <p class="step"><span class="n">3</span>As built, the client carries only a User-Agent. The anonymous probe gets its honest 401. Username enumeration, lockout and default-credential probes need the same clean slate.</p>
+      <p class="step"><span class="n">4</span>The scanner simply does not inherit the auth mixin. The orchestrator hands a session only to scanners that expose <code>_auth_headers</code>, so this one is skipped.</p>
+    </div>
+  </div>
+</section>
+
+<section id="why">
+  <h2>Why it matters</h2>
+  <div class="callout why">
+    <div class="label">Why it matters</div>
+    <p>Authentication is the front door. If attackers can enumerate usernames, there is no lockout and default credentials work, then guessing becomes cheap. <b>Targeted attacks:</b> knowing which emails have accounts lets attackers focus phishing and credential stuffing. <b>Brute force:</b> without lockout, tools try thousands of passwords per minute. <b>Instant access:</b> <code>admin/admin</code> gives admin access with zero effort.</p>
+  </div>
+  <div class="callout breach">
+    <div class="label">iCloud (2014)</div>
+    <p>No account lockout on the Find My iPhone API allowed brute-force password attacks against celebrity accounts.</p>
+  </div>
+</section>
+
+<section id="code">
+  <h2>Vulnerable vs fixed code</h2>
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true" type="button">BAD · vulnerable</button>
+      <button class="tab good" role="tab" aria-selected="false" type="button">GOOD · fixed</button>
+    </div>
+    <div role="tabpanel"><pre><code><span class="c">// BAD: a different message for each cause, and no limit on tries</span>
+if (!user) {
+  return NextResponse.json({ error: <span class="s">"User not found"</span> }, { status: 404 })
+}
+<span class="hl bad">if (!validPassword) {</span>
+<span class="hl bad">  return NextResponse.json({ error: <span class="s">"Invalid password"</span> }, { status: 401 })</span>
+<span class="hl bad">}</span></code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c">// GOOD: Same error message for all auth failures</span>
+if (!user || !validPassword) {
+  return NextResponse.json(
+    { error: <span class="s">"Invalid email or password"</span> },  <span class="c">// Same message regardless of cause</span>
+    { status: 401 }
+  )
+}
+
+<span class="c">// GOOD: Account lockout after N attempts</span>
+const attempts = await getLoginAttempts(email)
+<span class="hl good">if (attempts >= 5) {</span>
+  return NextResponse.json({ error: <span class="s">"Account locked. Try again in 15 minutes."</span> }, { status: <span class="k">423</span> })
+}</code></pre></div>
+  </div>
+  <div class="callout note">
+    <div class="label">Fix timing as well</div>
+    <p>The same message and status are not enough if one path hashes a password and the other returns early. Run the same work, or a dummy hash, when the account does not exist, so the 0.5 s timing check has nothing to see. The lockout check only recognises status 423, so a lock that answers with another code is reported even though it works.</p>
+  </div>
+</section>
+
+<section id="limits">
+  <h2>Limits and configuration</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Phase</th><th>Requests</th><th>Reports when</th><th>Severity · confidence</th></tr></thead>
+      <tbody>
+        <tr><td>Username enumeration</td><td>2 per login endpoint</td><td>a known phrase pair in the two bodies; timing gap above 0.5 s; different status codes</td><td>High · 0.85 / Medium · 0.65 / Medium · 0.70</td></tr>
+        <tr><td>Reset token leak</td><td>1 per reset endpoint</td><td>one of 7 token strings in the first 500 body characters or in the headers</td><td>High · 0.90</td></tr>
+        <tr><td>Account lockout</td><td>10, plus 1 if needed</td><td>the last status is not 423</td><td>Medium · 0.60</td></tr>
+        <tr><td>Default credentials</td><td>up to 7 per login endpoint</td><td>2xx and a token-like word in the body</td><td>Critical · 0.95</td></tr>
+        <tr><td>Auth header bypass</td><td>up to 3 per protected endpoint</td><td>any 2xx to the no-header, empty-Bearer or Basic admin:admin request</td><td>High · 0.85</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout note">
+    <div class="label">What it deliberately stays quiet about</div>
+    <p>It only runs at <code>--depth deep</code>, with a 1800 s timeout and a shared time budget across the five phases: when the budget runs out the current phase stops and each later phase stops on its first endpoint, returning what was found. The probes always send a JSON body with <code>email</code> and <code>password</code> keys, so a login that expects other field names or form encoding is not exercised the way a real client would. Each probe sleeps 0.5 s, and the whole run is logged as an authorized test. Only run it against systems you are permitted to test.</p>
+  </div>
+</section>
+
+<footer class="foot">
+  <span>Source: <a href="../scanners/auth-bypass-scanner.md">docs/scanners/auth-bypass-scanner.md</a> · <a href="../../isitsecure/engine/scanners/auth_bypass_scanner.py">auth_bypass_scanner.py</a></span>
+  <span>Group: <a href="group-auth-sessions.html">Authentication and sessions</a> · Related: <a href="password-reset.html">Password reset</a> · <a href="rate-limit.html">Rate limit</a> · <a href="jwt-attacks.html">JWT attacks</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+</body>
+</html>

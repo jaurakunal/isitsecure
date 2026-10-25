@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Infrastructure configuration · isitsecure</title>
+<meta name="description" content="The four isitsecure scanners that read infrastructure files: Dockerfiles and compose, Kubernetes manifests, Terraform and shell scripts. One shared mechanism, animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+
+  .topbar-inner .crumb a { color: inherit; text-decoration: none; }
+  .topbar-inner .crumb a:hover { color: var(--accent); }
+  .wbar { fill: transparent; transition: fill .3s; }
+  .wmark, .wflag { opacity: 0; transition: opacity .3s; }
+  .scene .stage svg text.mono { white-space: pre; }
+  .wrow > rect { transition: fill .3s, stroke .3s; }
+
+  .thumb svg .n > rect, .thumb svg .n > circle { fill: var(--surface); stroke: var(--muted); stroke-width: 1.3; }
+  .thumb svg .w { stroke: var(--muted); stroke-width: 1.3; fill: none; }
+  .thumb svg .a { stroke: var(--accent); }
+  .thumb svg .fa { fill: var(--accent); }
+  .thumb svg .fr { fill: var(--attacker); }
+  .thumb svg .fs { fill: var(--safe); }
+  .thumb svg .fi { fill: var(--info); }
+  .thumb svg .r { stroke: var(--attacker); }
+  .thumb svg .s { stroke: var(--safe); }
+  .thumb svg .i { stroke: var(--info); }
+
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› Infrastructure configuration</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/README.md" title="The markdown source for this page">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">Scanner group</div>
+  <h1>Infrastructure configuration</h1>
+  <p class="lede">Every scanner in this group reads a configuration file as plain text and runs regular expressions over it. A Dockerfile, a Kubernetes manifest, a Terraform file and a shell script are four different languages, but the scanner treats each as one string: pick the file by name or marker, match the rule, skip the placeholders, report a severity.</p>
+  <div class="meta">
+    <span class="pill "><b>4</b> scanners</span><span class="pill sast">4 SAST</span><span class="pill crit">Low to Critical</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#how"><span class="n">01</span>How this group works</a>
+  <a href="#scanners"><span class="n">02</span>Scanners in this group</a>
+  <a href="#glance"><span class="n">03</span>At a glance</a>
+  <a href="#why"><span class="n">04</span>Why this class matters</a>
+</nav>
+
+<section id="how">
+  <h2>How this group works</h2>
+  <p class="prose">Four files, one shape. Each step adds a column: how the file is picked, what is searched for, what is skipped and what comes out.</p>
+  <div class="scene" id="infra-shape" data-scene data-interval="3600">
+    <figure class="stage">
+      <svg viewBox="0 0 960 350" role="img" aria-label="Four files flow left to right through a name test, a text rule with a guard, and into a finding with a severity.">
+<defs><marker id="arr-hg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+<text class="lbl at-1" x="20" y="26">Input file</text>
+<text class="lbl at-2" x="250" y="26">Picked by</text>
+<text class="lbl at-3" x="470" y="26">Rule over the text</text>
+<text class="lbl at-4" x="750" y="26">Finding</text>
+<g class="node"><rect x="20" y="40" width="200" height="52" rx="8"/><text class="mono" x="34" y="63">Dockerfile</text><text class="lbl" x="34" y="81">Docker scanner</text></g>
+<g class="at-2"><g class="node"><rect x="250" y="40" width="190" height="52" rx="8"/></g><text class="lbl" x="262" y="62">name in the Dockerfile list</text><text class="lbl" x="262" y="79">file index, by name</text></g>
+<g class="at-3"><g class="node"><rect x="470" y="40" width="250" height="52" rx="8"/></g><text class="mono" x="484" y="62">no line matches ^\s*USER</text><text class="lbl only-3" x="484" y="81">whole file, absence rule</text><text class="lbl t-info only-4" x="484" y="81">guard: skipped if the path has &quot;dev&quot;</text><text class="lbl at-5" x="484" y="81">whole file, absence rule</text></g>
+<g class="at-5"><g class="node"><rect x="750" y="40" width="190" height="52" rx="8"/></g><text class="t-attacker" x="764" y="62" style="font-size:12px;font-weight:600">Medium · conf 0.85</text><text class="lbl" x="764" y="81">Dockerfile runs as root</text></g>
+<path class="wire at-2 accent" d="M220 66 H 248" marker-end="url(#arr-hg)"/>
+<path class="wire at-3 accent" d="M440 66 H 468" marker-end="url(#arr-hg)"/>
+<path class="wire at-5 accent" d="M720 66 H 748" marker-end="url(#arr-hg)"/>
+<g class="node"><rect x="20" y="110" width="200" height="52" rx="8"/><text class="mono" x="34" y="133">deploy/app.yaml</text><text class="lbl" x="34" y="151">Kubernetes scanner</text></g>
+<g class="at-2"><g class="node"><rect x="250" y="110" width="190" height="52" rx="8"/></g><text class="lbl" x="262" y="132">.yaml/.yml with apiVersion:</text><text class="lbl" x="262" y="149">plus 7 folder names on disk</text></g>
+<g class="at-3"><g class="node"><rect x="470" y="110" width="250" height="52" rx="8"/></g><text class="mono" x="484" y="132">privileged\s*:\s*true</text><text class="lbl only-3" x="484" y="151">searched in the full file text</text><text class="lbl t-info only-4" x="484" y="151">guard: placeholders ${..} &lt;..&gt; CHANGE_ME</text><text class="lbl at-5" x="484" y="151">searched in the full file text</text></g>
+<g class="at-5"><g class="node"><rect x="750" y="110" width="190" height="52" rx="8"/></g><text class="t-attacker" x="764" y="132" style="font-size:12px;font-weight:600">Critical · conf 0.95</text><text class="lbl" x="764" y="151">Container runs privileged</text></g>
+<path class="wire at-2 accent" d="M220 136 H 248" marker-end="url(#arr-hg)"/>
+<path class="wire at-3 accent" d="M440 136 H 468" marker-end="url(#arr-hg)"/>
+<path class="wire at-5 accent" d="M720 136 H 748" marker-end="url(#arr-hg)"/>
+<g class="node"><rect x="20" y="180" width="200" height="52" rx="8"/><text class="mono" x="34" y="203">infra/main.tf</text><text class="lbl" x="34" y="221">IaC scanner</text></g>
+<g class="at-2"><g class="node"><rect x="250" y="180" width="190" height="52" rx="8"/></g><text class="lbl" x="262" y="202">extension .tf or .tfvars</text><text class="lbl" x="262" y="219">no folder or name rule</text></g>
+<g class="at-3"><g class="node"><rect x="470" y="180" width="250" height="52" rx="8"/></g><text class="mono" x="484" y="202">0.0.0.0/0 + from_port 5432</text><text class="lbl only-3" x="484" y="221">searched inside each ingress { }</text><text class="lbl t-info only-4" x="484" y="221">guard: ports 80 and 443 are allowed</text><text class="lbl at-5" x="484" y="221">searched inside each ingress { }</text></g>
+<g class="at-5"><g class="node"><rect x="750" y="180" width="190" height="52" rx="8"/></g><text class="t-attacker" x="764" y="202" style="font-size:12px;font-weight:600">High · conf 0.90</text><text class="lbl" x="764" y="221">SG open on port 5432</text></g>
+<path class="wire at-2 accent" d="M220 206 H 248" marker-end="url(#arr-hg)"/>
+<path class="wire at-3 accent" d="M440 206 H 468" marker-end="url(#arr-hg)"/>
+<path class="wire at-5 accent" d="M720 206 H 748" marker-end="url(#arr-hg)"/>
+<g class="node"><rect x="20" y="250" width="200" height="52" rx="8"/><text class="mono" x="34" y="273">deploy.sh</text><text class="lbl" x="34" y="291">Shell script scanner</text></g>
+<g class="at-2"><g class="node"><rect x="250" y="250" width="190" height="52" rx="8"/></g><text class="lbl" x="262" y="272">extension .sh or .bash</text><text class="lbl" x="262" y="289">no shebang check</text></g>
+<g class="at-3"><g class="node"><rect x="470" y="250" width="250" height="52" rx="8"/></g><text class="mono" x="484" y="272">curl ... | sh</text><text class="lbl only-3" x="484" y="291">searched in the full file text</text><text class="lbl t-info only-4" x="484" y="291">guard: values with $ / your- are skipped</text><text class="lbl at-5" x="484" y="291">searched in the full file text</text></g>
+<g class="at-5"><g class="node"><rect x="750" y="250" width="190" height="52" rx="8"/></g><text class="t-attacker" x="764" y="272" style="font-size:12px;font-weight:600">High · conf 0.90</text><text class="lbl" x="764" y="291">curl piped to a shell</text></g>
+<path class="wire at-2 accent" d="M220 276 H 248" marker-end="url(#arr-hg)"/>
+<path class="wire at-3 accent" d="M440 276 H 468" marker-end="url(#arr-hg)"/>
+<path class="wire at-5 accent" d="M720 276 H 748" marker-end="url(#arr-hg)"/>
+<path class="wire dashed only-1" d="M226 66 H 934"/>
+<path class="wire dashed only-1" d="M226 136 H 934"/>
+<path class="wire dashed only-1" d="M226 206 H 934"/>
+<path class="wire dashed only-1" d="M226 276 H 934"/>
+<text class="lbl only-1" x="20" y="334">Text goes in on the left and a finding comes out on the right. The next four steps fill in what happens between them.</text>
+<text class="lbl at-6" x="20" y="334">No YAML, HCL, Dockerfile or shell parser sits in between. A finding is a file path, a severity and a confidence.</text>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Four kinds of configuration file, four scanners, one habit. Each scanner takes <b>the text of a file</b> from the repository snapshot and nothing else: no running app, no credentials, no network.</p>
+      <p class="step"><span class="n">2</span><b>Discovery is by name.</b> A Dockerfile by its file name, a Terraform file by its extension, a script by <code>.sh</code> or <code>.bash</code>. Kubernetes manifests have no fixed name, so the marker <code>apiVersion:</code> and seven folder names stand in.</p>
+      <p class="step"><span class="n">3</span><b>The rule is a regular expression over the text.</b> Some look for a bad line, some for a bad line inside a block, and some for a good line that is missing. None of them builds a tree of the file first.</p>
+      <p class="step"><span class="n">4</span><b>Each rule has a guard.</b> Placeholders, allowed ports, development paths and variable references are skipped so that a template or a public web port does not turn into a finding.</p>
+      <p class="step"><span class="n">5</span><b>A match becomes a finding</b> with a fixed severity and a fixed confidence from the scanner's configuration. The finding names the file; the scanners in this group do not record a line number.</p>
+      <p class="step"><span class="n">6</span><b>That is the whole shape.</b> It is cheap, it runs on every scan, quick or deep, and it cannot tell a development default from a production one. The per-scanner pages show where each guard sits and what each one misses.</p>
+    </div>
+  </div>
+</section>
+
+<section id="scanners">
+  <h2>Scanners in this group</h2>
+  <div class="cards">
+    <a class="card" href="docker.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><text x="12" y="20">FROM node:latest</text><rect class="fr" x="8" y="9" width="3" height="14"/><text x="12" y="40">ENV DB_PASSWORD=hunter2</text><text x="12" y="60">EXPOSE 5432</text><circle class="fr" cx="186" cy="56" r="5"/></svg></div>
+      <h3>Docker</h3><p>Six Dockerfile rules and three compose rules over one string: root, unpinned tags, database ports, ENV secrets, remote ADD, privileged mode.</p>
+      <div class="foot"><span class="pill sast">SAST</span><span class="pill med">Low</span><span class="pill crit">Critical</span><span class="pill">docker-scanner.md</span></div>
+    </a>
+    <a class="card" href="kubernetes.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><text x="12" y="20">securityContext:</text><text x="24" y="40" class="fr">privileged: true</text><text x="24" y="60">runAsUser: 0</text><circle class="fr" cx="186" cy="40" r="5"/><path class="w r" d="M150 40 H 176"/></svg></div>
+      <h3>Kubernetes</h3><p>Manifests found by apiVersion and folder name, seven regular expressions for dangerous settings, and a separate check for Helm values files.</p>
+      <div class="foot"><span class="pill sast">SAST</span><span class="pill med">Low</span><span class="pill crit">Critical</span><span class="pill">k8s-scanner.md</span></div>
+    </a>
+    <a class="card" href="iac.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><text x="12" y="20">ingress {</text><text x="24" y="40" class="fr">cidr = ["0.0.0.0/0"]</text><text x="24" y="60">from_port = 5432</text><circle class="fr" cx="186" cy="40" r="5"/></svg></div>
+      <h3>IaC (Terraform)</h3><p>Every .tf and .tfvars file: open security groups, wildcard IAM, secret defaults, public buckets, and the ports and thresholds that are allowed.</p>
+      <div class="foot"><span class="pill sast">SAST</span><span class="pill med">Low</span><span class="pill crit">Critical</span><span class="pill">iac-scanner.md</span></div>
+    </a>
+    <a class="card" href="shell-scripts.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><text x="12" y="20">curl -fsSL $URL | sh</text><rect class="fr" x="8" y="9" width="3" height="14"/><text x="12" y="40">chmod 777 /app</text><text x="12" y="60">eval "$CMD"</text><circle class="fr" cx="186" cy="56" r="5"/></svg></div>
+      <h3>Shell scripts</h3><p>Eight text rules for .sh and .bash: hardcoded secrets, curl piped to a shell, eval, chmod 777, missing set -e, echoed secrets, curl -k.</p>
+      <div class="foot"><span class="pill sast">SAST</span><span class="pill med">Low</span><span class="pill high">High</span><span class="pill">shell-script-scanner.md</span></div>
+    </a>
+  </div>
+</section>
+
+<section id="glance">
+  <h2>At a glance</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Scanner</th><th>What it looks at</th><th>What it reports</th><th>Severity</th><th>Needs</th></tr></thead>
+    <tbody>
+      <tr><td><a href="docker.html">Docker scanner</a></td><td>Dockerfiles (4 names) and compose files (6 names)</td><td>Root, unpinned base, sensitive ports, ENV secrets, remote ADD, no HEALTHCHECK; weak password, privileged, published database port</td><td>Low to Critical</td><td>Repository</td></tr>
+      <tr><td><a href="kubernetes.html">Kubernetes scanner</a></td><td>YAML with <code>apiVersion:</code>, plus 7 manifest folders; Helm <code>values.yaml</code></td><td>Privileged, root, host namespaces, ALL capabilities, env secrets, image tag, LoadBalancer; Helm plaintext secrets</td><td>Low to Critical</td><td>Repository (folder scan needs the checkout on disk)</td></tr>
+      <tr><td><a href="iac.html">IaC scanner</a></td><td><code>.tf</code> and <code>.tfvars</code></td><td>Open ingress, wildcard IAM, secret defaults, public S3, Secrets Manager recovery, ALB HTTP, ECS public IP, log retention</td><td>Low to Critical</td><td>Repository</td></tr>
+      <tr><td><a href="shell-scripts.html">Shell script scanner</a></td><td><code>.sh</code> and <code>.bash</code></td><td>Hardcoded secrets and AWS account IDs, curl to shell, chmod, eval, missing set -e, echoed secrets, curl -k</td><td>Low to High</td><td>Repository</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="why">
+  <h2>Why this class matters</h2>
+  <div class="grid-2">
+    <div class="callout why"><div class="label">Why it matters</div><p>Configuration files decide what an attacker gets after the first foothold. A container that runs as root, a pod that is privileged, an IAM policy that grants everything and a script that runs fetched code each turn a small bug into a large one. They are also the cheapest class to find: the evidence is already in the repository, so no running system is needed.</p></div>
+    <div class="callout breach"><div class="label">Real-world breaches</div><p><b>Tesla (2018).</b> An unsecured Kubernetes dashboard led to AWS credentials and cryptocurrency miners. <b>Twitch (2021).</b> An AWS misconfiguration contributed to the leak of its entire source code. <b>Accenture (2017).</b> Four public S3 buckets exposed API data, credentials and decryption keys. <b>SolarWinds (2020).</b> Build scripts that run unverified content are high-risk targets.</p></div>
+  </div>
+</section>
+
+<footer class="foot">
+  <span>Sources: <a href="../scanners/docker-scanner.md">docker-scanner.md</a> · <a href="../scanners/k8s-scanner.md">k8s-scanner.md</a> · <a href="../scanners/iac-scanner.md">iac-scanner.md</a> · <a href="../scanners/shell-script-scanner.md">shell-script-scanner.md</a></span>
+  <span>Other groups: <a href="group-injection.html">Injection</a> · <a href="group-access-control.html">Access control</a> · <a href="group-auth-sessions.html">Authentication and sessions</a> · <a href="group-browser-defenses.html">Browser-side defenses</a> · <a href="group-business-logic.html">Business logic</a> · <a href="group-surface.html">Attack surface and exposure</a> · <a href="group-secrets-dependencies.html">Secrets and dependencies</a> · <a href="group-schema-middleware.html">Schemas and middleware</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+</body>
+</html>

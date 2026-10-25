@@ -5,8 +5,11 @@
 [![Release](https://img.shields.io/github/v/release/jaurakunal/isitsecure)](https://github.com/jaurakunal/isitsecure/releases)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org)
+[![Docs](https://img.shields.io/badge/docs-interactive-orange.svg)](https://jaurakunal.github.io/isitsecure/)
 
 AI-powered security scanner for modern web apps. SAST + DAST + LLM code review in a single scan.
+
+> **[Explore how it works →](https://jaurakunal.github.io/isitsecure/)** Animated, step-by-step walkthroughs of the architecture and of every scanner, with no install needed.
 
 Built for developers and **vibe coders** shipping web apps who need to know if their code is secure — without becoming security experts.
 
@@ -104,7 +107,7 @@ isitsecure setup
 | `pip install -e ".[browser]"` | Adds DAST / live-URL scanning (requires `isitsecure setup` to install Chromium) |
 | `pip install -e ".[llm]"` | Adds LLM code review, triage, and AI fixes (requires an API key) |
 | `pip install -e ".[all]"` | Everything except `[taint]` (see below) |
-| `pip install -e ".[taint]"` | Deterministic Semgrep taint/injection SAST for JS/TS, Python, Java, and Kotlin. **Install separately** — semgrep's pinned dependencies don't co-resolve with `[all]`. The analyzer only needs the `semgrep` binary on PATH, so `pipx install semgrep` (or brew) works too; it falls back to LLM-only if absent |
+| `pip install -e ".[taint]"` | Deterministic Semgrep taint/injection SAST for JS/TS, Python, Java, Kotlin, and Go. **Install separately** — semgrep's pinned dependencies don't co-resolve with `[all]`. The analyzer only needs the `semgrep` binary on PATH, so `pipx install semgrep` (or brew) works too; it falls back to LLM-only if absent |
 
 URL/DAST scanning needs the `[browser]` extra — without it, `isitsecure scan <url>` exits with a message telling you to install it.
 
@@ -262,7 +265,7 @@ record to prove it could is not worth the finding.
 
 | Scanner | What It Finds |
 |---|---|
-| Semgrep Taint Analyzer | Deterministic source→sink injection for JS/TS, Python, Java, and Kotlin — SQLi, XSS, SSRF, path traversal, command injection, SSTI (a reproducible floor beneath the LLM reviewer; needs the `[taint]` extra, no-ops without the `semgrep` binary) |
+| Semgrep Taint Analyzer | Deterministic source→sink injection for JS/TS, Python, Java, Kotlin, and Go — SQLi, XSS, SSRF, path traversal, command injection, SSTI (a reproducible floor beneath the LLM reviewer; needs the `[taint]` extra, no-ops without the `semgrep` binary) |
 | Git Secret Scanner | API keys, tokens, and credentials in git history (not just HEAD) |
 | Route Auth Analyzer | Next.js/Express/Django/FastAPI/Spring routes missing authentication |
 | RLS Policy Analyzer | Supabase tables without Row Level Security enabled |
@@ -276,7 +279,7 @@ record to prove it could is not worth the finding.
 | Dependency Scanner (npm) | Known CVEs in package.json dependencies |
 | Python Dependency Scanner | Known CVEs in requirements.txt / pyproject.toml (Django, Flask, FastAPI, PyJWT, etc.) |
 | Java Dependency Scanner | Known CVEs in pom.xml / build.gradle (Log4Shell, Spring, Struts, Jackson, etc.) |
-| OSV Dependency Scanner | Real-time CVE lookups against Google's OSV.dev database (200K+ vulns, all ecosystems: npm, PyPI, Maven, Gradle, Go, Rust) — no hardcoded CVE list, no API key |
+| OSV Dependency Scanner | Real-time CVE lookups against Google's OSV.dev database (200K+ vulns, extracts npm, PyPI, Maven/Gradle, and Go dependencies; other ecosystems such as Rust are not extracted) — no hardcoded CVE list, no API key |
 | Firebase Rules Analyzer | Overly permissive Firestore/RTDB security rules |
 | OpenAPI Scanner | Internal endpoints exposed in API specifications |
 | K8s Scanner | Privileged containers, no resource limits, hostPath mounts |
@@ -496,12 +499,12 @@ isitsecure works well alongside other tools. Run `isitsecure scan` for the combi
 
 ## What It Does NOT Cover
 
-- **Inter-procedural taint analysis** — The opt-in Semgrep taint layer (`[taint]`) does intra-file source→sink dataflow for JS/TS, Python, Java, and Kotlin injection; cross-function/cross-file tracking (Semgrep Pro territory) still falls back to LLM reasoning
+- **Inter-procedural taint analysis** — The opt-in Semgrep taint layer (`[taint]`) does intra-file source→sink dataflow for JS/TS, Python, Java, Kotlin, and Go injection; cross-function/cross-file tracking (Semgrep Pro territory) still falls back to LLM reasoning
 - **WAF evasion** — DAST payloads don't include advanced bypass techniques
 - **Compliance mapping** — No OWASP Top 10, CWE, or PCI-DSS tagging (yet)
 - **Network-level scanning** — No port scanning, TLS analysis, or infrastructure enumeration
 - **Mobile apps** — Web APIs only
-- **Go/Ruby/Rust SAST** — Route mapping not yet implemented (DAST and dependency scanning via OSV still work)
+- **Ruby/Rust/PHP SAST** — Route mapping not yet implemented (DAST still works; Ruby and Rust dependencies are not scanned)
 
 ## Configuration
 
@@ -762,9 +765,11 @@ Most targets spin the app up in Docker, run a DAST scan, score against a known g
 
 See [docs/architecture.md](docs/architecture.md) for the full pipeline design, including how SAST feeds DAST, how LLM review is prioritized, and how cross-referencing works.
 
+Prefer pictures to prose? [docs/interactive/](docs/interactive/index.html) is a site of animated, step-by-step explainers: an [architecture deep dive](docs/interactive/architecture.html), nine scanner-group pages, and one page for every scanner. Open `docs/interactive/index.html` in a browser; no build step.
+
 ## Scanner Documentation
 
-See [docs/scanners/](docs/scanners/) for detailed documentation on every scanner — what it detects, why it matters, real-world breach examples, and how to fix the vulnerabilities it finds.
+See [docs/scanners/](docs/scanners/) for detailed documentation on every scanner — what it detects, why it matters, real-world breach examples, and how to fix the vulnerabilities it finds. The scanners with a mechanism worth watching also have an animated page under [docs/interactive/](docs/interactive/index.html).
 
 ## LSP Setup (Optional, Reduces False Positives)
 

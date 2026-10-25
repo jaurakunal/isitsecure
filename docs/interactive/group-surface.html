@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Attack Surface and Exposure · isitsecure</title>
+<meta name="description" content="The scanners that map what an application reveals about itself before any exploit: endpoint discovery, the HTTP probe, the GraphQL scanner and the OpenAPI spec scanner.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  /* group scene: lanes brighten on their own step, verdicts stay lit from step 6 */
+  #shape .lane { opacity: .35; transition: opacity .45s ease; }
+  #shape.s3 .lane.a, #shape.s4 .lane.b, #shape.s5 .lane.c { opacity: 1; }
+  #shape .verdict > rect { fill: var(--surface); }
+  #shape.s6 .verdict > rect { stroke: var(--accent); stroke-width: 2.5; }
+  #shape .inv-line { opacity: .35; transition: opacity .4s; }
+  #shape.s2 .inv-line { opacity: 1; }
+  /* card thumbs (same classes as index.html) */
+  .thumb svg .n > rect, .thumb svg .n > circle { fill: var(--surface); stroke: var(--muted); stroke-width: 1.3; }
+  .thumb svg .w { stroke: var(--muted); stroke-width: 1.3; fill: none; }
+  .thumb svg .a { stroke: var(--accent); }
+  .thumb svg .fa { fill: var(--accent); }
+  .thumb svg .fr { fill: var(--attacker); }
+  .thumb svg .fs { fill: var(--safe); }
+  .thumb svg .fi { fill: var(--info); }
+  .thumb svg .r { stroke: var(--attacker); }
+  .thumb svg .s { stroke: var(--safe); }
+  .thumb svg .i { stroke: var(--info); }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› Attack surface and exposure</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/README.md" title="The markdown scanner index">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">Scanner group</div>
+  <h1>Attack surface and exposure</h1>
+  <p class="lede">Four pages about what an application gives away before anyone exploits it. Discovery builds the endpoint inventory every dynamic scanner works from; the three scanners here then ask one cheap question each, a known request or a known file, and decide on a string match in what comes back.</p>
+  <div class="meta">
+    <span class="pill">3 scanners + discovery</span><span class="pill dast">2 DAST</span><span class="pill sast">1 SAST</span><span class="pill high">up to High</span><span class="pill">no credentials needed</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#how"><span class="n">01</span>How this group works</a>
+  <a href="#scanners"><span class="n">02</span>Scanners in this group</a>
+  <a href="#glance"><span class="n">03</span>At a glance</a>
+  <a href="#why"><span class="n">04</span>Why this class matters</a>
+</nav>
+
+<section id="how">
+  <h2>How this group works</h2>
+  <p class="prose">No payload crafting, no two-account comparison, no timing oracle. Each scanner sends one well-known request (or reads one well-known file), then looks for a fixed string in the response. The inventory from discovery tells the dynamic scanners where to send it; the repository tells the static one what to read.</p>
+
+  <div class="scene" id="shape" data-scene data-interval="3200">
+    <figure class="stage">
+      <svg viewBox="0 0 960 360" role="img" aria-label="A target app feeds an endpoint inventory. Three lanes show one probe each: the HTTP probe fetches /.env and finds a 200 whose body contains an equals sign; the GraphQL scanner posts an introspection query and finds __schema in the body; the OpenAPI scanner reads openapi.yaml from the repository and finds no top-level security line. Each ends in a finding.">
+        <defs><marker id="arr-shape" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+
+        <!-- target + repo -->
+        <g class="node lit-1" transform="translate(20 70)">
+          <rect width="160" height="96" rx="10"/>
+          <text class="ttl" x="14" y="26">Target app</text>
+          <text class="mono" x="14" y="50">https://app.example</text>
+          <text class="lbl" x="14" y="70">HTML · bundles · spec</text>
+          <text class="lbl" x="14" y="84">forms · probed paths</text>
+        </g>
+        <g class="node at-5 lit-5" transform="translate(20 236)">
+          <rect width="160" height="70" rx="10"/>
+          <text class="ttl" x="14" y="26">Repository</text>
+          <text class="mono" x="14" y="48">openapi.yaml</text>
+          <text class="lbl" x="14" y="62">only when a repo is given</text>
+        </g>
+
+        <!-- inventory -->
+        <path class="wire at-2" d="M180 118 H 218" marker-end="url(#arr-shape)"/>
+        <g class="node at-2 lit-2" transform="translate(220 30)">
+          <rect width="220" height="180" rx="10"/>
+          <text class="ttl" x="14" y="26">Endpoint inventory</text>
+          <g class="mono">
+            <text class="inv-line" x="14" y="52">GET  /</text>
+            <text class="inv-line" x="14" y="68">GET  /api/Users</text>
+            <text class="inv-line" x="14" y="84">POST /api/orders</text>
+            <text class="inv-line t-accent" x="14" y="100">POST /graphql</text>
+            <text class="inv-line" x="14" y="116">GET  /rest/v1/tasks</text>
+          </g>
+          <text class="lbl" x="14" y="144">bundles · spec · forms · probes</text>
+          <text class="lbl" x="14" y="160">base URL = scheme + host</text>
+        </g>
+
+        <!-- lane A: http_probe -->
+        <path class="wire at-3" d="M440 90 C 470 90, 470 62, 498 62" marker-end="url(#arr-shape)"/>
+        <g class="lane a">
+          <text class="lbl" x="500" y="22">http_probe · DAST · fixed-cost path check on the base URL</text>
+          <g class="node lit-3" transform="translate(500 32)"><rect width="140" height="58" rx="8"/><text class="lbl" x="12" y="18">request</text><text class="mono" x="12" y="40">GET /.env</text></g>
+          <path class="wire at-3" d="M640 61 H 658" marker-end="url(#arr-shape)"/>
+          <g class="node lit-3" transform="translate(660 32)"><rect width="150" height="58" rx="8"/><text class="lbl" x="12" y="18">response</text><text class="mono" x="12" y="40">200 · body has "="</text></g>
+          <path class="wire at-3" d="M810 61 H 828" marker-end="url(#arr-shape)"/>
+          <g class="node verdict at-3 lit-3" transform="translate(830 32)"><rect width="110" height="58" rx="8"/><text class="t-attacker" x="12" y="24" style="font-weight:600">HIGH</text><text class="lbl" x="12" y="44">confidence 0.90</text></g>
+        </g>
+
+        <!-- lane B: graphql -->
+        <path class="wire at-4" d="M440 120 C 470 120, 470 172, 498 172" marker-end="url(#arr-shape)"/>
+        <g class="lane b">
+          <text class="lbl" x="500" y="132">graphql · DAST · only paths containing /graphql, /api/graphql, /gql</text>
+          <g class="node lit-4" transform="translate(500 142)"><rect width="140" height="58" rx="8"/><text class="lbl" x="12" y="18">request</text><text class="mono" x="12" y="40">POST { __schema }</text></g>
+          <path class="wire at-4" d="M640 171 H 658" marker-end="url(#arr-shape)"/>
+          <g class="node lit-4" transform="translate(660 142)"><rect width="150" height="58" rx="8"/><text class="lbl" x="12" y="18">response</text><text class="mono" x="12" y="40">2xx · "__schema" in it</text></g>
+          <path class="wire at-4" d="M810 171 H 828" marker-end="url(#arr-shape)"/>
+          <g class="node verdict at-4 lit-4" transform="translate(830 142)"><rect width="110" height="58" rx="8"/><text class="t-accent" x="12" y="24" style="font-weight:600">MEDIUM</text><text class="lbl" x="12" y="44">confidence 0.90</text></g>
+        </g>
+
+        <!-- lane C: openapi (SAST) -->
+        <path class="wire at-5" d="M180 271 C 340 271, 340 281, 498 281" marker-end="url(#arr-shape)"/>
+        <g class="lane c">
+          <text class="lbl" x="500" y="242">openapi · SAST · spec files in the repo, found by an openapi: or swagger: marker</text>
+          <g class="node lit-5" transform="translate(500 252)"><rect width="140" height="58" rx="8"/><text class="lbl" x="12" y="18">read</text><text class="mono" x="12" y="40">openapi.yaml</text></g>
+          <path class="wire at-5" d="M640 281 H 658" marker-end="url(#arr-shape)"/>
+          <g class="node lit-5" transform="translate(660 252)"><rect width="150" height="58" rx="8"/><text class="lbl" x="12" y="18">evidence</text><text class="mono" x="12" y="40">no ^security: line</text></g>
+          <path class="wire at-5" d="M810 281 H 828" marker-end="url(#arr-shape)"/>
+          <g class="node verdict at-5 lit-5" transform="translate(830 252)"><rect width="110" height="58" rx="8"/><text class="t-attacker" x="12" y="24" style="font-weight:600">HIGH</text><text class="lbl" x="12" y="44">confidence 0.85</text></g>
+        </g>
+
+        <!-- shared rule band -->
+        <g class="at-6" transform="translate(220 344)">
+          <text class="t-accent" style="font-size:12px">Shared rule: one request or one file read, then a fixed string in what came back. No exploit chain, so confidence is set by the check, 0.70 to 0.90.</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Everything starts from the target URL. Playwright renders the page and keeps the HTML and every JavaScript file it pulled in. A repository is optional and only the static scanner uses it.</p>
+      <p class="step"><span class="n">2</span><b>Endpoint discovery</b> turns bundles, a served spec, HTML forms and a short list of probed paths into the inventory. The scanners in this group take the inventory as given; the HTTP probe also derives the base URL (scheme plus host) from its first entry.</p>
+      <p class="step"><span class="n">3</span><b>HTTP probe.</b> Known paths are fetched on the base URL. <code>GET /.env</code> that returns <b>200 with an "=" in the body</b> is reported as an exposed sensitive file at High. Nothing is parsed or exploited; the string is the evidence.</p>
+      <p class="step"><span class="n">4</span><b>GraphQL.</b> Only endpoints whose path contains <code>/graphql</code>, <code>/api/graphql</code> or <code>/gql</code> are touched. An introspection query that comes back <b>2xx with <code>__schema</code>, <code>__type</code> or <code>"types"</code> in the body</b> means the whole schema is public.</p>
+      <p class="step"><span class="n">5</span><b>OpenAPI (SAST).</b> Any <code>.yaml</code>, <code>.yml</code> or <code>.json</code> file carrying an <code>openapi:</code> or <code>swagger:</code> marker is a spec. A spec with <b>no <code>securitySchemes</code> or no top-level <code>security:</code> line</b> describes an API that is public by default.</p>
+      <p class="step"><span class="n">6</span>The three share one shape: a cheap probe, a string match, a finding whose confidence is fixed per check rather than measured. That is why they run early, run at quick depth, and need no credentials. The pages below show each scanner's full check list and the guards that keep the string match honest.</p>
+    </div>
+  </div>
+</section>
+
+<section id="scanners">
+  <h2>Scanners in this group</h2>
+  <div class="cards">
+    <a class="card" href="endpoint-discovery.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><g class="n"><rect x="10" y="14" width="56" height="52" rx="4"/></g><text x="38" y="30" text-anchor="middle">shell</text><path class="w" d="M20 40h36M20 48h24M20 56h30"/><path class="w a" d="M66 40 C 90 40, 90 22, 110 22 M66 40 C 90 40, 90 58, 110 58"/><g class="n"><rect x="104" y="12" width="90" height="20" rx="4"/></g><text x="149" y="26" text-anchor="middle" style="font-size:9px">GET /api/Users</text><g class="n"><rect x="104" y="48" width="90" height="20" rx="4"/></g><text x="149" y="62" text-anchor="middle" style="font-size:9px">/file-upload</text></svg></div>
+      <h3>Endpoint discovery</h3><p>How the inventory every DAST scanner uses is built: bundles and lazy chunks, served specs, forms, probed paths, the authenticated crawl, and ranking per attack dimension.</p>
+      <div class="foot"><span class="pill dast">DAST input</span><span class="pill">architecture.md</span></div>
+    </a>
+    <a class="card" href="http-probe.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><text x="12" y="26">GET /.env</text><path class="w" d="M12 34 H 188"/><text x="12" y="52" class="fr">200  DB_PASSWORD=…</text><g class="n"><rect x="128" y="58" width="60" height="16" rx="3"/></g><text x="158" y="70" text-anchor="middle" class="fr" style="font-size:9px">HIGH 0.90</text><circle class="fa" cx="100" cy="34" r="4"/></svg></div>
+      <h3>HTTP probe</h3><p>Five checks in cost order: verbose errors, exposed <code>.git</code> and <code>.env</code>, TRACE and CONNECT, a forged Host header, CRLF in query parameters. Also the scanner that lost four findings to a 901 s hard cancel.</p>
+      <div class="foot"><span class="pill dast">DAST</span><span class="pill high">Medium to High</span><span class="pill">http-probe-scanner.md</span></div>
+    </a>
+    <a class="card" href="graphql.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><g class="n"><rect x="8" y="22" width="72" height="36" rx="4"/></g><text x="44" y="37" text-anchor="middle" style="font-size:9px">POST /graphql</text><text x="44" y="51" text-anchor="middle" style="font-size:9px">{ __schema }</text><path class="w a" d="M80 40 H 118"/><g class="n"><rect x="118" y="14" width="74" height="52" rx="4"/></g><text x="155" y="30" text-anchor="middle" style="font-size:9px">"types": [</text><text x="155" y="44" text-anchor="middle" style="font-size:9px" class="fr">User, Order,</text><text x="155" y="58" text-anchor="middle" style="font-size:9px" class="fr">AdminMutation</text></svg></div>
+      <h3>GraphQL</h3><p>Three probes on any <code>/graphql</code> endpoint: an introspection query, a query nested ten levels deep, and a two-query batch. What the body must contain for each to count.</p>
+      <div class="foot"><span class="pill dast">DAST</span><span class="pill med">Low to Medium</span><span class="pill">graphql-scanner.md</span></div>
+    </a>
+    <a class="card" href="openapi.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><text x="12" y="22" style="font-size:9px">openapi: 3.0.0</text><text x="12" y="36" style="font-size:9px">servers:</text><text x="22" y="50" style="font-size:9px" class="fr">- url: http://api.example</text><text x="12" y="64" style="font-size:9px">paths:</text><text x="22" y="76" style="font-size:9px" class="fr">/admin/users:</text><g class="n"><rect x="130" y="12" width="60" height="16" rx="3"/></g><text x="160" y="24" text-anchor="middle" style="font-size:9px" class="fr">no security:</text></svg></div>
+      <h3>OpenAPI spec</h3><p>Six regex checks over spec files in the repo: no global security, <code>http://</code> servers, Basic auth, API keys in the query string, <code>security: []</code> overrides, sensitive paths with no global scheme.</p>
+      <div class="foot"><span class="pill sast">SAST</span><span class="pill high">Medium to High</span><span class="pill">openapi-scanner.md</span></div>
+    </a>
+  </div>
+</section>
+
+<section id="glance">
+  <h2>At a glance</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Scanner</th><th>What it looks at</th><th>What it reports</th><th>Severity</th><th>Needs</th></tr></thead>
+    <tbody>
+      <tr><td><a href="endpoint-discovery.html">Endpoint discovery</a></td><td>Rendered HTML, every JS bundle and lazy chunk, 13 well-known spec paths per API base, forms and query links, probed API bases</td><td>Not findings: the categorised, ranked endpoint inventory the DAST scanners consume</td><td>n/a</td><td>Target URL. Credentials add the authenticated crawl; <code>--probe-writes</code> adds derived POST/PUT endpoints</td></tr>
+      <tr><td><a href="http-probe.html">HTTP probe</a></td><td>Four error-trigger paths and nine sensitive paths on the base URL, then OPTIONS, TRACE, forged Host and CRLF query payloads against ranked endpoints</td><td>Verbose error page, exposed <code>.git/HEAD</code> or <code>.env</code>, directory listing, TRACE or CONNECT enabled, Host header reflected, CRLF header injection</td><td>Medium to High</td><td>Target URL only. Quick depth. 900 s timeout, stops itself at 85 % of it</td></tr>
+      <tr><td><a href="graphql.html">GraphQL</a></td><td>Inventory entries whose path contains <code>/graphql</code>, <code>/api/graphql</code> or <code>/gql</code></td><td>Introspection enabled, no query depth limit, batch queries accepted</td><td>Low to Medium</td><td>Target URL only. Quick depth. 600 s timeout. Nothing runs if no path matches</td></tr>
+      <tr><td><a href="openapi.html">OpenAPI spec</a></td><td><code>.yaml</code>, <code>.yml</code>, <code>.json</code> files in the indexed repo that contain an <code>openapi:</code> or <code>swagger:</code> marker</td><td>No global security scheme, <code>http://</code> server URL, Basic auth, API key in query, <code>security: []</code> override, sensitive path without global security</td><td>Medium to High</td><td>Repository only. No LLM, no binary</td></tr>
+    </tbody>
+  </table></div>
+  <p class="prose small">The HTTP probe and GraphQL scanners are auth-aware: when a login session exists from the authenticated crawl, its headers ride along on every request so protected endpoints are probed too. Neither requires one.</p>
+</section>
+
+<section id="why">
+  <h2>Why this class matters</h2>
+  <div class="callout why">
+    <div class="label">Why it matters</div>
+    <p>These findings are reconnaissance, and reconnaissance is where every attack starts. An exposed <code>.env</code> hands over database credentials; an exposed <code>.git</code> lets the source be reconstructed; a stack trace names the framework, file paths and query structure; a GraphQL schema or a Swagger document is a complete map of the API with the auth requirements of every route. Individually each looks low-risk. Chained, they decide which endpoint an attacker goes after first and with what payload.</p>
+  </div>
+  <div class="callout breach">
+    <div class="label">Real-world context</div>
+    <p><b>GitLab, 2019:</b> GraphQL introspection was enabled by default, and researchers used it to enumerate private project information and user data. GitLab then restricted introspection in production. Exposed <code>.env</code> files, <code>.git</code> directories and Swagger documents at <code>/api-docs</code> or <code>/swagger.json</code> are among the most common bug bounty findings; automated scanners probe the internet for these paths continuously, and thousands of production sites have leaked database credentials and API keys this way.</p>
+  </div>
+</section>
+
+<footer class="foot">
+  <span>Sources: <a href="../scanners/http-probe-scanner.md">http-probe-scanner.md</a> · <a href="../scanners/graphql-scanner.md">graphql-scanner.md</a> · <a href="../scanners/openapi-scanner.md">openapi-scanner.md</a> · <a href="../architecture.md">architecture.md</a></span>
+  <span>Other groups: <a href="group-injection.html">Injection</a> · <a href="group-access-control.html">Access control</a> · <a href="group-auth-sessions.html">Authentication and sessions</a> · <a href="group-browser-defenses.html">Browser-side defenses</a> · <a href="group-business-logic.html">Business logic</a> · <a href="group-secrets-dependencies.html">Secrets and dependencies</a> · <a href="group-infrastructure.html">Infrastructure configuration</a> · <a href="group-schema-middleware.html">Schemas and middleware</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+<script src="assets/isdoc.js"></script>
+</body>
+</html>

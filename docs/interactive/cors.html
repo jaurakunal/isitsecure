@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>CORS Scanner · isitsecure</title>
+<meta name="description" content="How isitsecure tests CORS: three forged Origin values per route group, and the ordered rules that turn the response headers into a verdict, animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  .topbar-inner .crumb a { color: inherit; text-decoration: none; }
+  .topbar-inner .crumb a:hover { color: var(--accent); }
+  /* page-specific */
+  #select-scene .path.skipped { opacity: .5; }
+  #rules-scene .rule > rect { fill: var(--surface-2); stroke: var(--line); stroke-width: 1.2; transition: stroke .35s, opacity .35s; }
+  #rules-scene .rule { opacity: .45; transition: opacity .35s; }
+  #rules-scene.s1 .r1, #rules-scene.s2 .r2, #rules-scene.s3 .r3, #rules-scene.s4 .r4, #rules-scene.s5 .r5 { opacity: 1; }
+
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› <a href="group-browser-defenses.html">Browser-side defenses</a> › CORS</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/cors-scanner.md" title="The markdown source for this page">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">DAST scanner · active probe</div>
+  <h1>CORS Scanner</h1>
+  <p class="lede">Cross-origin rules decide which websites may read your API with a visitor's cookies. The scanner sends three hostile Origin values to one endpoint per route group and checks whether the server agrees to them.</p>
+  <div class="meta">
+    <span class="pill dast">DAST</span><span class="pill crit">Medium–Critical</span><span class="pill">CORS misconfiguration</span><span class="pill">4 rules</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#select"><span class="n">01</span>What gets probed</a>
+  <a href="#rules"><span class="n">02</span>Reading the response</a>
+  <a href="#fix"><span class="n">03</span>What an allowlist changes</a>
+  <a href="#why"><span class="n">04</span>Why it matters</a>
+  <a href="#code"><span class="n">05</span>Vulnerable vs fixed code</a>
+  <a href="#limits"><span class="n">06</span>Limits and what it needs</a>
+</nav>
+
+
+<section id="select">
+  <h2>What gets probed</h2>
+  <p class="prose">CORS is a property of a route group, not of a single URL, so the scanner does not hit every endpoint. It picks one endpoint per path prefix, then sends that endpoint three different <code>Origin</code> values and reads what the server says back.</p>
+
+  <div class="scene" id="select-scene" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 330" role="img" aria-label="Five discovered endpoints are reduced to one per two-segment path prefix. Each selected endpoint gets up to three Origin probes in order and stops at the first finding. A response with no Access-Control-Allow-Origin header ends the probe quietly.">
+        <defs><marker id="arrCo1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g class="node lit-1" transform="translate(20 20)">
+          <rect width="300" height="290" rx="10"/>
+          <text class="ttl" x="14" y="26">Discovered endpoints</text>
+          <text class="lbl" x="14" y="44">one pick per first two path segments</text>
+          <g class="mono">
+            <text x="14" y="78">/api/users/1</text><text class="lbl t-safe" x="170" y="78">api/users: picked</text>
+            <g class="path skipped"><text x="14" y="108">/api/users/2</text><text class="lbl" x="170" y="108">api/users: seen</text></g>
+            <text x="14" y="138">/api/orders/9</text><text class="lbl t-safe" x="170" y="138">api/orders: picked</text>
+            <g class="path skipped"><text x="14" y="168">/api/users/7/notes</text><text class="lbl" x="170" y="168">api/users: seen</text></g>
+            <text x="14" y="198">/health</text><text class="lbl t-safe" x="170" y="198">health: picked</text>
+          </g>
+          <text class="lbl at-1" x="14" y="250">No cap: every distinct prefix is tested.</text>
+          <text class="lbl at-1" x="14" y="268">Five endpoints, three prefixes, three picks.</text>
+        </g>
+        <path class="wire at-2" d="M320 160 H350" marker-end="url(#arrCo1)"/>
+        <g class="node at-2 lit-2" transform="translate(350 20)">
+          <rect width="290" height="290" rx="10"/>
+          <text class="ttl" x="14" y="26">Origin probes, in order</text>
+          <text class="lbl" x="14" y="44">plain GET, no preflight</text>
+          <g class="mono">
+            <text x="14" y="82">1  https://evil.com</text><text class="lbl" x="34" y="98">arbitrary_origin</text>
+            <text x="14" y="136">2  null</text><text class="lbl" x="34" y="152">null_origin</text>
+            <text x="14" y="190">3  https://{host}.evil.com</text><text class="lbl" x="34" y="206">subdomain_bypass</text>
+          </g>
+          <text class="lbl" x="14" y="252">{host} is the target's own hostname.</text>
+          <text class="lbl" x="14" y="270">The first probe that yields a finding wins.</text>
+        </g>
+        <path class="wire at-3" d="M640 160 H670" marker-end="url(#arrCo1)"/>
+        <g class="node at-3 lit-3 lit-4" transform="translate(670 20)">
+          <rect width="270" height="290" rx="10"/>
+          <text class="ttl" x="14" y="26">Per endpoint</text>
+          <text class="mono" x="14" y="62">/api/users/1</text>
+          <text class="lbl" x="14" y="80">probe 1 echoed: HIGH, stop</text>
+          <text class="lbl" x="14" y="96">probes 2 and 3 are never sent</text>
+          <text class="mono" x="14" y="136">/api/orders/9</text>
+          <text class="lbl at-4" x="14" y="154">no ACAO header on any probe</text>
+          <text class="lbl at-4 t-safe" x="14" y="170">silent: the browser blocks it</text>
+          <text class="mono" x="14" y="210">/health</text>
+          <text class="lbl" x="14" y="228">probe 1 got ACAO: *</text>
+          <text class="lbl" x="14" y="244">MEDIUM, stop</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Discovery produced many endpoints. The scanner keeps the <b>first endpoint it sees for each distinct two-segment path prefix</b>, so <code>/api/users/1</code> stands in for everything under <code>api/users</code>.</p>
+      <p class="step"><span class="n">2</span>Each pick gets a GET with <code>Origin: https://evil.com</code>, then <code>null</code>, then <code>https://&lt;target-host&gt;.evil.com</code>. The third catches servers that match the origin by suffix or substring.</p>
+      <p class="step"><span class="n">3</span>The scanner stops at the first probe that produces a finding, so one endpoint yields at most one finding.</p>
+      <p class="step"><span class="n">4</span><b>No <code>Access-Control-Allow-Origin</code> in the response ends that probe silently.</b> Without it the browser refuses to expose the response to another site, so there is nothing to report.</p>
+    </div>
+  </div>
+</section>
+
+<section id="rules">
+  <h2>Reading the response</h2>
+  <p class="prose">Two headers decide everything: <code>Access-Control-Allow-Origin</code> (ACAO) and <code>Access-Control-Allow-Credentials</code> (ACAC). The checks run in a fixed order and the first match wins.</p>
+
+  <div class="scene" id="rules-scene" data-scene data-interval="3600">
+    <figure class="stage">
+      <svg viewBox="0 0 960 320" role="img" aria-label="Five ordered rules. Wildcard with credentials is Critical, an echoed origin is High, a null origin is High, a wildcard without credentials is Medium, and anything else is silent.">
+        <defs><marker id="arrCo2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <text class="lbl" x="34" y="22">ACAO in the response</text>
+        <text class="lbl" x="300" y="22">ACAC</text>
+        <text class="lbl" x="400" y="22">verdict</text>
+        <text class="lbl" x="560" y="22">confidence</text>
+        <text class="lbl" x="670" y="22">meaning</text>
+
+        <g class="rule r1 node lit-1" transform="translate(20 32)"><rect width="920" height="46" rx="8"/>
+          <text class="mono" x="14" y="28">*</text><text class="mono" x="280" y="28">true</text>
+          <text class="mono t-attacker" x="380" y="28">CRITICAL</text><text class="mono" x="540" y="28">0.95</text><text class="lbl" x="650" y="28">any site reads logged-in data</text></g>
+        <g class="rule r2 node lit-2" transform="translate(20 86)"><rect width="920" height="46" rx="8"/>
+          <text class="mono" x="14" y="28">equals the Origin sent</text><text class="mono lbl" x="280" y="28">any</text>
+          <text class="mono t-attacker" x="380" y="28">HIGH</text><text class="mono" x="540" y="28">0.90</text><text class="lbl" x="650" y="28">server echoes whatever it is told</text></g>
+        <g class="rule r3 node lit-3" transform="translate(20 140)"><rect width="920" height="46" rx="8"/>
+          <text class="mono" x="14" y="28">null</text><text class="mono lbl" x="280" y="28">any</text>
+          <text class="mono t-attacker" x="380" y="28">HIGH</text><text class="mono" x="540" y="28">0.85</text><text class="lbl" x="650" y="28">sandboxed iframes can read it</text></g>
+        <g class="rule r4 node lit-4" transform="translate(20 194)"><rect width="920" height="46" rx="8"/>
+          <text class="mono" x="14" y="28">*</text><text class="mono lbl" x="280" y="28">not true</text>
+          <text class="mono t-accent" x="380" y="28">MEDIUM</text><text class="mono" x="540" y="28">0.70</text><text class="lbl" x="650" y="28">any site reads public responses</text></g>
+        <g class="rule r5 node lit-5" transform="translate(20 248)"><rect width="920" height="46" rx="8"/>
+          <text class="mono" x="14" y="28">https://app.example.com</text><text class="mono lbl" x="280" y="28">any</text>
+          <text class="mono t-safe" x="380" y="28">silent</text><text class="mono" x="540" y="28">-</text><text class="lbl" x="650" y="28">fixed value, or no header at all</text></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span><b>Wildcard plus credentials is CRITICAL, 0.95.</b> <code>ACAO: *</code> together with <code>ACAC: true</code> is the worst case: any website can read authenticated responses.</p>
+      <p class="step"><span class="n">2</span><b>An echoed origin is HIGH, 0.90.</b> If ACAO equals the exact Origin the scanner sent, the server mirrors any caller. The scanner does not check ACAC for this rule, so it fires whether or not credentials are allowed.</p>
+      <p class="step"><span class="n">3</span><b>ACAO: null is HIGH, 0.85.</b> A page in a sandboxed iframe sends <code>Origin: null</code>, so allowing it lets an attacker reach the API from a sandbox.</p>
+      <p class="step"><span class="n">4</span><b>A wildcard without credentials is MEDIUM, 0.70.</b> Any site can read the response, but not with the victim's cookies.</p>
+      <p class="step"><span class="n">5</span>Anything else is silent: a fixed allowed origin, or no header. A response with no ACAO header never reaches these rules at all.</p>
+    </div>
+  </div>
+</section>
+
+<section id="fix">
+  <h2>What an allowlist changes</h2>
+  <p class="prose">The fix is to echo an origin only when it is on a list you wrote. The scanner's probes then come back with no ACAO header, and the browser keeps the response from the attacker's page.</p>
+
+  <div class="scene" id="allow-scene" data-scene data-interval="3200">
+    <figure class="stage">
+      <svg viewBox="0 0 960 250" role="img" aria-label="With an allowlist the server answers the attacker's origin without an Access-Control-Allow-Origin header and answers its own origin with one.">
+        <defs><marker id="arrCo3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g class="node" transform="translate(20 20)"><rect width="260" height="60" rx="8"/><text class="mono" x="14" y="26">Origin: https://evil.com</text><text class="lbl" x="14" y="46">attacker's page or scanner probe</text></g>
+        <path class="wire at-1" d="M280 50 H340" marker-end="url(#arrCo3)"/>
+        <g class="node at-1 lit-1" transform="translate(340 20)"><rect width="330" height="60" rx="8"/><text class="mono" x="14" y="26">not in ALLOWED_ORIGINS</text><text class="lbl" x="14" y="46">server sets no CORS headers</text></g>
+        <path class="wire at-1" d="M670 50 H700" marker-end="url(#arrCo3)"/>
+        <g class="node at-1" transform="translate(700 20)"><rect width="240" height="60" rx="8"/><text class="mono t-safe" x="14" y="26">no ACAO header</text><text class="lbl" x="14" y="46">browser blocks the read</text></g>
+
+        <g class="at-2">
+        <g class="node" transform="translate(20 110)"><rect width="260" height="60" rx="8"/><text class="mono" x="14" y="26">Origin: https://your-app.com</text><text class="lbl" x="14" y="46">the real front end</text></g>
+        <path class="wire" d="M280 140 H340" marker-end="url(#arrCo3)"/>
+        <g class="node lit-2" transform="translate(340 110)"><rect width="330" height="60" rx="8"/><text class="mono" x="14" y="26">found in ALLOWED_ORIGINS</text><text class="lbl" x="14" y="46">server echoes that one origin and ACAC</text></g>
+        <path class="wire" d="M670 140 H700" marker-end="url(#arrCo3)"/>
+        <g class="node" transform="translate(700 110)"><rect width="240" height="60" rx="8"/><text class="mono t-safe" x="14" y="26">ACAO: your-app.com</text><text class="lbl" x="14" y="46">read allowed</text></g>
+        </g>
+        <text class="lbl at-3" x="20" y="214">The scanner sees the first case on all three probes: no ACAO, so no finding.</text>
+        <text class="lbl at-3" x="20" y="232">Its probes never come from your-app.com, so the allowed case is never reported.</text>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>An origin that is not on the allowlist gets <b>no CORS headers at all</b>. The browser then refuses to hand the response to the attacker's script.</p>
+      <p class="step"><span class="n">2</span>An origin on the list gets that single origin echoed back, with credentials allowed. Only that front end can read authenticated responses.</p>
+      <p class="step"><span class="n">3</span>This is why the scanner's three probes (<code>evil.com</code>, <code>null</code>, <code>&lt;host&gt;.evil.com</code>) all come back silent on a correct setup.</p>
+    </div>
+  </div>
+</section>
+
+<section id="why">
+  <h2>Why it matters</h2>
+  <div class="callout why">
+    <div class="label">Why it matters</div>
+    <p>A CORS misconfiguration lets another website read your API as the logged-in user. If a user is signed in to your app and visits evil.com, evil.com's JavaScript can fetch your API and read account data, messages and tokens, and can also send state-changing requests from the victim's browser session.</p>
+  </div>
+  <div class="callout breach">
+    <div class="label">Cryptocurrency exchanges (2016 to 2018)</div>
+    <p>Several exchanges were found reflecting arbitrary Origin headers in CORS responses. That allowed attacker-controlled websites to read authenticated API responses containing balances and API keys.</p>
+  </div>
+</section>
+
+<section id="code">
+  <h2>Vulnerable vs fixed code</h2>
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true" type="button">BAD · wildcard or reflection</button>
+      <button class="tab good" role="tab" aria-selected="false" type="button">GOOD · allowlist</button>
+    </div>
+    <div role="tabpanel"><pre><code><span class="c">// BAD: Wildcard CORS with credentials</span>
+<span class="hl bad">response.headers.set(<span class="s">"Access-Control-Allow-Origin"</span>, <span class="s">"*"</span>)</span>
+<span class="hl bad">response.headers.set(<span class="s">"Access-Control-Allow-Credentials"</span>, <span class="s">"true"</span>)</span>
+
+<span class="c">// BAD: Reflecting the Origin header without validation</span>
+const origin = request.headers.get(<span class="s">"Origin"</span>)
+<span class="hl bad">response.headers.set(<span class="s">"Access-Control-Allow-Origin"</span>, origin)</span></code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c">// GOOD: Allowlist specific origins</span>
+const ALLOWED_ORIGINS = [<span class="s">"https://your-app.com"</span>, <span class="s">"https://admin.your-app.com"</span>]
+
+const origin = request.headers.get(<span class="s">"Origin"</span>)
+<span class="hl good">if (ALLOWED_ORIGINS.includes(origin)) {</span>
+  response.headers.set(<span class="s">"Access-Control-Allow-Origin"</span>, origin)
+  response.headers.set(<span class="s">"Access-Control-Allow-Credentials"</span>, <span class="s">"true"</span>)
+}
+<span class="c">// If origin not in list, no CORS headers = browser blocks the request</span></code></pre></div>
+  </div>
+</section>
+
+<section id="limits">
+  <h2>Limits and what it needs</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Rule</th><th>Reports when</th><th>Severity · confidence</th></tr></thead>
+      <tbody>
+        <tr><td>Wildcard + credentials</td><td><code>ACAO: *</code> and <code>ACAC: true</code></td><td>Critical · 0.95</td></tr>
+        <tr><td>Origin reflected</td><td>ACAO equals the Origin sent (not <code>*</code>)</td><td>High · 0.90</td></tr>
+        <tr><td>Null origin</td><td><code>ACAO: null</code></td><td>High · 0.85</td></tr>
+        <tr><td>Wildcard, no credentials</td><td><code>ACAO: *</code> without <code>ACAC: true</code></td><td>Medium · 0.70</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout note">
+    <div class="label">What it deliberately stays quiet about</div>
+    <p>The probes are plain GET requests, so a route that only sets CORS headers on an OPTIONS preflight is not seen. A response with no <code>Access-Control-Allow-Origin</code> is never reported, and only one endpoint per path prefix is tested, so a single route that differs from its siblings can be missed. Credentials are optional: with them, the probes carry the scan's auth headers.</p>
+    <p>One order quirk: for the <code>Origin: null</code> probe a server that answers <code>ACAO: null</code> already matches the echoed-origin rule, so it is reported as High, 0.90 with the title for a reflected origin. The null-origin rule only fires when ACAO is <code>null</code> for a different probe.</p>
+  </div>
+</section>
+
+
+<footer class="foot">
+  <span>Source: <a href="../scanners/cors-scanner.md">docs/scanners/cors-scanner.md</a> · <code>isitsecure/engine/scanners/cors_scanner.py</code></span>
+  <span>Group: <a href="group-browser-defenses.html">Browser-side defenses</a> · Related: <a href="csrf.html">CSRF</a> · <a href="security-headers.html">Security headers</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+</body>
+</html>

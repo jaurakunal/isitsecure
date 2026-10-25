@@ -1,20 +1,20 @@
 # Auth Bypass Scanner
 
-**Type:** DAST | **Severity:** High | **Category:** Auth Weakness
+**Type:** DAST | **Severity:** Medium to Critical | **Category:** Auth Weakness
 
 ## What It Does
 
 Tests authentication mechanisms for five weaknesses:
 
-1. **Username enumeration** — sends valid vs invalid emails and compares error messages, response times, and status codes. Different responses reveal which accounts exist.
+1. **Username enumeration** — sends valid vs invalid emails and compares error messages (High), response times (Medium, a gap over 0.5 s) and status codes (Medium). Different responses reveal which accounts exist.
 
-2. **Password reset token leaks** — checks if reset endpoints return tokens in the response body or headers instead of only sending them via email.
+2. **Password reset token leaks** — checks if reset endpoints return tokens in the response body (first 500 characters) or headers instead of only sending them via email. It is a plain substring search for strings such as `reset_token`, `token=` or `verify_token` (High).
 
-3. **Account lockout detection** — sends 5+ failed login attempts. If no lockout (423 status) occurs, brute force is possible.
+3. **Account lockout detection** — sends 10 failed login attempts, then an 11th. Only a 423 status counts as lockout; if it never appears, brute force is possible (Medium). A 429 rate limiter does not satisfy this check.
 
-4. **Default credentials** — tests common username/password pairs: `admin/admin`, `admin/password`, `test/test`, etc.
+4. **Default credentials** — tests seven common email/password pairs (`admin@admin.com` with `admin`, `password`, `admin123` or `changeme`; `test@test.com`/`test`; `root@root.com`/`root`; `user@user.com`/`password123`). A pair counts only when the reply is 2xx and the body contains a token-like word (Critical).
 
-5. **Auth header bypass** — sends requests with no auth, empty Bearer token, and Basic auth tricks to check for bypass paths.
+5. **Auth header bypass** — sends exactly three probes to endpoints that look auth-protected: no Authorization header, an empty Bearer token, and `Basic admin:admin`. Any 2xx response is flagged on status alone (High).
 
 **Runs unauthenticated by design (#119):** unlike the other DAST scanners, this one is deliberately not made "auth-aware" — every test above depends on the absence or manipulation of authentication. Injecting the crawl's live session would ride on every request and make bypass attempts spuriously succeed (false positives), so the orchestrator's session propagation intentionally skips this scanner.
 

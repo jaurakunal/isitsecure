@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>CSRF Scanner · isitsecure</title>
+<meta name="description" content="How isitsecure tests CSRF: a forged Origin sent to state-changing endpoints, cookies without SameSite and POST forms without a token, animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  .topbar-inner .crumb a { color: inherit; text-decoration: none; }
+  .topbar-inner .crumb a:hover { color: var(--accent); }
+  /* page-specific */
+  #probe-scene .row > rect { fill: var(--surface-2); stroke: var(--line); stroke-width: 1.2; transition: stroke .35s, fill .35s; }
+  #probe-scene .row.skip { opacity: .55; }
+  #passive-scene .finding > rect { stroke: var(--line); stroke-width: 1; }
+  #passive-scene .src { transition: fill .35s; }
+  #passive-scene[data-step="2"] .ck, #passive-scene[data-step="3"] .fm { fill: var(--accent); }
+  #attack .cookie-x { transition: opacity .35s; }
+
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› <a href="group-browser-defenses.html">Browser-side defenses</a> › CSRF</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/csrf-scanner.md" title="The markdown source for this page">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">DAST scanner · active probe plus snapshot</div>
+  <h1>CSRF Scanner</h1>
+  <p class="lede">A logged-in browser attaches its cookie to any request, whoever started it. This scanner asks three questions: does a state-changing endpoint answer a request that claims to come from an attacker's site, do the cookies refuse to travel cross-site, and do the POST forms carry a token.</p>
+  <div class="meta">
+    <span class="pill dast">DAST</span><span class="pill high">Medium–High</span><span class="pill">Auth Weakness</span><span class="pill">3 checks</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#probe"><span class="n">01</span>The forged-origin probe</a>
+  <a href="#passive"><span class="n">02</span>Cookies and forms</a>
+  <a href="#fix"><span class="n">03</span>What the defenses do</a>
+  <a href="#why"><span class="n">04</span>Why it matters</a>
+  <a href="#code"><span class="n">05</span>Vulnerable vs fixed code</a>
+  <a href="#limits"><span class="n">06</span>Limits and what it needs</a>
+</nav>
+
+
+<section id="probe">
+  <h2>The forged-origin probe</h2>
+  <p class="prose">The only active test. The scanner takes every discovered endpoint that changes state and replays it with an <code>Origin</code> and <code>Referer</code> that belong to an attacker. A server that checks the origin refuses; a server that does not answers normally, and that answer is the evidence.</p>
+
+  <div class="scene" id="probe-scene" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 310" role="img" aria-label="Four discovered endpoints. GET is skipped. POST, DELETE and PATCH are sent with a forged Origin. The 200 and 204 responses become High findings; the 403 stays silent.">
+        <defs><marker id="arrCs1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <text class="lbl" x="34" y="24">endpoint from discovery</text>
+        <text class="lbl at-2" x="296" y="24">what the scanner sends</text>
+        <text class="lbl at-3" x="560" y="24">response</text>
+        <text class="lbl at-4" x="730" y="24">verdict</text>
+
+        <g class="row skip node" transform="translate(20 36)"><rect width="920" height="44" rx="8"/>
+          <text class="mono" x="14" y="27">GET /api/profile</text>
+          <text class="lbl at-2" x="276" y="27">not probed: GET is not a state-changing method</text></g>
+
+        <g class="row node lit-4" transform="translate(20 90)"><rect width="920" height="44" rx="8"/>
+          <text class="mono" x="14" y="27">POST /api/transfer</text>
+          <text class="mono at-2" x="276" y="27">Origin: https://evil-attacker.com</text>
+          <text class="mono at-3 t-attacker" x="540" y="27">200 OK</text>
+          <text class="mono at-4 t-attacker" x="710" y="27">HIGH · 0.90</text></g>
+
+        <g class="row node" transform="translate(20 144)"><rect width="920" height="44" rx="8"/>
+          <text class="mono" x="14" y="27">DELETE /api/account</text>
+          <text class="mono at-2" x="276" y="27">Origin: https://evil-attacker.com</text>
+          <text class="mono at-3 t-safe" x="540" y="27">403 Forbidden</text>
+          <text class="mono at-4 t-safe" x="710" y="27">silent</text></g>
+
+        <g class="row node lit-4" transform="translate(20 198)"><rect width="920" height="44" rx="8"/>
+          <text class="mono" x="14" y="27">PATCH /api/settings</text>
+          <text class="mono at-2" x="276" y="27">Origin: https://evil-attacker.com</text>
+          <text class="mono at-3 t-attacker" x="540" y="27">204 No Content</text>
+          <text class="mono at-4 t-attacker" x="710" y="27">HIGH · 0.90</text></g>
+
+        <text class="lbl at-2" x="34" y="276">Also sent: Referer: https://evil-attacker.com/attack, the scan's auth headers if any, and no request body.</text>
+        <text class="lbl at-4" x="34" y="296">Any status from 200 to 299 counts. Nothing else is read from the response.</text>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Discovery hands over its endpoint list. <b>Only POST, PUT, PATCH and DELETE are kept</b>, because a GET is not supposed to change anything and is not the CSRF surface.</p>
+      <p class="step"><span class="n">2</span>Each kept endpoint is called once with its own method, <code>Origin: https://evil-attacker.com</code> and a matching forged <code>Referer</code>. The body is empty. Requests are sent three at a time, 0.3 s apart.</p>
+      <p class="step"><span class="n">3</span>The scanner reads one thing: the status code. A server that validates <code>Origin</code> answers 403. A server that ignores it processes the request and answers normally.</p>
+      <p class="step"><span class="n">4</span><b>Any 2xx is a HIGH finding at confidence 0.90</b>: the endpoint did not refuse a request from a foreign origin. A 4xx stays silent, which also means an endpoint that rejects the empty body with 400 or 422 is not reported.</p>
+    </div>
+  </div>
+</section>
+
+<section id="passive">
+  <h2>Cookies and forms, read from the snapshot</h2>
+  <p class="prose">The other two checks send nothing. They read the page snapshot captured in phase 1: the cookies the server set, and the HTML of the page. Both are MEDIUM, because a missing flag or a missing token is a weaker signal than a server that actually accepted a forged request.</p>
+
+  <div class="scene" id="passive-scene" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 330" role="img" aria-label="The snapshot holds three cookies and two POST forms. Cookies with SameSite None or no SameSite are flagged, a Lax cookie is not. A POST form with no known CSRF token field is flagged, a form with csrf_token is not.">
+        <defs><marker id="arrCs2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g class="node lit-1" transform="translate(20 20)">
+          <rect width="250" height="290" rx="10"/>
+          <text class="ttl" x="14" y="26">Snapshot from phase 1</text>
+          <text class="lbl" x="14" y="44">no request is sent here</text>
+          <g class="mono">
+            <text class="src ck" x="14" y="76">sid; SameSite=None</text>
+            <text class="src ck" x="14" y="96">theme</text>
+            <text class="src ck" x="14" y="116">sb-token; SameSite=Lax</text>
+            <text class="src fm" x="14" y="160">&lt;form method=post&gt;</text>
+            <text class="src fm" x="28" y="180">hidden: csrf_token</text>
+            <text class="src fm" x="14" y="212">&lt;form method=post&gt;</text>
+            <text class="src fm" x="28" y="232">hidden: lang</text>
+          </g>
+          <text class="lbl" x="14" y="268">HTML of the page, plus Set-Cookie</text>
+        </g>
+        <path class="wire at-2" d="M270 100 C 288 100, 288 80, 300 80" marker-end="url(#arrCs2)"/>
+        <path class="wire at-3" d="M270 200 C 288 200, 288 245, 300 245" marker-end="url(#arrCs2)"/>
+        <path class="wire at-2" d="M660 80 C 672 80, 672 100, 680 100" marker-end="url(#arrCs2)"/>
+        <path class="wire at-3" d="M660 245 C 672 245, 672 230, 680 230" marker-end="url(#arrCs2)"/>
+
+        <g class="node at-2 lit-2" transform="translate(300 20)">
+          <rect width="360" height="150" rx="10"/>
+          <text class="ttl" x="14" y="26">Cookie SameSite</text>
+          <text class="lbl" x="14" y="44">flag if the attribute is absent or None</text>
+          <g class="mono">
+            <text x="14" y="74">sid</text><text class="lbl" x="110" y="74">SameSite=None</text><text class="t-attacker" x="250" y="74">flag · 0.70</text>
+            <text x="14" y="96">theme</text><text class="lbl" x="110" y="96">(not set)</text><text class="t-attacker" x="250" y="96">flag · 0.70</text>
+            <text x="14" y="118">sb-token</text><text class="lbl" x="110" y="118">SameSite=Lax</text><text class="t-safe" x="250" y="118">silent</text>
+          </g>
+          <text class="lbl at-4" x="14" y="138">Strict and Lax both pass</text>
+        </g>
+        <g class="node at-3 lit-3" transform="translate(300 190)">
+          <rect width="360" height="120" rx="10"/>
+          <text class="ttl" x="14" y="26">POST forms</text>
+          <text class="lbl" x="14" y="44">hidden field names against a token list</text>
+          <g class="mono">
+            <text x="14" y="72">csrf_token</text><text class="t-safe" x="230" y="72">known · silent</text>
+            <text x="14" y="94">lang</text><text class="t-attacker" x="230" y="94">no token · flag</text>
+          </g>
+          <text class="lbl at-4" x="14" y="110">names are compared case-insensitively</text>
+        </g>
+
+        <g class="node" transform="translate(680 20)">
+          <rect width="260" height="290" rx="10"/>
+          <text class="ttl" x="14" y="26">Findings</text>
+          <text class="lbl only-1" x="14" y="46">none yet</text>
+          <g class="finding at-2" transform="translate(14 58)"><rect width="232" height="52" rx="6" class="soft-accent"/><text class="mono t-accent" x="10" y="19">MEDIUM · 0.70</text><text class="lbl" x="10" y="38">Cookie 'sid' lacks SameSite</text></g>
+          <g class="finding at-2" transform="translate(14 118)"><rect width="232" height="52" rx="6" class="soft-accent"/><text class="mono t-accent" x="10" y="19">MEDIUM · 0.70</text><text class="lbl" x="10" y="38">Cookie 'theme' lacks SameSite</text></g>
+          <g class="finding at-3" transform="translate(14 178)"><rect width="232" height="52" rx="6" class="soft-accent"/><text class="mono t-accent" x="10" y="19">MEDIUM · 0.85</text><text class="lbl" x="10" y="38">POST form lacks CSRF token</text></g>
+          <text class="lbl at-4" x="14" y="258">sb-token and the csrf_token form:</text>
+          <text class="lbl at-4" x="14" y="274">nothing reported</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The snapshot holds every <code>Set-Cookie</code> the first page load produced and the page's HTML. The scanner reads it; the target is not contacted for these two checks.</p>
+      <p class="step"><span class="n">2</span>Every cookie is looked at. <b>No SameSite, or SameSite=None, is MEDIUM at 0.70</b>, because the browser will attach that cookie to a request started from another site.</p>
+      <p class="step"><span class="n">3</span>Every <code>&lt;form method=post&gt;</code> has its hidden input names compared with nine known token names (<code>csrf_token</code>, <code>_csrf</code>, <code>authenticity_token</code>, <code>xsrf-token</code>, <code>token</code> and others). <b>No match is MEDIUM at 0.85</b>.</p>
+      <p class="step"><span class="n">4</span>The guards: <code>Lax</code> and <code>Strict</code> cookies are silent, a form with any listed token name is silent, and a GET form is never matched at all.</p>
+    </div>
+  </div>
+</section>
+
+<section id="fix">
+  <h2>What the defenses do to a forged request</h2>
+  <p class="prose">Why these checks exist. The attacker never sees the victim's cookie. The victim's browser attaches it by itself, so the defense has to make the request fail anyway: keep the cookie off cross-site requests, or have the server refuse a foreign <code>Origin</code>.</p>
+
+  <div class="scene" id="attack" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 300" role="img" aria-label="An attacker page makes the victim's browser send a POST to the app. With no defense the cookie rides along and the transfer succeeds. With SameSite Lax the cookie is left off and the app answers 401. With an Origin check the app answers 403.">
+        <defs><marker id="arrCs3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g class="node" transform="translate(20 20)"><rect width="250" height="100" rx="10"/>
+          <text class="ttl" x="14" y="28">evil-attacker.com</text>
+          <text class="lbl" x="14" y="50">hidden form, submits itself</text>
+          <text class="mono t-attacker" x="14" y="78">POST /api/transfer</text></g>
+        <g class="node" transform="translate(355 20)"><rect width="250" height="100" rx="10"/>
+          <text class="ttl" x="14" y="28">Victim's browser</text>
+          <text class="lbl" x="14" y="50">logged in to the app</text>
+          <text class="mono" x="14" y="78">cookie: session=…</text></g>
+        <g class="node lit-1 lit-2 lit-3" transform="translate(690 20)"><rect width="250" height="100" rx="10"/>
+          <text class="ttl" x="14" y="28">app.example.com</text>
+          <text class="lbl" x="14" y="50">POST /api/transfer</text>
+          <text class="mono until-3" x="14" y="78">checks: nothing</text><text class="mono at-3 t-safe" x="14" y="78">checks: Origin allowlist</text></g>
+        <path class="wire attacker" d="M270 70 H355" marker-end="url(#arrCs3)"/>
+        <path class="wire attacker" d="M605 70 H690" marker-end="url(#arrCs3)"/>
+
+        <g class="only-1">
+          <text class="mono" x="20" y="170">POST /api/transfer   Cookie: session=…   Origin: https://evil-attacker.com</text>
+          <text class="mono t-attacker" x="20" y="200">200 OK: the transfer ran. This is what the HIGH finding means.</text>
+        </g>
+        <g class="only-2">
+          <text class="mono" x="20" y="170">POST /api/transfer   (SameSite=Lax: no Cookie header on a cross-site POST)</text>
+          <text class="mono t-safe" x="20" y="200">401: the request arrives with no session. The cookie check goes silent.</text>
+        </g>
+        <g class="only-3">
+          <text class="mono" x="20" y="170">POST /api/transfer   Cookie: session=…   Origin: https://evil-attacker.com</text>
+          <text class="mono t-safe" x="20" y="200">403: the origin is not in the allowlist. The forged-origin probe goes silent.</text>
+        </g>
+        <text class="lbl" x="20" y="250">The scanner plays the attacker's role in step 3 by sending the same Origin itself.</text>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span><b>No defense.</b> The victim opens the attacker's page. Their browser sends the POST with the session cookie, and the app cannot tell it from a click on its own button.</p>
+      <p class="step"><span class="n">2</span><b>SameSite=Lax or Strict.</b> The browser leaves the cookie off a cross-site POST, so the request arrives unauthenticated and fails.</p>
+      <p class="step"><span class="n">3</span><b>Origin validation.</b> The server compares <code>Origin</code> with its own allowlist and returns 403, which is exactly the answer the scanner's forged-origin probe looks for.</p>
+    </div>
+  </div>
+</section>
+
+<section id="why">
+  <h2>Why it matters</h2>
+  <div class="callout why">
+    <div class="label">Why it matters</div>
+    <p>CSRF tricks a victim's browser into calling your app while the victim is logged in. The attacker's page can submit a form to <code>/api/transfer</code> to move funds, change the victim's email or password, delete their data, or place an order with their saved payment method. The victim sees nothing happen.</p>
+  </div>
+  <div class="callout breach">
+    <div class="label">Netflix (2006) and ING Direct (2008)</div>
+    <p>At Netflix, CSRF could change a member's account email, password and DVD queue because the site lacked CSRF tokens. At ING Direct, CSRF let an attacker start fund transfers from a victim's bank account when the victim visited a malicious page while logged in.</p>
+  </div>
+</section>
+
+<section id="code">
+  <h2>Vulnerable vs fixed code</h2>
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true" type="button">BAD · cookie sent cross-site</button>
+      <button class="tab good" role="tab" aria-selected="false" type="button">GOOD · SameSite + Origin check</button>
+    </div>
+    <div role="tabpanel"><pre><code><span class="c">// BAD: no SameSite, so the browser attaches it to cross-site requests</span>
+<span class="hl bad">response.cookies.set(<span class="s">"session"</span>, token, { httpOnly: true, secure: true })</span>
+
+<span class="c">// BAD: mutation handler never looks at where the request came from</span>
+export async function POST(request: Request) {
+<span class="hl bad">  await transferFunds(await request.json())</span>
+  return new Response(<span class="s">"ok"</span>)
+}</code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c">// GOOD: Use SameSite cookies (modern defense)</span>
+response.cookies.set(<span class="s">"session"</span>, token, {
+  httpOnly: true,
+  secure: true,
+<span class="hl good">  sameSite: <span class="s">"strict"</span>  <span class="c">// or "lax" for GET-safe scenarios</span></span>
+})
+
+<span class="c">// GOOD: Validate Origin header on mutations</span>
+const origin = request.headers.get(<span class="s">"Origin"</span>)
+<span class="hl good">if (origin !== <span class="s">"https://your-app.com"</span>) {</span>
+  return new Response(<span class="s">"Forbidden"</span>, { status: 403 })
+}</code></pre></div>
+  </div>
+</section>
+
+<section id="limits">
+  <h2>Limits and what it needs</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Check</th><th>Reads</th><th>Reports when</th><th>Severity · confidence</th></tr></thead>
+      <tbody>
+        <tr><td>Forged Origin accepted</td><td>live response to each POST, PUT, PATCH and DELETE endpoint</td><td>status 200 to 299 with <code>Origin: https://evil-attacker.com</code></td><td>High · 0.90</td></tr>
+        <tr><td>Cookie SameSite</td><td>cookies and the raw <code>Set-Cookie</code> header in the snapshot</td><td>SameSite is absent or <code>None</code></td><td>Medium · 0.70</td></tr>
+        <tr><td>POST form token</td><td>HTML of the snapshot page</td><td>a POST form has no hidden input whose name is a known token name</td><td>Medium · 0.85</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout note">
+    <div class="label">What it deliberately stays quiet about</div>
+    <p>The probe sends an empty body, so an endpoint that validates input before it checks anything else may answer 400 and be missed. A 2xx is taken as acceptance without checking that the endpoint really uses cookie authentication or that anything changed. The form and cookie checks cover the snapshot page only, not every page of the app. Credentials are optional: with them, the probe carries the auth headers.</p>
+  </div>
+</section>
+
+
+<footer class="foot">
+  <span>Source: <a href="../scanners/csrf-scanner.md">docs/scanners/csrf-scanner.md</a> · <code>isitsecure/engine/scanners/csrf_scanner.py</code></span>
+  <span>Group: <a href="group-browser-defenses.html">Browser-side defenses</a> · Related: <a href="cors.html">CORS</a> · <a href="session.html">Session</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+</body>
+</html>

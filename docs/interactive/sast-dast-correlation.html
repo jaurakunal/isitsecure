@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>SAST ↔ DAST Correlation · isitsecure</title>
+<meta name="description" content="How isitsecure pairs a live (DAST) finding with a code (SAST) finding into one confirmed finding, and how six strategies turn code findings into new dynamic tests — animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  /* matcher: the pair rule table sits in the centre column until the first match lands */
+  #xref .rule { fill: var(--surface-2); stroke: var(--line); stroke-dasharray: 4 4; }
+  #xref .confirmed > rect { fill: var(--accent-soft) !important; }
+  #xref .pass > rect { stroke-dasharray: 4 4; }
+  /* guided DAST: the target column is one tall box; rows fill in as strategies fire */
+  #guided .target > rect { fill: var(--surface-2); stroke: var(--line); stroke-width: 1.5; }
+  #guided .hit { fill: var(--attacker); font-weight: 500; }
+  /* generative: the intersection region is drawn on top of both sets */
+  #generative .overlap { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 2; }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› SAST ↔ DAST Correlation</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../architecture.md" title="The markdown source for this page">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">Architecture</div>
+  <h1>SAST ↔ DAST Correlation</h1>
+  <p class="lede">A dynamic finding says the app misbehaved. A static finding says the code looks wrong. Phase 9 pairs the two into one confirmed finding with boosted severity. Phase 9.1 runs the relationship forward: a code finding becomes a concrete request against the live app, a test no scanner would otherwise have sent.</p>
+  <div class="meta">
+    <span class="pill">Phase 9 + 9.1</span><span class="pill dast">DAST</span><span class="pill sast">SAST</span><span class="pill high">confirmed = severity +1</span><span class="pill">full mode only</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#matcher"><span class="n">01</span>The matcher</a>
+  <a href="#guided"><span class="n">02</span>Six guided strategies</a>
+  <a href="#generative"><span class="n">03</span>Generative, not post-hoc</a>
+  <a href="#why"><span class="n">04</span>Why it matters</a>
+  <a href="#code"><span class="n">05</span>Vulnerable vs fixed</a>
+  <a href="#limits"><span class="n">06</span>Limits</a>
+</nav>
+
+<section id="matcher">
+  <h2>Phase 9: two streams, one matcher</h2>
+  <p class="prose">After the scanners finish, every finding carries a source and a category. The cross-referencer walks the DAST stream and, for each finding, looks for the first unused SAST finding whose category completes one of its pair rules. A hit produces a new confirmed finding that links both originals. Findings without a partner pass through untouched.</p>
+
+  <div class="scene" id="xref" data-scene data-interval="3200">
+    <figure class="stage">
+      <svg viewBox="0 0 960 360" role="img" aria-label="DAST findings on the left and SAST findings on the right. The cross-referencer in the middle pairs them by category: IDOR with missing auth, RLS bypass with missing RLS, injection with injection risk, secret exposure with secret in code. Each pair produces a confirmed finding with boosted severity. A missing CSP header and a vulnerable dependency have no pair and pass through unchanged.">
+        <defs><marker id="arrA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <text class="lbl" x="20" y="24">DAST findings · sources DAST_URL, DAST_AUTHENTICATED</text>
+        <text class="lbl" x="480" y="24" text-anchor="middle">Cross-referencer · Phase 9</text>
+        <text class="lbl" x="940" y="24" text-anchor="end">SAST findings · sources SAST_CODE, SAST_GIT_HISTORY</text>
+
+        <!-- row 1: IDOR + missing auth -->
+        <g class="node lit-3" transform="translate(20 40)"><rect width="230" height="54" rx="8"/><text class="ttl" x="12" y="16">IDOR</text><text class="mono" x="12" y="30">GET /api/tasks/42</text><text class="lbl" x="12" y="44">idor · HIGH · idor_scanner</text></g>
+        <g class="node lit-3" transform="translate(710 40)"><rect width="230" height="54" rx="8"/><text class="ttl" x="12" y="16">Missing auth check</text><text class="mono" x="12" y="30">tasks/[id]/route.ts</text><text class="lbl" x="12" y="44">auth_weakness · HIGH · route_auth</text></g>
+        <path class="wire at-3 accent" d="M250 67 H 288" marker-end="url(#arrA)"/>
+        <path class="wire at-3 accent" d="M710 67 H 672" marker-end="url(#arrA)"/>
+        <g class="node confirmed at-3 lit-3" transform="translate(290 40)"><rect width="380" height="54" rx="8"/><text class="ttl" x="12" y="16">IDOR confirmed: exposed endpoint + no auth in code</text><text class="lbl" x="12" y="30">rule: idor (DAST) + auth_weakness (SAST)</text><text class="lbl" x="12" y="44">severity max(HIGH, HIGH) + 1 → CRITICAL · confidence 0.95</text></g>
+
+        <!-- row 2: RLS -->
+        <g class="node lit-4" transform="translate(20 102)"><rect width="230" height="54" rx="8"/><text class="ttl" x="12" y="16">RLS bypass</text><text class="mono" x="12" y="30">/rest/v1/orders?select=*</text><text class="lbl" x="12" y="44">rls_misconfiguration · CRITICAL</text></g>
+        <g class="node lit-4" transform="translate(710 102)"><rect width="230" height="54" rx="8"/><text class="ttl" x="12" y="16">Table without RLS policy</text><text class="mono" x="12" y="30">migrations/orders.sql</text><text class="lbl" x="12" y="44">rls_misconfiguration · HIGH</text></g>
+        <path class="wire at-4 accent" d="M250 129 H 288" marker-end="url(#arrA)"/>
+        <path class="wire at-4 accent" d="M710 129 H 672" marker-end="url(#arrA)"/>
+        <g class="node confirmed at-4 lit-4" transform="translate(290 102)"><rect width="380" height="54" rx="8"/><text class="ttl" x="12" y="16">RLS gap confirmed: live probing + migration analysis</text><text class="lbl" x="12" y="30">rule: rls_misconfiguration + rls_misconfiguration</text><text class="lbl" x="12" y="44">severity max(CRITICAL, HIGH) + 1 → CRITICAL (already the top)</text></g>
+
+        <!-- row 3: injection -->
+        <g class="node lit-5" transform="translate(20 164)"><rect width="230" height="54" rx="8"/><text class="ttl" x="12" y="16">SQL injection</text><text class="mono" x="12" y="30">POST /rest/products/search</text><text class="lbl" x="12" y="44">injection_risk · HIGH</text></g>
+        <g class="node lit-5" transform="translate(710 164)"><rect width="230" height="54" rx="8"/><text class="ttl" x="12" y="16">Raw SQL concatenation</text><text class="mono" x="12" y="30">routes/search.ts:12</text><text class="lbl" x="12" y="44">injection_risk · MEDIUM</text></g>
+        <path class="wire at-5 accent" d="M250 191 H 288" marker-end="url(#arrA)"/>
+        <path class="wire at-5 accent" d="M710 191 H 672" marker-end="url(#arrA)"/>
+        <g class="node confirmed at-5 lit-5" transform="translate(290 164)"><rect width="380" height="54" rx="8"/><text class="ttl" x="12" y="16">Injection confirmed: active testing + code patterns</text><text class="lbl" x="12" y="30">rule: injection_risk + injection_risk</text><text class="lbl" x="12" y="44">severity max(HIGH, MEDIUM) + 1 → CRITICAL · confidence 0.95</text></g>
+
+        <!-- row 4: secrets -->
+        <g class="node lit-6" transform="translate(20 226)"><rect width="230" height="54" rx="8"/><text class="ttl" x="12" y="16">Secret in JS bundle</text><text class="mono" x="12" y="30">main.3f1a.js</text><text class="lbl" x="12" y="44">exposed_secrets · MEDIUM</text></g>
+        <g class="node lit-6" transform="translate(710 226)"><rect width="230" height="54" rx="8"/><text class="ttl" x="12" y="16">Key in git history</text><text class="mono" x="12" y="30">.env @ a1b2c3</text><text class="lbl" x="12" y="44">exposed_secrets · MEDIUM</text></g>
+        <path class="wire at-6 accent" d="M250 253 H 288" marker-end="url(#arrA)"/>
+        <path class="wire at-6 accent" d="M710 253 H 672" marker-end="url(#arrA)"/>
+        <g class="node confirmed at-6 lit-6" transform="translate(290 226)"><rect width="380" height="54" rx="8"/><text class="ttl" x="12" y="16">Secret exposure confirmed: JS bundle + git history</text><text class="lbl" x="12" y="30">rule: exposed_secrets + exposed_secrets</text><text class="lbl" x="12" y="44">severity max(MEDIUM, MEDIUM) + 1 → HIGH · confidence 0.95</text></g>
+
+        <!-- row 5: no pair -->
+        <g class="node lit-7" transform="translate(20 288)"><rect width="230" height="54" rx="8"/><text class="ttl" x="12" y="16">Missing CSP header</text><text class="mono" x="12" y="30">GET /</text><text class="lbl" x="12" y="44">missing_headers · LOW</text></g>
+        <g class="node lit-7" transform="translate(710 288)"><rect width="230" height="54" rx="8"/><text class="ttl" x="12" y="16">Vulnerable dependency</text><text class="mono" x="12" y="30">lodash 4.17.4</text><text class="lbl" x="12" y="44">dependency_vulnerability · HIGH</text></g>
+        <path class="wire at-7 dashed" d="M250 315 H 330"/>
+        <path class="wire at-7 dashed" d="M710 315 H 630"/>
+        <g class="at-7"><text class="lbl" x="480" y="311" text-anchor="middle">no pair rule for either category</text><text class="lbl" x="480" y="327" text-anchor="middle">both pass through unchanged</text></g>
+
+        <!-- the pair table, shown before the first match -->
+        <g class="until-3" transform="translate(290 40)">
+          <rect class="rule" width="380" height="302" rx="8"/>
+          <text class="ttl" x="12" y="22">Pair rules (DAST category + SAST category)</text>
+          <g class="mono">
+            <text x="12" y="52">idor                 + auth_weakness</text>
+            <text x="12" y="70">idor                 + idor</text>
+            <text x="12" y="88">rls_misconfiguration + rls_misconfiguration</text>
+            <text x="12" y="106">injection_risk       + injection_risk</text>
+            <text x="12" y="124">exposed_secrets      + exposed_secrets</text>
+            <text x="12" y="142">exposed_api_endpoint + auth_weakness</text>
+          </g>
+          <text class="lbl" x="12" y="176">each DAST finding takes the first unused SAST partner</text>
+          <text class="lbl" x="12" y="192">a SAST finding is consumed at most once</text>
+          <text class="lbl" x="12" y="216">result: a new finding, source CROSS_REFERENCED</text>
+          <text class="lbl" x="12" y="232">severity = higher of the two, raised one level</text>
+          <text class="lbl" x="12" y="248">confidence 0.95 · endpoint from DAST · file from SAST</text>
+          <text class="lbl" x="12" y="264">related_finding_ids = [dast.id, sast.id]</text>
+          <text class="lbl at-2" x="12" y="290">runs only in full mode: a target URL and a repository</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Two streams arrive. On the left, findings from live requests (sources <code>DAST_URL</code> and <code>DAST_AUTHENTICATED</code>); on the right, findings from reading code and git history. Each carries a <b>category</b>, and the category is what the matcher keys on.</p>
+      <p class="step"><span class="n">2</span>The pair table is fixed in code. The matcher walks the DAST list in order; for each finding it scans the SAST list for the first partner whose category completes a rule, and that partner is then spent. <b>Phase 9 compares categories only</b>; it does not compare the DAST endpoint with the SAST route file. That alignment happens in the route matcher of Phase 9.1, shown in the next scene.</p>
+      <p class="step"><span class="n">3</span><b>IDOR + missing auth.</b> The dynamic scanner read another user's task by swapping an id; the static analyzer found no auth check in the route file. The result is a new finding titled from the rule, with severity <b>max(HIGH, HIGH) raised one level to CRITICAL</b> and confidence 0.95.</p>
+      <p class="step"><span class="n">4</span><b>RLS bypass + missing RLS.</b> The anon key returned rows and the migration never enabled row-level security. The boost is clamped: CRITICAL plus one is still CRITICAL.</p>
+      <p class="step"><span class="n">5</span><b>Injection + injection risk.</b> The active scanner got a different response under a payload, and the code concatenates user input into SQL. The higher of the two (HIGH) is raised to CRITICAL.</p>
+      <p class="step"><span class="n">6</span><b>Secret exposure + secret in code.</b> The same key shows up in a shipped bundle and in git history. Two MEDIUMs become one HIGH.</p>
+      <p class="step"><span class="n">7</span>A missing CSP header and a vulnerable dependency complete no rule, so nothing happens to them. The originals of matched pairs are also kept; the confirmed finding is <b>added</b> and points at both ids, so a reader can see what each side proved.</p>
+    </div>
+  </div>
+
+  <div class="callout note">
+    <div class="label">Where the endpoint ↔ route alignment lives</div>
+    <p>The matching rules above are the whole of <code>FindingCrossReferencer</code>: a category pair, first unused partner wins. The step that turns a code file into a live URL, <code>RouteEndpointMatcher</code>, belongs to Phase 9.1. It looks the finding's file up in the route map, converts the route pattern (<code>/api/tasks/:id</code> or <code>/api/tasks/[id]</code>) into a regex (<code>/api/tasks/[^/]+/?$</code>) and tests it against every discovered endpoint path. Paths are compared by suffix, so a relative finding path and an absolute route path still match.</p>
+  </div>
+</section>
+
+<section id="guided">
+  <h2>Phase 9.1: six strategies, six generated requests</h2>
+  <p class="prose">Each strategy subscribes to the SAST scanners it understands, picks the findings whose wording matches its trigger, maps the file to live endpoints, and emits concrete test cases. The runner drops tests whose endpoint and category are already a finding, orders the rest by the severity of the source finding, keeps the first 50, and sends them through the rate-limited client. A 2xx reply becomes a new finding linked to the code finding that caused it.</p>
+
+  <div class="scene" id="guided" data-scene data-interval="3000">
+    <figure class="stage">
+      <svg viewBox="0 0 960 380" role="img" aria-label="Six rows. Each row starts with a SAST finding on the left, becomes a generated HTTP request in the middle, and hits the target on the right, where the response is recorded as a new finding.">
+        <defs><marker id="arrB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <text class="lbl" x="20" y="24">SAST input · scanner · file</text>
+        <text class="lbl" x="340" y="24">Generated request</text>
+        <text class="lbl" x="750" y="24">Target response → new finding</text>
+
+        <!-- target column -->
+        <g class="target"><rect x="750" y="34" width="190" height="316" rx="10"/></g>
+
+        <!-- row 1: auth bypass -->
+        <g class="node lit-2" transform="translate(20 40)"><rect width="280" height="44" rx="8"/><text class="ttl" x="12" y="17">Route missing auth check</text><text class="lbl" x="12" y="35">route_auth_analyzer · tasks/[id]/route.ts</text></g>
+        <path class="wire at-2 info" d="M300 62 H 338" marker-end="url(#arrB)"/>
+        <g class="node at-2 lit-2" transform="translate(340 40)"><rect width="370" height="44" rx="8"/><text class="ttl" x="12" y="17">Auth bypass</text><text class="mono" x="12" y="35">GET /api/tasks/42 · no Authorization header</text></g>
+        <path class="wire at-2 attacker" d="M710 62 H 748" marker-end="url(#arrB)"/>
+        <g class="at-2 mono"><text class="hit" x="762" y="58">200 OK · CRITICAL</text><text class="lbl" x="762" y="74">→ auth_weakness</text></g>
+
+        <!-- row 2: idor targeted -->
+        <g class="node lit-3" transform="translate(20 92)"><rect width="280" height="44" rx="8"/><text class="ttl" x="12" y="17">Route missing ownership check</text><text class="lbl" x="12" y="35">route_auth_analyzer · tasks/[id]/route.ts</text></g>
+        <path class="wire at-3 info" d="M300 114 H 338" marker-end="url(#arrB)"/>
+        <g class="node at-3 lit-3" transform="translate(340 92)"><rect width="370" height="44" rx="8"/><text class="ttl" x="12" y="17">IDOR targeted</text><text class="mono" x="12" y="35">GET /api/tasks/42 · {"id": "00000000-…-0001"}</text></g>
+        <path class="wire at-3 attacker" d="M710 114 H 748" marker-end="url(#arrB)"/>
+        <g class="at-3 mono"><text class="hit" x="762" y="110">200 OK · HIGH</text><text class="lbl" x="762" y="126">→ idor</text></g>
+
+        <!-- row 3: injection targeted -->
+        <g class="node lit-4" transform="translate(20 144)"><rect width="280" height="44" rx="8"/><text class="ttl" x="12" y="17">Raw SQL concatenation</text><text class="lbl" x="12" y="35">injection_pattern_trigger · search.ts:12</text></g>
+        <path class="wire at-4 info" d="M300 166 H 338" marker-end="url(#arrB)"/>
+        <g class="node at-4 lit-4" transform="translate(340 144)"><rect width="370" height="44" rx="8"/><text class="ttl" x="12" y="17">Injection targeted</text><text class="mono" x="12" y="35">POST /products/search · {"q": "' OR '1'='1' --"}</text></g>
+        <path class="wire at-4 attacker" d="M710 166 H 748" marker-end="url(#arrB)"/>
+        <g class="at-4 mono"><text class="hit" x="762" y="162">200 OK · CRITICAL</text><text class="lbl" x="762" y="178">→ injection_risk</text></g>
+
+        <!-- row 4: mass assignment -->
+        <g class="node lit-5" transform="translate(20 196)"><rect width="280" height="44" rx="8"/><text class="ttl" x="12" y="17">Schema has isAdmin column</text><text class="lbl" x="12" y="35">prisma_schema_analyzer · schema.prisma</text></g>
+        <path class="wire at-5 info" d="M300 218 H 338" marker-end="url(#arrB)"/>
+        <g class="node at-5 lit-5" transform="translate(340 196)"><rect width="370" height="44" rx="8"/><text class="ttl" x="12" y="17">Mass assignment</text><text class="mono" x="12" y="35">POST /api/users · {"isAdmin": true}</text></g>
+        <path class="wire at-5 attacker" d="M710 218 H 748" marker-end="url(#arrB)"/>
+        <g class="at-5 mono"><text class="hit" x="762" y="214">201 Created · HIGH</text><text class="lbl" x="762" y="230">→ privilege_escalation</text></g>
+
+        <!-- row 5: race condition -->
+        <g class="node lit-6" transform="translate(20 248)"><rect width="280" height="44" rx="8"/><text class="ttl" x="12" y="17">LLM review flags TOCTOU</text><text class="lbl" x="12" y="35">llm_review · orders/route.ts</text></g>
+        <path class="wire at-6 info" d="M300 270 H 338" marker-end="url(#arrB)"/>
+        <g class="node at-6 lit-6" transform="translate(340 248)"><rect width="370" height="44" rx="8"/><text class="ttl" x="12" y="17">Race condition</text><text class="mono" x="12" y="35">POST /api/orders ×5 · identical, concurrent</text></g>
+        <path class="wire at-6 attacker" d="M710 270 H 748" marker-end="url(#arrB)"/>
+        <g class="at-6 mono"><text class="hit" x="762" y="266">200 ×3 of 5 · MEDIUM</text><text class="lbl" x="762" y="282">→ auth_weakness</text></g>
+
+        <!-- row 6: rls bypass -->
+        <g class="node lit-7" transform="translate(20 300)"><rect width="280" height="44" rx="8"/><text class="ttl" x="12" y="17">Table without RLS policy</text><text class="lbl" x="12" y="35">rls_policy_analyzer · migrations/orders.sql</text></g>
+        <path class="wire at-7 info" d="M300 322 H 338" marker-end="url(#arrB)"/>
+        <g class="node at-7 lit-7" transform="translate(340 300)"><rect width="370" height="44" rx="8"/><text class="ttl" x="12" y="17">RLS bypass</text><text class="mono" x="12" y="35">GET /rest/v1/orders?select=* · apikey: &lt;anon&gt;</text></g>
+        <path class="wire at-7 attacker" d="M710 322 H 748" marker-end="url(#arrB)"/>
+        <g class="at-7 mono"><text class="hit" x="762" y="318">200 OK · CRITICAL</text><text class="lbl" x="762" y="334">→ rls_misconfiguration</text></g>
+
+        <!-- step 1: the route matcher occupies the empty request column -->
+        <g class="node only-1" transform="translate(340 60)">
+          <rect width="370" height="160" rx="8"/>
+          <text class="ttl" x="12" y="22">RouteEndpointMatcher: file → route → live URL</text>
+          <g class="mono">
+            <text x="12" y="50">finding.file_path    tasks/[id]/route.ts</text>
+            <text x="12" y="68">route_map entry      /api/tasks/[id]</text>
+            <text x="12" y="86">pattern → regex      /api/tasks/[^/]+/?$</text>
+            <text class="t-safe" x="12" y="104">discovered endpoint  /api/tasks/42  ✓</text>
+          </g>
+          <text class="lbl" x="12" y="130">paths compared by suffix: relative and absolute both match</text>
+          <text class="lbl" x="12" y="146">one SAST finding can map to several live endpoints</text>
+        </g>
+
+        <!-- last step: runner rules -->
+        <text class="lbl at-8" x="20" y="370">Runner: skip tests whose endpoint:category is already a finding · order by source severity · keep 50 · 3 in flight, 0.3 s apart · any 2xx = confirmed · 401/403/404/405 = denied</text>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Every strategy starts the same way: the SAST finding names a file, the route map names the route that file serves, the route pattern becomes a regex, and the regex is tested against each discovered endpoint path. <b>Without a live URL to hit, no test is generated.</b></p>
+      <p class="step" data-on="guidedFire"><span class="n">2</span><b>Auth bypass.</b> A <code>route_auth_analyzer</code> finding whose text says "missing authentication", "missing authorization" or "no auth" becomes one request per HTTP method the route supports, sent with <b>no auth headers at all</b>. A 2xx means the guard the code lacks is also absent at runtime: CRITICAL, category auth_weakness.</p>
+      <p class="step" data-on="guidedFire"><span class="n">3</span><b>IDOR targeted.</b> The same scanner's "ownership" or "object reference" findings become a request carrying a probe id, <code>00000000-0000-0000-0000-000000000001</code>, under the endpoint's first path or query parameter name (or <code>user_id</code>, <code>userId</code>, <code>id</code>, <code>uuid</code> from the snippet). The probe travels as a JSON payload; the URL itself is not rewritten. A 2xx is an IDOR finding, HIGH.</p>
+      <p class="step" data-on="guidedFire"><span class="n">4</span><b>Injection targeted.</b> Findings from <code>injection_pattern_trigger</code> or the LLM review that mention injection, unsanitized input, SQL or XSS name the parameter. Three SQLi payloads, starting with <code>' OR '1'='1' --</code>, and a set of XSS payloads are sent to that parameter. A 2xx is CRITICAL for SQLi, HIGH for XSS.</p>
+      <p class="step" data-on="guidedFire"><span class="n">5</span><b>Mass assignment.</b> A Prisma or Drizzle schema finding that exposes <code>role</code>, <code>isAdmin</code>, <code>admin</code>, <code>price</code>, <code>amount</code> or <code>permission*</code> columns becomes a POST, PUT and PATCH carrying those exact field names with privileged values, here <code>{"isAdmin": true}</code>. A 2xx is privilege_escalation, HIGH.</p>
+      <p class="step" data-on="guidedFire"><span class="n">6</span><b>Race condition.</b> When the LLM review flags "race condition", "TOCTOU" or "time-of-check", five identical POSTs are fired concurrently. <b>The finding is raised only if more than one succeeds.</b> Routes that mention payment, charge, checkout, billing or invoice are marked dry-run: logged, never sent.</p>
+      <p class="step" data-on="guidedFire"><span class="n">7</span><b>RLS bypass.</b> A table named in an <code>rls_policy_analyzer</code> finding is queried directly at the Supabase REST endpoint found during discovery, with the anon key read from the repository. If RLS were on, the reply would be empty or 401; rows coming back is CRITICAL.</p>
+      <p class="step" data-on="guidedFire"><span class="n">8</span>Each confirmed probe becomes a finding with source <code>sast_guided_dast</code>, confidence 0.95, the request payload attached, and <code>related_finding_ids</code> pointing back at the code finding that generated it. The runner's bounds are shown below the rows.</p>
+    </div>
+  </div>
+</section>
+
+<section id="generative">
+  <h2>Generative, not post-hoc</h2>
+  <p class="prose">Commercial tools call DAST ↔ SAST correlation "IAST" and sell it as matching after the fact. Matching can only re-label findings the two sides already produced. Phase 9.1 adds a second direction: a code finding that no dynamic scanner would have thought to test becomes a request, and that request can produce a finding that did not exist on either side.</p>
+
+  <div class="scene" id="generative" data-scene data-interval="3000">
+    <figure class="stage">
+      <svg viewBox="0 0 960 250" role="img" aria-label="Left: two overlapping sets, DAST findings and SAST findings; post-hoc matching only highlights the overlap. Right: a SAST-only finding generates a test request which produces a new DAST finding that was not in either set.">
+        <defs><marker id="arrC" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <text class="lbl" x="20" y="24">Post-hoc matching (what vendors sell as IAST)</text>
+        <g class="node"><rect x="30" y="44" width="230" height="120" rx="12"/><text class="ttl" x="44" y="68">DAST findings</text><text class="lbl" x="44" y="88">from tests that already ran</text></g>
+        <g class="node"><rect x="200" y="44" width="230" height="120" rx="12"/><text class="ttl" x="270" y="68">SAST findings</text><text class="lbl" x="270" y="88">from reading the code</text><text class="lbl" x="270" y="140">schema has isAdmin ·</text><text class="lbl" x="270" y="154">nothing tested it</text></g>
+        <rect class="overlap at-2" x="200" y="44" width="60" height="120" rx="8"/>
+        <text class="lbl at-2" x="230" y="186" text-anchor="middle">same category, both sides</text>
+        <text class="lbl at-2" x="30" y="212">Phase 9 confirms the overlap and raises severity. The set of tests that ran never changes.</text>
+        <text class="lbl at-2" x="30" y="228">Everything outside the overlap stays exactly as the scanners left it.</text>
+
+        <text class="lbl" x="500" y="24">Generative (Phase 9.1)</text>
+        <g class="node lit-3"><rect x="500" y="44" width="200" height="52" rx="8"/><text class="ttl" x="512" y="64">SAST-only finding</text><text class="mono" x="512" y="84">schema has isAdmin</text></g>
+        <path class="wire at-3 accent" d="M700 70 H 738" marker-end="url(#arrC)"/>
+        <g class="node at-3 lit-3"><rect x="740" y="44" width="200" height="52" rx="8"/><text class="ttl" x="752" y="64">Generated test</text><text class="mono" x="752" y="84">POST {"isAdmin": true}</text></g>
+        <path class="wire at-4 attacker" d="M840 96 V 138" marker-end="url(#arrC)"/>
+        <g class="node at-4 lit-4"><rect x="740" y="140" width="200" height="52" rx="8" class="soft-attacker"/><text class="ttl" x="752" y="160">New DAST finding</text><text class="lbl" x="752" y="180">privilege_escalation · HIGH</text></g>
+        <text class="lbl at-4" x="500" y="160">A test no scanner would have sent,</text>
+        <text class="lbl at-4" x="500" y="176">because no scanner knew the column existed.</text>
+        <text class="lbl at-4" x="500" y="212">The DAST set grows. The new finding links back to the</text>
+        <text class="lbl at-4" x="500" y="228">schema finding, so the proof chain is visible in the report.</text>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Both approaches start from the same two sets: the dynamic scanners ran their fixed repertoire, the static analyzers read the code. A schema column named <code>isAdmin</code> is in the SAST set and nothing in the DAST set.</p>
+      <p class="step"><span class="n">2</span><b>Post-hoc matching</b> finds the overlap, where both sides reported the same category, and relabels it as confirmed. That is useful, and it is also all it can do: no request is ever sent because of a code finding.</p>
+      <p class="step" data-on="genFire"><span class="n">3</span><b>Generative.</b> The mass-assignment strategy turns the schema finding into a concrete POST with <code>{"isAdmin": true}</code> at the route the schema serves. The request exists only because the code was read first.</p>
+      <p class="step" data-on="genFire"><span class="n">4</span>If the target accepts the field, a <b>new</b> finding appears on the DAST side: privilege escalation, proven live, with a pointer back to the schema finding. The overlap did not merely get relabelled; the dynamic side learned something it could not have found alone.</p>
+    </div>
+  </div>
+</section>
+
+<section id="why">
+  <h2>Why it matters</h2>
+  <div class="grid-2">
+    <div class="callout why"><div class="label">Two weak signals, one strong one</div><p>A missing auth check in code might be covered by middleware the analyzer cannot see. A changed response under an id swap might be a 404 page that looks different. Either alone is a plausible false positive. The same route failing both ways is proven, which is why the matcher raises severity one level and sets confidence to 0.95 rather than averaging two guesses.</p></div>
+    <div class="callout why"><div class="label">Tests nobody would have written</div><p>A dynamic scanner cannot guess that a users table has an <code>isAdmin</code> column, which table has no RLS policy, or which handler the LLM thinks has a check-then-act race. The code knows. Every one of the six strategies is a request that is only sendable because the repository was read first.</p></div>
+  </div>
+</section>
+
+<section id="code">
+  <h2>Vulnerable vs fixed: the route the IDOR pairing lands on</h2>
+  <p class="prose">The first row of the matcher scene. The static analyzer flags the handler because no user is resolved and no ownership is checked; the auth-bypass and IDOR-targeted strategies then hit it without a session and with a foreign id.</p>
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true">BAD · app/api/tasks/[id]/route.ts</button>
+      <button class="tab good" role="tab" aria-selected="false">GOOD · ownership checked</button>
+    </div>
+    <div role="tabpanel"><pre><code><span class="c">// Anyone who knows an id can read the task. No session, no owner check.</span>
+export async function GET(req: Request, { params }: { params: { id: string } }) {
+<span class="hl bad">  const task = await db.task.findUnique({ where: { id: params.id } });</span>
+  return Response.json(task);
+}</code></pre></div>
+    <div role="tabpanel" hidden><pre><code>export async function GET(req: Request, { params }: { params: { id: string } }) {
+  const user = await getUser(req);                      <span class="c">// resolves the session</span>
+  if (!user) return new Response(<span class="s">"Unauthorized"</span>, { status: 401 });
+<span class="hl good">  const task = await db.task.findFirst({ where: { id: params.id, ownerId: user.id } });</span>
+  if (!task) return new Response(<span class="s">"Not found"</span>, { status: 404 });
+  return Response.json(task);
+}</code></pre></div>
+  </div>
+</section>
+
+<section id="limits">
+  <h2>Limits and what the code actually checks</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Where</th><th>Rule</th><th>Consequence</th></tr></thead>
+      <tbody>
+        <tr><td>Phase 9 and 9.1</td><td>Run only in full mode: a target URL and a repository. 9.1 also needs at least one SAST finding and one discovered endpoint.</td><td>URL-only or code-only scans have neither phase.</td></tr>
+        <tr><td>Phase 9 key</td><td>Category pair only; first unused SAST partner wins; each SAST finding is consumed once.</td><td>Two DAST IDORs on different routes can claim two different SAST auth findings regardless of which file serves which route.</td></tr>
+        <tr><td>Phase 9 output</td><td>A new finding is appended; the originals stay. Severity is the higher of the two plus one, clamped at CRITICAL.</td><td>The report shows three related findings, not one merged one; triage dedup runs later.</td></tr>
+        <tr><td>Phase 9.1 verdict</td><td>Any of 200, 201, 202, 204 confirms; 401, 403, 404, 405 means denied. No response body comparison.</td><td>An endpoint that answers 200 with an empty body or an error page can still count as confirmed.</td></tr>
+        <tr><td>Phase 9.1 budget</td><td>Skip tests whose endpoint and category already have a finding; sort by source-finding severity; keep 50; 3 requests in flight, 0.3 s apart, 15 s timeout.</td><td>On a large repo, lower-severity code findings may never be tested.</td></tr>
+        <tr><td>IDOR targeted</td><td>Probe id is sent as a JSON payload keyed by the first path or query parameter name; the URL path is unchanged.</td><td>Routes that only read the id from the path are not exercised the way a manual id swap would.</td></tr>
+        <tr><td>Race condition</td><td>Five concurrent identical POSTs; finding only when more than one returns 2xx. Payment, charge, checkout, billing, invoice routes are dry-run.</td><td>A real double-spend on a checkout route is never attempted by this phase.</td></tr>
+        <tr><td>RLS bypass</td><td>Needs a Supabase REST base among the discovered endpoints and an anon key found in the repository.</td><td>No key in the repo means no test, even with the table name in hand.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<footer class="foot">
+  <span>Source: <a href="../architecture.md">docs/architecture.md</a> (Phase 9, Phase 9.1)</span>
+  <span>Related: <a href="scan-pipeline.html">The scan pipeline</a> · <a href="triage-and-grading.html">Triage and grading</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+<script>
+(function () {
+  // Phase 9.1 rows: a packet leaves the SAST card, becomes the request, hits the target.
+  window.guidedFire = function (scene, step, el) {
+    const svg = el.querySelector("svg");
+    IsDoc.clearPackets(svg);
+    const i = step - 2;
+    if (i < 0 || i > 5) return;
+    const y = 40 + i * 52 + 22;
+    IsDoc.packet(svg, "M 300 " + y + " H 340", { r: 5, cls: "f-info", duration: 500, hold: 0 });
+    IsDoc.packet(svg, "M 710 " + y + " H 750", { r: 5, cls: "f-attacker", duration: 600, delay: 650, hold: 250 });
+  };
+  // Generative scene: schema finding → request → new finding.
+  window.genFire = function (scene, step, el) {
+    const svg = el.querySelector("svg");
+    IsDoc.clearPackets(svg);
+    if (step === 3) IsDoc.packet(svg, "M 700 70 H 740", { r: 5, cls: "f-accent", duration: 700, hold: 200 });
+    if (step === 4) IsDoc.packet(svg, "M 840 96 V 140", { r: 5, cls: "f-attacker", duration: 700, hold: 200 });
+  };
+})();
+</script>
+</body>
+</html>

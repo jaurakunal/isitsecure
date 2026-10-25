@@ -1,0 +1,439 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Docker Scanner · isitsecure</title>
+<meta name="description" content="How isitsecure reads Dockerfiles and compose files: which names are picked up, which rule fires on which line, what it skips, and the fixed line, animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+
+  .topbar-inner .crumb a { color: inherit; text-decoration: none; }
+  .topbar-inner .crumb a:hover { color: var(--accent); }
+  .wbar { fill: transparent; transition: fill .3s; }
+  .wmark, .wflag { opacity: 0; transition: opacity .3s; }
+  .scene .stage svg text.mono { white-space: pre; }
+  .wrow > rect { transition: fill .3s, stroke .3s; }
+  #dk-disc.s2 .fr0 > rect { stroke: var(--safe); }
+  #dk-disc.s2 .fr0 { opacity: 1; }
+  #dk-disc[data-step="2"] .fr0 > rect { fill: var(--accent-soft); }
+  #dk-disc.s2 .fr1 > rect { stroke: var(--safe); }
+  #dk-disc.s2 .fr1 { opacity: 1; }
+  #dk-disc[data-step="2"] .fr1 > rect { fill: var(--accent-soft); }
+  #dk-disc.s2 .fr2 > rect { stroke: var(--safe); }
+  #dk-disc.s2 .fr2 { opacity: 1; }
+  #dk-disc[data-step="2"] .fr2 > rect { fill: var(--accent-soft); }
+  #dk-disc.s5 .fr2 > rect { stroke: var(--info); }
+  #dk-disc.s5 .fr2 { opacity: 1; }
+  #dk-disc[data-step="5"] .fr2 > rect { fill: var(--accent-soft); }
+  #dk-disc.s3 .fr3 > rect { stroke: var(--safe); }
+  #dk-disc.s3 .fr3 { opacity: 1; }
+  #dk-disc[data-step="3"] .fr3 > rect { fill: var(--accent-soft); }
+  #dk-disc.s3 .fr4 > rect { stroke: var(--safe); }
+  #dk-disc.s3 .fr4 { opacity: 1; }
+  #dk-disc[data-step="3"] .fr4 > rect { fill: var(--accent-soft); }
+  #dk-disc.s4 .fr5 { opacity: .55; }
+  #dk-disc.s4 .fr5 > rect { stroke: var(--line); }
+  #dk-disc[data-step="4"] .fr5 > rect { fill: var(--accent-soft); }
+  #dk-disc.s4 .fr6 { opacity: .55; }
+  #dk-disc.s4 .fr6 > rect { stroke: var(--line); }
+  #dk-disc[data-step="4"] .fr6 > rect { fill: var(--accent-soft); }
+  #dk-walk[data-step="2"] .ln0 .wbar { fill: var(--info-soft); }
+  #dk-walk[data-step="2"] .ln1 .wbar { fill: var(--info-soft); }
+  #dk-walk[data-step="2"] .ln2 .wbar { fill: var(--info-soft); }
+  #dk-walk[data-step="2"] .ln3 .wbar { fill: var(--info-soft); }
+  #dk-walk[data-step="2"] .ln4 .wbar { fill: var(--info-soft); }
+  #dk-walk[data-step="2"] .ln5 .wbar { fill: var(--info-soft); }
+  #dk-walk[data-step="2"] .ln6 .wbar { fill: var(--info-soft); }
+  #dk-walk[data-step="2"] .ln7 .wbar { fill: var(--info-soft); }
+  #dk-walk[data-step="2"] .ln8 .wbar { fill: var(--info-soft); }
+  #dk-walk[data-step="2"] .ln9 .wbar { fill: var(--info-soft); }
+  #dk-walk[data-step="2"] .rr0 > rect { stroke: var(--accent); fill: var(--accent-soft); }
+  #dk-walk.s2 .rr0 .wflag { opacity: 1; }
+  #dk-walk[data-step="3"] .ln0 .wbar { fill: var(--attacker-soft); }
+  #dk-walk.s3 .ln0 .wmark { opacity: 1; }
+  #dk-walk[data-step="3"] .rr1 > rect { stroke: var(--accent); fill: var(--accent-soft); }
+  #dk-walk.s3 .rr1 .wflag { opacity: 1; }
+  #dk-walk[data-step="4"] .ln8 .wbar { fill: var(--attacker-soft); }
+  #dk-walk.s4 .ln8 .wmark { opacity: 1; }
+  #dk-walk[data-step="4"] .rr2 > rect { stroke: var(--accent); fill: var(--accent-soft); }
+  #dk-walk.s4 .rr2 .wflag { opacity: 1; }
+  #dk-walk[data-step="5"] .ln2 .wbar { fill: var(--attacker-soft); }
+  #dk-walk.s5 .ln2 .wmark { opacity: 1; }
+  #dk-walk[data-step="5"] .rr3 > rect { stroke: var(--accent); fill: var(--accent-soft); }
+  #dk-walk.s5 .rr3 .wflag { opacity: 1; }
+  #dk-walk[data-step="6"] .ln3 .wbar { fill: var(--attacker-soft); }
+  #dk-walk.s6 .ln3 .wmark { opacity: 1; }
+  #dk-walk[data-step="6"] .rr4 > rect { stroke: var(--accent); fill: var(--accent-soft); }
+  #dk-walk.s6 .rr4 .wflag { opacity: 1; }
+  #dk-walk[data-step="7"] .ln0 .wbar { fill: var(--info-soft); }
+  #dk-walk[data-step="7"] .ln1 .wbar { fill: var(--info-soft); }
+  #dk-walk[data-step="7"] .ln2 .wbar { fill: var(--info-soft); }
+  #dk-walk[data-step="7"] .ln3 .wbar { fill: var(--info-soft); }
+  #dk-walk[data-step="7"] .ln4 .wbar { fill: var(--info-soft); }
+  #dk-walk[data-step="7"] .ln5 .wbar { fill: var(--info-soft); }
+  #dk-walk[data-step="7"] .ln6 .wbar { fill: var(--info-soft); }
+  #dk-walk[data-step="7"] .ln7 .wbar { fill: var(--info-soft); }
+  #dk-walk[data-step="7"] .ln8 .wbar { fill: var(--info-soft); }
+  #dk-walk[data-step="7"] .ln9 .wbar { fill: var(--info-soft); }
+  #dk-walk[data-step="7"] .rr5 > rect { stroke: var(--accent); fill: var(--accent-soft); }
+  #dk-walk.s7 .rr5 .wflag { opacity: 1; }
+  #dk-compose[data-step="2"] .ln5 .wbar { fill: var(--attacker-soft); }
+  #dk-compose.s2 .ln5 .wmark { opacity: 1; }
+  #dk-compose[data-step="2"] .rr0 > rect { stroke: var(--accent); fill: var(--accent-soft); }
+  #dk-compose.s2 .rr0 .wflag { opacity: 1; }
+  #dk-compose[data-step="3"] .ln3 .wbar { fill: var(--attacker-soft); }
+  #dk-compose.s3 .ln3 .wmark { opacity: 1; }
+  #dk-compose[data-step="3"] .rr1 > rect { stroke: var(--accent); fill: var(--accent-soft); }
+  #dk-compose.s3 .rr1 .wflag { opacity: 1; }
+  #dk-compose[data-step="4"] .ln7 .wbar { fill: var(--attacker-soft); }
+  #dk-compose.s4 .ln7 .wmark { opacity: 1; }
+  #dk-compose[data-step="4"] .rr2 > rect { stroke: var(--accent); fill: var(--accent-soft); }
+  #dk-compose.s4 .rr2 .wflag { opacity: 1; }
+
+  #dk-fix[data-step="2"] .fx0 > rect { stroke: var(--safe); fill: var(--safe-soft); }
+  #dk-fix[data-step="3"] .fx1 > rect { stroke: var(--safe); fill: var(--safe-soft); }
+  #dk-fix[data-step="4"] .fx2 > rect { stroke: var(--safe); fill: var(--safe-soft); }
+  #dk-fix[data-step="5"] .fx3 > rect { stroke: var(--safe); fill: var(--safe-soft); }
+  #dk-fix[data-step="6"] .fx4 > rect { stroke: var(--safe); fill: var(--safe-soft); }
+  #dk-fix[data-step="7"] .fx5 > rect { stroke: var(--safe); fill: var(--safe-soft); }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› <a href="group-infrastructure.html">Infrastructure configuration</a> › Docker</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/docker-scanner.md" title="The markdown source for this page">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">SAST scanner · reads the file text</div>
+  <h1>Docker Scanner</h1>
+  <p class="lede">A container image carries whatever the Dockerfile put into it. This scanner picks up Dockerfiles and compose files by name, then runs a fixed list of line-anchored regular expressions over the raw text. Root user, unpinned base, database ports, secrets in <code>ENV</code>, remote <code>ADD</code>, weak compose passwords and privileged mode all come from that one pass.</p>
+  <div class="meta">
+    <span class="pill sast">SAST</span><span class="pill crit">Low to Critical</span><span class="pill ">Infrastructure Misconfiguration</span><span class="pill ">9 checks</span><span class="pill ">every scan depth</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#discovery"><span class="n">01</span>Which files it reads</a>
+  <a href="#walk"><span class="n">02</span>Walking a Dockerfile</a>
+  <a href="#compose"><span class="n">03</span>Walking a compose file</a>
+  <a href="#guards"><span class="n">04</span>What it deliberately skips</a>
+  <a href="#fix"><span class="n">05</span>The fix, line by line</a>
+  <a href="#why"><span class="n">06</span>Why it matters</a>
+  <a href="#code"><span class="n">07</span>Vulnerable vs fixed code</a>
+  <a href="#limits"><span class="n">08</span>Checks and limits</a>
+</nav>
+
+<section id="discovery">
+  <h2>Which files it reads</h2>
+  <p class="prose">The Docker scanner is the only one in this group with two kinds of input. Both are picked by file name alone.</p>
+  <div class="scene" id="dk-disc" data-scene data-interval="3600">
+    <figure class="stage">
+      <svg viewBox="0 0 960 310" role="img" aria-label="A list of repository paths; the Dockerfile and compose names are matched and everything else is left out.">
+<defs><marker id="arr-dk-disc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+<text class="lbl" x="20" y="24">Path in the repository</text><text class="lbl" x="372" y="24">Decision</text><text class="lbl" x="702" y="24">Goes to</text>
+<g class="node wrow fr0"><rect x="8" y="34" width="944" height="30" rx="6"/><text class="mono" x="20" y="53">Dockerfile</text>
+<g class="at-2"><text class="lbl" x="372" y="53">name is in the Dockerfile name list</text><rect class="soft-safe" x="698" y="38" width="242" height="20" rx="10"/><text class="lbl t-safe" x="712" y="52">Dockerfile checks (6)</text></g>
+</g>
+<g class="node wrow fr1"><rect x="8" y="70" width="944" height="30" rx="6"/><text class="mono" x="20" y="89">services/api/Dockerfile.prod</text>
+<g class="at-2"><text class="lbl" x="372" y="89">path ends with /Dockerfile.prod</text><rect class="soft-safe" x="698" y="74" width="242" height="20" rx="10"/><text class="lbl t-safe" x="712" y="88">Dockerfile checks (6)</text></g>
+</g>
+<g class="node wrow fr2"><rect x="8" y="106" width="944" height="30" rx="6"/><text class="mono" x="20" y="125">src/Dockerfile.dev</text>
+<g class="at-2 until-5"><text class="lbl" x="372" y="125">path ends with /Dockerfile.dev</text><rect class="soft-safe" x="698" y="110" width="242" height="20" rx="10"/><text class="lbl t-safe" x="712" y="124">Dockerfile checks (6)</text></g>
+<g class="at-5"><text class="lbl" x="372" y="125">scanned, but root and HEALTHCHECK checks are skipped</text><rect class="soft-info" x="698" y="110" width="242" height="20" rx="10"/><text class="lbl t-info" x="712" y="124">Dockerfile checks (4 of 6)</text></g>
+</g>
+<g class="node wrow fr3"><rect x="8" y="142" width="944" height="30" rx="6"/><text class="mono" x="20" y="161">docker-compose.yml</text>
+<g class="at-3"><text class="lbl" x="372" y="161">name is in the compose name list</text><rect class="soft-safe" x="698" y="146" width="242" height="20" rx="10"/><text class="lbl t-safe" x="712" y="160">Compose checks (3)</text></g>
+</g>
+<g class="node wrow fr4"><rect x="8" y="178" width="944" height="30" rx="6"/><text class="mono" x="20" y="197">deploy/compose.yaml</text>
+<g class="at-3"><text class="lbl" x="372" y="197">path ends with /compose.yaml</text><rect class="soft-safe" x="698" y="182" width="242" height="20" rx="10"/><text class="lbl t-safe" x="712" y="196">Compose checks (3)</text></g>
+</g>
+<g class="node wrow fr5"><rect x="8" y="214" width="944" height="30" rx="6"/><text class="mono" x="20" y="233">Dockerfile.local</text>
+<g class="at-4"><text class="lbl" x="372" y="233">not in the list (only .dev .prod .staging)</text><text class="lbl" x="702" y="233">not scanned</text></g>
+</g>
+<g class="node wrow fr6"><rect x="8" y="250" width="944" height="30" rx="6"/><text class="mono" x="20" y="269">docker-compose.override.yml</text>
+<g class="at-4"><text class="lbl" x="372" y="269">not in the list of six compose names</text><text class="lbl" x="702" y="269">not scanned</text></g>
+</g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The scanner starts from the repository file index: every path with its text. It does not look at file contents to decide what is a Dockerfile. <b>Only the file name counts.</b></p>
+      <p class="step"><span class="n">2</span>Dockerfile names are an exact list: <code>Dockerfile</code>, <code>Dockerfile.dev</code>, <code>.prod</code>, <code>.staging</code>. A path matches when it equals the name or ends with <code>/name</code>, so nested folders are found.</p>
+      <p class="step"><span class="n">3</span>Compose files use a second list of six names: <code>docker-compose.yml</code>, <code>.yaml</code>, <code>.dev.yml</code>, <code>.prod.yml</code>, <code>compose.yml</code>, <code>compose.yaml</code>. They get their own three checks.</p>
+      <p class="step"><span class="n">4</span>Anything else is invisible to it. <b>A <code>Dockerfile.local</code> or a compose override file is never read</b>, however dangerous its contents.</p>
+      <p class="step"><span class="n">5</span>Dev files are scanned, but a path containing the text <code>dev</code> skips the root-user and HEALTHCHECK checks, because dev containers usually run as root on purpose. The other four checks still run.</p>
+    </div>
+  </div>
+</section>
+
+<section id="walk">
+  <h2>Walking a Dockerfile</h2>
+  <p class="prose">Six rules, anchored to line starts, run over one string. The bar on the left is the text each rule matched; the arrow shows which check it fed.</p>
+  <div class="scene" id="dk-walk" data-scene data-interval="3600">
+    <figure class="stage">
+      <svg viewBox="0 0 960 308" role="img" aria-label="A ten line Dockerfile on the left; six checks on the right light up in turn on the lines that trigger them.">
+<defs><marker id="arr-dk-walk" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+<g class="node"><rect x="8" y="10" width="592" height="254" rx="8"/></g>
+<text class="ttl" x="20" y="32">Dockerfile</text><text class="lbl" x="588" y="32" text-anchor="end">read as one string, never parsed</text>
+<g class="ln ln0"><rect class="wbar" x="14" y="44" width="580" height="19" rx="3"/><text class="lbl" x="40" y="58" text-anchor="end">1</text><circle class="wmark f-attacker" cx="52" cy="54" r="3.5"/><text class="mono" x="64" y="58" xml:space="preserve">FROM node:latest</text></g>
+<g class="ln ln1"><rect class="wbar" x="14" y="64" width="580" height="19" rx="3"/><text class="lbl" x="40" y="78" text-anchor="end">2</text><circle class="wmark f-attacker" cx="52" cy="74" r="3.5"/><text class="mono" x="64" y="78" xml:space="preserve">ENV NODE_ENV=production</text></g>
+<g class="ln ln2"><rect class="wbar" x="14" y="84" width="580" height="19" rx="3"/><text class="lbl" x="40" y="98" text-anchor="end">3</text><circle class="wmark f-attacker" cx="52" cy="94" r="3.5"/><text class="mono" x="64" y="98" xml:space="preserve">ENV DB_PASSWORD=hunter2hunter2</text></g>
+<g class="ln ln3"><rect class="wbar" x="14" y="104" width="580" height="19" rx="3"/><text class="lbl" x="40" y="118" text-anchor="end">4</text><circle class="wmark f-attacker" cx="52" cy="114" r="3.5"/><text class="mono" x="64" y="118" xml:space="preserve">ADD https://example.com/tool.tgz /opt/</text></g>
+<g class="ln ln4"><rect class="wbar" x="14" y="124" width="580" height="19" rx="3"/><text class="lbl" x="40" y="138" text-anchor="end">5</text><circle class="wmark f-attacker" cx="52" cy="134" r="3.5"/><text class="mono" x="64" y="138" xml:space="preserve">WORKDIR /app</text></g>
+<g class="ln ln5"><rect class="wbar" x="14" y="144" width="580" height="19" rx="3"/><text class="lbl" x="40" y="158" text-anchor="end">6</text><circle class="wmark f-attacker" cx="52" cy="154" r="3.5"/><text class="mono" x="64" y="158" xml:space="preserve">COPY . .</text></g>
+<g class="ln ln6"><rect class="wbar" x="14" y="164" width="580" height="19" rx="3"/><text class="lbl" x="40" y="178" text-anchor="end">7</text><circle class="wmark f-attacker" cx="52" cy="174" r="3.5"/><text class="mono" x="64" y="178" xml:space="preserve">RUN npm install</text></g>
+<g class="ln ln7"><rect class="wbar" x="14" y="184" width="580" height="19" rx="3"/><text class="lbl" x="40" y="198" text-anchor="end">8</text><circle class="wmark f-attacker" cx="52" cy="194" r="3.5"/><text class="mono" x="64" y="198" xml:space="preserve">EXPOSE 3000</text></g>
+<g class="ln ln8"><rect class="wbar" x="14" y="204" width="580" height="19" rx="3"/><text class="lbl" x="40" y="218" text-anchor="end">9</text><circle class="wmark f-attacker" cx="52" cy="214" r="3.5"/><text class="mono" x="64" y="218" xml:space="preserve">EXPOSE 5432</text></g>
+<g class="ln ln9"><rect class="wbar" x="14" y="224" width="580" height="19" rx="3"/><text class="lbl" x="40" y="238" text-anchor="end">10</text><circle class="wmark f-attacker" cx="52" cy="234" r="3.5"/><text class="mono" x="64" y="238" xml:space="preserve">CMD [&quot;npm&quot;, &quot;start&quot;]</text></g>
+<text class="ttl" x="640" y="32">Checks</text>
+<g class="node wrow rr0"><rect x="640" y="44" width="304" height="32" rx="6"/><text x="652" y="58" style="font-size:12px">No USER directive</text><text class="lbl" x="652" y="71">Medium · conf 0.85</text>
+<text class="wflag t-attacker" x="934" y="64" text-anchor="end" style="font-weight:600">FLAG</text>
+</g>
+<g class="node wrow rr1"><rect x="640" y="82" width="304" height="32" rx="6"/><text x="652" y="96" style="font-size:12px">:latest or untagged FROM</text><text class="lbl" x="652" y="109">Low · conf 0.70</text>
+<text class="wflag t-attacker" x="934" y="102" text-anchor="end" style="font-weight:600">FLAG</text>
+</g>
+<g class="node wrow rr2"><rect x="640" y="120" width="304" height="32" rx="6"/><text x="652" y="134" style="font-size:12px">Sensitive EXPOSE port</text><text class="lbl" x="652" y="147">Medium · conf 0.80</text>
+<text class="wflag t-attacker" x="934" y="140" text-anchor="end" style="font-weight:600">FLAG</text>
+</g>
+<g class="node wrow rr3"><rect x="640" y="158" width="304" height="32" rx="6"/><text x="652" y="172" style="font-size:12px">Secret in ENV</text><text class="lbl" x="652" y="185">High · conf 0.85</text>
+<text class="wflag t-attacker" x="934" y="178" text-anchor="end" style="font-weight:600">FLAG</text>
+</g>
+<g class="node wrow rr4"><rect x="640" y="196" width="304" height="32" rx="6"/><text x="652" y="210" style="font-size:12px">ADD with a remote URL</text><text class="lbl" x="652" y="223">Medium · conf 0.80</text>
+<text class="wflag t-attacker" x="934" y="216" text-anchor="end" style="font-weight:600">FLAG</text>
+</g>
+<g class="node wrow rr5"><rect x="640" y="234" width="304" height="32" rx="6"/><text x="652" y="248" style="font-size:12px">No HEALTHCHECK</text><text class="lbl" x="652" y="261">Low · conf 0.60</text>
+<text class="wflag t-attacker" x="934" y="254" text-anchor="end" style="font-weight:600">FLAG</text>
+</g>
+<path class="wire only-2 accent" d="M600 154 C 620 154, 620 60, 638 60" marker-end="url(#arr-dk-walk)"/>
+<text class="lbl only-2" x="16" y="296">Medium, conf 0.85. Absence rules flag the file. The finding stores the file path, not a line number.</text>
+<path class="wire only-3 accent" d="M600 54 C 620 54, 620 98, 638 98" marker-end="url(#arr-dk-walk)"/>
+<text class="lbl only-3" x="16" y="296">Low, conf 0.70. The image can change under you between builds.</text>
+<path class="wire only-4 accent" d="M600 214 C 620 214, 620 136, 638 136" marker-end="url(#arr-dk-walk)"/>
+<text class="lbl only-4" x="16" y="296">Medium, conf 0.80. A database port in an application image suggests the database runs in the same container.</text>
+<path class="wire only-5 accent" d="M600 94 C 620 94, 620 174, 638 174" marker-end="url(#arr-dk-walk)"/>
+<text class="lbl only-5" x="16" y="296">High, conf 0.85. ENV values are baked into every layer and readable with docker history.</text>
+<path class="wire only-6 accent" d="M600 114 C 620 114, 620 212, 638 212" marker-end="url(#arr-dk-walk)"/>
+<text class="lbl only-6" x="16" y="296">Medium, conf 0.80. A supply chain risk: nothing checks what the URL serves.</text>
+<path class="wire only-7 accent" d="M600 154 C 620 154, 620 250, 638 250" marker-end="url(#arr-dk-walk)"/>
+<text class="lbl only-7" x="16" y="296">Low, conf 0.60.</text>
+<text class="lbl only-8" x="16" y="296">Real output for this file: 6 findings, in the order shown.</text>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>One Dockerfile, ten lines. Six checks will run over the text in a fixed order. Nothing is parsed: each check is a regular expression, anchored to the start of a line, run over the whole file.</p>
+      <p class="step"><span class="n">2</span><b>Root user.</b> The check looks for any line matching <code>^\s*USER\s+\S+</code>. There is none, so the container runs as root. This is a missing-line rule, so no single line is to blame.</p>
+      <p class="step"><span class="n">3</span><b>Base image.</b> <code>FROM node:latest</code> matches the <code>:latest</code> pattern. A second pass also flags any <code>FROM</code> whose image has no <code>:tag</code> after its last <code>/</code> (<code>scratch</code> is exempt).</p>
+      <p class="step"><span class="n">4</span><b>Exposed port.</b> Each <code>EXPOSE</code> number is looked up in a table of nine: 22, 2375, 2376, 3306, 5432, 6379, 9200, 11211, 27017. 3000 is not in it; 5432 is PostgreSQL.</p>
+      <p class="step"><span class="n">5</span><b>Secret in ENV.</b> An <code>ENV</code> name containing PASSWORD, SECRET, KEY or TOKEN with a literal value. <code>NODE_ENV</code> does not match, and a value starting with <code>$</code> or <code>{</code> is skipped. One finding per file at most.</p>
+      <p class="step"><span class="n">6</span><b>Remote ADD.</b> <code>ADD</code> followed by <code>http://</code> or <code>https://</code> pulls unverified bytes into the image at build time.</p>
+      <p class="step"><span class="n">7</span><b>HEALTHCHECK.</b> No line matches <code>^\s*HEALTHCHECK\s+</code>, so the orchestrator cannot tell a hung container from a healthy one. Another missing-line rule.</p>
+      <p class="step"><span class="n">8</span>Six findings, two of them from lines that are absent. <b>Line 6, <code>COPY . .</code>, is not reported.</b> The pattern for it exists in the configuration but no check uses it.</p>
+    </div>
+  </div>
+</section>
+
+<section id="compose">
+  <h2>Walking a compose file</h2>
+  <p class="prose">Compose files get three checks. The same shape: a regular expression over the raw text, one finding per file for the password rule.</p>
+  <div class="scene" id="dk-compose" data-scene data-interval="3600">
+    <figure class="stage">
+      <svg viewBox="0 0 960 260" role="img" aria-label="A small compose file; three checks light up on the password, privileged and published port lines.">
+<defs><marker id="arr-dk-compose" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+<g class="node"><rect x="8" y="10" width="592" height="214" rx="8"/></g>
+<text class="ttl" x="20" y="32">docker-compose.yml</text><text class="lbl" x="588" y="32" text-anchor="end">read as one string, never parsed</text>
+<g class="ln ln0"><rect class="wbar" x="14" y="44" width="580" height="19" rx="3"/><text class="lbl" x="40" y="58" text-anchor="end">1</text><circle class="wmark f-attacker" cx="52" cy="54" r="3.5"/><text class="mono" x="64" y="58" xml:space="preserve">services:</text></g>
+<g class="ln ln1"><rect class="wbar" x="14" y="64" width="580" height="19" rx="3"/><text class="lbl" x="40" y="78" text-anchor="end">2</text><circle class="wmark f-attacker" cx="52" cy="74" r="3.5"/><text class="mono" x="64" y="78" xml:space="preserve">  db:</text></g>
+<g class="ln ln2"><rect class="wbar" x="14" y="84" width="580" height="19" rx="3"/><text class="lbl" x="40" y="98" text-anchor="end">3</text><circle class="wmark f-attacker" cx="52" cy="94" r="3.5"/><text class="mono" x="64" y="98" xml:space="preserve">    image: postgres:16</text></g>
+<g class="ln ln3"><rect class="wbar" x="14" y="104" width="580" height="19" rx="3"/><text class="lbl" x="40" y="118" text-anchor="end">4</text><circle class="wmark f-attacker" cx="52" cy="114" r="3.5"/><text class="mono" x="64" y="118" xml:space="preserve">    privileged: true</text></g>
+<g class="ln ln4"><rect class="wbar" x="14" y="124" width="580" height="19" rx="3"/><text class="lbl" x="40" y="138" text-anchor="end">5</text><circle class="wmark f-attacker" cx="52" cy="134" r="3.5"/><text class="mono" x="64" y="138" xml:space="preserve">    environment:</text></g>
+<g class="ln ln5"><rect class="wbar" x="14" y="144" width="580" height="19" rx="3"/><text class="lbl" x="40" y="158" text-anchor="end">6</text><circle class="wmark f-attacker" cx="52" cy="154" r="3.5"/><text class="mono" x="64" y="158" xml:space="preserve">      POSTGRES_PASSWORD: postgres</text></g>
+<g class="ln ln6"><rect class="wbar" x="14" y="164" width="580" height="19" rx="3"/><text class="lbl" x="40" y="178" text-anchor="end">7</text><circle class="wmark f-attacker" cx="52" cy="174" r="3.5"/><text class="mono" x="64" y="178" xml:space="preserve">    ports:</text></g>
+<g class="ln ln7"><rect class="wbar" x="14" y="184" width="580" height="19" rx="3"/><text class="lbl" x="40" y="198" text-anchor="end">8</text><circle class="wmark f-attacker" cx="52" cy="194" r="3.5"/><text class="mono" x="64" y="198" xml:space="preserve">      - &quot;5432:5432&quot;</text></g>
+<text class="ttl" x="640" y="32">Checks</text>
+<g class="node wrow rr0"><rect x="640" y="44" width="304" height="32" rx="6"/><text x="652" y="58" style="font-size:12px">Default or weak password</text><text class="lbl" x="652" y="71">Medium · conf 0.90</text>
+<text class="wflag t-attacker" x="934" y="64" text-anchor="end" style="font-weight:600">FLAG</text>
+</g>
+<g class="node wrow rr1"><rect x="640" y="82" width="304" height="32" rx="6"/><text x="652" y="96" style="font-size:12px">Privileged mode</text><text class="lbl" x="652" y="109">Critical · conf 0.95</text>
+<text class="wflag t-attacker" x="934" y="102" text-anchor="end" style="font-weight:600">FLAG</text>
+</g>
+<g class="node wrow rr2"><rect x="640" y="120" width="304" height="32" rx="6"/><text x="652" y="134" style="font-size:12px">Database port on the host</text><text class="lbl" x="652" y="147">Low · conf 0.75</text>
+<text class="wflag t-attacker" x="934" y="140" text-anchor="end" style="font-weight:600">FLAG</text>
+</g>
+<path class="wire only-2 accent" d="M600 154 C 620 154, 620 60, 638 60" marker-end="url(#arr-dk-compose)"/>
+<text class="lbl only-2" x="16" y="248">Medium, conf 0.90. One finding per file.</text>
+<path class="wire only-3 accent" d="M600 114 C 620 114, 620 98, 638 98" marker-end="url(#arr-dk-compose)"/>
+<text class="lbl only-3" x="16" y="248">Critical, conf 0.95. The only Critical in the Docker scanner.</text>
+<path class="wire only-4 accent" d="M600 194 C 620 194, 620 136, 638 136" marker-end="url(#arr-dk-compose)"/>
+<text class="lbl only-4" x="16" y="248">Low, conf 0.75.</text>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>A compose file gets three checks, again as regular expressions over the raw text. The YAML is not loaded, so there is no notion of which service a line belongs to.</p>
+      <p class="step"><span class="n">2</span><b>Weak password.</b> <code>PASSWORD</code> or <code>PASSWD</code> followed by <code>:</code> or <code>=</code> and a known default (<code>postgres</code>, <code>admin</code>, <code>changeme</code>, ...) or any value of 8 word characters or fewer. Case is ignored.</p>
+      <p class="step"><span class="n">3</span><b>Privileged.</b> The text <code>privileged: true</code> anywhere in the file. The container shares the host kernel's devices and can escape.</p>
+      <p class="step"><span class="n">4</span><b>Published port.</b> Lines shaped <code>- "host:container"</code> are read; if the container port is 5432, 3306, 6379, 27017 or 9200, the database is reachable from every network the host is on. Once per port.</p>
+    </div>
+  </div>
+</section>
+
+<section id="guards">
+  <h2>What it deliberately skips</h2>
+  <p class="prose">Each row is a line the scanner meets. Step through to see the verdict and the reason.</p>
+  <div class="scene" id="dk-guard" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 332" role="img" aria-label="Six Dockerfile and compose lines, each with the scanner&#x27;s verdict and the reason.">
+<text class="lbl" x="20" y="22">What the scanner meets</text><text class="lbl" x="482" y="22">Verdict</text><text class="lbl" x="572" y="22">Why</text>
+<g class="node wrow lit-1"><rect x="8" y="28" width="944" height="42" rx="6"/><text class="mono" x="20" y="46" xml:space="preserve">ENV DB_PASSWORD=${DB_PASSWORD}</text><text class="lbl" x="20" y="62">Dockerfile ENV with a variable reference</text><g class="at-1"><rect class="soft-safe" x="482" y="38" width="64" height="22" rx="11"/><text class="lbl t-safe" x="514" y="53" text-anchor="middle" style="font-weight:600">SKIP</text>
+<text class="lbl" x="572" y="46">Values starting with $ or { are not literals.</text>
+<text class="lbl" x="572" y="62">The password arrives from the build environment.</text>
+</g></g>
+<g class="node wrow lit-2"><rect x="8" y="76" width="944" height="42" rx="6"/><text class="mono" x="20" y="94" xml:space="preserve">ENV DEBUG_KEY=true</text><text class="lbl" x="20" y="110">Name contains KEY, value is a boolean-like word</text><g class="at-2"><rect class="soft-safe" x="482" y="86" width="64" height="22" rx="11"/><text class="lbl t-safe" x="514" y="101" text-anchor="middle" style="font-weight:600">SKIP</text>
+<text class="lbl" x="572" y="94">true, false, 0, 1, none and empty are ignored</text>
+<text class="lbl" x="572" y="110">as common non-secret defaults.</text>
+</g></g>
+<g class="node wrow lit-3"><rect x="8" y="124" width="944" height="42" rx="6"/><text class="mono" x="20" y="142" xml:space="preserve">FROM scratch</text><text class="lbl" x="20" y="158">An empty base image</text><g class="at-3"><rect class="soft-safe" x="482" y="134" width="64" height="22" rx="11"/><text class="lbl t-safe" x="514" y="149" text-anchor="middle" style="font-weight:600">SKIP</text>
+<text class="lbl" x="572" y="142">scratch has no tag by design,</text>
+<text class="lbl" x="572" y="158">so it is exempt from the tag check.</text>
+</g></g>
+<g class="node wrow lit-4"><rect x="8" y="172" width="944" height="42" rx="6"/><text class="mono" x="20" y="190" xml:space="preserve">FROM registry.io:5000/app</text><text class="lbl" x="20" y="206">Registry with a port, but the image has no tag</text><g class="at-4"><rect class="soft-attacker" x="482" y="182" width="64" height="22" rx="11"/><text class="lbl t-attacker" x="514" y="197" text-anchor="middle" style="font-weight:600">FLAG</text>
+<text class="lbl" x="572" y="190">Only the part after the last / is checked</text>
+<text class="lbl" x="572" y="206">for a colon, so the port is not mistaken for a tag.</text>
+</g></g>
+<g class="node wrow lit-5"><rect x="8" y="220" width="944" height="42" rx="6"/><text class="mono" x="20" y="238" xml:space="preserve">- &quot;127.0.0.1:5432:5432&quot;</text><text class="lbl" x="20" y="254">compose port bound to the loopback address</text><g class="at-5"><rect class="soft-safe" x="482" y="230" width="64" height="22" rx="11"/><text class="lbl t-safe" x="514" y="245" text-anchor="middle" style="font-weight:600">SKIP</text>
+<text class="lbl" x="572" y="238">The pattern wants digits then a colon right after</text>
+<text class="lbl" x="572" y="254">the dash. 127.0.0.1:... does not match, so it is left alone.</text>
+</g></g>
+<g class="node wrow lit-6"><rect x="8" y="268" width="944" height="42" rx="6"/><text class="mono" x="20" y="286" xml:space="preserve">USER 1000</text><text class="lbl" x="20" y="302">Any USER line, even a numeric id or root</text><g class="at-6"><rect class="soft-safe" x="482" y="278" width="64" height="22" rx="11"/><text class="lbl t-safe" x="514" y="293" text-anchor="middle" style="font-weight:600">SKIP</text>
+<text class="lbl" x="572" y="286">The root check is satisfied by the presence of the</text>
+<text class="lbl" x="572" y="302">line. USER root would also pass.</text>
+</g></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span><b>Variable references are not secrets.</b> The ENV check reads the value after the equals sign and ignores it if it begins with a dollar sign or a brace.</p>
+      <p class="step"><span class="n">2</span><b>Boolean-like values are ignored.</b> A name with KEY in it is not enough on its own; the value must look like something other than a flag.</p>
+      <p class="step"><span class="n">3</span><b>scratch is exempt.</b> Distroless and static-binary images start from nothing and have no tag to pin.</p>
+      <p class="step"><span class="n">4</span><b>Registry ports are handled.</b> The scanner splits on the last slash first, so <code>registry.io:5000/app</code> is correctly seen as untagged and flagged.</p>
+      <p class="step"><span class="n">5</span><b>Loopback binds fall outside the pattern.</b> This is a side effect of the regular expression, not a designed exemption. It happens to match what a reader would want.</p>
+      <p class="step"><span class="n">6</span><b>The root check only asks whether a USER line exists.</b> It does not read the value, so <code>USER root</code> counts as having a user. Treat that as a known blind spot.</p>
+    </div>
+  </div>
+</section>
+
+<section id="fix">
+  <h2>The fix, line by line</h2>
+  <p class="prose">Fixing a finding means changing the text so the rule no longer matches, or so the line it wants is present.</p>
+  <div class="scene" id="dk-fix" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 354" role="img" aria-label="Six rows, each showing the flagged line on a red tag turning into the fixed line on a green tag.">
+<text class="lbl" x="20" y="24">Line the check matched, and the line after the fix</text>
+<text class="ttl only-1 t-attacker" x="940" y="24" text-anchor="end">findings in this file: 6</text>
+<text class="ttl only-2 t-attacker" x="940" y="24" text-anchor="end">findings in this file: 5</text>
+<text class="ttl only-3 t-attacker" x="940" y="24" text-anchor="end">findings in this file: 4</text>
+<text class="ttl only-4 t-attacker" x="940" y="24" text-anchor="end">findings in this file: 3</text>
+<text class="ttl only-5 t-attacker" x="940" y="24" text-anchor="end">findings in this file: 2</text>
+<text class="ttl only-6 t-attacker" x="940" y="24" text-anchor="end">findings in this file: 1</text>
+<text class="ttl only-7 t-safe" x="940" y="24" text-anchor="end">findings in this file: 0</text>
+<g class="node wrow fx0"><rect x="8" y="36" width="944" height="44" rx="6"/><text class="lbl" x="20" y="52">No USER directive</text><text class="mono t-attacker until-2" x="20" y="70" xml:space="preserve">(no USER line anywhere)</text><text class="mono t-safe at-2" x="20" y="70" xml:space="preserve">USER app</text><g class="until-2"><rect class="soft-attacker" x="870" y="47" width="64" height="22" rx="11"/><text class="lbl t-attacker" x="902" y="62" text-anchor="middle" style="font-weight:600">FLAG</text></g><g class="at-2"><rect class="soft-safe" x="870" y="47" width="64" height="22" rx="11"/><text class="lbl t-safe" x="902" y="62" text-anchor="middle" style="font-weight:600">clear</text></g></g>
+<g class="node wrow fx1"><rect x="8" y="86" width="944" height="44" rx="6"/><text class="lbl" x="20" y="102">:latest or untagged FROM</text><text class="mono t-attacker until-3" x="20" y="120" xml:space="preserve">FROM node:latest</text><text class="mono t-safe at-3" x="20" y="120" xml:space="preserve">FROM node:20.11-alpine</text><g class="until-3"><rect class="soft-attacker" x="870" y="97" width="64" height="22" rx="11"/><text class="lbl t-attacker" x="902" y="112" text-anchor="middle" style="font-weight:600">FLAG</text></g><g class="at-3"><rect class="soft-safe" x="870" y="97" width="64" height="22" rx="11"/><text class="lbl t-safe" x="902" y="112" text-anchor="middle" style="font-weight:600">clear</text></g></g>
+<g class="node wrow fx2"><rect x="8" y="136" width="944" height="44" rx="6"/><text class="lbl" x="20" y="152">Sensitive EXPOSE port</text><text class="mono t-attacker until-4" x="20" y="170" xml:space="preserve">EXPOSE 5432</text><text class="mono t-safe at-4" x="20" y="170" xml:space="preserve"># database runs in its own container; no EXPOSE 5432</text><g class="until-4"><rect class="soft-attacker" x="870" y="147" width="64" height="22" rx="11"/><text class="lbl t-attacker" x="902" y="162" text-anchor="middle" style="font-weight:600">FLAG</text></g><g class="at-4"><rect class="soft-safe" x="870" y="147" width="64" height="22" rx="11"/><text class="lbl t-safe" x="902" y="162" text-anchor="middle" style="font-weight:600">clear</text></g></g>
+<g class="node wrow fx3"><rect x="8" y="186" width="944" height="44" rx="6"/><text class="lbl" x="20" y="202">Secret in ENV</text><text class="mono t-attacker until-5" x="20" y="220" xml:space="preserve">ENV DB_PASSWORD=hunter2hunter2</text><text class="mono t-safe at-5" x="20" y="220" xml:space="preserve"># DB_PASSWORD is injected at run time (docker run -e)</text><g class="until-5"><rect class="soft-attacker" x="870" y="197" width="64" height="22" rx="11"/><text class="lbl t-attacker" x="902" y="212" text-anchor="middle" style="font-weight:600">FLAG</text></g><g class="at-5"><rect class="soft-safe" x="870" y="197" width="64" height="22" rx="11"/><text class="lbl t-safe" x="902" y="212" text-anchor="middle" style="font-weight:600">clear</text></g></g>
+<g class="node wrow fx4"><rect x="8" y="236" width="944" height="44" rx="6"/><text class="lbl" x="20" y="252">ADD with a remote URL</text><text class="mono t-attacker until-6" x="20" y="270" xml:space="preserve">ADD https://example.com/tool.tgz /opt/</text><text class="mono t-safe at-6" x="20" y="270" xml:space="preserve">RUN curl -fsSLO https://example.com/tool.tgz &amp;&amp; sha256sum -c tool.sha256</text><g class="until-6"><rect class="soft-attacker" x="870" y="247" width="64" height="22" rx="11"/><text class="lbl t-attacker" x="902" y="262" text-anchor="middle" style="font-weight:600">FLAG</text></g><g class="at-6"><rect class="soft-safe" x="870" y="247" width="64" height="22" rx="11"/><text class="lbl t-safe" x="902" y="262" text-anchor="middle" style="font-weight:600">clear</text></g></g>
+<g class="node wrow fx5"><rect x="8" y="286" width="944" height="44" rx="6"/><text class="lbl" x="20" y="302">No HEALTHCHECK</text><text class="mono t-attacker until-7" x="20" y="320" xml:space="preserve">(no HEALTHCHECK line anywhere)</text><text class="mono t-safe at-7" x="20" y="320" xml:space="preserve">HEALTHCHECK --interval=30s CMD wget -q --spider http://localhost:3000/ || exit 1</text><g class="until-7"><rect class="soft-attacker" x="870" y="297" width="64" height="22" rx="11"/><text class="lbl t-attacker" x="902" y="312" text-anchor="middle" style="font-weight:600">FLAG</text></g><g class="at-7"><rect class="soft-safe" x="870" y="297" width="64" height="22" rx="11"/><text class="lbl t-safe" x="902" y="312" text-anchor="middle" style="font-weight:600">clear</text></g></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Before: the six findings from the walk. Each step below fixes one line and the matching check goes quiet.</p>
+      <p class="step"><span class="n">2</span><b>Add a non-root user</b> after creating it with <code>addgroup</code> and <code>adduser</code>. Any <code>USER &lt;name&gt;</code> line satisfies the check.</p>
+      <p class="step"><span class="n">3</span><b>Pin the tag.</b> A version and a variant, so the base only changes when you change it.</p>
+      <p class="step"><span class="n">4</span><b>Remove the database port.</b> The app container exposes only its own port. A commented line is not matched because the pattern is anchored to the line start.</p>
+      <p class="step"><span class="n">5</span><b>Take the secret out of the image.</b> Pass it at run time or mount it; the image then carries nothing to extract.</p>
+      <p class="step"><span class="n">6</span><b>Download and verify.</b> A RUN step with a checksum fails the build if the bytes change.</p>
+      <p class="step"><span class="n">7</span><b>Declare a health check.</b> Any line starting with HEALTHCHECK clears the finding. Six fixes, zero findings.</p>
+    </div>
+  </div>
+</section>
+
+<section id="why">
+  <h2>Why it matters</h2>
+  <div class="grid-2">
+    <div class="callout why"><div class="label">Why it matters</div><p>A Dockerfile is a recipe that anyone who can pull the image can read back. A missing <code>USER</code> line means a container escape lands as root. A secret in <code>ENV</code> is stored in the image layers and shows up in <code>docker history</code>. An unpinned tag makes tomorrow's build different from today's. A database port in an application image suggests the database lives next to the app.</p></div>
+    <div class="callout breach"><div class="label">Real-world breaches</div><p><b>Tesla (2018).</b> Attackers found an unsecured Kubernetes dashboard on Tesla's AWS infrastructure, used it to reach AWS credentials, and ran cryptocurrency miners. <b>Alpine Linux, CVE-2019-5021 (2019).</b> Official Alpine Docker images shipped with a blank root password for three years, so anyone with console access to a container could log in as root.</p></div>
+  </div>
+</section>
+
+<section id="code">
+  <h2>Vulnerable vs fixed code</h2>
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true" type="button">BAD · vulnerable</button>
+      <button class="tab good" role="tab" aria-selected="false" type="button">GOOD · fixed</button>
+    </div>
+    <div role="tabpanel"><pre><code><span class="c"># BAD: the walk above, line by line</span>
+<span class="hl bad">FROM node:<span class="k">latest</span></span>
+<span class="hl bad">ENV DB_PASSWORD=<span class="s">hunter2hunter2</span></span>
+<span class="hl bad">ADD https://example.com/tool.tgz /opt/</span>
+WORKDIR /app
+COPY . .
+RUN npm install
+EXPOSE 3000
+<span class="hl bad">EXPOSE 5432</span>
+CMD ["npm", "start"]
+<span class="c"># no USER line, no HEALTHCHECK line: two more findings</span></code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c"># GOOD: multi-stage, pinned, non-root, with a health check</span>
+<span class="hl good">FROM node:20.11-alpine AS builder</span>
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --only=production
+COPY src/ ./src/
+
+FROM node:20.11-alpine
+RUN addgroup -S app &amp;&amp; adduser -S app -G app
+WORKDIR /app
+COPY --from=builder /app .
+<span class="hl good">USER app</span>
+EXPOSE 3000
+<span class="hl good">HEALTHCHECK --interval=30s CMD wget -q --spider http://localhost:3000/api/health || exit 1</span>
+CMD ["node", "dist/index.js"]
+
+<span class="c"># .dockerignore keeps .env, .git and node_modules out of the build context</span></code></pre></div>
+  </div>
+</section>
+
+<section id="limits">
+  <h2>Checks and limits</h2>
+  <p class="prose">Every check, with the severity and confidence the code assigns.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Check</th><th>Fires when</th><th>Severity</th><th>Conf.</th></tr></thead>
+    <tbody>
+      <tr><td>No USER</td><td>no line matches <code>^\s*USER\s+\S+</code>; path without <code>dev</code></td><td>Medium</td><td>0.85</td></tr>
+      <tr><td>:latest / untagged</td><td><code>FROM x:latest</code>, or a <code>FROM</code> image with no colon after its last slash</td><td>Low</td><td>0.70</td></tr>
+      <tr><td>Sensitive EXPOSE</td><td>port in 22, 2375, 2376, 3306, 5432, 6379, 9200, 11211, 27017</td><td>Medium</td><td>0.80</td></tr>
+      <tr><td>ENV secret</td><td><code>ENV</code> name with PASSWORD, SECRET, KEY or TOKEN and a literal value</td><td>High</td><td>0.85</td></tr>
+      <tr><td>Remote ADD</td><td><code>ADD http(s)://</code></td><td>Medium</td><td>0.80</td></tr>
+      <tr><td>No HEALTHCHECK</td><td>no <code>HEALTHCHECK</code> line; path without <code>dev</code></td><td>Low</td><td>0.60</td></tr>
+      <tr><td>Compose password</td><td>default or short value after a PASSWORD or PASSWD key</td><td>Medium</td><td>0.90</td></tr>
+      <tr><td>Compose privileged</td><td><code>privileged: true</code></td><td>Critical</td><td>0.95</td></tr>
+      <tr><td>Compose port</td><td>container port 5432, 3306, 6379, 27017 or 9200 published</td><td>Low</td><td>0.75</td></tr>
+    </tbody>
+  </table></div>
+  <div class="callout note"><div class="label">Docs and code</div><p>The code defines a pattern for <code>COPY . .</code> but nothing runs it, so <code>COPY . .</code> and <code>COPY .env</code> produce no finding today. Severity reaches High (ENV secrets) and Critical (compose privileged mode). Findings carry the file path only, with no line number.</p></div>
+</section>
+
+<footer class="foot">
+  <span>Source: <a href="../scanners/docker-scanner.md">docs/scanners/docker-scanner.md</a> · <code>isitsecure/engine/code_analysis/docker_scanner.py</code></span>
+  <span>Group: <a href="group-infrastructure.html">Infrastructure configuration</a> · Related: <a href="kubernetes.html">Kubernetes</a> · <a href="iac.html">IaC</a> · <a href="shell-scripts.html">Shell scripts</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+</body>
+</html>

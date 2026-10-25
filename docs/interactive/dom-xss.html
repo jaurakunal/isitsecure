@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>DOM XSS in a Real Browser · isitsecure</title>
+<meta name="description" content="How the isitsecure DOM XSS scanner hooks twelve dangerous browser sinks in headless Chromium, feeds a canary through four injection vectors, and confirms DOM XSS only when the canary reaches a sink. Animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  /* vectors: once a lane hits, the lanes below it are skipped */
+  #vectors .lane > rect { transition: opacity .4s, stroke .35s; }
+  #vectors[data-step="5"] .skip { opacity: .35; }
+  #vectors .skip { transition: opacity .4s; }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› <a href="group-injection.html">Injection</a> › DOM XSS in a real browser</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/dom-xss-scanner.md" title="The markdown source for this page">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">DAST scanner · headless browser</div>
+  <h1>DOM XSS in a real browser</h1>
+  <p class="lede">DOM XSS never shows up in the HTML the server sends, so a request/response scanner cannot see it. This scanner runs the real app in headless Chromium, wraps twelve dangerous browser functions before the app's JavaScript starts, feeds a canary in through four doors, and reports a finding only when the canary arrives at one of those functions.</p>
+  <div class="meta">
+    <span class="pill dast">DAST</span><span class="pill high">High</span><span class="pill">Injection Risk</span><span class="pill">dom_xss_scanner</span><span class="pill">needs Playwright</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#hook-sec"><span class="n">01</span>Hooking the sinks</a>
+  <a href="#vectors-sec"><span class="n">02</span>Four injection vectors</a>
+  <a href="#oracle-sec"><span class="n">03</span>Typing into inputs</a>
+  <a href="#why"><span class="n">04</span>Why it matters</a>
+  <a href="#breach"><span class="n">05</span>Breaches</a>
+  <a href="#fix-sec"><span class="n">06</span>The fix</a>
+  <a href="#limits"><span class="n">07</span>Limits</a>
+</nav>
+
+<section id="hook-sec">
+  <h2>Hooking the sinks before the app runs</h2>
+  <p class="prose">A sink is a browser API that turns a string into markup or code. The scanner replaces each one with a thin wrapper that notes whether the string holds its own canary, then calls the original. The app behaves normally and the wrapper watches.</p>
+
+  <div class="scene" id="hook" data-scene data-interval="3800">
+    <figure class="stage">
+      <svg viewBox="0 0 960 350" role="img" aria-label="An init script runs before the app and wraps twelve sinks. When app code assigns a URL-derived string to innerHTML, the wrapper checks the value for the canary pattern, records the hit and calls the original setter. The scanner then reads the recorded hits from the page.">
+        <defs><marker id="arrD1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+
+        <g class="node lit-1 lit-2" transform="translate(20 20)">
+          <rect width="270" height="126" rx="10"/>
+          <text class="ttl" x="14" y="26">Init script</text>
+          <text class="mono" x="14" y="48">page.add_init_script()</text>
+          <text class="lbl" x="14" y="70">runs on every load, before any</text>
+          <text class="lbl" x="14" y="84">app JavaScript</text>
+          <text class="lbl t-info" x="14" y="106">wraps 12 sinks</text>
+        </g>
+        <g class="node at-3 lit-3" transform="translate(345 20)">
+          <rect width="270" height="126" rx="10"/>
+          <text class="ttl" x="14" y="26">App code, later</text>
+          <g class="mono"><text x="14" y="52">el.innerHTML =</text>
+          <text x="14" y="70">  <tspan class="t-attacker">location.hash.slice(1)</tspan></text></g>
+          <text class="lbl" x="14" y="98">the URL fragment flows to a sink</text>
+        </g>
+        <g class="node at-3 lit-4" transform="translate(670 20)">
+          <rect width="274" height="126" rx="10"/>
+          <text class="ttl" x="14" y="26">Wrapper</text>
+          <g class="mono"><text x="14" y="48">_record('innerHTML', v)</text>
+          <text x="14" y="66">orig.set.call(this, v)</text></g>
+          <text class="lbl" x="14" y="90">records v only if it matches</text>
+          <text class="lbl t-attacker" x="14" y="104">DOMXSS_CANARY_[a-f0-9]{8}</text>
+        </g>
+        <path class="wire at-3 attacker" d="M615 83 H 668" marker-end="url(#arrD1)"/>
+        <path id="dw1p" d="M617 83 H 664" fill="none" stroke="none"/>
+
+        <text class="lbl" x="20" y="180">The twelve hooked sinks</text>
+        <g class="mono">
+          <text x="20" y="202">innerHTML · outerHTML · insertAdjacentHTML · document.write · document.writeln · eval · Function</text>
+          <text x="20" y="222">setTimeout(string) · setInterval(string) · location.assign · location.replace · window.open</text>
+        </g>
+
+        <g class="node at-5 lit-5" transform="translate(20 248)">
+          <rect width="924" height="84" rx="10"/>
+          <text class="ttl" x="14" y="24">window.__domxss_findings, read back by the scanner</text>
+          <g class="mono"><text x="14" y="46">{ sink: "innerHTML", canary: "DOMXSS_CANARY_a1b2c3d4",</text>
+          <text x="14" y="64">  value: "&lt;img src=x id=\"DOMXSS_CANARY_a1b2c3d4\"&gt;", url: location.href }</text></g>
+          <text class="ttl t-attacker" x="620" y="24">Confirmed DOM XSS · High · 0.95</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The scanner starts headless Chromium (or reuses the authenticated crawler's page) and registers an init script. Pages are loaded with the session's auth headers when credentials exist.</p>
+      <p class="step"><span class="n">2</span>The init script runs <b>before any app JavaScript</b> on every navigation. It replaces <code>innerHTML</code>, <code>outerHTML</code>, <code>insertAdjacentHTML</code>, <code>document.write</code>, <code>document.writeln</code>, <code>eval</code>, <code>Function</code>, the string forms of <code>setTimeout</code> and <code>setInterval</code>, <code>location.assign</code>, <code>location.replace</code> and <code>window.open</code> with wrappers.</p>
+      <p class="step" data-on="hookStep"><span class="n">3</span>The app's own code later assigns something derived from the URL to <code>innerHTML</code>. It does not know it is being watched.</p>
+      <p class="step"><span class="n">4</span><b>The wrapper records a call only if the string contains the scanner's canary pattern</b>, then runs the original function unchanged. Ordinary app strings never match, so the page works and there is nothing to false-positive on.</p>
+      <p class="step"><span class="n">5</span>After the page settles the scanner reads the recorded hits. A hit becomes "Confirmed DOM XSS: canary reached the <code>innerHTML</code> sink", High, 0.95, with the sink name and the vector that carried the canary.</p>
+    </div>
+  </div>
+</section>
+
+<section id="vectors-sec">
+  <h2>Four ways in, tried in order</h2>
+  <p class="prose">Each page gets its own canary, <code>DOMXSS_CANARY_</code> plus 8 hex characters. The scanner tries the doors cheapest first and stops at the first confirmed hit on that page.</p>
+
+  <div class="scene" id="vectors" data-scene data-interval="3800">
+    <figure class="stage">
+      <svg viewBox="0 0 960 330" role="img" aria-label="Four lanes in order: canary in each of 17 query parameter names, canary in the URL hash, four postMessage shapes, and typed input. Each lane waits 1.5 seconds and reads the sink hooks. A hit in one lane skips the lanes below it for that page.">
+        <defs><marker id="arrD2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+
+        <g class="lane node lit-1" transform="translate(20 14)">
+          <rect width="200" height="64" rx="8"/><text class="ttl" x="12" y="26">1 · Query string</text><text class="lbl" x="12" y="46">17 page loads</text></g>
+        <g class="node lit-1" transform="translate(236 14)">
+          <rect width="708" height="64" rx="8"/>
+          <text class="mono" x="14" y="24">/page?<tspan class="t-attacker">q</tspan>=CANARY  ·  ?<tspan class="t-attacker">query</tspan>=…  ·  ?<tspan class="t-attacker">search</tspan>=…</text>
+          <text class="lbl" x="14" y="44">q query search s keyword term redirect url next return callback ref page view tab id name</text>
+          <text class="lbl" x="14" y="58">one name per load, then wait 1.5 s and read the hooks</text></g>
+        <text class="ttl t-attacker at-5" x="930" y="36" text-anchor="end">hit: stop here</text>
+
+        <g class="lane node lit-2 at-2 skip" transform="translate(20 92)">
+          <rect width="200" height="64" rx="8"/><text class="ttl" x="12" y="26">2 · URL hash</text><text class="lbl" x="12" y="46">1 page load</text></g>
+        <g class="node lit-2 at-2 skip" transform="translate(236 92)">
+          <rect width="708" height="64" rx="8"/>
+          <text class="mono" x="14" y="24">/page#<tspan class="t-attacker">CANARY</tspan></text>
+          <text class="lbl" x="14" y="44">the fragment never leaves the browser: no server log, no WAF sees it</text>
+          <text class="lbl" x="14" y="58">runs only if lane 1 had no hit</text></g>
+
+        <g class="lane node lit-3 at-3 skip" transform="translate(20 170)">
+          <rect width="200" height="64" rx="8"/><text class="ttl" x="12" y="26">3 · postMessage</text><text class="lbl" x="12" y="46">4 message shapes</text></g>
+        <g class="node lit-3 at-3 skip" transform="translate(236 170)">
+          <rect width="708" height="64" rx="8"/>
+          <g class="mono"><text x="14" y="22">"CANARY"   {"data":"CANARY"}   {"type":"navigate","url":"CANARY"}</text>
+          <text x="14" y="40">{"html":"&lt;img src=x onerror=CANARY&gt;","action":"render"}</text></g>
+          <text class="lbl" x="14" y="57">window.postMessage(msg, '*') after load; runs only if lanes 1 and 2 had no hit</text></g>
+
+        <g class="lane node lit-4 at-4 skip" transform="translate(20 248)">
+          <rect width="200" height="64" rx="8"/><text class="ttl" x="12" y="26">4 · Typed input</text><text class="lbl" x="12" y="46">up to 8 fields per page</text></g>
+        <g class="node lit-4 at-4 skip" transform="translate(236 248)">
+          <rect width="708" height="64" rx="8"/>
+          <text class="mono" x="14" y="24">type  &lt;img src=x id="CANARY"&gt;  into each text box, then press Enter</text>
+          <text class="lbl" x="14" y="44">for search boxes that render client-side; details in the next section</text>
+          <text class="lbl" x="14" y="58">runs only if lanes 1 to 3 had no hit</text></g>
+
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span><b>Query string.</b> The page is loaded once per name in a list of 17 common parameter names, with the canary as the value. After each load the scanner waits 1.5 seconds and reads the sink hooks. The first name that produces a hit ends the lane.</p>
+      <p class="step"><span class="n">2</span><b>Hash fragment.</b> The canary goes after the <code>#</code>. Browsers do not send the fragment to the server, so this finds flows that no server-side filter or WAF can see.</p>
+      <p class="step"><span class="n">3</span><b>postMessage.</b> The page loads, then the scanner posts four message shapes to it: a bare string, a <code>data</code> object, a <code>navigate</code> command, and an <code>html</code> render request. This finds message handlers that trust any origin.</p>
+      <p class="step"><span class="n">4</span><b>Typed input.</b> For flows that need a person to type, the scanner fills real text boxes and observes. The next scene shows how.</p>
+      <p class="step"><span class="n">5</span><b>First hit wins per page.</b> A later lane runs only if every earlier lane found nothing. Across the site the scanner visits at most 30 pages, target URL first, and returns what it has when its 300 second budget runs out.</p>
+    </div>
+  </div>
+</section>
+
+<section id="oracle-sec">
+  <h2>Typing into inputs: two ways to confirm</h2>
+  <p class="prose">Some pages only render the user's text after it is typed and submitted, such as an SPA search box. The scanner finds those boxes from the live page by their type, with no app-specific selectors, and checks two independent oracles.</p>
+
+  <div class="scene" id="oracle" data-scene data-interval="3800">
+    <figure class="stage">
+      <svg viewBox="0 0 960 328" role="img" aria-label="The scanner finds text inputs by type, fills each with an img tag whose id is the canary, waits and observes. It confirms if the hooks saw the canary at a sink or if an element with that id now exists in the DOM. If nothing is seen it presses Enter and observes again.">
+        <defs><marker id="arrD3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+
+        <g class="node lit-1" transform="translate(20 20)">
+          <rect width="260" height="132" rx="10"/>
+          <text class="ttl" x="14" y="26">Inputs found by type</text>
+          <text class="lbl" x="14" y="48">text, search, email, number,</text>
+          <text class="lbl" x="14" y="62">textarea, contenteditable</text>
+          <text class="lbl t-info" x="14" y="86">skipped: hidden, submit, button,</text>
+          <text class="lbl t-info" x="14" y="100">checkbox, radio, file, image,</text>
+          <text class="lbl t-info" x="14" y="114">range, color, password</text>
+        </g>
+        <g class="node at-2 lit-2" transform="translate(320 20)">
+          <rect width="300" height="132" rx="10"/>
+          <text class="ttl" x="14" y="26">Typed payload</text>
+          <g class="mono"><text x="14" y="52">&lt;img src=x</text>
+            <text x="14" y="70">  id="<tspan class="t-attacker">DOMXSS_CANARY_a1b2c3d4</tspan>"&gt;</text></g>
+          <text class="lbl" x="14" y="96">no onerror, so it cannot run anything.</text>
+          <text class="lbl" x="14" y="110">If it parses, an onerror would too.</text>
+        </g>
+        <g class="node at-3 lit-3 lit-4" transform="translate(660 20)">
+          <rect width="284" height="132" rx="10"/>
+          <text class="ttl" x="14" y="26">Observe, after 1.5 s</text>
+          <text class="lbl" x="14" y="50">A · a hook recorded the canary</text>
+          <text class="lbl t-attacker" x="14" y="64">    at a sink (innerHTML, write, eval…)</text>
+          <text class="lbl" x="14" y="88">B · getElementById(canary) exists</text>
+          <text class="lbl t-attacker" x="14" y="102">    so the text was parsed as HTML</text>
+          <text class="lbl" x="14" y="122">either one is enough</text>
+        </g>
+        <path class="wire at-2 accent" d="M280 86 H 318" marker-end="url(#arrD3)"/>
+        <path class="wire at-3 accent" d="M620 86 H 658" marker-end="url(#arrD3)"/>
+
+        <g class="node at-4 lit-4" transform="translate(320 176)">
+          <rect width="300" height="64" rx="10"/>
+          <text class="ttl" x="14" y="26">Nothing yet? Press Enter</text>
+          <text class="lbl" x="14" y="46">many search boxes render on submit</text>
+        </g>
+        <path class="wire at-4 info dashed" d="M700 152 V 208 H 622" marker-end="url(#arrD3)"/>
+
+        <g class="node at-5 lit-5" transform="translate(730 176)">
+          <rect width="214" height="136" rx="10"/>
+          <text class="ttl t-attacker" x="14" y="26">Confirmed DOM XSS</text>
+          <text class="lbl" x="14" y="48">High · 0.95 · form input</text>
+          <text class="lbl" x="14" y="72">sink named from A, or</text>
+          <text class="mono" x="14" y="90">rendered DOM</text>
+          <text class="mono" x="14" y="106">(HTML injection)</text>
+          <text class="lbl" x="14" y="124">when only B fired</text>
+        </g>
+        <g class="at-5"><text class="lbl" x="20" y="200">No hit on this box:</text>
+          <text class="lbl" x="20" y="216">try the next one, 8 per page at most.</text></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The scanner asks the live page for every text-bearing input and skips the ones where typing markup is noise: hidden fields, buttons, checkboxes, radios, files, sliders, colour pickers and passwords. It uses at most 8 per page.</p>
+      <p class="step"><span class="n">2</span>The payload is an <code>&lt;img&gt;</code> whose <code>id</code> is the canary. It has a broken <code>src</code> and no <code>onerror</code>, so it is harmless. If the page parses it as an element, the same page would parse an <code>onerror</code> version. Boxes that cannot be filled (rich editors) are clicked and typed into instead.</p>
+      <p class="step"><span class="n">3</span>After 1.5 seconds the scanner checks two things. <b>Either the hooks saw the canary at a sink, or an element with the canary id now exists in the DOM.</b> Both mean the typed text was treated as markup.</p>
+      <p class="step"><span class="n">4</span>If neither happened, it presses Enter in the same box and checks again, because many search boxes only render after submit.</p>
+      <p class="step"><span class="n">5</span>A hit ends the page and is reported with source "an interactive form input". If only the DOM check fired, the sink is named "rendered DOM (HTML injection)". No hit moves on to the next input.</p>
+    </div>
+  </div>
+</section>
+
+<section id="why">
+  <h2>Why it matters</h2>
+  <div class="callout why">
+    <div class="label">Impact</div>
+    <p>DOM XSS is harder to see than reflected XSS because the payload never touches the server's output:</p>
+    <ul>
+      <li><b>WAFs cannot block it.</b> The payload can sit in the URL fragment, which is not sent to the server.</li>
+      <li><b>Server-side sanitization does not help.</b> The flaw is in client-side code.</li>
+      <li><b>The impact is the same as reflected XSS.</b> Token theft, session hijacking, defacement.</li>
+    </ul>
+    <p>Modern single-page apps (React, Next.js, Vue) read URL parameters and render them dynamically, which makes them especially exposed.</p>
+  </div>
+</section>
+
+<section id="breach">
+  <h2>Real-world breaches</h2>
+  <div class="grid-2">
+    <div class="callout breach">
+      <div class="label">Google Search · 2019</div>
+      <p>A DOM XSS vulnerability where URL fragment input was unsafely injected into the DOM. Google patched it and awarded a bounty.</p>
+    </div>
+    <div class="callout breach">
+      <div class="label">Salesforce · 2020</div>
+      <p>DOM XSS in the Lightning component framework where URL parameters were reflected into the page DOM without sanitization.</p>
+    </div>
+  </div>
+</section>
+
+<section id="fix-sec">
+  <h2>The fix: pick a safe sink</h2>
+  <p class="prose">The same URL fragment is harmless if it lands in an API that treats it as text. The hooks never fire for a safe sink, so the scanner has nothing to confirm.</p>
+
+  <div class="scene" id="fix" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 230" role="img" aria-label="The same location hash is written three ways: innerHTML, where the sink hook records the canary and the scanner confirms; textContent, which is not a hooked sink and creates a text node; and React JSX, which escapes it.">
+        <defs><marker id="arrD4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g class="node" transform="translate(20 50)"><rect width="250" height="76" rx="10"/>
+          <text class="ttl" x="14" y="26">Source</text>
+          <text class="mono t-attacker" x="14" y="52">location.hash.slice(1)</text></g>
+        <path class="wire" d="M270 88 H 318" marker-end="url(#arrD4)"/>
+        <g class="node lit-1 lit-2 lit-3" transform="translate(320 50)"><rect width="320" height="76" rx="10"/>
+          <g class="only-1"><text class="ttl" x="14" y="26">BAD · innerHTML</text><text class="mono" x="14" y="52">preview.innerHTML = hash</text></g>
+          <g class="only-2"><text class="ttl" x="14" y="26">GOOD · textContent</text><text class="mono" x="14" y="52">preview.textContent = hash</text></g>
+          <g class="only-3"><text class="ttl" x="14" y="26">GOOD · React JSX</text><text class="mono" x="14" y="52">&lt;div&gt;{content}&lt;/div&gt;</text></g></g>
+        <path class="wire" d="M640 88 H 688" marker-end="url(#arrD4)"/>
+        <g class="node lit-1 lit-2 lit-3" transform="translate(690 50)"><rect width="254" height="76" rx="10"/>
+          <text class="ttl" x="14" y="26">In the DOM</text>
+          <g class="only-1"><text class="mono t-attacker" x="14" y="52">parsed as HTML</text></g>
+          <g class="only-2"><text class="mono t-safe" x="14" y="52">a text node</text></g>
+          <g class="only-3"><text class="mono t-safe" x="14" y="52">escaped to text</text></g></g>
+        <g class="only-1"><text class="ttl t-attacker" x="20" y="170">The wrapper sees the canary reach innerHTML → Confirmed DOM XSS</text></g>
+        <g class="only-2"><text class="ttl t-safe" x="20" y="170">textContent is not a hooked sink and cannot create elements → nothing to record</text>
+          <text class="lbl" x="20" y="192">The typed-input check B also stays false: no element with the canary id appears.</text></g>
+        <g class="only-3"><text class="ttl t-safe" x="20" y="170">The framework escapes the string before it reaches the DOM → no hit at any vector</text></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The vulnerable line. A fragment reaches <code>innerHTML</code>, the init script's wrapper records it, and the scanner reports it.</p>
+      <p class="step"><span class="n">2</span><b>Use <code>textContent</code>.</b> It writes text only, so there is no markup to parse.</p>
+      <p class="step"><span class="n">3</span>In React, render the value as a JSX child. It is escaped for you.</p>
+    </div>
+  </div>
+
+  <h3>Vulnerable vs fixed</h3>
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true">BAD · innerHTML</button>
+      <button class="tab good" role="tab" aria-selected="false">GOOD · textContent / JSX</button>
+    </div>
+    <div role="tabpanel"><pre><code><span class="c">// BAD: innerHTML with user input</span>
+<span class="hl bad">document.getElementById(<span class="s">"preview"</span>).innerHTML = location.hash.slice(1)</span></code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c">// GOOD: Use textContent instead</span>
+<span class="hl good">document.getElementById(<span class="s">"preview"</span>).textContent = location.hash.slice(1)</span>
+
+<span class="c">// GOOD: Use React's built-in escaping</span>
+function Preview() {
+  const content = window.location.hash.slice(1)
+  return &lt;div&gt;{content}&lt;/div&gt;  <span class="c">// React auto-escapes</span>
+}</code></pre></div>
+  </div>
+</section>
+
+<section id="limits">
+  <h2>Limits and configuration</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Aspect</th><th>Behaviour</th></tr></thead>
+      <tbody>
+        <tr><td>Requires</td><td>Playwright with Chromium. Without it the scanner logs a warning and returns no findings; the rest of the scan continues.</td></tr>
+        <tr><td>Where it runs</td><td>Called by the agent during the authenticated crawl, reusing the crawler's browser page, or standalone with auth headers set on a new context. It is not a normal endpoint scanner.</td></tr>
+        <tr><td>Pages</td><td>At most 30 per run. The target URL is tested first so its findings survive a tight budget.</td></tr>
+        <tr><td>Time</td><td>300 s soft budget so the scan returns what it found rather than being cancelled. Per page: 15 s navigation timeout, 8 s network-idle wait, 1.5 s wait after each injection.</td></tr>
+        <tr><td>Confidence and severity</td><td>High, 0.95. Every finding names the sink and the vector.</td></tr>
+        <tr><td>One hit per page</td><td>Later vectors are skipped once one confirms, so a page with several flaws yields one finding.</td></tr>
+        <tr><td>Not hooked</td><td>Assigning <code>location.href</code> directly (it cannot be wrapped), and sinks outside the twelve listed. The canary must match <code>DOMXSS_CANARY_</code> plus 8 hex characters to be recorded.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<footer class="foot">
+  <span>Source: <a href="../scanners/dom-xss-scanner.md">docs/scanners/dom-xss-scanner.md</a> · isitsecure/engine/scanners/dom_xss_scanner.py</span>
+  <span>Group: <a href="group-injection.html">Injection</a> · Related: <a href="xss.html">Cross-site scripting</a> · <a href="taint-analysis.html">Taint analysis</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+<script>
+(function () {
+  const sel = (el, id) => el.querySelector(id);
+  window.hookStep = function (scene, i, el) {
+    const svg = el.querySelector("svg"); IsDoc.clearPackets(svg);
+    IsDoc.packet(svg, sel(svg, "#dw1p"), { cls: "f-attacker", duration: 900 });
+  };
+})();
+</script>
+</body>
+</html>

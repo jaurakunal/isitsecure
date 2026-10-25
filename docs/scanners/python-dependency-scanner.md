@@ -1,15 +1,17 @@
 # Python Dependency Scanner
 
-**Type:** SAST | **Severity:** Critical–Medium | **Category:** Dependency Vulnerability
+**Type:** SAST | **Severity:** Critical–Low | **Category:** Dependency Vulnerability
 
 ## What It Does
 
 Scans Python dependency files for known vulnerable packages:
 
-- **requirements.txt** (and variants like requirements-dev.txt)
-- **pyproject.toml** `[project.dependencies]`
-- Checks 13 common packages against a built-in CVE database
-- Flags unpinned dependencies (no version specifier)
+- **requirements.txt** (and files whose name starts with `requirements` and ends in `.txt`, like requirements-dev.txt; files in a `requirements/` folder such as `requirements/base.txt` are not read)
+- **pyproject.toml** dependencies, only when the array opens on its own line as `dependencies = [` or sits under `[project.dependencies]`, with double-quoted entries (single-quoted entries and one-line arrays are skipped)
+- Checks 13 common packages against a built-in CVE database (High 0.85 confidence). Severity per entry runs from Critical to Medium
+- Flags unpinned requirements.txt dependencies (no version specifier) as Low severity, confidence 0.60; pyproject.toml entries are not checked for pinning
+
+The version comparison uses the first version number on the line and ignores the operator, so `django>=4.2.8` is treated like `django==4.2.8`. A version that falls in two ranges of one package (for example old Django) yields one finding per range.
 
 Known vulnerability database includes: Django, Flask, FastAPI, PyJWT, cryptography, SQLAlchemy, Jinja2, Werkzeug, Pillow, urllib3, Paramiko, PyYAML, Requests.
 

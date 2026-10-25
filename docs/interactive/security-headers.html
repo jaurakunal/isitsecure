@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Security Headers Scanner · isitsecure</title>
+<meta name="description" content="How isitsecure checks response headers: eight checks per response, the clickjacking and nosniff special cases, and the pass that collapses server-wide gaps, animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  .topbar-inner .crumb a { color: inherit; text-decoration: none; }
+  .topbar-inner .crumb a:hover { color: var(--accent); }
+  /* page-specific */
+  #checks-scene .chk > rect { fill: var(--surface-2); stroke: var(--line); stroke-width: 1.1; }
+  #dedup-scene .dup { transition: opacity .5s ease; }
+  #dedup-scene.s2 .dup { opacity: .12; }
+  #dedup-scene .col-band { fill: var(--accent); opacity: 0; transition: opacity .4s; }
+  #dedup-scene[data-step="2"] .col-band.c123 { opacity: .1; }
+  #dedup-scene[data-step="3"] .col-band.c4 { opacity: .12; }
+  #fixhdr-scene .finding { transition: opacity .35s; }
+  #fixhdr-scene .finding text { transition: text-decoration-color .3s; }
+  #fixhdr-scene.s2 .f-a, #fixhdr-scene.s3 .f-b { opacity: .35; }
+  #fixhdr-scene.s2 .f-a text, #fixhdr-scene.s3 .f-b text { text-decoration: line-through; }
+
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› <a href="group-browser-defenses.html">Browser-side defenses</a> › Security headers</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/security-headers-scanner.md" title="The markdown source for this page">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">DAST scanner · reads response headers</div>
+  <h1>Security Headers Scanner</h1>
+  <p class="lede">Browsers only enforce protections the server asks for. The scanner fetches your pages, reads the response headers and reports each protection that is absent plus the headers that reveal software versions.</p>
+  <div class="meta">
+    <span class="pill dast">DAST</span><span class="pill high">Low–High</span><span class="pill">Missing headers · Info disclosure</span><span class="pill">8 checks</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#checks"><span class="n">01</span>One response, eight checks</a>
+  <a href="#dedup"><span class="n">02</span>One finding per server</a>
+  <a href="#fix"><span class="n">03</span>What the fix block clears</a>
+  <a href="#why"><span class="n">04</span>Why it matters</a>
+  <a href="#code"><span class="n">05</span>Vulnerable vs fixed code</a>
+  <a href="#limits"><span class="n">06</span>Limits and what it needs</a>
+</nav>
+
+
+<section id="checks">
+  <h2>One response, eight checks</h2>
+  <p class="prose">The scanner sends a plain GET and looks only at the response headers. Five checks are about a header being absent, one about a header that must hold a specific value, one pair about a header that gives too much away. The same checks run on every URL it tests.</p>
+
+  <div class="scene" id="checks-scene" data-scene data-interval="3600">
+    <figure class="stage">
+      <svg viewBox="0 0 960 340" role="img" aria-label="A sample response with its headers on the left. On the right, eight checks: HSTS absent is High, CSP present, clickjacking covered by frame-ancestors, nosniff present, Permissions-Policy and Referrer-Policy absent are Low, a Server header with a version and X-Powered-By are Low.">
+        <defs><marker id="arrHd1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g class="node lit-1" transform="translate(20 20)">
+          <rect width="330" height="300" rx="10"/>
+          <text class="ttl" x="14" y="26">GET / returns</text>
+          <text class="lbl" x="14" y="44">header names are lower-cased first</text>
+          <g class="mono">
+            <text x="14" y="76">HTTP/1.1 200 OK</text>
+            <text x="14" y="98">content-type: text/html</text>
+            <text x="14" y="120">content-security-policy:</text>
+            <text x="28" y="140">default-src 'self'; frame-ancestors</text>
+            <text x="28" y="160">'none'</text>
+            <text x="14" y="182">x-content-type-options: nosniff</text>
+            <text x="14" y="204">server: nginx/1.19.0</text>
+            <text x="14" y="226">x-powered-by: Express</text>
+          </g>
+          <text class="lbl" x="14" y="260">not sent at all:</text>
+          <text class="mono t-attacker" x="14" y="278">strict-transport-security</text>
+          <text class="mono t-attacker" x="14" y="294">permissions-policy · referrer-policy</text>
+        </g>
+        <path class="wire at-2" d="M350 170 H380" marker-end="url(#arrHd1)"/>
+        <g class="node" transform="translate(390 20)">
+          <rect width="550" height="300" rx="10"/>
+          <text class="ttl" x="14" y="26">Checks</text>
+          <text class="lbl" x="130" y="26">header · what was seen · result · severity if flagged</text>
+          <g class="chk node lit-2" transform="translate(14 38)"><rect width="522" height="28" rx="6"/>
+            <text class="mono" x="12" y="19">Strict-Transport-Security</text>
+            <text class="lbl at-2" x="226" y="19">absent</text>
+            <text class="mono at-2 t-attacker" x="372" y="19">flag</text>
+            <text class="lbl" x="432" y="19">HIGH 0.95</text></g>
+          <g class="chk node lit-2" transform="translate(14 70)"><rect width="522" height="28" rx="6"/>
+            <text class="mono" x="12" y="19">Content-Security-Policy</text>
+            <text class="lbl at-2" x="226" y="19">present</text>
+            <text class="mono at-2 t-safe" x="372" y="19">ok</text>
+            <text class="lbl" x="432" y="19">MEDIUM 0.85</text></g>
+          <g class="chk node lit-3" transform="translate(14 102)"><rect width="522" height="28" rx="6"/>
+            <text class="mono" x="12" y="19">Clickjacking guard</text>
+            <text class="lbl at-3" x="226" y="19">CSP frame-ancestors</text>
+            <text class="mono at-3 t-safe" x="372" y="19">ok</text>
+            <text class="lbl" x="432" y="19">MEDIUM 0.90</text></g>
+          <g class="chk node lit-3" transform="translate(14 134)"><rect width="522" height="28" rx="6"/>
+            <text class="mono" x="12" y="19">X-Content-Type-Options</text>
+            <text class="lbl at-3" x="226" y="19">nosniff</text>
+            <text class="mono at-3 t-safe" x="372" y="19">ok</text>
+            <text class="lbl" x="432" y="19">MEDIUM 0.95</text></g>
+          <g class="chk node lit-2" transform="translate(14 166)"><rect width="522" height="28" rx="6"/>
+            <text class="mono" x="12" y="19">Permissions-Policy</text>
+            <text class="lbl at-2" x="226" y="19">absent</text>
+            <text class="mono at-2 t-attacker" x="372" y="19">flag</text>
+            <text class="lbl" x="432" y="19">LOW 0.80</text></g>
+          <g class="chk node lit-2" transform="translate(14 198)"><rect width="522" height="28" rx="6"/>
+            <text class="mono" x="12" y="19">Referrer-Policy</text>
+            <text class="lbl at-2" x="226" y="19">absent</text>
+            <text class="mono at-2 t-attacker" x="372" y="19">flag</text>
+            <text class="lbl" x="432" y="19">LOW 0.80</text></g>
+          <g class="chk node lit-4" transform="translate(14 230)"><rect width="522" height="28" rx="6"/>
+            <text class="mono" x="12" y="19">Server</text>
+            <text class="lbl at-4" x="226" y="19">nginx/1.19.0</text>
+            <text class="mono at-4 t-attacker" x="372" y="19">flag</text>
+            <text class="lbl" x="432" y="19">LOW 0.90</text></g>
+          <g class="chk node lit-4" transform="translate(14 262)"><rect width="522" height="28" rx="6"/>
+            <text class="mono" x="12" y="19">X-Powered-By</text>
+            <text class="lbl at-4" x="226" y="19">Express</text>
+            <text class="mono at-4 t-attacker" x="372" y="19">flag</text>
+            <text class="lbl" x="432" y="19">LOW 0.90</text></g>
+          
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The scanner requests a URL and lower-cases the header names. Everything below is decided from this one response. Three headers were never sent, and two are sent with details a visitor should not need.</p>
+      <p class="step"><span class="n">2</span><b>Presence checks.</b> HSTS, Content-Security-Policy, Permissions-Policy and Referrer-Policy are flagged only when the header is absent. A missing <code>Strict-Transport-Security</code> is <b>HIGH at 0.95</b>, the others MEDIUM or LOW.</p>
+      <p class="step"><span class="n">3</span><b>Two checks with logic.</b> Clickjacking is reported only when <i>both</i> <code>X-Frame-Options</code> and a CSP <code>frame-ancestors</code> directive are missing. <code>X-Content-Type-Options</code> must equal <code>nosniff</code>; a present header with another value is flagged too.</p>
+      <p class="step"><span class="n">4</span><b>Disclosure checks.</b> <code>Server</code> is flagged only when it contains a version such as <code>/1.19</code>; a bare <code>nginx</code> passes. <code>X-Powered-By</code> is flagged whenever it is present. Both are LOW, 0.90.</p>
+    </div>
+  </div>
+</section>
+
+<section id="dedup">
+  <h2>One finding per server, not per URL</h2>
+  <p class="prose">Security headers are usually set once for the whole server. If the scanner tests several URLs it would report the same gap on each, so a deduplication pass collapses the repeats.</p>
+
+  <div class="scene" id="dedup-scene" data-scene data-interval="3600">
+    <figure class="stage">
+      <svg viewBox="0 0 960 290" role="img" aria-label="Three tested URLs and four findings. HSTS, CSP and Permissions-Policy are missing on all three URLs and collapse to one finding each. The Server version appears on one URL only and stays. Ten raw findings become four.">
+        <defs><marker id="arrHd2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g class="node" transform="translate(20 20)">
+          <rect width="580" height="250" rx="10"/>
+          <rect class="col-band c123" x="196" y="40" width="270" height="190" rx="6"/>
+          <rect class="col-band c4" x="466" y="40" width="100" height="190" rx="6"/>
+          <text class="lbl" x="14" y="36">URL tested</text>
+          <text class="lbl" x="214" y="36">HSTS</text><text class="lbl" x="304" y="36">CSP</text><text class="lbl" x="376" y="36">Perm.-Policy</text><text class="lbl" x="482" y="36">Server ver.</text>
+          <g class="mono">
+            <text x="14" y="90">/</text>
+            <text x="14" y="140">/login</text>
+            <text x="14" y="190">/api/health</text>
+          </g>
+          <g>
+            <circle class="shape f-attacker" cx="226" cy="86" r="8"/><circle class="shape f-attacker dup" cx="226" cy="136" r="8"/><circle class="shape f-attacker dup" cx="226" cy="186" r="8"/>
+            <circle class="shape f-attacker" cx="316" cy="86" r="8"/><circle class="shape f-attacker dup" cx="316" cy="136" r="8"/><circle class="shape f-attacker dup" cx="316" cy="186" r="8"/>
+            <circle class="shape f-attacker" cx="410" cy="86" r="8"/><circle class="shape f-attacker dup" cx="410" cy="136" r="8"/><circle class="shape f-attacker dup" cx="410" cy="186" r="8"/>
+            <circle class="shape f-attacker" cx="516" cy="186" r="8"/>
+          </g>
+          <text class="lbl" x="14" y="232">filled circle = a finding raised on that URL</text>
+        </g>
+        <path class="wire" d="M600 145 H640" marker-end="url(#arrHd2)"/>
+        <g class="node" transform="translate(640 20)">
+          <rect width="300" height="250" rx="10"/>
+          <text class="ttl" x="14" y="26">Reported</text>
+          <text class="mono t-attacker until-2" x="14" y="62">10 findings</text>
+          <text class="lbl until-2" x="14" y="82">same gap repeated per URL</text>
+          <g class="at-2">
+            <text class="mono t-safe" x="14" y="62">4 findings</text>
+            <text class="mono" x="14" y="100">HSTS</text><text class="lbl" x="110" y="100">once · all 3 URLs</text>
+            <text class="mono" x="14" y="124">CSP</text><text class="lbl" x="110" y="124">once · all 3 URLs</text>
+            <text class="mono" x="14" y="148">Perm.-Policy</text><text class="lbl" x="110" y="148">once · all 3 URLs</text>
+          </g>
+          <text class="mono at-3" x="14" y="172">Server ver.</text><text class="lbl at-3" x="110" y="172">kept · /api/health only</text>
+          <text class="lbl at-2" x="14" y="206">Collapsed findings gain a note:</text>
+          <text class="lbl at-2" x="14" y="222">"missing on all 3 tested endpoints"</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Three URLs were tested and raised ten findings between them. HSTS, CSP and Permissions-Policy are missing on every URL; the Server version leaks on one.</p>
+      <p class="step"><span class="n">2</span>Findings are grouped by title. <b>A group with as many members as there are URLs that produced findings is reported once</b>, with a note that the header is missing server-wide. Ten findings drop to four.</p>
+      <p class="step"><span class="n">3</span>The Server version is present on one URL out of three, so it stays as its own finding with that URL. A header that differs by route is not merged away.</p>
+    </div>
+  </div>
+</section>
+
+<section id="fix">
+  <h2>What the fix block clears</h2>
+  <p class="prose">Because the headers are server-wide, one configuration block removes most findings at once. A few things it does not touch.</p>
+
+  <div class="scene" id="fixhdr-scene" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 310" role="img" aria-label="A headers block is added to the config in two steps. As each header appears its finding on the right is struck out. The Server version and X-Powered-By findings remain.">
+        <defs><marker id="arrHd3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g class="node" transform="translate(20 20)">
+          <rect width="440" height="270" rx="10"/>
+          <text class="ttl" x="14" y="26">next.config.js headers()</text>
+          <text class="lbl only-1" x="14" y="56">no headers configured yet</text>
+          <g class="mono at-2">
+            <text x="14" y="62">Strict-Transport-Security: max-age=63072000</text>
+            <text x="14" y="86">Content-Security-Policy: default-src 'self'</text>
+          </g>
+          <g class="mono at-3">
+            <text x="14" y="122">X-Frame-Options: DENY</text>
+            <text x="14" y="146">X-Content-Type-Options: nosniff</text>
+            <text x="14" y="170">Referrer-Policy: strict-origin-when-cross-origin</text>
+            <text x="14" y="194">Permissions-Policy: camera=(), microphone=()</text>
+          </g>
+          <text class="lbl at-4" x="14" y="238">The block sets six headers. It does not</text>
+          <text class="lbl at-4" x="14" y="254">remove Server or X-Powered-By.</text>
+        </g>
+        <g class="node" transform="translate(480 20)">
+          <rect width="460" height="270" rx="10"/>
+          <text class="ttl" x="14" y="26">Findings from the scan</text>
+          <g class="finding f-a" transform="translate(14 44)"><rect width="432" height="26" rx="5" class="soft-attacker"/><text class="mono t-attacker" x="10" y="18">HIGH</text><text class="lbl" x="70" y="18">Missing Strict-Transport-Security</text></g>
+          <g class="finding f-a" transform="translate(14 76)"><rect width="432" height="26" rx="5" class="soft-accent"/><text class="mono t-accent" x="10" y="18">MEDIUM</text><text class="lbl" x="70" y="18">Missing Content-Security-Policy</text></g>
+          <g class="finding f-b" transform="translate(14 108)"><rect width="432" height="26" rx="5" class="soft-accent"/><text class="mono t-accent" x="10" y="18">MEDIUM</text><text class="lbl" x="70" y="18">Missing clickjacking protection</text></g>
+          <g class="finding f-b" transform="translate(14 140)"><rect width="432" height="26" rx="5" class="soft-accent"/><text class="mono t-accent" x="10" y="18">MEDIUM</text><text class="lbl" x="70" y="18">Missing X-Content-Type-Options</text></g>
+          <g class="finding f-b" transform="translate(14 172)"><rect width="432" height="26" rx="5" class="soft-info"/><text class="mono t-info" x="10" y="18">LOW</text><text class="lbl" x="70" y="18">Missing Referrer-Policy and Permissions-Policy</text></g>
+          <g class="finding" transform="translate(14 204)"><rect width="432" height="26" rx="5" class="soft-info"/><text class="mono t-info" x="10" y="18">LOW</text><text class="lbl" x="70" y="18">Server: nginx/1.19.0 · X-Powered-By: Express</text></g>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>A scan of an unconfigured server lists a finding for each of the six missing headers plus the two disclosure headers.</p>
+      <p class="step"><span class="n">2</span>Adding <code>Strict-Transport-Security</code> and <code>Content-Security-Policy</code> clears the High finding and one Medium.</p>
+      <p class="step"><span class="n">3</span>The other four headers clear the clickjacking, nosniff, Referrer-Policy and Permissions-Policy findings.</p>
+      <p class="step"><span class="n">4</span>The block shown in the markdown sets only the six security headers. <b>Server and X-Powered-By are produced by the web server or framework</b>, so they need their own change.</p>
+    </div>
+  </div>
+</section>
+
+<section id="why">
+  <h2>Why it matters</h2>
+  <div class="callout why">
+    <div class="label">Why it matters</div>
+    <p>Missing headers make other attacks easier. <b>No CSP</b> lets an XSS load external scripts and exfiltrate data. <b>No HSTS</b> lets a man in the middle strip HTTPS. <b>No X-Frame-Options</b> lets an attacker embed your site in an iframe and trick users into clicking hidden buttons. <b>An exposed Server version</b> tells an attacker which CVEs to try.</p>
+  </div>
+  <div class="callout breach">
+    <div class="label">British Airways (2018)</div>
+    <p>The Magecart XSS attack was worsened by the absence of a Content Security Policy. A CSP with <code>script-src 'self'</code> would have blocked the injected third-party script from executing.</p>
+  </div>
+</section>
+
+<section id="code">
+  <h2>Vulnerable vs fixed code</h2>
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true" type="button">BAD · defaults only</button>
+      <button class="tab good" role="tab" aria-selected="false" type="button">GOOD · headers block</button>
+    </div>
+    <div role="tabpanel"><pre><code><span class="c">// BAD: nothing sets security headers, and the framework advertises itself</span>
+<span class="hl bad">const app = express()   <span class="c">// replies with X-Powered-By: Express</span></span>
+app.get(<span class="s">"/"</span>, (req, res) =&gt; res.send(page))</code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c">// next.config.js</span>
+const securityHeaders = [
+<span class="hl good">  { key: <span class="s">"Strict-Transport-Security"</span>, value: <span class="s">"max-age=63072000; includeSubDomains"</span> },</span>
+<span class="hl good">  { key: <span class="s">"Content-Security-Policy"</span>, value: <span class="s">"default-src 'self'; script-src 'self'"</span> },</span>
+  { key: <span class="s">"X-Content-Type-Options"</span>, value: <span class="s">"nosniff"</span> },
+  { key: <span class="s">"X-Frame-Options"</span>, value: <span class="s">"DENY"</span> },
+  { key: <span class="s">"Referrer-Policy"</span>, value: <span class="s">"strict-origin-when-cross-origin"</span> },
+  { key: <span class="s">"Permissions-Policy"</span>, value: <span class="s">"camera=(), microphone=(), geolocation=()"</span> },
+]
+
+module.exports = {
+  async headers() {
+    return [{ source: <span class="s">"/(.*)"</span>, headers: securityHeaders }]
+  }
+}</code></pre></div>
+  </div>
+</section>
+
+<section id="limits">
+  <h2>Limits and what it needs</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Check</th><th>Reports when</th><th>Severity · confidence</th></tr></thead>
+      <tbody>
+        <tr><td>Strict-Transport-Security</td><td>header absent</td><td>High · 0.95</td></tr>
+        <tr><td>Content-Security-Policy</td><td>header absent</td><td>Medium · 0.85</td></tr>
+        <tr><td>Clickjacking protection</td><td><code>X-Frame-Options</code> absent and no <code>frame-ancestors</code> in the CSP</td><td>Medium · 0.90</td></tr>
+        <tr><td>X-Content-Type-Options</td><td>absent, or present with a value other than <code>nosniff</code></td><td>Medium · 0.95</td></tr>
+        <tr><td>Permissions-Policy</td><td>header absent</td><td>Low · 0.80</td></tr>
+        <tr><td>Referrer-Policy</td><td>header absent</td><td>Low · 0.80</td></tr>
+        <tr><td>Server</td><td>value contains a version like <code>/1.19</code></td><td>Low · 0.90</td></tr>
+        <tr><td>X-Powered-By</td><td>header present</td><td>Low · 0.90</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout note">
+    <div class="label">What it deliberately stays quiet about</div>
+    <p>Only presence and, for nosniff, one exact value are checked. A header that is present but weak, such as a CSP containing <code>unsafe-inline</code> or an HSTS with a tiny <code>max-age</code>, is not reported. Every distinct URL is requested, shortest URL first, with a plain GET (credentials optional: the scan's auth headers are sent if there are any). The documented dedup only merges findings that appear on every URL that produced one.</p>
+  </div>
+</section>
+
+
+<footer class="foot">
+  <span>Source: <a href="../scanners/security-headers-scanner.md">docs/scanners/security-headers-scanner.md</a> · <code>isitsecure/engine/scanners/security_headers_scanner.py</code></span>
+  <span>Group: <a href="group-browser-defenses.html">Browser-side defenses</a> · Related: <a href="cors.html">CORS</a> · <a href="csrf.html">CSRF</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+</body>
+</html>

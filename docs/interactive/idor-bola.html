@@ -1,0 +1,475 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>IDOR and Cross-User BOLA · isitsecure</title>
+<meta name="description" content="How isitsecure tests object references without credentials, why that can only ever be a lead, and how the authenticated cross-user pass with two guards and a mutation read-back is the only path to a confirmed finding. Animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  /* unauthenticated tests: rows that have been shown dim once the risk rule appears */
+  #unauth .row > rect { transition: fill .35s, stroke .35s, opacity .45s; }
+  #unauth.s5 .row { opacity: .55; }
+  /* cross-user: the corridors packets travel along */
+  #crossuser .corridor { stroke: var(--line); stroke-width: 1.5; fill: none; stroke-dasharray: 3 5; }
+  #crossuser.s2 .corridor.a, #crossuser.s4 .corridor.a { stroke: var(--info); }
+  #crossuser.s5 .corridor.b { stroke: var(--attacker); }
+  #crossuser .strike { stroke: var(--attacker); stroke-width: 1.5; }
+  /* guards: the stage that is deciding gets a soft fill */
+  #guards .stage-box > rect { transition: fill .35s, stroke .35s; }
+  #guards[data-step="2"] .g2 > rect, #guards[data-step="4"] .g4 > rect { fill: var(--accent-soft); }
+  /* mutation: verdict colours */
+  #mutation .verdict > rect { transition: fill .35s, stroke .35s; }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› IDOR and Cross-User BOLA</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/idor-scanner.md" title="The markdown source for this page">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">DAST scanner · special</div>
+  <h1>IDOR and Cross-User BOLA</h1>
+  <p class="lede">An insecure direct object reference is an id in a URL that the server looks up without asking who is asking. isitsecure probes ids four ways with no credentials, which can only produce leads, and then logs in as two users so that User B can try to read and write User A's real objects. That second pass is the only one that confirms anything.</p>
+  <div class="meta">
+    <span class="pill dast">DAST</span><span class="pill med">Medium</span><span class="pill high">High</span><span class="pill crit">Critical</span><span class="pill">IDOR</span><span class="pill">BOLA</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#unauth-sec"><span class="n">01</span>Without credentials</a>
+  <a href="#crossuser-sec"><span class="n">02</span>Cross-user pass</a>
+  <a href="#guards-sec"><span class="n">03</span>The two guards</a>
+  <a href="#mutation-sec"><span class="n">04</span>Mutation read-back</a>
+  <a href="#why"><span class="n">05</span>Why it matters</a>
+  <a href="#code"><span class="n">06</span>Vulnerable vs fixed code</a>
+  <a href="#limits"><span class="n">07</span>Limits</a>
+</nav>
+
+<section id="unauth-sec">
+  <h2>Without credentials: four probes, one ceiling</h2>
+  <p class="prose">With no login the scanner can still learn whether an id is real and whether the endpoint answers strangers. It cannot learn whether the object was supposed to be private. The scene shows the four probes and the rule that caps what they may claim.</p>
+
+  <div class="scene" id="unauth" data-scene data-interval="3200">
+    <figure class="stage">
+      <svg viewBox="0 0 960 384" role="img" aria-label="A scanner without credentials runs four probes against a target API: unauthenticated access, path parameter swap, query parameter swap and sequential id enumeration. A public catalogue and a private record look identical to these probes, so the result is at most POSSIBLE.">
+        <defs><marker id="arr-id1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g class="node" transform="translate(20 120)">
+          <rect width="150" height="96" rx="10"/>
+          <text class="ttl" x="12" y="24">Scanner</text>
+          <text class="lbl" x="12" y="44">no credentials</text>
+          <text class="lbl" x="12" y="60">no Authorization</text>
+          <text class="lbl" x="12" y="76">no cookie</text>
+        </g>
+        <g class="node" transform="translate(790 120)">
+          <rect width="150" height="96" rx="10"/>
+          <text class="ttl" x="12" y="24">Target API</text>
+          <text class="mono" x="12" y="46">/api/tasks/{id}</text>
+          <text class="mono" x="12" y="64">/api/tasks?user_id</text>
+          <text class="lbl" x="12" y="84">answers anyone</text>
+        </g>
+
+        <g class="node row at-1 lit-1" transform="translate(200 16)">
+          <rect width="570" height="62" rx="8"/>
+          <text class="ttl" x="12" y="18">1 · Unauthenticated access</text>
+          <text class="mono" x="12" y="36">GET /api/tasks/42   <tspan class="t-accent">no auth header</tspan></text>
+          <text class="mono" x="12" y="52">{"user":{}} <tspan class="t-safe">→ no value, ignored</tspan>    ·    {"id":42,"title":"Q3"} <tspan class="t-attacker">→ data, public</tspan></text>
+        </g>
+        <g class="node row at-2 lit-2" transform="translate(200 84)">
+          <rect width="570" height="62" rx="8"/>
+          <text class="ttl" x="12" y="18">2 · Path-parameter swap</text>
+          <text class="mono" x="12" y="36">GET /api/tasks/42  →  GET /api/tasks/43   <tspan class="t-accent">compare the two bodies</tspan></text>
+          <text class="mono" x="12" y="52">bodies differ <tspan class="t-attacker">→ real reference, a lead</tspan>    ·    same body <tspan class="t-safe">→ id ignored</tspan></text>
+        </g>
+        <g class="node row at-3 lit-3" transform="translate(200 152)">
+          <rect width="570" height="62" rx="8"/>
+          <text class="ttl" x="12" y="18">3 · Query-parameter swap</text>
+          <text class="mono" x="12" y="36">GET /api/tasks?user_id=A  →  ?user_id=B   <tspan class="t-accent">id-bearing params only</tspan></text>
+          <text class="mono" x="12" y="52">same comparison: a different body per value makes the param a real reference</text>
+        </g>
+        <g class="node row at-4 lit-4" transform="translate(200 220)">
+          <rect width="570" height="62" rx="8"/>
+          <text class="ttl" x="12" y="18">4 · Sequential enumeration</text>
+          <text class="mono" x="12" y="36">42  →  43 · 41 · 142   <tspan class="t-accent">id+1, id−1, id+100</tspan></text>
+          <text class="mono" x="12" y="52">numeric ids only: a neighbour that answers means every record is guessable</text>
+        </g>
+
+        <!-- risk rule band -->
+        <g class="at-5">
+          <text class="ttl" x="20" y="306">Risk rule without credentials</text>
+          <g class="node lit-5" transform="translate(20 316)">
+            <rect width="250" height="56" rx="8"/>
+            <text class="mono" x="12" y="20">/api/Products/{id}</text>
+            <text class="lbl" x="12" y="38">public catalogue · new object per id</text>
+          </g>
+          <g class="node lit-5" transform="translate(284 316)">
+            <rect width="250" height="56" rx="8"/>
+            <text class="mono" x="12" y="20">/api/Recycles/{id}</text>
+            <text class="lbl" x="12" y="38">private record · new object per id</text>
+          </g>
+          <path class="wire accent" d="M534 344 H 556" marker-end="url(#arr-id1)"/>
+          <g class="node lit-5" transform="translate(560 316)">
+            <rect width="380" height="56" rx="8" class="soft-accent"/>
+            <text class="ttl" x="12" y="20">identical to an anonymous probe</text>
+            <text class="lbl" x="12" y="38">different data per id → at most <tspan class="t-accent">POSSIBLE</tspan> · same body for every id → <tspan class="t-safe">SAFE</tspan></text>
+          </g>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span><b>Unauthenticated access.</b> The request carries no auth at all. "Returns data" is a structural check: the JSON must contain a non-empty scalar somewhere. An empty envelope like <code>{"user":{}}</code> is the server saying nobody, so it is not flagged, and the check does not depend on recognising <code>data</code> or <code>result</code> keys.</p>
+      <p class="step"><span class="n">2</span><b>Path-parameter swap.</b> Change <code>/api/tasks/42</code> to <code>/api/tasks/43</code> and compare the response with the original id's. Different data means the id is a real object reference; identical means it is ignored. Without a login this is only a lead.</p>
+      <p class="step"><span class="n">3</span><b>Query-parameter swap.</b> The same comparison on id-bearing query parameters: <code>?user_id=A</code> becomes <code>?user_id=B</code>.</p>
+      <p class="step"><span class="n">4</span><b>Sequential enumeration.</b> For numeric ids, try <code>id+1</code>, <code>id−1</code> and <code>id+100</code>. If neighbours answer, every record in the table can be walked.</p>
+      <p class="step"><span class="n">5</span><b>The ceiling.</b> A public catalogue and a private record both return a different object per id with no auth; only ownership intent separates them, and that is invisible without credentials. So <b>an unauthenticated swap that returns different data per id is at most POSSIBLE</b> (confidence 0.60, a lead to verify), and <b>an id that returns the same response however you change it is SAFE</b>. CONFIRMED is reserved for the cross-user pass.</p>
+    </div>
+  </div>
+</section>
+
+<section id="crossuser-sec">
+  <h2>The cross-user pass: User B asks for User A's objects</h2>
+  <p class="prose">With two accounts the question becomes answerable: does the server check ownership? The scanner does not guess ids. It logs in as A, reads A's collections to learn which ids A really owns, and then requests each of them as B.</p>
+
+  <div class="scene" id="crossuser" data-scene data-interval="3200">
+    <figure class="stage">
+      <svg viewBox="0 0 960 350" role="img" aria-label="User A and User B log in. As A, the scanner reads the tasks collection and harvests ids 42 and 57. As B it requests task 42 and receives A's data, which confirms a cross-user IDOR.">
+        <defs><marker id="arr-id2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <!-- corridors the packets travel -->
+        <path class="corridor a" id="cu-path-a" d="M190 56 H 212 V 12 H 760 V 150 H 778"/>
+        <path class="corridor b" id="cu-path-b" d="M190 296 H 212 V 340 H 760 V 200 H 778"/>
+        <g id="cu-packets"></g>
+
+        <g class="node lit-1" transform="translate(20 30)">
+          <rect width="170" height="80" rx="10"/>
+          <text class="ttl" x="12" y="24">User A · owner</text>
+          <text class="mono at-1" x="12" y="46">Bearer eyJ…A</text>
+          <text class="lbl" x="12" y="66">browser or REST login</text>
+        </g>
+        <g class="node lit-1" transform="translate(20 270)">
+          <rect width="170" height="70" rx="10"/>
+          <text class="ttl" x="12" y="24">User B · attacker</text>
+          <text class="mono at-1" x="12" y="46">Bearer eyJ…B</text>
+          <text class="lbl" x="12" y="62">a different real account</text>
+        </g>
+        <g class="node" transform="translate(780 120)">
+          <rect width="160" height="116" rx="10"/>
+          <text class="ttl" x="12" y="24">Target API</text>
+          <text class="mono" x="12" y="48">GET /api/tasks</text>
+          <text class="mono" x="12" y="66">GET /api/tasks/{id}</text>
+          <text class="lbl at-2" x="12" y="88">A owns 42 and 57</text>
+          <text class="lbl at-5 t-attacker" x="12" y="102">no ownership check</text>
+        </g>
+
+        <!-- harvest -->
+        <g class="node at-2 lit-2" transform="translate(230 30)">
+          <rect width="500" height="104" rx="8"/>
+          <text class="ttl" x="12" y="20">Harvest A's real ids from the parent collection</text>
+          <text class="mono" x="12" y="40"><tspan class="t-info">A</tspan>  GET /api/tasks</text>
+          <text class="mono" x="12" y="58">→ [{"id":42,"title":"Q3 budget"}, {"id":57,"title":"Hiring"}]</text>
+          <text class="mono" x="12" y="78">candidates: <tspan class="t-accent">42 · 57</tspan></text>
+          <g class="at-3 mono"><text x="166" y="78">7f3a-…-c0de</text><text x="264" y="78">a@example.com</text><line class="strike" x1="163" y1="74" x2="246" y2="74"/><line class="strike" x1="261" y1="74" x2="358" y2="74"/><text class="lbl t-attacker" x="370" y="78">dropped</text></g>
+          <text class="lbl at-3" x="12" y="94">harvested ids are all numeric → keep numeric only · identity values only for a user-named slot</text>
+        </g>
+
+        <!-- probes -->
+        <g class="node at-4 lit-4" transform="translate(230 150)">
+          <rect width="500" height="110" rx="8"/>
+          <text class="ttl" x="12" y="20">Request each harvested id as User B</text>
+          <text class="mono at-4" x="12" y="42"><tspan class="t-info">A</tspan>  GET /api/tasks/42  →  200  {"id":42,"title":"Q3 budget","owner":"A"}</text>
+          <text class="mono at-5" x="12" y="62"><tspan class="t-attacker">B</tspan>  GET /api/tasks/42  →  200  {"id":42,"title":"Q3 budget","owner":"A"}</text>
+          <text class="lbl at-5" x="12" y="80">same bytes as the owner saw · anonymous probe got 401 (next scene)</text>
+          <text class="mono at-6 t-attacker" x="12" y="96">CONFIRMED · cross-user read · confidence 0.95 · one finding per endpoint</text>
+        </g>
+        <g class="only-6" transform="translate(230 290)">
+          <text class="lbl">GET reads · PUT/PATCH writes · POST creates and DELETE destroys, so neither is tried</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step" data-on="cuLogin"><span class="n">1</span><b>Two logins.</b> The browser login helper finds the visible password field and fills the identity field in the same form, whatever it is named. For a frontend-less API, <code>RestLoginAuthProvider</code> POSTs the credentials and lifts the bearer token out of the JSON. Either way: a session for A and a session for B.</p>
+      <p class="step" data-on="cuHarvest"><span class="n">2</span><b>Harvest.</b> For an endpoint like <code>/api/tasks/{id}</code>, read the parent collection <code>/api/tasks</code> as A. The ids in that response are A's real objects, so no guessing. Both numeric and UUID shapes are handled.</p>
+      <p class="step"><span class="n">3</span><b>Candidates.</b> If every harvested id is numeric, the candidate set is filtered to numeric ids so UUIDs are not wasted. A's email or user id is only injected when the path parameter is named like an identity (<code>user</code>, <code>email</code>, <code>account</code>), never into an opaque object-id slot.</p>
+      <p class="step" data-on="cuOwner"><span class="n">4</span><b>Owner baseline.</b> A must be able to read its own object with a 2xx. If not, there is nothing to compare against and the id is skipped.</p>
+      <p class="step" data-on="cuAttacker"><span class="n">5</span><b>Attacker probe.</b> The same URL with B's token. B gets 200 and the body is byte-for-byte what A saw. Object 42 belongs to A, so the server never checked ownership.</p>
+      <p class="step"><span class="n">6</span><b>Confirmed.</b> This is the only path to CONFIRMED: it proves B can read A's object. The two guards in the next scene run inside this step and are what keep it honest.</p>
+    </div>
+  </div>
+</section>
+
+<section id="guards-sec">
+  <h2>The two guards that kill false positives</h2>
+  <p class="prose">A 200 for User B is not enough. The endpoint may be public to everyone, or it may have ignored the id and returned B's own data. Each probe passes through four stages and either guard can drop it.</p>
+
+  <div class="scene" id="guards" data-scene data-interval="3200">
+    <figure class="stage">
+      <svg viewBox="0 0 960 300" role="img" aria-label="Four stages: owner baseline, anonymous guard, attacker probe, content match. The anonymous guard suppresses a finding if the resource is public; the content-match guard requires User B's body to equal User A's.">
+        <defs><marker id="arr-id3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g class="node stage-box g1 lit-1" transform="translate(20 40)">
+          <rect width="214" height="150" rx="8"/>
+          <text class="ttl" x="12" y="22">1 · Owner baseline</text>
+          <text class="mono" x="12" y="46"><tspan class="t-info">A</tspan>  GET /api/tasks/42</text>
+          <text class="mono" x="12" y="64">200 {"id":42,"title":"Q3"}</text>
+          <text class="lbl" x="12" y="92">A must reach its own object</text>
+          <text class="lbl" x="12" y="108">with a 2xx and data;</text>
+          <text class="lbl" x="12" y="124">otherwise skip this id</text>
+        </g>
+        <path class="wire at-2" d="M234 115 H 250" marker-end="url(#arr-id3)"/>
+        <g class="node stage-box g2 at-2 lit-2" transform="translate(252 40)">
+          <rect width="214" height="150" rx="8"/>
+          <text class="ttl" x="12" y="22">2 · Anonymous guard</text>
+          <text class="mono" x="12" y="46"><tspan class="t-accent">—</tspan>  GET /api/tasks/42</text>
+          <text class="mono" x="12" y="64">no token at all</text>
+          <text class="mono" x="12" y="92"><tspan class="t-safe">401 / 403</tspan>  → private, go on</text>
+          <text class="mono" x="12" y="110"><tspan class="t-attacker">200</tspan>  → public, suppress</text>
+          <text class="lbl" x="12" y="134">a catalogue is not an IDOR</text>
+        </g>
+        <path class="wire at-3" d="M466 115 H 482" marker-end="url(#arr-id3)"/>
+        <g class="node stage-box g3 at-3 lit-3" transform="translate(484 40)">
+          <rect width="214" height="150" rx="8"/>
+          <text class="ttl" x="12" y="22">3 · Attacker probe</text>
+          <text class="mono" x="12" y="46"><tspan class="t-attacker">B</tspan>  GET /api/tasks/42</text>
+          <text class="mono" x="12" y="64">B's own token</text>
+          <text class="mono" x="12" y="92"><tspan class="t-safe">401 / 403 / 404</tspan>  → drop</text>
+          <text class="mono" x="12" y="110"><tspan class="t-attacker">200</tspan>  → candidate</text>
+          <text class="lbl" x="12" y="134">a status alone proves nothing yet</text>
+        </g>
+        <path class="wire at-4" d="M698 115 H 714" marker-end="url(#arr-id3)"/>
+        <g class="node stage-box g4 at-4 lit-4" transform="translate(716 40)">
+          <rect width="224" height="150" rx="8"/>
+          <text class="ttl" x="12" y="22">4 · Content match</text>
+          <text class="mono" x="12" y="46">B.body == A.body ?</text>
+          <text class="mono" x="12" y="74"><tspan class="t-attacker">equal</tspan>  → CONFIRMED</text>
+          <text class="mono" x="12" y="92"><tspan class="t-safe">differs</tspan>  → drop</text>
+          <text class="lbl" x="12" y="118">an empty or generic body, or</text>
+          <text class="lbl" x="12" y="134">B's own data, never counts</text>
+        </g>
+        <!-- outcome band -->
+        <g class="only-1" transform="translate(20 236)"><text>The owner read is the reference. Everything later is compared against this exact body.</text></g>
+        <g class="only-2" transform="translate(20 236)"><text><tspan class="t-attacker" style="font-weight:600">Guard 1.</tspan> If a request with no auth gets through, the endpoint is simply public and the cross-user finding is suppressed.</text><text class="lbl" x="0" y="20">That is how /api/Products/{id} on a shop stays out of the report.</text></g>
+        <g class="only-3" transform="translate(20 236)"><text>B's token reaches A's URL. A 2xx makes it a candidate, a 4xx ends the probe. Writes only need to get past access control here.</text></g>
+        <g class="only-4" transform="translate(20 236)"><text><tspan class="t-attacker" style="font-weight:600">Guard 2.</tspan> B's response must equal A's body. If the bodies differ, the id was ignored or coerced to B's own record: caller-scoped, not IDOR.</text><text class="lbl" x="0" y="20">Only the equal case becomes a finding: CONFIRMED, confidence 0.95.</text></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span><b>Owner baseline.</b> A reads the object with its own token. The response must be a 2xx carrying data; this body is what B's will be compared against.</p>
+      <p class="step"><span class="n">2</span><b>Anonymous-access guard.</b> The same URL is requested with no auth at all, before B tries. If that returns anything but 401 or 403 the resource is public, so a cross-user hit would be meaningless and the finding is suppressed.</p>
+      <p class="step"><span class="n">3</span><b>Attacker probe.</b> B requests the URL. A 4xx ends it. A 2xx is only a candidate.</p>
+      <p class="step"><span class="n">4</span><b>Content-match guard.</b> B's body must equal A's body. <b>The comparison is exact equality of the two body texts</b> (not a search for A's values inside B's body). Any difference, including a changed timestamp or a request id, drops the candidate as caller-scoped data, so a real hit on a response that carries volatile fields can be missed. For writes only the 401/403 check applies.</p>
+    </div>
+  </div>
+</section>
+
+<section id="mutation-sec">
+  <h2>Mutation read-back: a 2xx is not a write</h2>
+  <p class="prose">For PUT and PATCH a success status only proves the request was accepted. Many servers answer 200 and change nothing. The probe writes a harmless canary, reads it back, and restores the original before deciding anything.</p>
+
+  <div class="scene" id="mutation" data-scene data-interval="3200">
+    <figure class="stage">
+      <svg viewBox="0 0 960 330" role="img" aria-label="A PUT probe: first the SPA catch-all is rejected, then a canary is written into one non-sensitive field, read back, and restored. Confirmed persistence is CRITICAL, an unconfirmable write is a HIGH lead.">
+        <defs><marker id="arr-id4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g class="node" transform="translate(20 100)">
+          <rect width="150" height="110" rx="10"/>
+          <text class="ttl" x="12" y="24">User B</text>
+          <text class="lbl" x="12" y="44">authenticated session</text>
+          <text class="lbl" x="12" y="60">runs only under</text>
+          <text class="mono" x="12" y="78">--probe-writes</text>
+          <text class="lbl" x="12" y="98">it writes to the target</text>
+        </g>
+        <g class="node" transform="translate(790 100)">
+          <rect width="150" height="110" rx="10"/>
+          <text class="ttl" x="12" y="24">Target</text>
+          <text class="mono" x="12" y="46">PUT /api/tasks/42</text>
+          <text class="lbl" x="12" y="66">A's task</text>
+          <text class="mono until-2" x="12" y="88">notes: "call Sam"</text>
+          <text class="mono at-2 until-4 t-attacker" x="12" y="88">notes: canary</text>
+          <text class="mono at-4" x="12" y="88">notes: "call Sam"</text>
+        </g>
+
+        <g class="node lit-1" transform="translate(200 16)">
+          <rect width="560" height="60" rx="8"/>
+          <text class="ttl" x="12" y="20">0 · Gate: is this the SPA shell?</text>
+          <text class="mono" x="12" y="38">PUT /api/tasks/42 → 200 text/html  &lt;!doctype html&gt;   <tspan class="t-attacker">rejected, not a write</tspan></text>
+          <text class="mono" x="12" y="54">PUT /api/tasks/42 → 200 application/json              <tspan class="t-safe">continue</tspan></text>
+        </g>
+
+        <g class="node at-2 lit-2" transform="translate(200 88)">
+          <rect width="272" height="100" rx="8"/>
+          <text class="ttl" x="12" y="20">1 · Write a canary</text>
+          <text class="mono" x="12" y="40"><tspan class="t-attacker">B</tspan>  PUT {"notes":"isitsecure_rb_3f9a"}</text>
+          <text class="lbl" x="12" y="58">one existing, non-sensitive field</text>
+          <text class="lbl" x="12" y="72">never money, auth or PII</text>
+          <text class="mono" x="12" y="86">→ 200   accepted, not yet proven</text>
+        </g>
+        <path class="wire at-3" d="M472 138 H 486" marker-end="url(#arr-id4)"/>
+        <g class="node at-3 lit-3" transform="translate(488 88)">
+          <rect width="272" height="100" rx="8"/>
+          <text class="ttl" x="12" y="20">2 · Read it back</text>
+          <text class="mono" x="12" y="40">GET /api/tasks/42</text>
+          <text class="mono" x="12" y="58">notes == "isitsecure_rb_3f9a"  <tspan class="t-attacker">yes</tspan></text>
+          <text class="lbl" x="12" y="76">the write response echoing it</text>
+          <text class="lbl" x="12" y="88">is proof enough on its own</text>
+        </g>
+
+        <g class="node at-4 lit-4" transform="translate(200 200)">
+          <rect width="272" height="66" rx="8"/>
+          <text class="ttl" x="12" y="20">3 · Restore</text>
+          <text class="mono" x="12" y="40">PUT {"notes":"call Sam"}</text>
+          <text class="lbl" x="12" y="58">the original value is always put back</text>
+        </g>
+        <g class="node verdict at-4 lit-4" transform="translate(488 200)">
+          <rect width="272" height="66" rx="8" class="until-5 soft-attacker"/>
+          <rect width="272" height="66" rx="8" class="only-5 soft-accent"/>
+          <g class="until-5">
+            <text class="ttl t-attacker" x="12" y="22">persisted → CRITICAL</text>
+            <text class="lbl" x="12" y="40">B changed A's record and it stuck</text>
+            <text class="lbl" x="12" y="56">cross-user write · confidence 0.98</text>
+          </g>
+          <g class="only-5">
+            <text class="ttl t-accent" x="12" y="22">unconfirmable → HIGH lead</text>
+            <text class="lbl" x="12" y="40">read is gated and the write did not echo</text>
+            <text class="lbl" x="12" y="56">reported, but downgraded</text>
+          </g>
+        </g>
+
+        <g class="only-5" transform="translate(200 292)">
+          <text class="lbl" x="0" y="0">GET /api/tasks/42 → 401 and PUT answers with nothing to read: cannot confirm, so HIGH.</text>
+          <text class="lbl" x="0" y="18">GET → 401 but the PUT echoes the object with the canary: still CONFIRMED, from the write response.</text>
+        </g>
+        <g class="only-1" transform="translate(200 292)">
+          <text class="lbl" x="0" y="0">A code-split front end serves index.html with a 200 for unknown routes. That answer is never treated as a write.</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span><b>Gate first.</b> A single-page app answers unknown routes with its shell, 200 <code>text/html</code>. That response is rejected before any probe runs, so an app shell can never count as an accepted write. Mutation probes run authenticated when a session exists and only under <code>--probe-writes</code>.</p>
+      <p class="step"><span class="n">2</span><b>Canary.</b> B sends a PUT that changes exactly one existing, non-sensitive field of A's object to a marker value. Money, auth and PII fields are never touched. The 200 that comes back only says the request was accepted.</p>
+      <p class="step"><span class="n">3</span><b>Read back.</b> The object is fetched again. If the field now holds the canary, the write really landed. When the write's own response already echoes the canary, that is proof enough and no re-read is needed.</p>
+      <p class="step"><span class="n">4</span><b>Restore and decide.</b> The original value is written back. <b>Confirmed persistence is CRITICAL</b>: B modified A's data and it stuck. Each endpoint yields one finding; self-swaps are skipped and probing stops at the first accepted swap.</p>
+      <p class="step"><span class="n">5</span><b>When it cannot be confirmed.</b> If the read is auth-gated and the write echoes nothing, persistence is unknown and the finding is downgraded to a HIGH lead. A write-open, read-gated endpoint whose PUT echoes the object is still confirmed from the write response alone. That is what reaches an auth-gated BOLA delete like Juice Shop's "delete another user's feedback".</p>
+    </div>
+  </div>
+</section>
+
+<section id="why">
+  <h2>Why it matters</h2>
+  <div class="grid-2">
+    <div class="callout why">
+      <div class="label">The most common API bug</div>
+      <p>IDOR is the #1 most common vulnerability in modern web APIs. Unlike SQL injection it needs no payload; it is just changing a number in a URL, which makes it trivial to exploit and devastating in impact.</p>
+      <ul>
+        <li><b>Read other users' private data</b>: messages, documents, medical and financial records.</li>
+        <li><b>Modify other users' data</b>: change settings, delete files, alter records.</li>
+        <li><b>Escalate privileges</b>: reach admin-only resources by guessing admin ids.</li>
+        <li><b>Mass data theft</b>: enumerate every record by iterating ids.</li>
+      </ul>
+    </div>
+    <div class="callout breach">
+      <div class="label">Real-world breaches</div>
+      <p><b>First American Financial (2019).</b> 885 million mortgage documents (Social Security numbers, bank statements, tax records) were exposed because document URLs used sequential record numbers with no authorization check. Changing the id in the URL returned any customer's documents.</p>
+      <p><b>Parler (2021).</b> After the platform was deplatformed, researchers scraped all posts, including deleted content and GPS metadata, because the API used sequential post ids with no access control.</p>
+    </div>
+  </div>
+</section>
+
+<section id="code">
+  <h2>Vulnerable vs fixed code</h2>
+  <p class="prose">The vulnerable handlers look an object up by whatever id the request supplies. The fix adds the authenticated user to the query, or moves the rule into the database as a row-level security policy.</p>
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true">BAD · no ownership check</button>
+      <button class="tab good" role="tab" aria-selected="false">GOOD · scope to the user</button>
+      <button class="tab good" role="tab" aria-selected="false">GOOD · Supabase RLS</button>
+    </div>
+    <div role="tabpanel"><pre><code><span class="c">// BAD: No ownership check — any authenticated user can access any task</span>
+export async function GET(request, { params }) {
+<span class="hl bad">  const task = await db.getById(<span class="s">"tasks"</span>, params.id)</span>
+  return NextResponse.json(task)
+}
+
+<span class="c">// BAD: User ID comes from request body, not from auth token</span>
+export async function GET(request) {
+<span class="hl bad">  const { userId } = await request.json()</span>
+  const profile = await db.getById(<span class="s">"profiles"</span>, userId)
+  return NextResponse.json(profile)
+}</code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c">// GOOD: Verify the resource belongs to the authenticated user</span>
+export async function GET(request, { params }) {
+  const user = await getAuthUser(request)
+<span class="hl good">  const task = await db.query(<span class="s">"tasks"</span>, <span class="s">`id = '${params.id}' AND user_id = '${user.id}'`</span>)</span>
+
+  if (!task.length) {
+    return NextResponse.json({ error: <span class="s">"Not found"</span> }, { status: 404 })
+  }
+  return NextResponse.json(task[0])
+}</code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c">// GOOD: Use Supabase RLS instead of application-level checks</span>
+<span class="c">// In your migration:</span>
+<span class="hl good">CREATE POLICY <span class="s">"Users can view own tasks"</span> ON tasks
+  FOR SELECT USING (auth.uid() = user_id);</span></code></pre></div>
+  </div>
+</section>
+
+<section id="limits">
+  <h2>Limits and configuration</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Rule</th><th>Value</th><th>Note</th></tr></thead>
+      <tbody>
+        <tr><td>Unauthenticated verdicts</td><td>POSSIBLE (0.60) or SAFE</td><td>never CONFIRMED or LIKELY without credentials</td></tr>
+        <tr><td>Cross-user read</td><td>CONFIRMED · 0.95</td><td>GET only; owner 2xx, anonymous 401/403, attacker 2xx with the owner's body</td></tr>
+        <tr><td>Cross-user write</td><td>CONFIRMED · 0.98 / LIKELY · 0.80</td><td>PUT and PATCH; a non-auth 4xx (bad body) still shows B got past access control</td></tr>
+        <tr><td>Ids tried per endpoint</td><td>8</td><td>harvested ids first, deduplicated; numeric filter when all harvested ids are numeric</td></tr>
+        <tr><td>Mutation probes</td><td><code>--probe-writes</code></td><td>authenticated when a session exists; canary prefix <code>isitsecure_rb_</code>; original restored</td></tr>
+        <tr><td>Not probed cross-user</td><td>POST, DELETE</td><td>POST creates and DELETE destroys; the read-back path covers PUT/PATCH and the gated delete</td></tr>
+        <tr><td>Supabase</td><td>full-table <code>SELECT *</code></td><td>User B is also tried against the REST API for a table-wide read</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout note">
+    <div class="label">What it deliberately stays quiet about</div>
+    <p>Without two accounts the scanner reports leads, not findings: it refuses to call a public catalogue an IDOR because it cannot see intent. With two accounts, a resource that an anonymous request can also read is never reported, and a 200 whose body is not the owner's data is never reported. A code-split front end's 200 shell is rejected before any of this runs.</p>
+  </div>
+</section>
+
+<footer class="foot">
+  <span>Source: <a href="../scanners/idor-scanner.md">docs/scanners/idor-scanner.md</a> · <a href="../architecture.md">docs/architecture.md</a></span>
+  <span>Related: <a href="scan-pipeline.html">The scan pipeline</a> · <a href="race-conditions.html">Race conditions</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+<script>
+(function () {
+  const PA = "M190 56 H 212 V 12 H 760 V 150 H 778";
+  const PA_BACK = "M778 150 H 760 V 12 H 212 V 56 H 190";
+  const PB = "M190 296 H 212 V 340 H 760 V 200 H 778";
+  const PB_BACK = "M778 200 H 760 V 340 H 212 V 296 H 190";
+  function layerOf(el) { const svg = el.querySelector("svg"); IsDoc.clearPackets(svg); return [svg, svg.querySelector("#cu-packets")]; }
+  window.cuLogin = function (scene, step, el) { layerOf(el); };
+  window.cuHarvest = function (scene, step, el) {
+    const [svg, layer] = layerOf(el);
+    IsDoc.packet(svg, PA, { r: 6, cls: "f-info", label: "GET /api/tasks", duration: 1200, hold: 100, layer });
+    IsDoc.packet(svg, PA_BACK, { r: 6, cls: "f-info", label: "[42, 57]", duration: 1200, delay: 1400, hold: 400, layer });
+  };
+  window.cuOwner = function (scene, step, el) {
+    const [svg, layer] = layerOf(el);
+    IsDoc.packet(svg, PA, { r: 6, cls: "f-info", label: "GET /api/tasks/42", duration: 1200, hold: 100, layer });
+    IsDoc.packet(svg, PA_BACK, { r: 6, cls: "f-info", label: "200", duration: 1200, delay: 1400, hold: 400, layer });
+  };
+  window.cuAttacker = function (scene, step, el) {
+    const [svg, layer] = layerOf(el);
+    IsDoc.packet(svg, PB, { r: 6, cls: "f-attacker", label: "GET /api/tasks/42", duration: 1200, hold: 100, layer });
+    IsDoc.packet(svg, PB_BACK, { r: 6, cls: "f-attacker", label: "200 A's task", duration: 1200, delay: 1400, hold: 400, layer });
+  };
+})();
+</script>
+</body>
+</html>

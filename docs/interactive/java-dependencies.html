@@ -1,0 +1,368 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Java Dependencies · isitsecure</title>
+<meta name="description" content="How isitsecure reads pom.xml and Gradle files, looks each library up in a 12-entry built-in table and compares three version numbers, animated. Includes why a property version is invisible and when Struts yields two findings.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  /* page-specific: small cards inside nodes, skipped-state styling, struts zones */
+  .scene .stage svg .card-r > rect { fill: var(--surface); stroke: var(--line); stroke-width: 1; }
+  #extract .item, #gradle .row { transition: opacity .4s; }
+  #extract.s3 .skip { opacity: .45; }
+  #extract.s3 .skip .m { text-decoration: line-through; }
+  #gradle .row text.src { transition: fill .35s; }
+  #gradle[data-step="2"] .r1 text.src, #gradle[data-step="3"] .r2 text.src { fill: var(--accent); }
+  #gradle[data-step="4"] .r3 text.src, #gradle[data-step="4"] .r4 text.src { fill: var(--muted); }
+  #struts .pin { fill: var(--fg); }
+  #compare .cmp-ok { fill: var(--safe); }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› <a href="group-secrets-dependencies.html">Secrets and dependencies</a> › Java dependencies</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/java-dependency-scanner.md" title="The markdown source for this page">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">SAST scanner · reads manifests only</div>
+  <h1>Java Dependency Scanner</h1>
+  <p class="lede">Log4Shell shipped inside thousands of builds that never called Log4j directly. This scanner reads <code>pom.xml</code> and <code>build.gradle</code> as plain text, pulls out each <code>group:artifact</code> and its version, and checks it against a table of twelve known-bad coordinates. No build, no network, no API key.</p>
+  <div class="meta">
+    <span class="pill sast">SAST</span><span class="pill crit">Critical–Medium</span><span class="pill">Dependency Vulnerability</span><span class="pill">12 coordinates</span><span class="pill">confidence 0.85</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#extract-sec"><span class="n">01</span>Reading pom.xml</a>
+  <a href="#compare-sec"><span class="n">02</span>Lookup and version compare</a>
+  <a href="#struts-sec"><span class="n">03</span>When Struts gives two findings</a>
+  <a href="#gradle-sec"><span class="n">04</span>Gradle declarations</a>
+  <a href="#why"><span class="n">05</span>Why it matters</a>
+  <a href="#code"><span class="n">06</span>Vulnerable vs fixed</a>
+  <a href="#limits"><span class="n">07</span>Limits and what it stays quiet about</a>
+</nav>
+
+<section id="extract-sec">
+  <h2>Reading pom.xml</h2>
+  <p class="prose">The actor is the scanner alone. It walks every file in the repository snapshot, and any file named <code>pom.xml</code> (at any depth) goes to a Maven routine. The routine never resolves a parent POM or a property; it sees only the text in front of it.</p>
+
+  <div class="scene" id="extract" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 340" role="img" aria-label="Three dependency blocks in a pom.xml pass through one regex. The log4j block with a literal version becomes a lookup candidate; the guava block with a property version and the spring block with no version tag are skipped.">
+        <defs><marker id="arrJ1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+
+        <g class="node lit-1" transform="translate(20 20)">
+          <rect width="300" height="300" rx="10"/>
+          <text class="ttl" x="14" y="26">pom.xml</text>
+          <text class="lbl" x="14" y="44">three &lt;dependency&gt; blocks</text>
+          <g class="card-r mono" transform="translate(14 56)"><rect width="272" height="62" rx="6"/>
+            <text x="10" y="19">groupId    org.apache.logging.log4j</text><text x="10" y="35">artifactId log4j-core</text><text class="t-attacker" x="10" y="51">version    2.14.1</text></g>
+          <g class="card-r mono" transform="translate(14 128)"><rect width="272" height="62" rx="6"/>
+            <text x="10" y="19">groupId    com.google.guava</text><text x="10" y="35">artifactId guava</text><text class="t-info" x="10" y="51">version    ${guava.version}</text></g>
+          <g class="card-r mono" transform="translate(14 200)"><rect width="272" height="62" rx="6"/>
+            <text x="10" y="19">groupId    org.springframework</text><text x="10" y="35">artifactId spring-webmvc</text><text class="lbl" x="10" y="51">(no version tag: managed by a BOM)</text></g>
+          <text class="lbl" x="14" y="286">example file; line numbers are illustrative</text>
+        </g>
+
+        <path class="wire at-2" d="M320 170 H 358" marker-end="url(#arrJ1)"/>
+        <g class="node at-2 lit-2" transform="translate(360 20)">
+          <rect width="250" height="300" rx="10"/>
+          <text class="ttl" x="14" y="26">One regex per block</text>
+          <g class="mono">
+            <text x="14" y="62">&lt;dependency&gt;</text>
+            <text x="14" y="80">&lt;groupId&gt;(…)&lt;/groupId&gt;</text>
+            <text x="14" y="98">&lt;artifactId&gt;(…)&lt;/artifactId&gt;</text>
+            <text x="14" y="116">(&lt;version&gt;(…)&lt;/version&gt;)?</text>
+          </g>
+          <text class="lbl" x="14" y="140">line = newlines before match + 1</text>
+          <g class="at-3">
+            <text class="lbl" x="14" y="176">guard before any lookup:</text>
+            <text class="mono t-attacker" x="14" y="196">not version</text>
+            <text class="mono t-attacker" x="14" y="214">or version.startswith("$")</text>
+            <text class="lbl" x="14" y="234">then skip, silently</text>
+          </g>
+          <text class="lbl" x="14" y="266">version must follow artifactId</text>
+          <text class="lbl" x="14" y="282">directly, or it is not captured</text>
+        </g>
+
+        <path class="wire at-2" d="M610 170 H 648" marker-end="url(#arrJ1)"/>
+        <g class="node" transform="translate(650 20)">
+          <rect width="290" height="300" rx="10"/>
+          <text class="ttl" x="14" y="26">Coordinates to look up</text>
+          <text class="lbl only-1" x="14" y="62">nothing extracted yet</text>
+          <g class="item card-r at-2 lit-4" transform="translate(14 56)"><rect width="262" height="62" rx="6"/>
+            <text class="mono m" x="10" y="22">log4j-core @ 2.14.1</text>
+            <text class="lbl only-2" x="10" y="46">extracted, line 14</text>
+            <text class="lbl only-3" x="10" y="46">kept: literal version</text>
+            <text class="lbl t-attacker at-4" x="10" y="46">goes to the table lookup</text></g>
+          <g class="item skip card-r at-2" transform="translate(14 128)"><rect width="262" height="62" rx="6"/>
+            <text class="mono m" x="10" y="22">guava @ ${guava.version}</text>
+            <text class="lbl only-2" x="10" y="46">extracted, line 22</text>
+            <text class="lbl at-3" x="10" y="46">skipped: property reference</text></g>
+          <g class="item skip card-r at-2" transform="translate(14 200)"><rect width="262" height="62" rx="6"/>
+            <text class="mono m" x="10" y="22">spring-webmvc @ (none)</text>
+            <text class="lbl only-2" x="10" y="46">extracted, line 30</text>
+            <text class="lbl at-3" x="10" y="46">skipped: no version tag</text></g>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>A <code>pom.xml</code> declares libraries in <code>&lt;dependency&gt;</code> blocks. Three typical ones: a literal version, a version held in a property, and a version left to a BOM.</p>
+      <p class="step"><span class="n">2</span>One regex finds every block that has <code>groupId</code>, then <code>artifactId</code>, then an <b>optional</b> <code>&lt;version&gt;</code> right after. The coordinate is <code>group:artifact</code>, and the line number is the count of newlines before the match.</p>
+      <p class="step"><span class="n">3</span><b>Guard: an empty version, or one starting with <code>$</code>, is skipped.</b> The scanner cannot resolve <code>${guava.version}</code> or a BOM-managed version, so it reports nothing rather than guess. A vulnerable Guava hidden behind a property is therefore invisible to this scanner.</p>
+      <p class="step"><span class="n">4</span>Only the log4j block, with a literal <code>2.14.1</code>, continues to the table lookup.</p>
+    </div>
+  </div>
+</section>
+
+<section id="compare-sec">
+  <h2>Lookup and version compare</h2>
+  <p class="prose">The table is a fixed dictionary of 12 <code>group:artifact</code> keys. A coordinate that is not a key is never reported, at any version.</p>
+
+  <div class="scene" id="compare" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 372" role="img" aria-label="The coordinate log4j-core 2.14.1 is looked up in the table, both versions are split into three integers, the lists are compared and 14 is less than 17, so a Critical finding is created. A strip below shows other inputs: 2.17.0 vulnerable, 2.21.0 clean, 2.14.1-SNAPSHOT silent.">
+        <defs><marker id="arrJ2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+
+        <g class="node lit-1" transform="translate(20 20)">
+          <rect width="270" height="190" rx="10"/>
+          <text class="ttl" x="14" y="26">Table entry</text>
+          <text class="lbl" x="14" y="44">exact key, group:artifact</text>
+          <g class="mono">
+            <text x="14" y="72">org.apache.logging.log4j:</text>
+            <text x="14" y="90">log4j-core</text>
+            <text class="t-attacker" x="14" y="118">range  &lt;2.17.1</text>
+            <text class="t-attacker" x="14" y="136">CRITICAL</text>
+          </g>
+          <text class="lbl" x="14" y="162">CVE-2021-44228 (Log4Shell)</text>
+          <text class="lbl" x="14" y="178">remote code execution via log message</text>
+        </g>
+        <path class="wire at-2" d="M290 115 H 328" marker-end="url(#arrJ2)"/>
+        <g class="node at-2 lit-2 lit-3" transform="translate(330 20)">
+          <rect width="290" height="190" rx="10"/>
+          <text class="ttl" x="14" y="26">Compare three numbers</text>
+          <g class="mono">
+            <text x="14" y="56">installed "2.14.1" → [2, 14, 1]</text>
+            <text x="14" y="76">limit     "2.17.1" → [2, 17, 1]</text>
+          </g>
+          <text class="lbl" x="14" y="98">first three parts, padded with 0</text>
+          <g class="at-3">
+            <text class="mono t-attacker" x="14" y="128">[2,14,1] &lt; [2,17,1]  true</text>
+            <text class="lbl" x="14" y="150">2 = 2, then 14 &lt; 17: decided</text>
+            <text class="lbl" x="14" y="168">only the &lt; operator is supported</text>
+          </g>
+        </g>
+        <path class="wire at-4 accent" d="M620 115 H 658" marker-end="url(#arrJ2)"/>
+        <g class="node" transform="translate(660 20)">
+          <rect width="280" height="190" rx="10"/>
+          <text class="ttl" x="14" y="26">Findings</text>
+          <text class="lbl until-4" x="14" y="52">none yet</text>
+          <g class="at-4"><rect x="14" y="40" width="252" height="134" rx="6" class="soft-attacker"/>
+            <text class="mono t-attacker" x="24" y="62">CRITICAL · 0.85</text>
+            <text class="lbl" x="24" y="82">Vulnerable dependency:</text>
+            <text class="mono" x="24" y="100">…:log4j-core:2.14.1</text>
+            <text class="lbl" x="24" y="122">pom.xml · line 14</text>
+            <text class="lbl" x="24" y="140">fix: upgrade to the latest version</text>
+            <text class="lbl" x="24" y="158">snippet: group:artifact:version</text></g>
+        </g>
+
+        <g class="node at-5 lit-5" transform="translate(20 226)">
+          <rect width="920" height="130" rx="10"/>
+          <text class="ttl" x="14" y="24">Same rule, other inputs for log4j-core (limit &lt;2.17.1)</text>
+          <g class="mono">
+            <text x="14" y="52">2.17.0</text><text x="230" y="52">[2,17,0] &lt; [2,17,1]</text><text class="t-attacker" x="470" y="52">vulnerable, one finding</text>
+            <text x="14" y="72">2.21.0</text><text x="230" y="72">[2,21,0] not &lt; [2,17,1]</text><text class="cmp-ok t-safe" x="470" y="72">clean: this is the fix</text>
+            <text x="14" y="92">2.14.1-SNAPSHOT</text><text x="230" y="92">int("1-SNAPSHOT") fails</text><text class="lbl" x="470" y="92">treated as not vulnerable, silent</text>
+            <text x="14" y="112">2.14.+</text><text x="230" y="112">int("+") fails</text><text class="lbl" x="470" y="112">treated as not vulnerable, silent</text>
+          </g>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The surviving coordinate is a dictionary lookup. Log4j-core has one entry: vulnerable below <code>2.17.1</code>, severity Critical, the Log4Shell CVE.</p>
+      <p class="step"><span class="n">2</span>Installed version and limit are each split on <code>.</code>, the first three parts are read as integers, and short versions are padded with zeros.</p>
+      <p class="step"><span class="n">3</span><b>The rule is installed &lt; limit as a list compare</b>: <code>[2,14,1] &lt; [2,17,1]</code>. The middle numbers differ and 14 is less than 17, so the library is vulnerable. Only the <code>&lt;</code> range form exists in the table.</p>
+      <p class="step"><span class="n">4</span>A match becomes a Critical finding at confidence 0.85, with the manifest path, the line, and <code>group:artifact:version</code> as the snippet. The fix text is generic: upgrade to the latest version.</p>
+      <p class="step"><span class="n">5</span>Edge cases. 2.17.0 is still below 2.17.1. 2.21.0 passes, which is the fix. A version with a suffix such as <code>-SNAPSHOT</code>, or a wildcard like <code>2.14.+</code>, cannot be parsed to integers, and the scanner treats that as <b>not vulnerable</b>, not as an error.</p>
+    </div>
+  </div>
+</section>
+
+<section id="struts-sec">
+  <h2>When Struts gives two findings</h2>
+  <p class="prose">Most coordinates have one entry. <code>org.apache.struts:struts2-core</code> has two Critical ranges, and each range that matches yields its own finding for the same line.</p>
+
+  <div class="scene" id="struts" data-scene data-interval="3200">
+    <figure class="stage">
+      <svg viewBox="0 0 960 350" role="img" aria-label="A version axis for struts2-core with boundaries at 2.3.37 and 2.5.33. Below 2.3.37 both rules match; between the boundaries one matches; at 2.5.33 and above none. Pins for 2.3.30, 2.4.0 and 2.5.33 show two findings, one finding and none.">
+        <text class="lbl" x="40" y="22">entry 1: &lt;2.5.33  CRITICAL  CVE-2023-50164, path traversal leading to RCE</text>
+        <text class="lbl" x="40" y="40">entry 2: &lt;2.3.37  CRITICAL  CVE-2017-5638, RCE via Content-Type header (Equifax)</text>
+        <text class="lbl" x="380" y="70" text-anchor="middle">2.3.37</text>
+        <text class="lbl" x="700" y="70" text-anchor="middle">2.5.33</text>
+        <g class="node lit-1">
+          <rect x="40" y="80" width="340" height="60" rx="6" class="soft-attacker"/>
+          <rect x="380" y="80" width="320" height="60" rx="6" class="soft-accent"/>
+          <rect x="700" y="80" width="220" height="60" rx="6" class="soft-safe"/>
+        </g>
+        <text class="mono t-attacker" x="210" y="115" text-anchor="middle">both entries match</text>
+        <text class="mono t-accent" x="540" y="115" text-anchor="middle">entry 1 only</text>
+        <text class="mono t-safe" x="810" y="115" text-anchor="middle">no entry matches</text>
+
+        <g class="at-2"><path class="pin" d="M210 142 l-7 12 h14 z"/><text class="mono" x="210" y="176" text-anchor="middle">2.3.30</text></g>
+        <g class="at-3"><path class="pin" d="M540 142 l-7 12 h14 z"/><text class="mono" x="540" y="176" text-anchor="middle">2.4.0</text></g>
+        <g class="at-4"><path class="pin" d="M810 142 l-7 12 h14 z"/><text class="mono" x="810" y="176" text-anchor="middle">2.5.33</text></g>
+
+        <g class="node at-2 lit-2" transform="translate(40 200)"><rect width="270" height="130" rx="10"/>
+          <text class="ttl" x="14" y="26">2.3.30: two findings</text>
+          <g class="mono"><text x="14" y="54">&lt;2.5.33  yes</text><text x="14" y="72">&lt;2.3.37  yes</text></g>
+          <text class="lbl" x="14" y="98">same file, line and snippet;</text><text class="lbl" x="14" y="114">descriptions name each CVE</text></g>
+        <g class="node at-3 lit-3" transform="translate(345 200)"><rect width="270" height="130" rx="10"/>
+          <text class="ttl" x="14" y="26">2.4.0: one finding</text>
+          <g class="mono"><text x="14" y="54">&lt;2.5.33  yes</text><text x="14" y="72">&lt;2.3.37  no</text></g>
+          <text class="lbl" x="14" y="98">CVE-2023-50164 only</text></g>
+        <g class="node at-4 lit-4" transform="translate(650 200)"><rect width="270" height="130" rx="10"/>
+          <text class="ttl" x="14" y="26">2.5.33: clean</text>
+          <g class="mono"><text x="14" y="54">&lt;2.5.33  no</text><text x="14" y="72">&lt;2.3.37  no</text></g>
+          <text class="lbl" x="14" y="98">equal to the limit is not less</text></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Two entries share one coordinate. The scanner tests every entry for the coordinate; it does not stop at the first match.</p>
+      <p class="step"><span class="n">2</span>2.3.30 is below both limits, so it gets <b>two findings</b>, one per CVE, on the same line.</p>
+      <p class="step"><span class="n">3</span>2.4.0 is below 2.5.33 but not below 2.3.37, so one finding.</p>
+      <p class="step"><span class="n">4</span>2.5.33 equals the first limit. The compare is strict less-than, so nothing is reported.</p>
+    </div>
+  </div>
+</section>
+
+<section id="gradle-sec">
+  <h2>Gradle declarations</h2>
+  <p class="prose"><code>build.gradle</code> and <code>build.gradle.kts</code> go through one regex over the whole file. The table and the compare are the same as for Maven.</p>
+
+  <div class="scene" id="gradle" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 330" role="img" aria-label="Four lines of a Gradle build file. The Groovy log4j line and the Kotlin commons-text line match and are flagged; a line with a variable version fails to parse and a line using annotationProcessor is never matched.">
+        <g class="node lit-1" transform="translate(20 20)">
+          <rect width="520" height="290" rx="10"/>
+          <text class="ttl" x="14" y="26">build.gradle / build.gradle.kts</text>
+          <g class="row r1 mono"><text class="src" x="14" y="72">implementation 'org.apache.logging.log4j:log4j-core:2.14.1'</text>
+            <text class="lbl t-attacker at-2" x="14" y="90">match: 2.14.1 &lt; 2.17.1, CRITICAL</text></g>
+          <g class="row r2 mono"><text class="src" x="14" y="124">implementation("org.apache.commons:commons-text:1.9")</text>
+            <text class="lbl t-attacker at-3" x="14" y="142">match (.kts form): [1,9,0] &lt; [1,10,0], CRITICAL</text></g>
+          <g class="row r3 mono"><text class="src" x="14" y="176">api "com.google.guava:guava:$guavaVersion"</text>
+            <text class="lbl at-4" x="14" y="194">version "$guavaVersion" is not a number: silent</text></g>
+          <g class="row r4 mono"><text class="src" x="14" y="228">annotationProcessor 'org.projectlombok:lombok:1.18.30'</text>
+            <text class="lbl at-4" x="14" y="246">keyword not in the list: never matched</text></g>
+        </g>
+        <g class="node" transform="translate(570 20)">
+          <rect width="370" height="290" rx="10"/>
+          <text class="ttl" x="14" y="26">The Gradle regex</text>
+          <text class="lbl" x="14" y="50">keyword, then ( ' or ", then three parts</text>
+          <g class="mono">
+            <text x="14" y="78">implementation | api | compile</text>
+            <text x="14" y="96">runtimeOnly | testImplementation</text>
+            <text class="t-info" x="14" y="124">group : artifact : version</text>
+          </g>
+          <text class="lbl" x="14" y="152">version = everything up to a quote,</text>
+          <text class="lbl" x="14" y="168">a ) or whitespace</text>
+          <text class="lbl" x="14" y="196">Unlike pom.xml there is no $ guard.</text>
+          <text class="lbl" x="14" y="212">A variable version reaches the compare</text>
+          <text class="lbl" x="14" y="228">and fails the integer parse instead.</text>
+          <text class="lbl" x="14" y="260">testImplementation is scanned too.</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>One regex runs over the file text. It needs one of five configuration keywords, an opening quote or parenthesis, and a <code>group:artifact:version</code> string.</p>
+      <p class="step"><span class="n">2</span>The Groovy single-quoted form matches. Log4j-core <code>2.14.1</code> is below <code>2.17.1</code>, so Critical.</p>
+      <p class="step"><span class="n">3</span>The Kotlin DSL form <code>implementation("…")</code> matches the same regex. Commons Text <code>1.9</code> is below <code>1.10.0</code> (Text4Shell), so Critical.</p>
+      <p class="step"><span class="n">4</span>Two quiet cases. A variable version is captured as text, fails the integer parse and is dropped. A configuration such as <code>annotationProcessor</code> is not in the keyword list, so the line is never seen.</p>
+    </div>
+  </div>
+</section>
+
+<section id="why">
+  <h2>Why it matters</h2>
+  <div class="callout why">
+    <div class="label">Why it matters</div>
+    <p>Java dependency vulnerabilities have caused some of the largest breaches in history, because one library sits under thousands of applications. <b>Log4Shell (2021)</b>, CVE-2021-44228, allowed remote code execution through a log message. <b>Apache Struts (2017)</b>, CVE-2017-5638, caused the Equifax breach. <b>Text4Shell (2022)</b>, CVE-2022-42889 in Commons Text, allowed remote code execution through string interpolation.</p>
+  </div>
+  <div class="callout breach">
+    <div class="label">Real-world breach</div>
+    <p><b>Equifax (2017).</b> 147 million records were stolen because of an unpatched Apache Struts dependency. The patch had been available for two months. Equifax paid $700 million in settlements. <b>Log4Shell (2021)</b> affected hundreds of thousands of applications, including Apple, Amazon, Cloudflare and Steam.</p>
+  </div>
+</section>
+
+<section id="code">
+  <h2>Vulnerable vs fixed</h2>
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true" type="button">BAD · vulnerable</button>
+      <button class="tab good" role="tab" aria-selected="false" type="button">GOOD · fixed</button>
+    </div>
+    <div role="tabpanel"><pre><code><span class="c">&lt;!-- Maven: Log4Shell-era version --&gt;</span>
+&lt;dependency&gt;
+    &lt;groupId&gt;org.apache.logging.log4j&lt;/groupId&gt;
+    &lt;artifactId&gt;log4j-core&lt;/artifactId&gt;
+    <span class="hl bad">&lt;version&gt;<span class="s">2.14.1</span>&lt;/version&gt;</span>
+&lt;/dependency&gt;
+
+<span class="c">// Gradle: same coordinate</span>
+<span class="hl bad">implementation <span class="s">'org.apache.logging.log4j:log4j-core:2.14.1'</span></span></code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c">&lt;!-- Maven: update to safe versions --&gt;</span>
+&lt;dependency&gt;
+    &lt;groupId&gt;org.apache.logging.log4j&lt;/groupId&gt;
+    &lt;artifactId&gt;log4j-core&lt;/artifactId&gt;
+    <span class="hl good">&lt;version&gt;<span class="s">2.21.0</span>&lt;/version&gt;</span> <span class="c">&lt;!-- Fixed --&gt;</span>
+&lt;/dependency&gt;
+
+<span class="c">// Gradle: update to safe versions</span>
+<span class="hl good">implementation <span class="s">'org.apache.logging.log4j:log4j-core:2.21.0'</span></span></code></pre></div>
+  </div>
+</section>
+
+<section id="limits">
+  <h2>Limits and what it stays quiet about</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Coordinate</th><th>Limit</th><th>Severity</th><th>Issue</th></tr></thead>
+      <tbody>
+        <tr><td><code>org.apache.logging.log4j:log4j-core</code></td><td>&lt;2.17.1</td><td>Critical</td><td>CVE-2021-44228 (Log4Shell)</td></tr>
+        <tr><td><code>org.apache.struts:struts2-core</code></td><td>&lt;2.5.33 and &lt;2.3.37</td><td>Critical</td><td>CVE-2023-50164; CVE-2017-5638</td></tr>
+        <tr><td><code>org.apache.commons:commons-text</code></td><td>&lt;1.10.0</td><td>Critical</td><td>CVE-2022-42889 (Text4Shell)</td></tr>
+        <tr><td><code>org.springframework:spring-webmvc</code></td><td>&lt;5.3.28</td><td>High</td><td>CVE-2023-34036, DoS</td></tr>
+        <tr><td><code>org.springframework.boot:spring-boot-starter</code></td><td>&lt;3.1.5</td><td>High</td><td>CVE-2023-34055, DoS via HTTP/2</td></tr>
+        <tr><td><code>org.springframework.security:spring-security-core</code></td><td>&lt;5.8.9</td><td>High</td><td>CVE-2023-34042, authorization bypass</td></tr>
+        <tr><td><code>com.fasterxml.jackson.core:jackson-databind</code></td><td>&lt;2.15.3</td><td>High</td><td>CVE-2023-35116, DoS</td></tr>
+        <tr><td><code>io.jsonwebtoken:jjwt</code></td><td>&lt;0.11.5</td><td>High</td><td>Algorithm confusion</td></tr>
+        <tr><td><code>org.apache.tomcat.embed:tomcat-embed-core</code></td><td>&lt;10.1.16</td><td>High</td><td>CVE-2023-46589, request smuggling</td></tr>
+        <tr><td><code>mysql:mysql-connector-java</code></td><td>&lt;8.0.33</td><td>High</td><td>CVE-2023-21971, unauthorized access</td></tr>
+        <tr><td><code>commons-io:commons-io</code></td><td>&lt;2.14.0</td><td>Medium</td><td>CVE-2024-47554, path traversal</td></tr>
+        <tr><td><code>com.google.guava:guava</code></td><td>&lt;32.0.0</td><td>Medium</td><td>CVE-2023-2976, temp directory</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout note">
+    <div class="label">What it deliberately stays quiet about</div>
+    <p>The table is hand-maintained and holds one or two entries per library, so a library or a CVE not in it is never reported; the OSV scanner covers Maven coordinates with a live database. Property versions in <code>pom.xml</code> (<code>${…}</code>) and BOM-managed versions with no <code>&lt;version&gt;</code> tag are skipped. A version that does not parse as three integers, such as a <code>-SNAPSHOT</code> suffix, a wildcard or a Maven range, counts as not vulnerable. Gradle version catalogs and unlisted configurations such as <code>annotationProcessor</code> are not read.</p>
+  </div>
+</section>
+
+<footer class="foot">
+  <span>Source: <a href="../scanners/java-dependency-scanner.md">docs/scanners/java-dependency-scanner.md</a> · <code>isitsecure/engine/code_analysis/java_dependency_scanner.py</code></span>
+  <span>Group: <a href="group-secrets-dependencies.html">Secrets and dependencies</a> · Related: <a href="osv-dependencies.html">OSV dependencies</a> · <a href="python-dependencies.html">Python dependencies</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+</body>
+</html>

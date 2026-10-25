@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Body Param Fuzzer · isitsecure</title>
+<meta name="description" content="How isitsecure replays captured authenticated writes with one JSON field swapped for SQL injection, XSS, wrong types and prototype-pollution keys, and what each finding does and does not prove. Animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  .topbar-inner .crumb a { color: inherit; text-decoration: none; }
+  .topbar-inner .crumb a:hover { color: var(--accent); }
+  .scene svg text.mono, .scene svg .mono text { white-space: pre; }
+  /* checks: the lane being discussed stays bright */
+  #checks .ln { transition: opacity .35s ease; }
+  #checks:not([data-step="1"]) .ln.l1, #checks:not([data-step="2"]) .ln.l2,
+  #checks:not([data-step="3"]) .ln.l3, #checks:not([data-step="4"]) .ln.l4 { opacity: .38; }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› <a href="group-access-control.html">Access control</a> › Body param fuzzer</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/body-param-fuzzer.md" title="The markdown source for this page">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">DAST scanner · special</div>
+  <h1>Body Param Fuzzer</h1>
+  <p class="lede">Most real API bugs sit in the fields of a JSON body, not in the query string. While logged in, the crawler records the writes the app makes. The fuzzer replays each one many times, changing one field per request, and looks at what the server says back.</p>
+  <div class="meta">
+    <span class="pill dast">DAST</span><span class="pill med">Medium</span><span class="pill high">High</span><span class="pill crit">Critical</span><span class="pill">Injection risk</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#capture-sec"><span class="n">01</span>From capture to fuzzed request</a>
+  <a href="#checks-sec"><span class="n">02</span>Four checks</a>
+  <a href="#proof-sec"><span class="n">03</span>What a finding proves</a>
+  <a href="#why"><span class="n">04</span>Why it matters</a>
+  <a href="#code"><span class="n">05</span>Vulnerable vs fixed code</a>
+  <a href="#limits"><span class="n">06</span>Limits</a>
+</nav>
+
+<section id="capture-sec">
+  <h2>From a captured write to a fuzzed request</h2>
+  <p class="prose">The fuzzer does not invent requests. It starts from writes the real app made, so the URL, method and the shape of the body are already valid. That is why a changed field reaches the code that handles it.</p>
+
+  <div class="scene" id="capture" data-scene data-interval="3600">
+    <figure class="stage">
+      <svg viewBox="0 0 960 384" role="img" aria-label="Captured requests are filtered to successful writes with a JSON object body. Each kept request is replayed with one field replaced by a payload, and prototype-pollution keys are added to the body.">
+        <g class="node lit-1" transform="translate(20 14)"><rect width="920" height="150" rx="10"/>
+          <text class="ttl" x="12" y="24">Captured by the authenticated crawl</text>
+          <text class="lbl" x="560" y="24">then the first 20 kept requests are fuzzed</text>
+          <text class="mono" x="12" y="54">POST   /api/orders  201</text>
+          <text class="lbl t-safe" x="290" y="54">kept: a write, a success, a JSON object body</text>
+          <text class="mono" x="12" y="80" opacity=".55">GET    /api/orders  200</text>
+          <text class="lbl" x="290" y="80">dropped: not POST, PUT or PATCH</text>
+          <text class="mono" x="12" y="106" opacity=".55">POST   /api/login   401</text>
+          <text class="lbl" x="290" y="106">dropped: status is not 200, 201 or 204</text>
+          <text class="mono" x="12" y="132" opacity=".55">PATCH  /api/cart    200</text>
+          <text class="lbl" x="290" y="132">dropped: the body is a list, not an object</text></g>
+
+        <g class="node at-2 lit-2" transform="translate(20 182)"><rect width="920" height="190" rx="10"/>
+          <text class="ttl" x="12" y="24">POST /api/orders · captured body, one field changed per request</text>
+          <text class="mono" x="12" y="56">{"item": <tspan class="t-attacker">"' OR '1'='1' --"</tspan>, "qty": "2", "note": "gift"}</text>
+          <text class="lbl" x="660" y="56">key 1 of 3: SQL injection payload</text>
+          <text class="mono" x="12" y="86">{"item": "mug", "qty": <tspan class="t-attacker">"&lt;script&gt;alert(1)&lt;/script&gt;"</tspan>, "note": "gift"}</text>
+          <text class="lbl" x="660" y="86">key 2 of 3: XSS payload</text>
+          <g class="at-3">
+            <text class="mono" x="12" y="116">{"item": "mug", "qty": "2", "note": "gift", <tspan class="t-attacker">"__proto__": {"polluted": "true"}</tspan>}</text>
+            <text class="lbl" x="660" y="116">added to the body, not swapped in</text>
+            <text class="lbl" x="12" y="150">per key: 3 SQL injection + 2 XSS + 7 wrong types (string-valued keys only) = 12</text>
+            <text class="lbl" x="12" y="170">per request: up to 10 keys x 12 + 3 pollution keys = 123 requests</text></g></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span><b>Filter the capture.</b> Only POST, PUT and PATCH requests that carry a body and returned 200, 201 or 204 are kept, and the body must parse as a JSON object. Each kept request is replayed with the logged-in user's token plus the original <code>apikey</code> header if it had one. The first 20 are fuzzed.</p>
+      <p class="step"><span class="n">2</span><b>Change one field at a time.</b> For each of the first 10 keys the scanner rebuilds the body with that one value replaced and sends it to the same URL with the same method. Every other field stays valid so the request still reaches the handler.</p>
+      <p class="step"><span class="n">3</span><b>Count the requests.</b> A string-valued key gets 12 payloads. Prototype-pollution keys are tried once per captured request, as an extra key rather than a replacement. That is at most 123 requests per captured write.</p>
+    </div>
+  </div>
+</section>
+
+<section id="checks-sec">
+  <h2>Four checks, four different rules</h2>
+  <p class="prose">Each payload family has its own question about the response. They are deliberately simple: the scanner sends one fuzzed request and reads the status and the text.</p>
+
+  <div class="scene" id="checks" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 360" role="img" aria-label="Four rows: SQL injection payloads checked against database error patterns, XSS payloads checked for verbatim reflection, wrong-typed values checked for a 5xx status, and prototype pollution keys checked for a status below 400.">
+        <defs><marker id="arr-bp2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g class="node ln l1 lit-1" transform="translate(20 14)"><rect width="920" height="76" rx="8"/>
+          <text class="ttl" x="12" y="22">SQL injection · 3 payloads</text>
+          <text class="mono" x="12" y="44">' OR '1'='1' --</text>
+          <text class="mono" x="12" y="62">1; DROP TABLE users--</text>
+          <path class="wire" d="M262 40 H 306" marker-end="url(#arr-bp2)"/>
+          <text class="ttl" x="320" y="22">the response text matches one of 13 error patterns</text>
+          <text class="lbl" x="320" y="44">SQL syntax · SQLSTATE · ORA-nnnnn · Traceback · Internal Server Error …</text>
+          <text class="lbl" x="320" y="62">third payload: ' UNION SELECT NULL,NULL--</text>
+          <text class="ttl t-attacker" x="908" y="22" text-anchor="end">CRITICAL · 0.90</text></g>
+
+        <g class="node ln l2 lit-2" transform="translate(20 98)"><rect width="920" height="76" rx="8"/>
+          <text class="ttl" x="12" y="22">XSS reflection · 2 payloads</text>
+          <text class="mono" x="12" y="44">&lt;script&gt;alert(1)&lt;/script&gt;</text>
+          <text class="mono" x="12" y="62">"&gt;&lt;img src=x onerror=alert(1)&gt;</text>
+          <path class="wire" d="M262 40 H 306" marker-end="url(#arr-bp2)"/>
+          <text class="ttl" x="320" y="22">the payload appears verbatim in the response</text>
+          <text class="lbl" x="320" y="44">a plain substring test on the response text</text>
+          <text class="lbl" x="320" y="62">the content type and the place it appears are not examined</text>
+          <text class="ttl t-accent" x="908" y="22" text-anchor="end">HIGH · 0.85</text></g>
+
+        <g class="node ln l3 lit-3" transform="translate(20 182)"><rect width="920" height="76" rx="8"/>
+          <text class="ttl" x="12" y="22">Type confusion · 7 values</text>
+          <text class="mono" x="12" y="44">99999 · true · [] · null</text>
+          <text class="mono" x="12" y="62">-1 · 0 · 999999999999</text>
+          <path class="wire" d="M262 40 H 306" marker-end="url(#arr-bp2)"/>
+          <text class="ttl" x="320" y="22">the status is 500 or higher</text>
+          <text class="lbl" x="320" y="44">only for keys whose original value is a string</text>
+          <text class="lbl" x="320" y="62">the server crashed on a type it did not expect</text>
+          <text class="ttl t-info" x="908" y="22" text-anchor="end">MEDIUM · 0.70</text></g>
+
+        <g class="node ln l4 lit-4" transform="translate(20 266)"><rect width="920" height="76" rx="8"/>
+          <text class="ttl" x="12" y="22">Prototype pollution · 3 keys</text>
+          <text class="mono" x="12" y="44">__proto__: {"polluted": "true"}</text>
+          <text class="mono" x="12" y="62">constructor.prototype · "__proto__.polluted"</text>
+          <path class="wire" d="M392 40 H 426" marker-end="url(#arr-bp2)"/>
+          <text class="ttl" x="440" y="22">the status is below 400</text>
+          <text class="lbl" x="440" y="44">the key was accepted instead of refused</text>
+          <text class="lbl" x="440" y="62">nothing else in the response is checked</text>
+          <text class="ttl t-accent" x="908" y="22" text-anchor="end">HIGH · 0.90</text></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span><b>SQL injection.</b> Three payloads go into one field. If the response text matches any of 13 error patterns the server leaked a database error, which means the value was placed in a query. This is the only Critical check.</p>
+      <p class="step"><span class="n">2</span><b>XSS reflection.</b> Two canary payloads. If the exact string comes back in the response, the field is echoed without encoding. It is High, not Critical, because where the echo ends up decides whether it runs.</p>
+      <p class="step"><span class="n">3</span><b>Type confusion.</b> Seven wrong types replace a string-valued field. A 5xx means the handler did not guard the type. It is Medium: a crash, not yet an exploit.</p>
+      <p class="step"><span class="n">4</span><b>Prototype pollution.</b> The three keys are added to the body. Node.js can merge them onto <code>Object.prototype</code>, which can bypass authorisation checks. The scanner reports when the server answers below 400.</p>
+    </div>
+  </div>
+</section>
+
+<section id="proof-sec">
+  <h2>What a finding proves, and what it does not</h2>
+  <p class="prose">Two of the checks are looser than their names suggest. The scene shows where a finding means "the server accepted it" rather than "the server was exploited".</p>
+
+  <div class="scene" id="proof" data-scene data-interval="3800">
+    <figure class="stage">
+      <svg viewBox="0 0 960 400" role="img" aria-label="Three servers receive a proto key. A strict schema answers 400 and is not reported. A server that ignores unknown keys and a server that merges them both answer 200 and are both reported. A band lists the 13 error patterns, six of which are generic runtime errors.">
+        <defs><marker id="arr-bp3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g class="node lit-1" transform="translate(20 14)"><rect width="296" height="214" rx="10"/>
+          <text class="ttl" x="12" y="24">Strict schema</text>
+          <text class="lbl" x="12" y="44">refuses keys it does not know</text>
+          <text class="mono" x="12" y="76">+ "__proto__": {…}</text>
+          <path class="wire" d="M16 86 V 116" marker-end="url(#arr-bp3)"/>
+          <text class="mono t-safe" x="12" y="138">400 Bad Request</text>
+          <text class="ttl t-safe" x="12" y="172">No finding</text>
+          <text class="lbl" x="12" y="192">status is not below 400</text></g>
+
+        <g class="node at-2 lit-2" transform="translate(332 14)"><rect width="296" height="214" rx="10"/>
+          <text class="ttl" x="12" y="24">Ignores unknown keys</text>
+          <text class="lbl" x="12" y="44">drops the key, handles the rest</text>
+          <text class="mono" x="12" y="76">+ "__proto__": {…}</text>
+          <path class="wire" d="M16 86 V 116" marker-end="url(#arr-bp3)"/>
+          <text class="mono t-attacker" x="12" y="138">200 OK</text>
+          <text class="ttl t-attacker" x="12" y="172">Finding · HIGH</text>
+          <text class="lbl" x="12" y="192">Object.prototype is unchanged</text></g>
+
+        <g class="node at-3 lit-3" transform="translate(644 14)"><rect width="296" height="214" rx="10"/>
+          <text class="ttl" x="12" y="24">Merges keys into an object</text>
+          <text class="lbl" x="12" y="44">copies every key it receives</text>
+          <text class="mono" x="12" y="76">+ "__proto__": {…}</text>
+          <path class="wire" d="M16 86 V 116" marker-end="url(#arr-bp3)"/>
+          <text class="mono t-attacker" x="12" y="138">200 OK</text>
+          <text class="ttl t-attacker" x="12" y="172">Finding · HIGH</text>
+          <text class="lbl" x="12" y="192">Object.prototype is polluted</text></g>
+
+
+        <g class="node at-4" transform="translate(20 244)"><rect width="920" height="144" rx="10"/>
+          <text class="ttl" x="12" y="24">13 error patterns behind the SQL injection rule</text>
+          <text class="lbl" x="12" y="60">database wording</text>
+          <g class="node"><rect x="190" y="44" width="86" height="22" rx="6" class="soft-info"/><text class="mono" x="198" y="59">SQL syntax</text></g>
+            <g class="node"><rect x="284" y="44" width="72" height="22" rx="6" class="soft-info"/><text class="mono" x="292" y="59">pg_query</text></g>
+            <g class="node"><rect x="364" y="44" width="79" height="22" rx="6" class="soft-info"/><text class="mono" x="372" y="59">ORA-\d{5}</text></g>
+            <g class="node"><rect x="451" y="44" width="100" height="22" rx="6" class="soft-info"/><text class="mono" x="459" y="59">SQLITE_ERROR</text></g>
+            <g class="node"><rect x="559" y="44" width="100" height="22" rx="6" class="soft-info"/><text class="mono" x="567" y="59">syntax error</text></g>
+            <g class="node"><rect x="667" y="44" width="100" height="22" rx="6" class="soft-info"/><text class="mono" x="675" y="59">unterminated</text></g>
+            <g class="node"><rect x="775" y="44" width="72" height="22" rx="6" class="soft-info"/><text class="mono" x="783" y="59">SQLSTATE</text></g>
+          <text class="lbl" x="12" y="94">any runtime error</text>
+          <g class="node"><rect x="190" y="78" width="93" height="22" rx="6" class="soft-attacker"/><text class="mono" x="198" y="93">stack trace</text></g>
+            <g class="node"><rect x="291" y="78" width="79" height="22" rx="6" class="soft-attacker"/><text class="mono" x="299" y="93">Traceback</text></g>
+            <g class="node"><rect x="378" y="78" width="79" height="22" rx="6" class="soft-attacker"/><text class="mono" x="386" y="93">TypeError</text></g>
+            <g class="node"><rect x="465" y="78" width="86" height="22" rx="6" class="soft-attacker"/><text class="mono" x="473" y="93">ValueError</text></g>
+            <g class="node"><rect x="559" y="78" width="163" height="22" rx="6" class="soft-attacker"/><text class="mono" x="567" y="93">Internal Server Error</text></g>
+            <g class="node"><rect x="730" y="78" width="156" height="22" rx="6" class="soft-attacker"/><text class="mono" x="738" y="93">NullPointerException</text></g>
+          <text class="lbl" x="12" y="130">one regex pass over the response text, with no baseline request to compare against</text></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span><b>A strict server is clean.</b> A schema validator that rejects unknown keys answers 400, which is not below 400, so no finding is made.</p>
+      <p class="step"><span class="n">2</span><b>Acceptance is the test.</b> A server that quietly drops the key answers 200 and is reported, even though nothing was polluted.</p>
+      <p class="step"><span class="n">3</span><b>The scanner cannot tell the last two apart.</b> It never reads <code>Object.prototype</code> back or sends a follow-up request, so a High finding means the pollution key was accepted. Treat it as a lead and confirm that a property you set on the prototype shows up elsewhere.</p>
+      <p class="step"><span class="n">4</span><b>The SQL error list is broad.</b> Seven patterns are database wording. Six, from <code>stack trace</code> to <code>Internal Server Error</code>, match any crashing handler, so a Critical finding can come from a failure that involves no SQL. Check the response preview before acting on it.</p>
+    </div>
+  </div>
+</section>
+
+<section id="why">
+  <h2>Why it matters</h2>
+  <div class="grid-2">
+    <div class="callout why"><div class="label">Why it matters</div><p>Body parameter fuzzing catches what scanners that target URL parameters miss. Many APIs accept complex JSON bodies where individual fields are unsanitised. Prototype pollution can override security checks, bypass authorisation or reach remote code execution in Node.js. Sending <code>null</code> where a string is expected can crash the app or bypass validation. SQL and XSS payloads hidden in deeply nested JSON often get past a WAF.</p></div>
+    <div class="callout breach"><div class="label">Real-world breaches</div><p><b>Lodash CVE-2019-10744 (2019).</b> Prototype pollution via <code>defaultsDeep</code> in Lodash, with more than 100 million downloads a month, enabled denial of service or remote code execution in Node.js apps. <b>jQuery CVE-2019-11358 (2019).</b> Prototype pollution in <code>$.extend()</code> affected about 74% of all websites at the time.</p></div>
+  </div>
+</section>
+
+<section id="code">
+  <h2>Vulnerable vs fixed code</h2>
+  <p class="prose">The vulnerable handler merges whatever the client sent into a live object. The fix removes the dangerous keys before the body is used.</p>
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true">BAD · merge the raw body</button>
+      <button class="tab good" role="tab" aria-selected="false">GOOD · strip dangerous keys</button>
+    </div>
+    <div role="tabpanel"><pre><code><span class="c">// BAD: the client's keys, including __proto__, are merged in</span>
+const body = await request.json()
+<span class="hl bad">Object.assign(settings, body)</span></code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c">// GOOD: Strip dangerous keys before spreading</span>
+function sanitize(obj: Record&lt;string, unknown&gt;) {
+<span class="hl good">  const { __proto__, constructor, prototype, ...safe } = obj</span>
+  return safe
+}
+
+const body = sanitize(await request.json())</code></pre></div>
+  </div>
+</section>
+
+<section id="limits">
+  <h2>Limits</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Setting</th><th>Value</th></tr></thead>
+    <tbody>
+      <tr><td>Requests fuzzed</td><td>first 20 successful JSON writes from the crawl</td></tr>
+      <tr><td>Keys per request</td><td>first 10</td></tr>
+      <tr><td>Payloads per string key</td><td>3 SQL injection, 2 XSS, 7 wrong types</td></tr>
+      <tr><td>Pollution keys per request</td><td>3, added to the body</td></tr>
+      <tr><td>Needs</td><td>an authenticated crawl that captured JSON writes</td></tr>
+      <tr><td>Concurrency</td><td>3 at a time, 0.3 s between requests</td></tr>
+    </tbody>
+  </table></div>
+  <div class="callout note"><div class="label">What it stays quiet about</div><p>Only the top-level keys of an object body are fuzzed; nested fields are replaced as a whole, not one by one. Bodies that are lists, form-encoded or multipart are skipped. The fuzzer replays real writes, so a successful probe can create or change records on the target.</p></div>
+</section>
+
+<footer class="foot">
+  <span>Source: <a href="../scanners/body-param-fuzzer.md">docs/scanners/body-param-fuzzer.md</a></span>
+  <span>Group: <a href="group-access-control.html">Access control</a> · Related: <a href="mass-assignment.html">Mass assignment</a> · <a href="privilege-escalation.html">Privilege escalation</a> · <a href="active-injection.html">Active injection</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+</body>
+</html>

@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>File Upload · isitsecure</title>
+<meta name="description" content="How the isitsecure file upload scanner finds upload endpoints by path, posts an HTML file, an SVG file and three path traversal filenames as multipart, and decides on the status code alone. Animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  /* detect: rows that match are lifted, the rest stay muted */
+  #detect .row text { fill: var(--muted); }
+  #detect.s2 .row.hit text { fill: var(--fg); }
+  #detect.s2 .row.hit .tag { fill: var(--accent); font-weight: 500; }
+  /* fix: a red gate on the step that rejects */
+  #fix[data-step="2"] .g-ext > rect, #fix[data-step="3"] .g-ext > rect { stroke: var(--attacker) !important; stroke-width: 2.5 !important; }
+  #fix[data-step="2"] .after-ext, #fix[data-step="3"] .after-ext { opacity: .25; }
+  #fix .after-ext { transition: opacity .4s; }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› <a href="group-injection.html">Injection</a> › File upload</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/file-upload-scanner.md" title="The markdown source for this page">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">DAST scanner</div>
+  <h1>File Upload</h1>
+  <p class="lede">An upload endpoint that accepts anything lets an attacker plant a script on your domain or write outside the upload folder. The scanner finds endpoints whose path looks like an upload, posts an HTML file, an SVG file and three traversal filenames as multipart form data, and judges each by one thing: did the server answer 2xx.</p>
+  <div class="meta">
+    <span class="pill dast">DAST</span><span class="pill crit">High–Critical</span><span class="pill">Injection Risk</span><span class="pill">file_upload_scanner</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#detect-sec"><span class="n">01</span>Finding upload endpoints</a>
+  <a href="#probe-sec"><span class="n">02</span>The five probes</a>
+  <a href="#limit-sec"><span class="n">03</span>What 2xx proves</a>
+  <a href="#why"><span class="n">04</span>Why it matters</a>
+  <a href="#breach"><span class="n">05</span>Breach</a>
+  <a href="#fix-sec"><span class="n">06</span>The fix</a>
+  <a href="#limits"><span class="n">07</span>Limits</a>
+</nav>
+
+<section id="detect-sec">
+  <h2>Finding upload endpoints</h2>
+  <p class="prose">The scanner does not look at forms or methods. It reads the path of every endpoint in the inventory and keeps the ones that contain an upload word.</p>
+
+  <div class="scene" id="detect" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 300" role="img" aria-label="Five inventory endpoints are matched against eight path indicators. Three contain an indicator as a substring and are kept; two do not and are never sent a file.">
+        <defs><marker id="arrF1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+
+        <g class="node lit-1" transform="translate(20 20)">
+          <rect width="330" height="250" rx="10"/>
+          <text class="ttl" x="14" y="26">Endpoint inventory</text>
+          <g class="mono">
+            <g class="row hit"><text x="14" y="56">POST /api/upload</text><text class="tag lbl at-2" x="230" y="56">/upload</text></g>
+            <g class="row hit"><text x="14" y="90">POST /profile/avatar</text><text class="tag lbl at-2" x="230" y="90">/avatar</text></g>
+            <g class="row hit"><text x="14" y="124">GET  /files/list</text><text class="tag lbl at-2" x="230" y="124">/file</text></g>
+            <g class="row"><text x="14" y="158">GET  /api/users</text><text class="lbl at-2" x="230" y="158">no word</text></g>
+            <g class="row"><text x="14" y="192">POST /api/orders</text><text class="lbl at-2" x="230" y="192">no word</text></g>
+          </g>
+          <text class="lbl" x="14" y="228">path only, lowercased, any method</text>
+        </g>
+
+        <g class="node at-2 lit-2" transform="translate(390 20)">
+          <rect width="250" height="250" rx="10"/>
+          <text class="ttl" x="14" y="26">Eight path indicators</text>
+          <g class="mono">
+            <text x="14" y="56">/upload</text><text x="14" y="82">/file</text><text x="14" y="108">/media</text><text x="14" y="134">/attachment</text>
+            <text x="14" y="160">/image</text><text x="14" y="186">/avatar</text><text x="14" y="212">/document</text><text x="14" y="238">/import</text>
+          </g>
+        </g>
+        <path class="wire at-2 info dashed" d="M350 100 H 388" marker-end="url(#arrF1)"/>
+
+        <g class="node at-3 lit-3" transform="translate(680 20)">
+          <rect width="264" height="250" rx="10"/>
+          <text class="ttl" x="14" y="26">Tested endpoints</text>
+          <g class="mono"><text x="14" y="56">/api/upload</text><text x="14" y="76">/profile/avatar</text><text x="14" y="96">/files/list</text></g>
+          <text class="lbl" x="14" y="130">GET /files/list is kept too:</text>
+          <text class="lbl" x="14" y="144">the match is a substring, so</text>
+          <text class="lbl" x="14" y="158">/file hits /files/list.</text>
+          <text class="lbl t-info" x="14" y="190">No match anywhere?</text>
+          <text class="lbl t-info" x="14" y="204">The scanner sends nothing</text>
+          <text class="lbl t-info" x="14" y="218">and returns no findings.</text>
+        </g>
+        <path class="wire at-3 info" d="M640 100 H 678" marker-end="url(#arrF1)"/>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The scanner starts from the endpoint inventory built by discovery and the crawl: method and URL for every endpoint.</p>
+      <p class="step"><span class="n">2</span><b>An endpoint is kept if its lowercased path contains one of eight words</b>: <code>/upload</code>, <code>/file</code>, <code>/media</code>, <code>/attachment</code>, <code>/image</code>, <code>/avatar</code>, <code>/document</code>, <code>/import</code>. Method, form fields and content type are not consulted.</p>
+      <p class="step"><span class="n">3</span>The kept list is what gets probed. Because the match is a substring, a read-only <code>GET /files/list</code> is included, and an upload sink on a path like <code>/api/orders</code> is never tested.</p>
+    </div>
+  </div>
+</section>
+
+<section id="probe-sec">
+  <h2>The five probes</h2>
+  <p class="prose">For every kept endpoint the scanner posts five small files, one at a time. Two test which file types the server accepts. Three test whether it accepts a filename that climbs out of the upload folder.</p>
+
+  <div class="scene" id="probe" data-scene data-interval="3800">
+    <figure class="stage">
+      <svg viewBox="0 0 960 330" role="img" aria-label="The scanner posts a multipart request with one part named file. An html or svg file accepted with a 2xx status is a High finding. A traversal filename accepted with a 2xx status is a Critical finding and ends the traversal probes for that endpoint. Any non-2xx status is not a finding.">
+        <defs><marker id="arrF2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+
+        <g class="node lit-1 lit-2 lit-3" transform="translate(20 20)">
+          <rect width="380" height="168" rx="10"/>
+          <text class="ttl" x="14" y="26">Request</text>
+          <g class="mono">
+            <text x="14" y="50">POST /api/upload</text>
+            <text x="14" y="68">Content-Type: multipart/form-data</text>
+            <text x="14" y="86">part name: "file"</text>
+          </g>
+          <g class="only-1 only-4"><g class="mono"><text x="14" y="108">filename="…"</text><text x="14" y="126">part type: …    body: …</text></g>
+            <text class="lbl" x="14" y="150">session cookie or bearer added if one exists</text></g>
+          <g class="only-2"><g class="mono"><text x="14" y="108">filename="test.svg"</text><text x="14" y="126">part type: image/svg+xml</text>
+            <text class="t-attacker" x="14" y="144">body: &lt;svg onload="alert(1)"&gt;</text></g></g>
+          <g class="only-3"><g class="mono"><text x="14" y="108">filename="../../../etc/passwd"</text><text x="14" y="126">part type: text/plain</text>
+            <text class="t-attacker" x="14" y="144">body: test</text></g></g>
+        </g>
+
+        <g class="node at-2 lit-2 lit-3 lit-4" transform="translate(540 20)">
+          <rect width="404" height="168" rx="10"/>
+          <text class="ttl" x="14" y="26">Response</text>
+          <g class="only-2 only-3"><text class="mono t-attacker" x="14" y="52">201 Created</text>
+            <text class="lbl" x="14" y="76">200 &lt;= status &lt; 300  →  accepted</text></g>
+          <g class="only-4"><text class="mono t-safe" x="14" y="52">415 Unsupported Media Type</text>
+            <text class="lbl" x="14" y="76">outside 200 to 299  →  not accepted</text></g>
+          <text class="lbl" x="14" y="106">The body of the reply is never read.</text>
+          <text class="lbl" x="14" y="122">A network error counts as not accepted.</text>
+        </g>
+        <path id="fw1p" d="M402 80 H 534" fill="none" stroke="none"/>
+        <path id="fw1r" d="M536 120 H 404" fill="none" stroke="none"/>
+        <path class="wire at-2 accent" d="M400 80 H 538" marker-end="url(#arrF2)"/>
+        <path class="wire at-2 info dashed" d="M536 120 H 404" marker-end="url(#arrF2)"/>
+
+        <g class="only-1">
+          <text class="lbl" x="20" y="224">Two type probes, one finding each if accepted:</text>
+          <g class="mono"><text x="20" y="246">test.html  text/html          &lt;script&gt;alert(1)&lt;/script&gt;</text>
+          <text x="20" y="264">test.svg   image/svg+xml      &lt;svg onload="alert(1)"&gt;</text></g>
+          <text class="lbl" x="20" y="292">Three traversal probes, then the first accepted one ends the endpoint:</text>
+          <g class="mono"><text x="20" y="312">../../../etc/passwd   ..\..\..\etc\passwd   ....//....//etc/passwd</text></g>
+        </g>
+        <g class="only-2"><text class="ttl t-attacker" x="20" y="232">File upload accepts dangerous file types</text>
+          <text class="lbl" x="20" y="252">High · confidence 0.85 · one finding for each of .html and .svg that is accepted</text></g>
+        <g class="only-3"><text class="ttl t-attacker" x="20" y="232">File upload vulnerable to path traversal</text>
+          <text class="lbl" x="20" y="252">Critical · confidence 0.90 · the first accepted name is reported, the rest are skipped</text></g>
+        <g class="only-4"><text class="ttl t-safe" x="20" y="232">No finding</text>
+          <text class="lbl" x="20" y="252">The server refused the file. That is the expected behaviour of a protected endpoint.</text></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Each probe is a multipart POST with a single part named <code>file</code>, carrying a filename, a part content type and a tiny body. The session's auth headers are attached when the scan has a session.</p>
+      <p class="step" data-on="probeStep"><span class="n">2</span><b>Type probes.</b> <code>test.html</code> (<code>text/html</code>) and <code>test.svg</code> (<code>image/svg+xml</code>), each with a script payload. A 2xx for either is a High finding titled "File upload accepts dangerous file types", because an uploaded HTML or SVG file served back runs script on your origin.</p>
+      <p class="step" data-on="probeStep"><span class="n">3</span><b>Traversal probes.</b> A harmless <code>test</code> body under three filenames in order. The first 2xx is a Critical finding, "File upload vulnerable to path traversal", and the remaining names are skipped for that endpoint.</p>
+      <p class="step" data-on="probeStep"><span class="n">4</span><b>The decision rule is the status code and nothing else.</b> Anything from 200 to 299 is "accepted". A 4xx, a 5xx or a failed connection is not.</p>
+    </div>
+  </div>
+</section>
+
+<section id="limit-sec">
+  <h2>What a 2xx does and does not prove</h2>
+  <p class="prose">Because the rule reads only the status, the finding means "the server did not refuse this". It is a strong lead, and sometimes a false alarm. The four replies below show where the line is.</p>
+
+  <div class="scene" id="limit" data-scene data-interval="3800">
+    <figure class="stage">
+      <svg viewBox="0 0 960 250" role="img" aria-label="Four example replies. A 400 is no finding. A 201 with a URL is a true finding. A 200 whose body says the type is not allowed is still flagged. A 400 asking for a field named avatar means the scanner never tested the endpoint, a silent miss.">
+        <g class="node at-1 lit-1" transform="translate(20 20)"><rect width="224" height="190" rx="10"/>
+          <text class="ttl" x="14" y="26">400 Bad Request</text>
+          <text class="mono" x="14" y="54">{"error":"bad type"}</text>
+          <text class="lbl" x="14" y="84">status outside 2xx</text>
+          <text class="ttl t-safe" x="14" y="130">no finding</text>
+          <text class="lbl" x="14" y="152">the server refused the file</text></g>
+        <g class="node at-2 lit-2" transform="translate(253 20)"><rect width="224" height="190" rx="10"/>
+          <text class="ttl" x="14" y="26">201 Created</text>
+          <text class="mono" x="14" y="54">{"url":"/u/test.svg"}</text>
+          <text class="lbl" x="14" y="84">status inside 2xx</text>
+          <text class="ttl t-attacker" x="14" y="130">High finding</text>
+          <text class="lbl" x="14" y="152">a real accept; the URL is not</text>
+          <text class="lbl" x="14" y="166">fetched back by the scanner</text></g>
+        <g class="node at-3 lit-3" transform="translate(486 20)"><rect width="224" height="190" rx="10"/>
+          <text class="ttl" x="14" y="26">200 OK</text>
+          <text class="mono" x="14" y="54">{"error":"bad type"}</text>
+          <text class="lbl" x="14" y="84">status inside 2xx</text>
+          <text class="ttl t-accent" x="14" y="130">High finding</text>
+          <text class="lbl" x="14" y="152">possible false alarm: the body</text>
+          <text class="lbl" x="14" y="166">refuses, the status does not</text></g>
+        <g class="node at-4 lit-4" transform="translate(719 20)"><rect width="224" height="190" rx="10"/>
+          <text class="ttl" x="14" y="26">400 Bad Request</text>
+          <text class="mono" x="14" y="54">missing field "avatar"</text>
+          <text class="lbl" x="14" y="84">the part is always named file</text>
+          <text class="ttl t-info" x="14" y="130">silent miss</text>
+          <text class="lbl" x="14" y="152">an endpoint that expects another</text>
+          <text class="lbl" x="14" y="166">field name is never really tested</text></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>A refusing server answers 4xx. No finding, no noise.</p>
+      <p class="step"><span class="n">2</span>A server that stores the file answers 2xx, often with a URL. That is the finding. The scanner never opens the URL to check how the file is served or whether a traversal name escaped the folder.</p>
+      <p class="step"><span class="n">3</span>Some APIs return 200 and put the refusal in the JSON body. The scanner reports these too, since it never reads the body, so treat a High finding as "verify this upload by hand".</p>
+      <p class="step"><span class="n">4</span>The part is always named <code>file</code>. An endpoint that requires a different field name rejects every probe and is silently skipped.</p>
+    </div>
+  </div>
+</section>
+
+<section id="why">
+  <h2>Why it matters</h2>
+  <div class="callout why">
+    <div class="label">Impact</div>
+    <p>Unrestricted file uploads let an attacker:</p>
+    <ul>
+      <li><b>Execute code on your server.</b> Uploading <code>.php</code>, <code>.jsp</code> or <code>.sh</code> files that the server executes.</li>
+      <li><b>Plant stored XSS.</b> An <code>.html</code> or <code>.svg</code> file with JavaScript runs when someone opens it on your domain.</li>
+      <li><b>Overwrite system files.</b> A traversal name such as <code>../../etc/cron.d/backdoor</code> can write anywhere the process can.</li>
+      <li><b>Serve malware.</b> Your domain becomes a malware distribution point.</li>
+    </ul>
+  </div>
+</section>
+
+<section id="breach">
+  <h2>Real-world breach</h2>
+  <div class="callout breach">
+    <div class="label">ImageTragick · 2016</div>
+    <p>CVE-2016-3714 in ImageMagick allowed remote code execution via crafted image files. Any service that accepted user-uploaded images and processed them with ImageMagick was vulnerable.</p>
+  </div>
+</section>
+
+<section id="fix-sec">
+  <h2>The fix: three gates before the file is saved</h2>
+  <p class="prose">Check the extension, check the declared type, and never use the client's filename. Watch three uploads go through.</p>
+
+  <div class="scene" id="fix" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 240" role="img" aria-label="An upload passes three gates: extension allowlist, content type allowlist, then a random filename. photo.png passes and is saved under a UUID. test.svg is refused at the extension gate. A traversal filename has no allowed extension and is refused at the first gate; even if it passed, the random filename removes the path.">
+        <defs><marker id="arrF4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <text class="lbl" x="20" y="28">filename =</text>
+        <g class="mono">
+          <text class="only-1 t-safe" x="92" y="28">photo.png</text>
+          <text class="only-2 t-attacker" x="92" y="28">test.svg</text>
+          <text class="only-3 t-attacker" x="92" y="28">../../../etc/passwd</text>
+        </g>
+        <g class="node g-ext lit-1 lit-2 lit-3" transform="translate(20 70)">
+          <rect width="260" height="82" rx="8"/>
+          <text class="ttl" x="12" y="24">1 · Extension allowlist</text>
+          <text class="mono" x="12" y="46">.jpg .jpeg .png .webp</text>
+          <text class="lbl" x="12" y="66">path.extname(file.name)</text>
+        </g>
+        <path class="wire after-ext" d="M280 111 H 318" marker-end="url(#arrF4)"/>
+        <g class="node after-ext lit-1" transform="translate(320 70)">
+          <rect width="260" height="82" rx="8"/>
+          <text class="ttl" x="12" y="24">2 · Content-type allowlist</text>
+          <text class="mono" x="12" y="46">image/jpeg · png · webp</text>
+          <text class="lbl" x="12" y="66">file.type</text>
+        </g>
+        <path class="wire after-ext" d="M580 111 H 618" marker-end="url(#arrF4)"/>
+        <g class="node after-ext lit-1" transform="translate(620 70)">
+          <rect width="324" height="82" rx="8" class="soft-safe"/>
+          <text class="ttl" x="12" y="24">3 · Random filename</text>
+          <text class="mono" x="12" y="46">crypto.randomUUID() + ext</text>
+          <text class="lbl" x="12" y="66">the client's name is discarded</text>
+        </g>
+        <g class="only-1"><text class="t-safe" x="20" y="196">Extension .png and type image/png are on the lists → saved as 3f9c…e1.png.</text></g>
+        <g class="only-2"><text class="t-attacker" x="20" y="196">.svg is not on the extension list → 400 "File type not allowed". The type probe is refused.</text></g>
+        <g class="only-3"><text class="t-attacker" x="20" y="196">Extension is empty → 400. Even if it passed, the saved name is a UUID, so no path survives.</text></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The happy path. The file is checked on extension and declared type, then stored under a name the server chose.</p>
+      <p class="step"><span class="n">2</span><b>Gate one: extension allowlist.</b> <code>.svg</code>, <code>.html</code> and the other dangerous types are not on it, so the scanner's type probes get a 400.</p>
+      <p class="step"><span class="n">3</span><b>Gate three removes traversal at the root.</b> A random UUID name means the filename the client sent never touches the filesystem, so <code>../</code> has nothing to climb with.</p>
+    </div>
+  </div>
+
+  <h3>Vulnerable vs fixed</h3>
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true">BAD · saves whatever arrives</button>
+      <button class="tab good" role="tab" aria-selected="false">GOOD · allowlists + random name</button>
+    </div>
+    <div role="tabpanel"><pre><code><span class="c">// BAD: accepts any file and keeps the client's filename</span>
+export async function POST(request: Request) {
+  const file = (await request.formData()).get(<span class="s">"file"</span>) as File
+<span class="hl bad">  await fs.writeFile(path.join(UPLOAD_DIR, file.name), Buffer.from(await file.arrayBuffer()))</span>
+  return NextResponse.json({ url: `/uploads/${file.name}` })
+}</code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c">// GOOD: Whitelist allowed extensions and validate content</span>
+const ALLOWED_TYPES = [<span class="s">"image/jpeg"</span>, <span class="s">"image/png"</span>, <span class="s">"image/webp"</span>]
+const ALLOWED_EXTENSIONS = [<span class="s">".jpg"</span>, <span class="s">".jpeg"</span>, <span class="s">".png"</span>, <span class="s">".webp"</span>]
+
+export async function POST(request: Request) {
+  const file = formData.get(<span class="s">"file"</span>) as File
+  const ext = path.extname(file.name).toLowerCase()
+
+<span class="hl good">  if (!ALLOWED_EXTENSIONS.includes(ext)) {</span>
+    return NextResponse.json({ error: <span class="s">"File type not allowed"</span> }, { status: 400 })
+  }
+<span class="hl good">  if (!ALLOWED_TYPES.includes(file.type)) {</span>
+    return NextResponse.json({ error: <span class="s">"Invalid content type"</span> }, { status: 400 })
+  }
+
+  <span class="c">// Generate a random filename (prevents path traversal)</span>
+<span class="hl good">  const safeFilename = `${crypto.randomUUID()}${ext}`</span>
+  <span class="c">// ... save with safeFilename</span>
+}</code></pre></div>
+  </div>
+</section>
+
+<section id="limits">
+  <h2>Limits and what it deliberately stays quiet about</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Aspect</th><th>Behaviour</th></tr></thead>
+      <tbody>
+        <tr><td>Endpoint selection</td><td>Path substring only, from eight indicators. Methods and forms are ignored.</td></tr>
+        <tr><td>Types tested</td><td>Only <code>.html</code> and <code>.svg</code>. Server-executable types such as <code>.php</code>, <code>.jsp</code> and <code>.sh</code> are not probed.</td></tr>
+        <tr><td>Traversal names</td><td><code>../../../etc/passwd</code>, <code>..\..\..\etc\passwd</code>, <code>....//....//etc/passwd</code>. One finding per endpoint at most.</td></tr>
+        <tr><td>Content-type mismatch</td><td>Not tested. Each file is posted with a content type that matches its extension.</td></tr>
+        <tr><td>Proof</td><td>Status code from 200 to 299. The scanner does not read the reply body, fetch the stored file, or check where a traversal name landed.</td></tr>
+        <tr><td>Form field</td><td>Always <code>file</code>.</td></tr>
+        <tr><td>Safety</td><td>Bodies are a few bytes and scripts only alert. Accepted files stay on the target, so remove test files such as <code>test.html</code> and <code>test.svg</code> if the server stored them.</td></tr>
+        <tr><td>Time</td><td>Endpoints are probed in order and the scanner stops cooperatively before its hard timeout, returning the findings gathered so far.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<footer class="foot">
+  <span>Source: <a href="../scanners/file-upload-scanner.md">docs/scanners/file-upload-scanner.md</a> · isitsecure/engine/scanners/file_upload_scanner.py</span>
+  <span>Group: <a href="group-injection.html">Injection</a> · Related: <a href="xss.html">Cross-site scripting</a> · <a href="active-injection.html">Active injection</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+<script>
+(function () {
+  const sel = (el, id) => el.querySelector(id);
+  window.probeStep = function (scene, i, el) {
+    const svg = el.querySelector("svg"); IsDoc.clearPackets(svg);
+    if (i === 4) {
+      IsDoc.packet(svg, sel(svg, "#fw1p"), { cls: "f-accent", duration: 900 });
+      IsDoc.packet(svg, sel(svg, "#fw1r"), { cls: "f-safe", duration: 800, delay: 900 });
+    } else {
+      IsDoc.packet(svg, sel(svg, "#fw1p"), { cls: "f-attacker", duration: 900 });
+      IsDoc.packet(svg, sel(svg, "#fw1r"), { cls: "f-info", duration: 800, delay: 900 });
+    }
+  };
+})();
+</script>
+</body>
+</html>

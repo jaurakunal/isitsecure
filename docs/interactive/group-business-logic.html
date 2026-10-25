@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Business Logic · isitsecure</title>
+<meta name="description" content="The four isitsecure scanners for flaws that have no signature: race conditions, LLM code review, LLM-planned attacks against the live app, and semantic review of security rules. One shared idea, animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  /* card thumbnails (same classes as index.html) */
+  .thumb svg .n > rect, .thumb svg .n > circle { fill: var(--surface); stroke: var(--muted); stroke-width: 1.3; }
+  .thumb svg .w { stroke: var(--muted); stroke-width: 1.3; fill: none; }
+  .thumb svg .a { stroke: var(--accent); }
+  .thumb svg .fa { fill: var(--accent); }
+  .thumb svg .fr { fill: var(--attacker); }
+  .thumb svg .fs { fill: var(--safe); }
+  .thumb svg .fi { fill: var(--info); }
+  .thumb svg .r { stroke: var(--attacker); }
+  .thumb svg .s { stroke: var(--safe); }
+  .thumb svg .i { stroke: var(--info); }
+  /* group scene: the active scanner is shaded on the left */
+  #rule .scn > rect { transition: fill .35s, stroke .35s; }
+  #rule[data-step="2"] .nRace > rect, #rule[data-step="3"] .nRev > rect, #rule[data-step="4"] .nBiz > rect, #rule[data-step="5"] .nSem > rect { fill: var(--accent-soft); stroke: var(--accent); }
+  #rule .exchange > rect { fill: var(--surface); }
+  .topbar-inner .crumb a { color: inherit; text-decoration: none; }
+  .topbar-inner .crumb a:hover { color: var(--accent); }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› Business logic</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/README.md" title="The markdown scanner index">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">Scanner group</div>
+  <h1>Business logic</h1>
+  <p class="lede">These flaws have no payload and no signature. The request is well formed and the server does what its code says; the code just does not enforce a rule the business assumed. Each scanner here turns one such rule into a claim (a balance cannot be spent twice, a price comes from the server, a policy compares the owner) and then looks for evidence that contradicts it: a count of responses, a model's reading of code, or a model's verdict on a live reply.</p>
+  <div class="meta">
+    <span class="pill"><b>4</b> scanners</span><span class="pill dast">1 rule-based DAST</span><span class="pill llm">3 LLM-powered</span><span class="pill crit">up to Critical</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#how"><span class="n">01</span>How this group works</a>
+  <a href="#scanners"><span class="n">02</span>Scanners in this group</a>
+  <a href="#glance"><span class="n">03</span>At a glance</a>
+  <a href="#why"><span class="n">04</span>Why this class matters</a>
+</nav>
+
+<section id="how">
+  <h2>How this group works</h2>
+  <p class="prose">One rule, four ways to test it. Step through the scanners and watch what each one treats as evidence. Only one of the four decides without a model.</p>
+
+  <div class="scene" id="rule" data-scene data-interval="3600">
+    <figure class="stage">
+      <svg viewBox="0 0 960 330" role="img" aria-label="Four scanners listed on the left. A central panel shows, for the selected scanner, the claim it tests, what it sends or reads, and what counts as evidence.">
+        <g class="node scn nRace" transform="translate(20 20)"><rect width="200" height="62" rx="8"/>
+          <text class="ttl" x="12" y="26">Race conditions</text><text class="lbl" x="12" y="46">DAST · no model</text></g>
+        <g class="node scn nRev" transform="translate(20 98)"><rect width="200" height="62" rx="8"/>
+          <text class="ttl" x="12" y="26">LLM code review</text><text class="lbl" x="12" y="46">reads routes · model</text></g>
+        <g class="node scn nBiz" transform="translate(20 176)"><rect width="200" height="62" rx="8"/>
+          <text class="ttl" x="12" y="26">LLM business logic</text><text class="lbl" x="12" y="46">plans, runs, judges · model</text></g>
+        <g class="node scn nSem" transform="translate(20 254)"><rect width="200" height="62" rx="8"/>
+          <text class="ttl" x="12" y="26">Semantic rule verifier</text><text class="lbl" x="12" y="46">reads RLS and rules · model</text></g>
+
+        <g class="node exchange" transform="translate(250 20)"><rect width="690" height="296" rx="10"/>
+          <text class="ttl" x="16" y="26">Claim → test → evidence</text>
+
+          <g class="only-1">
+            <text class="lbl" x="16" y="62">the rule lives in the developer's head</text>
+            <text x="16" y="92">A balance never goes below zero.</text>
+            <text x="16" y="116">The price comes from the server, not the client.</text>
+            <text x="16" y="140">A policy compares the row's owner, not its primary key.</text>
+            <text x="16" y="176">Each scanner turns one such rule into a claim and looks for</text>
+            <text x="16" y="198">evidence against it.</text>
+            <text class="lbl" x="16" y="244">Three of the four call a model. A model's reply is parsed and capped,</text>
+            <text class="lbl" x="16" y="262">and what differs is whose evidence settles the claim. See each step.</text>
+          </g>
+          <g class="only-2 mono">
+            <text class="lbl" x="16" y="62">claim: a redeem cannot succeed twice on one balance</text>
+            <text x="16" y="92">POST /api/redeem {"amount":50}   x10, same instant</text>
+            <text x="16" y="116">one shared connection, so the requests overlap</text>
+            <text x="16" y="140">201 201 201 400 400 400 400 400 400 400</text>
+            <text class="t-attacker" x="16" y="176">FLAG: 2 or more of 200 / 201 / 204</text>
+            <text class="lbl" x="16" y="226">evidence: a count of status codes. No model is involved,</text>
+            <text class="lbl" x="16" y="244">so the same run gives the same answer.</text>
+          </g>
+          <g class="only-3 mono">
+            <text class="lbl" x="16" y="62">claim: this route lets the client set what the server should own</text>
+            <text x="16" y="92">route source picked by the review triggers</text>
+            <text x="16" y="116">amount: price,   // from request.json()</text>
+            <text x="16" y="140">model reply: CRITICAL, price manipulation</text>
+            <text class="t-attacker" x="16" y="176">FLAG: the model's reading of the code</text>
+            <text class="lbl" x="16" y="226">evidence: the model's judgment. Nothing is sent to the app, so the</text>
+            <text class="lbl" x="16" y="244">finding is a static claim.</text>
+          </g>
+          <g class="only-4 mono">
+            <text class="lbl" x="16" y="62">claim: model-planned, then tested on the live app</text>
+            <text x="16" y="92">plan: regular_user POST /api/checkout {"price":1}</text>
+            <text x="16" y="116">scanner sends it: 201 {"total":1,"paid":true}</text>
+            <text x="16" y="140">judge model reads the plan and the response</text>
+            <text class="t-attacker" x="16" y="176">FLAG: only if the judge answers confirmed: true</text>
+            <text class="lbl" x="16" y="226">evidence: a live response, but the verdict on it is the model's.</text>
+            <text class="lbl" x="16" y="244">No code re-reads the body.</text>
+          </g>
+          <g class="only-5 mono">
+            <text class="lbl" x="16" y="62">claim: this policy protects what it appears to protect</text>
+            <text x="16" y="92">CREATE POLICY ... USING (auth.uid() = id)</text>
+            <text x="16" y="116">model: id is the primary key, owner is user_id</text>
+            <text x="16" y="140">no request is sent, no database is queried</text>
+            <text class="t-attacker" x="16" y="176">FLAG: logical flaw, confidence fixed at 0.70</text>
+            <text class="lbl" x="16" y="226">evidence: the model's reading of the rules. The RLS deep scanner</text>
+            <text class="lbl" x="16" y="244">is the one that asks the live database.</text>
+          </g>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Four scanners, one idea. Each turns a rule the business assumed into a claim and looks for evidence against it. <b>What differs is who supplies the evidence.</b></p>
+      <p class="step"><span class="n">2</span><b>Race conditions.</b> Ten identical mutations at once over one connection. If two or more come back 200, 201 or 204, the check-then-act gap is real. A counted result, no model.</p>
+      <p class="step"><span class="n">3</span><b>LLM code review.</b> A model reads high-priority route source, selected by the review triggers, and flags code that trusts the client. It sends nothing to the app. This is the one that catches <code>amount: price</code>.</p>
+      <p class="step"><span class="n">4</span><b>LLM business logic.</b> A model writes an attack plan from source, the scanner runs it with two real logins, and a second model call judges the responses. Only a confirmed verdict becomes a finding.</p>
+      <p class="step"><span class="n">5</span><b>Semantic rule verifier.</b> A model reads RLS migrations and Firebase rules for logic errors the structural analyzers cannot see. Every finding gets a fixed 0.70 confidence. Without an API key it does not run.</p>
+    </div>
+  </div>
+</section>
+
+<section id="scanners">
+  <h2>Scanners in this group</h2>
+  <div class="cards">
+    <a class="card" href="race-conditions.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><text x="10" y="26">A</text><text x="10" y="58">B</text><path class="w" d="M24 22H190M24 54H190"/><circle class="fi" cx="60" cy="22" r="4"/><circle class="fi" cx="64" cy="54" r="4"/><circle class="fr" cx="150" cy="22" r="4"/><circle class="fr" cx="154" cy="54" r="4"/><text x="100" y="42" text-anchor="middle" class="fr">both read 100</text></svg></div>
+      <h3>Race conditions</h3><p>Check-then-act on two lanes, N identical requests over one connection, and the row lock or atomic update that closes the gap.</p>
+      <div class="foot"><span class="pill dast">DAST</span><span class="pill high">High</span><span class="pill">race-condition-scanner.md</span></div>
+    </a>
+    <a class="card" href="llm-review-and-fixes.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><text x="12" y="26">amount: price</text><text x="12" y="48" class="fr">← client-controlled</text><g class="n"><rect x="130" y="14" width="60" height="18" rx="3"/></g><text x="160" y="27" text-anchor="middle">CRITICAL</text><text x="12" y="70" class="fs">+ PLAN_PRICES[plan]</text></svg></div>
+      <h3>LLM review and AI fixes</h3><p>Several triggers choose which routes and files are worth the tokens, what the model catches that regex cannot, and the three ways a fix is delivered.</p>
+      <div class="foot"><span class="pill llm">LLM</span><span class="pill">Varies</span><span class="pill">llm-code-reviewer.md</span></div>
+    </a>
+    <a class="card" href="llm-business-logic.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><g class="n"><rect x="6" y="28" width="40" height="22" rx="4"/></g><text x="26" y="43" text-anchor="middle" style="font-size:9px">plan</text><g class="n"><rect x="58" y="28" width="40" height="22" rx="4"/></g><text x="78" y="43" text-anchor="middle" style="font-size:9px">send</text><g class="n"><rect x="110" y="28" width="40" height="22" rx="4"/></g><text x="130" y="43" text-anchor="middle" style="font-size:9px">judge</text><path class="w a" d="M46 39H58M98 39H110"/><path class="w s" d="M150 39 H 168"/><circle class="fs" cx="178" cy="39" r="5"/><text x="12" y="70" class="fr">price:1 → 201</text></svg></div>
+      <h3>LLM business logic</h3><p>A model plans attacks from your source, the scanner runs them with two logins, a second call judges the replies. What is sent, what comes back, and what is never checked.</p>
+      <div class="foot"><span class="pill llm">LLM</span><span class="pill high">High</span><span class="pill crit">Critical</span><span class="pill">architecture.md</span></div>
+    </a>
+    <a class="card" href="semantic-rule-verifier.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><text x="10" y="26">USING (auth.uid()</text><text x="10" y="44" class="fr">   = id)</text><text x="10" y="64" class="fs">   = user_id ✓</text><circle class="fr" cx="176" cy="40" r="5"/></svg></div>
+      <h3>Semantic rule verifier</h3><p>A model reads RLS migrations and Firebase rules for logic errors: the wrong column, uneven coverage, broken tenant scoping. Parsed, capped, fixed at 0.70 confidence.</p>
+      <div class="foot"><span class="pill llm">LLM</span><span class="pill sast">SAST</span><span class="pill">Low to Critical</span><span class="pill">semantic-rule-verifier.md</span></div>
+    </a>
+  </div>
+</section>
+
+<section id="glance">
+  <h2>At a glance</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Scanner</th><th>What it looks at</th><th>What it reports</th><th>Severity</th><th>Needs</th></tr></thead>
+    <tbody>
+      <tr><td><a href="race-conditions.html">Race condition scanner</a></td><td>Mutations the authenticated crawl saw succeed with a body</td><td>An endpoint where two or more identical concurrent requests succeed</td><td>High</td><td>URL; credentials; special DAST scanner</td></tr>
+      <tr><td><a href="llm-review-and-fixes.html">LLM code reviewer</a></td><td>High-priority route source chosen by the review triggers</td><td>Missing ownership checks, price manipulation, payment races, auth bypass, business rule violations</td><td>Varies</td><td>Repository; an LLM API key (about $5 to $8 per code-only scan, per its doc)</td></tr>
+      <tr><td><a href="llm-business-logic.html">LLM business logic scanner</a></td><td>Up to 30 business-logic source files, up to 50 discovered endpoints, then live responses</td><td>Attack plans the judge confirmed against the running app</td><td>High to Critical (judge's choice)</td><td>Repository; URL; two logins; authenticated or full mode; an LLM API key</td></tr>
+      <tr><td><a href="semantic-rule-verifier.html">Semantic rule verifier</a></td><td>.sql files with RLS policies; firestore.rules, storage.rules, database.rules.json</td><td>Logical flaws in security rules, as RLS misconfiguration</td><td>Low to Critical (the model's choice)</td><td>Repository; an LLM API key</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="why">
+  <h2>Why this class matters</h2>
+  <div class="grid-2">
+    <div class="callout why"><div class="label">Why it matters</div><p>Business logic bugs are the most impactful and the hardest to detect. There is no regex for "this payment flow has no idempotency". They are specific to what your app does, they often span several steps, and the server behaves exactly as written. A race lets one balance be spent twice, a client-set price buys the enterprise plan for a cent, and a policy on the wrong column looks protective while it is not. All four scanners here work without a payload; the first three need either two requests at once or a reader that understands what the code is for.</p></div>
+    <div class="callout breach"><div class="label">Real-world breaches</div><p><b>Starbucks (2015).</b> Researchers showed a race condition in the gift card system that duplicated balances by transferring the same balance to multiple cards at once. <b>Docker runc CVE-2019-5736.</b> A TOCTOU race let a malicious container overwrite the host runc binary and gain root on the host. <b>Facebook (2013).</b> The ability to delete any photo came from the API checking that the photo id existed rather than that the requester owned it.</p></div>
+  </div>
+</section>
+
+<footer class="foot">
+  <span>Sources: <a href="../scanners/race-condition-scanner.md">race-condition-scanner.md</a> · <a href="../scanners/llm-code-reviewer.md">llm-code-reviewer.md</a> · <a href="../architecture.md">architecture.md</a> (Phase 9.2) · <a href="../scanners/semantic-rule-verifier.md">semantic-rule-verifier.md</a></span>
+  <span>Other groups: <a href="group-injection.html">Injection</a> · <a href="group-access-control.html">Access control</a> · <a href="group-auth-sessions.html">Authentication and sessions</a> · <a href="group-browser-defenses.html">Browser-side defenses</a> · <a href="group-surface.html">Attack surface and exposure</a> · <a href="group-secrets-dependencies.html">Secrets and dependencies</a> · <a href="group-infrastructure.html">Infrastructure configuration</a> · <a href="group-schema-middleware.html">Schemas and middleware</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+</body>
+</html>

@@ -1,16 +1,16 @@
 # GraphQL Scanner
 
-**Type:** DAST | **Severity:** Medium–High | **Category:** Info Disclosure / API Exposure
+**Type:** DAST | **Severity:** Low–Medium | **Category:** Info Disclosure / API Exposure
 
 ## What It Does
 
-Tests GraphQL endpoints for three issues:
+Tests GraphQL endpoints (found by a path containing `/graphql`, `/api/graphql` or `/gql`) for three issues:
 
-1. **Introspection enabled** — sends `__schema` query. If the full schema is returned, attackers can see every type, field, query, and mutation — a complete map of your API.
+1. **Introspection enabled** — sends `__schema` query. If the full schema is returned, attackers can see every type, field, query, and mutation — a complete map of your API. Reported as Medium (0.90).
 
-2. **No depth limit** — sends deeply nested queries (100+ levels). Without limits, attackers can craft queries that consume exponential server resources (DoS).
+2. **No depth limit** — sends one query nested 10 levels deep. If the server does not answer with an error, it is reported as Medium (0.80). Without limits, attackers can craft queries that consume exponential server resources (DoS).
 
-3. **Batch query support** — sends arrays of queries in a single POST. Batch queries can bypass rate limiting (1 HTTP request = 1000 queries).
+3. **Batch query support** — sends an array of two queries in a single POST and checks for an array response, reported as Low (0.70). Batch queries can bypass rate limiting (1 HTTP request = 1000 queries).
 
 ## Why It Matters
 

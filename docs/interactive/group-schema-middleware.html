@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Schemas and Middleware · isitsecure</title>
+<meta name="description" content="The five isitsecure SAST analyzers that read schemas, rules and middleware as text: Prisma, Drizzle, Firebase rules, Next.js middleware and Express middleware. One shared shape, animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  /* card thumbnails (same classes as index.html) */
+  .thumb svg .n > rect, .thumb svg .n > circle { fill: var(--surface); stroke: var(--muted); stroke-width: 1.3; }
+  .thumb svg .w { stroke: var(--muted); stroke-width: 1.3; fill: none; }
+  .thumb svg .a { stroke: var(--accent); }
+  .thumb svg text.fa, .thumb svg circle.fa { fill: var(--accent); }
+  .thumb svg text.fr, .thumb svg circle.fr, .thumb svg rect.fr { fill: var(--attacker); }
+  .thumb svg text.fs, .thumb svg circle.fs { fill: var(--safe); }
+  .thumb svg text.fi { fill: var(--info); }
+  .thumb svg .r { stroke: var(--attacker); }
+  .thumb svg .s { stroke: var(--safe); }
+  /* flow scene: the exchange box sits over the wires, so a packet re-emerges on the far side */
+  #flow .exchange > rect { fill: var(--surface); }
+  #flow .chip > rect { transition: fill .35s, stroke .35s; }
+  #flow[data-step="2"] .c0 > rect, #flow[data-step="3"] .c1 > rect, #flow[data-step="4"] .c2 > rect, #flow[data-step="5"] .c3 > rect, #flow[data-step="6"] .c4 > rect { fill: var(--accent-soft); stroke: var(--accent); }
+  #flow .code text { white-space: pre; }
+  .topbar-inner .crumb a { color: inherit; text-decoration: none; }
+  .topbar-inner .crumb a:hover { color: var(--accent); }
+  footer.foot span { min-width: 0; overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› Schemas and middleware</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/README.md" title="The markdown scanner index">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">Scanner group</div>
+  <h1>Schemas and middleware</h1>
+  <p class="lede">Every analyzer in this group reads one file and compares it with what a safe file would contain: a schema without the encrypted twin of a PII field, a rules file without an auth test, a middleware matcher that skips a route, an Express route with no guard. <b>No request is sent.</b> The evidence is a file path and the rule that fired.</p>
+  <div class="meta">
+    <span class="pill"><b>5</b> scanners</span><span class="pill sast">5 SAST</span><span class="pill">repository only</span><span class="pill crit">up to Critical</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#how"><span class="n">01</span>How this group works</a>
+  <a href="#scanners"><span class="n">02</span>Scanners in this group</a>
+  <a href="#glance"><span class="n">03</span>At a glance</a>
+  <a href="#why"><span class="n">04</span>Why this class matters</a>
+</nav>
+<section id="how">
+  <h2>How this group works</h2>
+  <p class="prose">Five artefacts on the left, one loop in the middle. Pick a step to see the scanner read its file, apply one rule and produce a finding.</p>
+  <div class="scene" id="flow" data-scene data-interval="3800">
+    <figure class="stage">
+      <svg viewBox="0 0 960 322" role="img" aria-label="Five source artefacts on the left, a central box showing the file content and the rule that fires, and a finding record on the right.">
+        <defs><marker id="arr-gf" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g id="flow-wires">
+          <path class="wire only-2 accent" d="M270 44 C 480 44, 480 160, 690 160" marker-end="url(#arr-gf)"/>
+          <path class="wire only-3 accent" d="M270 102 C 480 102, 480 160, 690 160" marker-end="url(#arr-gf)"/>
+          <path class="wire only-4 accent" d="M270 160 C 480 160, 480 160, 690 160" marker-end="url(#arr-gf)"/>
+          <path class="wire only-5 accent" d="M270 218 C 480 218, 480 160, 690 160" marker-end="url(#arr-gf)"/>
+          <path class="wire only-6 accent" d="M270 276 C 480 276, 480 160, 690 160" marker-end="url(#arr-gf)"/>
+        </g>
+        <g class="node chip c0" transform="translate(20 20)"><rect width="250" height="48" rx="8"/>
+          <text class="ttl" x="12" y="21">Prisma schema</text><text class="lbl" x="12" y="38">schema.prisma</text></g>
+        <g class="node chip c1" transform="translate(20 78)"><rect width="250" height="48" rx="8"/>
+          <text class="ttl" x="12" y="21">Drizzle schema</text><text class="lbl" x="12" y="38">schema.ts</text></g>
+        <g class="node chip c2" transform="translate(20 136)"><rect width="250" height="48" rx="8"/>
+          <text class="ttl" x="12" y="21">Firebase rules</text><text class="lbl" x="12" y="38">firestore.rules</text></g>
+        <g class="node chip c3" transform="translate(20 194)"><rect width="250" height="48" rx="8"/>
+          <text class="ttl" x="12" y="21">Next.js middleware</text><text class="lbl" x="12" y="38">middleware.ts</text></g>
+        <g class="node chip c4" transform="translate(20 252)"><rect width="250" height="48" rx="8"/>
+          <text class="ttl" x="12" y="21">Express middleware</text><text class="lbl" x="12" y="38">app.js, middleware/</text></g>
+        <g class="node exchange" transform="translate(300 20)"><rect width="360" height="280" rx="10"/>
+          <text class="ttl" x="14" y="26">Artefact → rule → finding</text>
+          <g class="only-1">
+            <text class="lbl" x="14" y="52">the shared shape</text>
+            <text x="14" y="78">Each scanner reads a file as text. It knows what a safe</text>
+            <text x="14" y="98">version of that file would contain, and the absence of</text>
+            <text x="14" y="118">that thing is the finding.</text>
+            <text class="lbl" x="14" y="158">what none of them do</text>
+            <text x="14" y="184">Send a request, run the code or load a database.</text>
+            <text class="lbl" x="14" y="224">Pick a scanner on the left to see one rule fire.</text>
+          </g>
+          <g class="only-2">
+            <text class="lbl" x="14" y="52">the file says</text>
+            <text class="mono" x="14" y="74">email String @unique</text>
+            <text class="mono" x="14" y="94">(no email_hash beside it)</text>
+            <text class="lbl" x="14" y="130">the rule asks</text>
+            <text x="14" y="152">A field named like PII with no encrypted</text>
+            <text x="14" y="172">or hashed twin in the same model.</text>
+            <text class="lbl" x="14" y="214">so</text>
+            <text class="t-attacker" x="14" y="238" style="font-weight:600">the twin is missing</text>
+          </g>
+          <g class="only-3">
+            <text class="lbl" x="14" y="52">the file says</text>
+            <text class="mono" x="14" y="74">api_key: text("api_key")</text>
+            <text class="mono" x="14" y="94">(no api_key_encrypted column)</text>
+            <text class="lbl" x="14" y="130">the rule asks</text>
+            <text x="14" y="152">A column named like a secret with no</text>
+            <text x="14" y="172">protected twin in the same table.</text>
+            <text class="lbl" x="14" y="214">so</text>
+            <text class="t-attacker" x="14" y="238" style="font-weight:600">the secret sits in plaintext</text>
+          </g>
+          <g class="only-4">
+            <text class="lbl" x="14" y="52">the file says</text>
+            <text class="mono" x="14" y="74">allow read, write: if true;</text>
+            <text class="lbl" x="14" y="130">the rule asks</text>
+            <text x="14" y="152">The open-rule patterns, then an auth test</text>
+            <text x="14" y="172">within three lines of every other allow.</text>
+            <text class="lbl" x="14" y="214">so</text>
+            <text class="t-attacker" x="14" y="238" style="font-weight:600">anyone can read and write</text>
+          </g>
+          <g class="only-5">
+            <text class="lbl" x="14" y="52">the file says</text>
+            <text class="mono" x="14" y="74">matcher: ["/dashboard/:path*"]</text>
+            <text class="mono" x="14" y="94">route: /api/tasks</text>
+            <text class="lbl" x="14" y="130">the rule asks</text>
+            <text x="14" y="152">Does any matcher regex match the route</text>
+            <text x="14" y="172">pattern? Each miss is one finding.</text>
+            <text class="lbl" x="14" y="214">so</text>
+            <text class="t-attacker" x="14" y="238" style="font-weight:600">the route is outside the middleware</text>
+          </g>
+          <g class="only-6">
+            <text class="lbl" x="14" y="52">the file says</text>
+            <text class="mono" x="14" y="74">app.get("/api/admin/users", getUsers)</text>
+            <text class="lbl" x="14" y="130">the rule asks</text>
+            <text x="14" y="152">Is a known guard name among the route's</text>
+            <text x="14" y="172">own arguments? A global app.use is not.</text>
+            <text class="lbl" x="14" y="214">so</text>
+            <text class="t-attacker" x="14" y="238" style="font-weight:600">the route has no guard</text>
+          </g>
+        </g>
+        <g class="node" transform="translate(690 20)"><rect width="250" height="280" rx="10"/>
+          <text class="ttl" x="14" y="26">Finding</text>
+          <g class="only-1"><text class="lbl" x="14" y="52">every finding carries</text>
+            <text class="mono" x="14" y="78">severity</text><text class="mono" x="14" y="98">confidence</text><text class="mono" x="14" y="118">title</text><text class="mono" x="14" y="138">file_path</text>
+            <text class="lbl" x="14" y="180">a line number only where one is known</text></g>
+          <g class="only-2"><text class="t-accent" x="14" y="52" style="font-weight:600;font-size:15px">MEDIUM</text>
+            <text x="14" y="78" style="font-size:12px">PII field without encryption:</text>
+            <text x="14" y="96" style="font-size:12px">'email' in model</text>
+            <text x="14" y="114" style="font-size:12px">'UserSettings'</text>
+            <text class="lbl" x="14" y="200">confidence 0.80</text>
+            <text class="lbl" x="14" y="220">source: the repository only</text></g>
+          <g class="only-3"><text class="t-attacker" x="14" y="52" style="font-weight:600;font-size:15px">HIGH</text>
+            <text x="14" y="78" style="font-size:12px">Secret stored in plaintext:</text>
+            <text x="14" y="96" style="font-size:12px">'api_key' in table 'users'</text>
+            <text class="lbl" x="14" y="200">confidence 0.90</text>
+            <text class="lbl" x="14" y="220">source: the repository only</text></g>
+          <g class="only-4"><text class="t-attacker" x="14" y="52" style="font-weight:600;font-size:15px">CRITICAL</text>
+            <text x="14" y="78" style="font-size:12px">Firebase Firestore rules allow</text>
+            <text x="14" y="96" style="font-size:12px">unrestricted access</text>
+            <text class="lbl" x="14" y="200">confidence 0.95</text>
+            <text class="lbl" x="14" y="220">source: the repository only</text></g>
+          <g class="only-5"><text class="t-accent" x="14" y="52" style="font-weight:600;font-size:15px">MEDIUM</text>
+            <text x="14" y="78" style="font-size:12px">API route not covered by</text>
+            <text x="14" y="96" style="font-size:12px">auth middleware</text>
+            <text class="lbl" x="14" y="200">confidence 0.85</text>
+            <text class="lbl" x="14" y="220">source: the repository only</text></g>
+          <g class="only-6"><text class="t-accent" x="14" y="52" style="font-weight:600;font-size:15px">MEDIUM</text>
+            <text x="14" y="78" style="font-size:12px">Express route</text>
+            <text x="14" y="96" style="font-size:12px">'/api/admin/users' has no</text>
+            <text x="14" y="114" style="font-size:12px">auth middleware</text>
+            <text class="lbl" x="14" y="200">confidence 0.85</text>
+            <text class="lbl" x="14" y="220">source: the repository only</text></g>
+        </g>
+
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step" data-on="groupFlow"><span class="n">1</span>Five analyzers, one shape. Each reads a repository file as text, knows what a safe version would contain, and reports the absence. <b>No request is sent and no code is run</b>, so the evidence is always a file path and the rule that fired.</p>
+      <p class="step" data-on="groupFlow"><span class="n">2</span><b>Prisma schema.</b> A field named like personal data, with no <code>_encrypted</code>, <code>_hash</code> or <code>_hashed</code> twin in the same model. The same rule family finds plaintext secrets, missing tenant columns and payment IDs.</p>
+      <p class="step" data-on="groupFlow"><span class="n">3</span><b>Drizzle schema.</b> The same checks on <code>pgTable</code> definitions, run on the quoted column name. <code>api_key</code> is a secret name and no protected twin exists.</p>
+      <p class="step" data-on="groupFlow"><span class="n">4</span><b>Firebase rules.</b> The rules file is the whole server-side access control. <code>allow read, write: if true</code> is matched by pattern: <b>Critical</b>, the highest severity in this group.</p>
+      <p class="step" data-on="groupFlow"><span class="n">5</span><b>Next.js middleware.</b> The matcher list is compared with the routes found in the repository. A route no matcher reaches skips the auth check, and each such route is a finding.</p>
+      <p class="step" data-on="groupFlow"><span class="n">6</span><b>Express middleware.</b> Express has no matcher, so each route line is read for a guard among its own arguments. A route with none, on a sensitive path, is a finding.</p>
+    </div>
+  </div>
+</section>
+
+<section id="scanners">
+  <h2>Scanners in this group</h2>
+  <div class="cards">
+    <a class="card" href="prisma-schema.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><g class="n"><rect x="14" y="10" width="110" height="60" rx="4"/></g><text x="22" y="26">model User {</text><text x="26" y="42">id String</text><text x="26" y="58" class="fr">email String</text><circle class="fr" cx="164" cy="54" r="5"/><path class="w r" d="M126 54 H 156"/></svg></div>
+      <h3>Prisma schema</h3><p>Four field checks on schema.prisma, and the camelCase spellings that decide what the matcher can see.</p>
+      <div class="foot"><span class="pill sast">SAST</span><span class="pill high">Low to High</span><span class="pill">prisma-schema-analyzer.md</span></div>
+    </a>
+    <a class="card" href="drizzle-schema.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><text x="10" y="18">pgTable("users", {</text><text x="18" y="36" class="fr">api_key: text(</text><text x="18" y="52">tenant_id: —</text><text x="10" y="68">})</text><circle class="fr" cx="176" cy="32" r="5"/><circle class="fa" cx="176" cy="48" r="5"/></svg></div>
+      <h3>Drizzle schema</h3><p>The same checks on pgTable definitions, run on the database column name, plus the tenant check across tables.</p>
+      <div class="foot"><span class="pill sast">SAST</span><span class="pill high">Low to High</span><span class="pill">drizzle-schema-analyzer.md</span></div>
+    </a>
+    <a class="card" href="firebase-rules.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><text x="10" y="20">match /users/{id} {</text><text x="20" y="40" class="fr">allow read, write:</text><text x="20" y="56" class="fr">if true;</text><text x="10" y="72">}</text><circle class="fr" cx="178" cy="46" r="6"/></svg></div>
+      <h3>Firebase rules</h3><p>Open rules, missing auth tests and wildcards, line by line, and one rule evaluated against a request.</p>
+      <div class="foot"><span class="pill sast">SAST</span><span class="pill crit">Medium to Critical</span><span class="pill">firebase-rules-analyzer.md</span></div>
+    </a>
+    <a class="card" href="middleware.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><text x="10" y="16" class="fi">matcher /api/:path*</text><g class="n"><rect x="10" y="26" width="86" height="18" rx="3"/><rect x="104" y="26" width="86" height="18" rx="3"/></g><text x="16" y="39">/api/tasks</text><text x="110" y="39">/api/admin</text><circle class="fs" cx="86" cy="35" r="3"/><circle class="fr" cx="180" cy="35" r="3"/><path class="w s" d="M53 44 V 62"/><path class="w r" d="M147 44 V 62"/><text x="26" y="74" class="fs">covered</text><text x="114" y="74" class="fr">not covered</text></svg></div>
+      <h3>Next.js middleware</h3><p>A matcher laid over the route tree: which API routes fall outside it, and which matcher shapes hide them.</p>
+      <div class="foot"><span class="pill sast">SAST</span><span class="pill high">Low to High</span><span class="pill">middleware-analyzer.md</span></div>
+    </a>
+    <a class="card" href="express-middleware.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><text x="10" y="22">app.get("/admin",</text><text x="10" y="40" class="fr">  getUsers)</text><text x="10" y="62" class="fs">app.get("/admin",</text><text x="10" y="74" class="fs">  requireAuth, ...)</text><circle class="fr" cx="170" cy="36" r="5"/><circle class="fs" cx="170" cy="64" r="5"/></svg></div>
+      <h3>Express middleware</h3><p>Routes without a guard in their own arguments, weak token checks, and rate limit, header, CORS and tenant checks.</p>
+      <div class="foot"><span class="pill sast">SAST</span><span class="pill high">Low to High</span><span class="pill">express-middleware-analyzer.md</span></div>
+    </a>
+  </div>
+</section>
+
+<section id="glance">
+  <h2>At a glance</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Scanner</th><th>What it looks at</th><th>What it reports</th><th>Severity</th><th>Needs</th></tr></thead>
+    <tbody>
+      <tr><td><a href="prisma-schema.html">Prisma schema analyzer</a></td><td>Every <code>model</code> block in <code>schema.prisma</code></td><td>Secret fields, PII without an encrypted twin, models without <code>tenant_id</code>, payment provider IDs</td><td>Low to High</td><td>Repository</td></tr>
+      <tr><td><a href="drizzle-schema.html">Drizzle schema analyzer</a></td><td>Every <code>pgTable</code>, <code>mysqlTable</code> or <code>sqliteTable</code> call, by column db_name</td><td>The same four findings as Prisma</td><td>Low to High</td><td>Repository</td></tr>
+      <tr><td><a href="firebase-rules.html">Firebase rules analyzer</a></td><td><code>firestore.rules</code>, <code>storage.rules</code>, <code>database.rules.json</code></td><td>Open rules, <code>allow</code> lines with no auth test, broad wildcards</td><td>Medium to Critical</td><td>Repository</td></tr>
+      <tr><td><a href="middleware.html">Middleware analyzer</a></td><td><code>middleware.ts</code> or <code>.js</code> and the Next.js API route list</td><td>No middleware, routes outside the matcher, weak token check, bypassable matcher</td><td>Low to High</td><td>Repository</td></tr>
+      <tr><td><a href="express-middleware.html">Express middleware analyzer</a></td><td>Express route lines and middleware files</td><td>Routes without a guard, weak or missing auth middleware, rate limit, headers, CORS, tenant isolation</td><td>Low to High</td><td>Repository; Express detected</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="why">
+  <h2>Why this class matters</h2>
+  <div class="grid-2">
+    <div class="callout why"><div class="label">Why it matters</div><p>These files decide who can do what before any request arrives, so a mistake in them is a mistake in every request. A schema decides how much a leak exposes. A rules file <b>is</b> the server-side access control for Firebase. A middleware matcher or a route list decides which endpoints are ever asked who is calling.</p></div>
+    <div class="callout breach"><div class="label">Real-world breaches</div><p><b>GitHub (2012).</b> A Rails mass assignment bug let an attacker add his SSH key to the Rails core repository through a field on the model. <b>Comparitech (2020)</b> found 24,000 Android apps with misconfigured Firebase databases leaking emails, passwords and health data. <b>Optus (2022)</b> exposed 9.8 million records through an API endpoint with no authentication, and <b>Peloton (2021)</b> exposed user data through unauthenticated API endpoints.</p></div>
+  </div>
+</section>
+
+<footer class="foot">
+  <span>Sources: <a href="../scanners/prisma-schema-analyzer.md">prisma-schema-analyzer.md</a> · <a href="../scanners/drizzle-schema-analyzer.md">drizzle-schema-analyzer.md</a> · <a href="../scanners/firebase-rules-analyzer.md">firebase-rules-analyzer.md</a> · <a href="../scanners/middleware-analyzer.md">middleware-analyzer.md</a> · <a href="../scanners/express-middleware-analyzer.md">express-middleware-analyzer.md</a></span>
+  <span>Other groups: <a href="group-injection.html">Injection</a> · <a href="group-access-control.html">Access control</a> · <a href="group-auth-sessions.html">Authentication and sessions</a> · <a href="group-browser-defenses.html">Browser-side defenses</a> · <a href="group-business-logic.html">Business logic</a> · <a href="group-surface.html">Attack surface and exposure</a> · <a href="group-secrets-dependencies.html">Secrets and dependencies</a> · <a href="group-infrastructure.html">Infrastructure configuration</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+<script>
+(function () {
+  const CY = [44, 102, 160, 218, 276];
+  window.groupFlow = function (scene, step, el) {
+    const svg = el.querySelector("svg");
+    IsDoc.clearPackets(svg);
+    if (step < 2) return;
+    const cy = CY[step - 2];
+    const layer = svg.querySelector("#flow-wires");
+    IsDoc.packet(svg, "M270 " + cy + " C 480 " + cy + ", 480 160, 690 160", { cls: "f-accent", r: 5, duration: 1300, hold: 300, layer: layer });
+  };
+})();
+</script>
+</body>
+</html>

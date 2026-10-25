@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Client Exposure · isitsecure</title>
+<meta name="description" content="How isitsecure reads a site's own JavaScript for a Supabase service_role key, internal or staging URLs and un-replaced environment variables, and which values it deliberately ignores — animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  .topbar-inner .crumb a { color: inherit; text-decoration: none; }
+  .topbar-inner .crumb a:hover { color: var(--accent); }
+  #ce-scan text.src { transition: fill .35s; }
+  #ce-scan.s2 text.r1, #ce-scan.s3 text.r2, #ce-scan.s4 text.r3 { fill: var(--attacker); }
+  #ce-scan.s4 text.r4 { fill: var(--safe); }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› <a href="group-browser-defenses.html">Browser-side defenses</a> › Client exposure</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../../isitsecure/engine/scanners/client_exposure_scanner.py" title="The implementation this page is built from">source .py</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">DAST scanner · passive</div>
+  <h1>Client Exposure</h1>
+  <p class="lede">Whatever a bundler ships to the browser is public. isitsecure reads the site's own JavaScript, filtered of vendor bundles, and looks for three kinds of leftovers: a Supabase <code>service_role</code> key, which bypasses Row-Level Security; URLs that point at localhost or staging; and <code>process.env</code> names the build never replaced. It sends no requests of its own.</p>
+  <div class="meta">
+    <span class="pill dast">DAST</span><span class="pill crit">Critical</span><span class="pill">Low</span><span class="pill">Secrets in client code</span><span class="pill">Snapshot-based</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#scan"><span class="n">01</span>Three checks</a>
+  <a href="#jwt"><span class="n">02</span>The service_role key</a>
+  <a href="#guards"><span class="n">03</span>What stays quiet</a>
+  <a href="#fix"><span class="n">04</span>The fix</a>
+  <a href="#reference"><span class="n">05</span>Reference</a>
+</nav>
+
+<section id="scan">
+  <h2>Three checks over one string</h2>
+  <p class="prose">The input is a single string: the concatenated content of the site's first-party scripts. Vendor and framework bundles were removed by a shared filter before the scanner ever sees them, so a minified library cannot trigger a finding. Three independent checks run over that string.</p>
+
+  <div class="scene" id="ce-scan" data-scene data-interval="3200">
+    <figure class="stage">
+      <svg viewBox="0 0 960 320" role="img" aria-label="A first-party JavaScript snapshot with four lines feeds three checks: a JWT with role service_role is Critical, an internal URL is Low, and an un-replaced process.env name is Low; a NEXT_PUBLIC_ variable is ignored.">
+        <defs><marker id="ce-arr1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+
+        <g class="node lit-1" transform="translate(20 20)">
+          <rect width="380" height="280" rx="10"/>
+          <text class="ttl" x="12" y="26">First-party JS</text>
+          <text class="lbl" x="12" y="44">vendor bundles already filtered out</text>
+          <g class="mono">
+            <text class="src r1" x="12" y="84">createClient(U, "eyJhbGci…")</text>
+            <text class="src r2" x="12" y="124">fetch("http://localhost:4000/api")</text>
+            <text class="src r3" x="12" y="164">const db = process.env.DB_URL</text>
+            <text class="src r4" x="12" y="204">process.env.NEXT_PUBLIC_API</text>
+          </g>
+          <text class="lbl at-5" x="12" y="246">no request is ever sent;</text>
+          <text class="lbl at-5" x="12" y="262">only captured text is read</text>
+        </g>
+
+        <path class="wire at-2 accent" d="M400 58 H 438" marker-end="url(#ce-arr1)"/>
+        <g class="node at-2 lit-2" transform="translate(440 20)">
+          <rect width="500" height="76" rx="8"/>
+          <text class="ttl" x="12" y="24">JWT shape, then role claim</text>
+          <text class="lbl" x="12" y="44">decode the payload; role must equal service_role</text>
+          <text class="t-attacker" x="12" y="64">CRITICAL · confidence 0.98</text>
+        </g>
+
+        <path class="wire at-3 accent" d="M400 144 H 438" marker-end="url(#ce-arr1)"/>
+        <g class="node at-3 lit-3" transform="translate(440 106)">
+          <rect width="500" height="76" rx="8"/>
+          <text class="ttl" x="12" y="24">Internal or non-production URL</text>
+          <text class="lbl" x="12" y="44">localhost, private IPs, .local .internal .test, staging-style hosts</text>
+          <text class="t-accent" x="12" y="64">LOW · confidence 0.75</text>
+        </g>
+
+        <path class="wire at-4 accent" d="M400 230 H 438" marker-end="url(#ce-arr1)"/>
+        <g class="node at-4 lit-4" transform="translate(440 192)">
+          <rect width="500" height="76" rx="8"/>
+          <text class="ttl" x="12" y="24">Un-replaced env reference</text>
+          <text class="lbl" x="12" y="44">process.env.X or import.meta.env.X, unless X is a public prefix</text>
+          <text class="t-accent" x="12" y="64">LOW · confidence 0.7</text>
+        </g>
+
+        <g class="at-5">
+          <text class="lbl" x="440" y="288">each check stops at 10 findings · URLs and names reported once</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The scanner receives the first-party JavaScript of the page as one string. If it is empty there is nothing to do. <b>Only first-party code is read</b>: HTML, vendor bundles and third-party scripts are out of scope.</p>
+      <p class="step"><span class="n">2</span>Check one finds anything shaped like a JWT, decodes its payload, and keeps it only when the <code>role</code> claim is <code>service_role</code>. <b>That is the one CRITICAL finding.</b> The next scene walks through it.</p>
+      <p class="step"><span class="n">3</span>Check two matches URLs whose host is <code>localhost</code>, a loopback or private address, a <code>.local</code>, <code>.internal</code> or <code>.test</code> name, or a host that starts with <code>staging</code>, <code>dev</code>, <code>qa</code> and similar. A production bundle should not know those exist, so each is a <b>LOW</b>.</p>
+      <p class="step"><span class="n">4</span>Check three finds <code>process.env.NAME</code> and <code>import.meta.env.NAME</code> left in the shipped code. A bundler should have replaced them. The leftover leaks the variable's name, <b>LOW</b>. A name with a public prefix such as <code>NEXT_PUBLIC_</code> is meant to ship and is skipped.</p>
+      <p class="step"><span class="n">5</span>Findings carry the page URL as their endpoint. Each check keeps at most 10 and reports a given URL, token or variable name once.</p>
+    </div>
+  </div>
+
+  <div class="callout note">
+    <div class="label">Built from the code, not a markdown doc</div>
+    <p>This scanner has no page under <code>docs/scanners/</code>. Everything here is taken from <code>isitsecure/engine/scanners/client_exposure_scanner.py</code> and the README scanner-table row ("Secrets in client JS: Supabase <code>service_role</code> keys, internal URLs, unreplaced env placeholders"). The regexes, the public-prefix list, severities and confidences are read directly from that file.</p>
+  </div>
+</section>
+
+<section id="jwt">
+  <h2>Why one JWT is Critical and another is ignored</h2>
+  <p class="prose">A Supabase project ships two keys. The <code>anon</code> key is designed to sit in the browser, because Row-Level Security limits what it can do. The <code>service_role</code> key skips RLS entirely. The two look identical until the payload is decoded, so the scanner decodes it.</p>
+
+  <div class="scene" id="ce-jwt" data-scene data-interval="3200">
+    <figure class="stage">
+      <svg viewBox="0 0 960 300" role="img" aria-label="A JWT found in the bundle is split into header, payload and signature. The payload is base64-decoded without checking the signature. A role of anon is ignored; a role of service_role is a Critical finding with the token redacted.">
+        <defs><marker id="ce-arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+
+        <text class="lbl" x="20" y="22">found in the bundle</text>
+        <g class="node lit-1" transform="translate(20 32)"><rect width="250" height="40" rx="8"/><text class="mono" x="12" y="25">eyJhbGciOiJIUzI1NiJ9</text></g>
+        <text class="ttl" x="278" y="58">.</text>
+        <g class="node lit-2" transform="translate(292 32)"><rect width="250" height="40" rx="8"/><text class="mono" x="12" y="25">eyJyb2xlIjoi…</text></g>
+        <text class="ttl" x="550" y="58">.</text>
+        <g class="node" transform="translate(564 32)"><rect width="250" height="40" rx="8"/><text class="mono" x="12" y="25">SflKxwRJSMeKKF2QT4…</text></g>
+        <text class="lbl" x="135" y="92" text-anchor="middle">header</text>
+        <text class="lbl" x="417" y="92" text-anchor="middle">payload</text>
+        <text class="lbl" x="689" y="92" text-anchor="middle">signature</text>
+        <text class="lbl at-2" x="835" y="58">never checked</text>
+
+        <path class="wire at-2 accent" d="M417 100 V 128" marker-end="url(#ce-arr2)"/>
+        <g class="node at-2 lit-2" transform="translate(292 130)">
+          <rect width="250" height="52" rx="8"/>
+          <text class="lbl" x="12" y="20">base64 decode the payload</text>
+          <text class="mono until-3" x="12" y="40">{"role": …}</text>
+          <text class="mono only-3 t-safe" x="12" y="40">{"role": "anon"}</text>
+          <text class="mono at-4 t-attacker" x="12" y="40">{"role": "service_role"}</text>
+        </g>
+
+        <path class="wire only-3" d="M542 156 H 600" marker-end="url(#ce-arr2)"/>
+        <g class="node only-3 lit-3" transform="translate(602 124)">
+          <rect width="338" height="64" rx="8" class="soft-safe"/>
+          <text class="t-safe" x="12" y="26">ignored · anon key</text>
+          <text class="lbl" x="12" y="46">expected in the browser, RLS applies</text>
+        </g>
+
+        <path class="wire at-4 attacker" d="M542 156 H 600" marker-end="url(#ce-arr2)"/>
+        <g class="node at-4 lit-4" transform="translate(602 124)">
+          <rect width="338" height="64" rx="8" class="soft-attacker"/>
+          <text class="t-attacker" x="12" y="26">CRITICAL · service_role key exposed</text>
+          <text class="lbl" x="12" y="46">full read and write, RLS bypassed</text>
+        </g>
+
+        <g class="at-4">
+          <text class="lbl" x="20" y="232">evidence keeps only the ends of the token:</text>
+          <text class="mono" x="20" y="254">eyJhbGciOiJIUzI1…KF2QT4</text>
+          <text class="lbl" x="20" y="276">first 16 characters, an ellipsis, last 6 · confidence 0.98</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The pattern looks for three base64url parts joined by dots, where the first two start with <code>eyJ</code> (the encoding of <code>{"</code>). Each distinct token is processed once.</p>
+      <p class="step"><span class="n">2</span>The middle part is base64-decoded into JSON. <b>The signature is not verified</b>: the scanner only needs to read the claim, not to trust the token.</p>
+      <p class="step"><span class="n">3</span>The <code>role</code> claim is lowercased and compared. <code>anon</code> is the key every Supabase front end ships, so <b>it is ignored</b>. So is any token that fails to decode or has another role.</p>
+      <p class="step"><span class="n">4</span>A role of <code>service_role</code> is <b>CRITICAL</b>. The finding keeps a redacted form of the token, never the full secret, and tells the owner to rotate the key and use it server-side only.</p>
+    </div>
+  </div>
+
+  <div class="callout why">
+    <div class="label">Why it matters</div>
+    <p>The finding text is blunt: the <code>service_role</code> key "bypasses Row-Level Security and grants full read/write access to the entire database. Anyone viewing the page can extract it." Rotation is the only fix once it has shipped, because the old key is already in every cached copy of the bundle.</p>
+  </div>
+</section>
+
+<section id="guards">
+  <h2>What stays quiet</h2>
+  <p class="prose">Two of the checks run on names and URLs, which are easy to over-match. These rows show what the code lets through and what it reports.</p>
+
+  <div class="scene" id="ce-guards" data-scene data-interval="2800">
+    <figure class="stage">
+      <svg viewBox="0 0 960 330" role="img" aria-label="Five strings found in a bundle and the verdict each gets: process.env.STRIPE_SECRET is Low, a NEXT_PUBLIC_ variable is quiet, a VITE_ import.meta variable is quiet, a localhost URL is Low, and a production API URL is quiet.">
+        <defs><marker id="ce-arr3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <text class="lbl" x="20" y="20">found in the first-party bundle</text>
+        <text class="lbl" x="560" y="20">verdict</text>
+
+        <g class="node lit-2" transform="translate(20 32)"><rect width="500" height="50" rx="8"/><text class="mono" x="12" y="22">process.env.STRIPE_SECRET</text><text class="lbl" x="12" y="40">raw reference survived the build</text></g>
+        <path class="wire at-2 accent" d="M520 57 H 548" marker-end="url(#ce-arr3)"/>
+        <g class="node verdict at-2 lit-2" transform="translate(550 32)"><rect width="390" height="50" rx="8" class="soft-accent"/><text class="t-accent" x="12" y="22">LOW · un-replaced environment variable</text><text class="lbl" x="12" y="40">leaks the name STRIPE_SECRET</text></g>
+
+        <g class="node lit-3" transform="translate(20 92)"><rect width="500" height="50" rx="8"/><text class="mono" x="12" y="22">process.env.NEXT_PUBLIC_API_URL</text><text class="lbl" x="12" y="40">framework-public prefix</text></g>
+        <path class="wire at-3" d="M520 117 H 548" marker-end="url(#ce-arr3)"/>
+        <g class="node verdict at-3 lit-3" transform="translate(550 92)"><rect width="390" height="50" rx="8" class="soft-safe"/><text class="t-safe" x="12" y="22">quiet · meant to ship</text><text class="lbl" x="12" y="40">NEXT_PUBLIC_ is on the allowed list</text></g>
+
+        <g class="node lit-4" transform="translate(20 152)"><rect width="500" height="50" rx="8"/><text class="mono" x="12" y="22">import.meta.env.VITE_SUPABASE_URL</text><text class="lbl" x="12" y="40">Vite public prefix</text></g>
+        <path class="wire at-4" d="M520 177 H 548" marker-end="url(#ce-arr3)"/>
+        <g class="node verdict at-4 lit-4" transform="translate(550 152)"><rect width="390" height="50" rx="8" class="soft-safe"/><text class="t-safe" x="12" y="22">quiet · meant to ship</text><text class="lbl" x="12" y="40">VITE_ is on the allowed list</text></g>
+
+        <g class="node lit-5" transform="translate(20 212)"><rect width="500" height="50" rx="8"/><text class="mono" x="12" y="22">"http://localhost:4000/api"</text><text class="lbl" x="12" y="40">development host in production code</text></g>
+        <path class="wire at-5 accent" d="M520 237 H 548" marker-end="url(#ce-arr3)"/>
+        <g class="node verdict at-5 lit-5" transform="translate(550 212)"><rect width="390" height="50" rx="8" class="soft-accent"/><text class="t-accent" x="12" y="22">LOW · internal or non-production URL</text><text class="lbl" x="12" y="40">reported once per distinct URL</text></g>
+
+        <g class="node lit-6" transform="translate(20 272)"><rect width="500" height="50" rx="8"/><text class="mono" x="12" y="22">"https://api.example.com/v1"</text><text class="lbl" x="12" y="40">public production host</text></g>
+        <path class="wire at-6" d="M520 297 H 548" marker-end="url(#ce-arr3)"/>
+        <g class="node verdict at-6 lit-6" transform="translate(550 272)"><rect width="390" height="50" rx="8" class="soft-safe"/><text class="t-safe" x="12" y="22">quiet · no internal host pattern</text><text class="lbl" x="12" y="40">not localhost, private, or staging-style</text></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Five strings the scanner might meet in a bundle. Two sets of rules decide them: a list of env-var prefixes that are allowed to ship, and a pattern for hosts that should not appear in production.</p>
+      <p class="step"><span class="n">2</span>A bare <code>process.env.STRIPE_SECRET</code> means the bundler left a server-side name in the output. The name must be upper case, at least three characters, and have no public prefix. <b>LOW</b>, because it leaks a name, not a value.</p>
+      <p class="step"><span class="n">3</span><code>NEXT_PUBLIC_</code> variables are copied into the bundle on purpose. <b>Eight prefixes are allowed</b>: <code>NEXT_PUBLIC_</code>, <code>VITE_</code>, <code>REACT_APP_</code>, <code>PUBLIC_</code>, <code>VUE_APP_</code>, <code>GATSBY_</code>, <code>EXPO_PUBLIC_</code>, <code>NUXT_PUBLIC_</code>.</p>
+      <p class="step"><span class="n">4</span>The <code>import.meta.env</code> form is handled by the same rule, so a <code>VITE_</code> name is quiet too.</p>
+      <p class="step"><span class="n">5</span>A URL whose host is <code>localhost</code>, <code>127.0.0.1</code>, <code>0.0.0.0</code>, a 10.x, 192.168.x or 172.16-31.x address, or a <code>.local</code>, <code>.internal</code> or <code>.test</code> name is reported at <b>LOW</b>, with confidence 0.75.</p>
+      <p class="step"><span class="n">6</span>An ordinary production URL matches none of those patterns and is not reported. The scanner does not judge whether an API host is correct, only whether it looks like an internal one.</p>
+    </div>
+  </div>
+</section>
+
+<section id="fix">
+  <h2>Vulnerable vs fixed client code</h2>
+  <p class="prose">The fix is to keep the privileged key on the server and let only intentionally public values reach the bundle.</p>
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true">BAD · secrets in the bundle</button>
+      <button class="tab good" role="tab" aria-selected="false">GOOD · server-side only</button>
+    </div>
+    <div role="tabpanel"><pre><code><span class="c">// shipped to every visitor in app.js</span>
+<span class="hl bad">const admin = createClient(URL, <span class="s">"eyJhbGciOi…"</span>)   <span class="c">// payload: {"role":"service_role"}  CRITICAL</span></span>
+<span class="hl bad">const api   = <span class="s">"http://localhost:4000/api"</span>            <span class="c">// internal URL  LOW</span></span>
+<span class="hl bad">const db    = <span class="k">process.env.DB_URL</span>                    <span class="c">// un-replaced  LOW</span></span></code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c">// browser: only the anon key, protected by Row-Level Security</span>
+<span class="hl good">const supabase = createClient(URL, <span class="k">process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY</span>)</span>
+<span class="hl good">const api      = <span class="s">"https://api.example.com/v1"</span></span>
+
+<span class="c">// server only (API route, edge function, backend): the service_role key
+// lives in a server environment variable and never reaches client code.
+// If a service_role key has already shipped, rotate it.</span>
+<span class="hl good">const admin = createClient(URL, process.env.SUPABASE_SERVICE_ROLE_KEY)</span></code></pre></div>
+  </div>
+</section>
+
+<section id="reference">
+  <h2>Reference: what the code does</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Item</th><th>Value</th><th>Where it comes from</th></tr></thead>
+      <tbody>
+        <tr><td>Input</td><td>first-party JavaScript only, vendor and framework bundles filtered out; empty input returns nothing</td><td><code>snapshot.first_party_js_content</code></td></tr>
+        <tr><td>service_role JWT</td><td>token matches <code>eyJ….eyJ….sig</code>; payload <code>role</code> lowercased equals <code>service_role</code> → CRITICAL, confidence 0.98; <code>anon</code> ignored</td><td><code>_JWT_RE</code>, <code>_check_service_role_jwt</code></td></tr>
+        <tr><td>Internal URL</td><td><code>http(s)://</code> then localhost, 127.0.0.1, 0.0.0.0, 10.x, 192.168.x, 172.16-31.x, <code>*.local</code> / <code>*.internal</code> / <code>*.test</code>, or a host beginning with staging, stg, dev, qa, internal, preprod or uat → LOW, confidence 0.75</td><td><code>_INTERNAL_URL_RE</code></td></tr>
+        <tr><td>Un-replaced env</td><td><code>process.env.NAME</code> or <code>import.meta.env.NAME</code>, NAME upper case, 3+ characters, no public prefix → LOW, confidence 0.7</td><td><code>_PROCESS_ENV_RE</code>, <code>_IMPORT_META_ENV_RE</code>, <code>_PUBLIC_ENV_PREFIXES</code></td></tr>
+        <tr><td>Caps</td><td>at most 10 findings per check; one finding per distinct token, URL or variable name</td><td><code>_MAX_FINDINGS_PER_KIND</code></td></tr>
+        <tr><td>Evidence</td><td>token shown as first 16 characters, <code>...</code>, last 6</td><td><code>redacted</code> in <code>_check_service_role_jwt</code></td></tr>
+        <tr><td>Finding</td><td>category CLIENT_EXPOSURE, source DAST_URL, endpoint = page URL</td><td>the three <code>DeepFinding</code> builders</td></tr>
+        <tr><td>Network</td><td>none</td><td>module docstring</td></tr>
+        <tr><td>Scan depth</td><td>runs at both <code>quick</code> and <code>deep</code></td><td><code>factory.py</code> DAST list</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout note">
+    <div class="label">Things it does not do</div>
+    <p>It decodes only JWTs, so a <code>service_role</code> key that has been split, encoded or loaded at runtime is not found, and other secrets (cloud keys, private API tokens) are left to the secret scanners. It does not read inline scripts in the HTML or third-party bundles. The host-prefix rule for staging names matches any host that merely starts with <code>dev</code>, <code>qa</code> and the like, for example <code>developers.example.com</code>, so a LOW here deserves a glance at the URL.</p>
+  </div>
+</section>
+
+<footer class="foot">
+  <span>Source: <a href="../../isitsecure/engine/scanners/client_exposure_scanner.py">client_exposure_scanner.py</a> · <a href="../../README.md">README scanner table</a></span>
+  <span>Group: <a href="group-browser-defenses.html">Browser-side defenses</a> · Related: <a href="source-map.html">Source maps</a> · <a href="rls-supabase.html">Supabase RLS</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+</body>
+</html>

@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Browser-side Defenses · isitsecure</title>
+<meta name="description" content="Eight isitsecure scanners that check what a browser is told to enforce: CORS, CSRF, redirects, security headers, mixed content, SRI, source maps and client-side exposure. Animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  .topbar-inner .crumb a { color: inherit; text-decoration: none; }
+  .topbar-inner .crumb a:hover { color: var(--accent); }
+  /* card thumbs (same classes as index.html) */
+  .thumb svg .n > rect, .thumb svg .n > circle { fill: var(--surface); stroke: var(--muted); stroke-width: 1.3; }
+  .thumb svg .w { stroke: var(--muted); stroke-width: 1.3; fill: none; }
+  .thumb svg .a { stroke: var(--accent); }
+  .thumb svg .fa { fill: var(--accent); }
+  .thumb svg .fr { fill: var(--attacker); }
+  .thumb svg .fs { fill: var(--safe); }
+  .thumb svg .fi { fill: var(--info); }
+  .thumb svg .r { stroke: var(--attacker); }
+  .thumb svg .s { stroke: var(--safe); }
+  .thumb svg .i { stroke: var(--info); }
+  /* group scene: rows dim until their step */
+  #shape .row { opacity: .22; transition: opacity .4s ease; }
+  #shape.s2 .row.passive, #shape.s3 .row.active { opacity: 1; }
+  #shape[data-step="4"] .row .guard { fill: var(--safe); }
+  #shape .row .guard { fill: var(--muted); transition: fill .3s; }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› Browser-side defenses</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/README.md" title="The markdown scanner index">scanner index .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">Scanner group</div>
+  <h1>Browser-side defenses</h1>
+  <p class="lede">Eight scanners test the rules a browser enforces on the user's behalf: which origins may read a response, which cross-site requests the server accepts, where a redirect may land, which protective headers are set, and what the page itself ships to the client. All of them work from one rendered snapshot of the target plus a handful of header-level requests.</p>
+  <div class="meta">
+    <span class="pill">8 scanners</span><span class="pill dast">8 DAST</span><span class="pill">quick depth</span><span class="pill">url-only mode</span><span class="pill">Low → Critical</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#how"><span class="n">01</span>How this group works</a>
+  <a href="#scanners"><span class="n">02</span>Scanners in this group</a>
+  <a href="#glance"><span class="n">03</span>At a glance</a>
+  <a href="#why"><span class="n">04</span>Why this class matters</a>
+</nav>
+
+<section id="how">
+  <h2>How this group works</h2>
+  <p class="prose">The ingestion phase renders the target once and keeps what it saw. Four of these scanners read only that snapshot and never touch the network. The other four send a few requests that differ from a normal one by a single header or query parameter, then read a single header or status in the reply. Every scanner has one rule and one guard.</p>
+
+  <div class="scene" id="shape" data-scene data-interval="3400">
+    <figure class="stage">
+      <svg viewBox="0 0 960 330" role="img" aria-label="A target app feeds a captured page snapshot and a set of header-level probes; nine rules, one per scanner, turn them into findings from LOW to CRITICAL.">
+        <defs><marker id="arr-shape" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+
+        <g class="node lit-1" transform="translate(20 120)">
+          <rect width="160" height="90" rx="10"/>
+          <text class="ttl" x="12" y="24">Target app</text>
+          <text class="mono" x="12" y="46">https://app.example</text>
+          <text class="lbl" x="12" y="66">rendered once</text>
+          <text class="lbl" x="12" y="80">by Playwright</text>
+        </g>
+
+        <path class="wire at-2 info" d="M180 150 C 210 150, 210 85, 238 85" marker-end="url(#arr-shape)"/>
+        <path class="wire at-3 attacker" d="M180 180 C 210 180, 210 245, 238 245" marker-end="url(#arr-shape)"/>
+
+        <g class="node at-2 lit-2" transform="translate(240 20)">
+          <rect width="250" height="130" rx="10"/>
+          <text class="ttl" x="12" y="24">Snapshot (no requests)</text>
+          <text class="lbl" x="12" y="48">rendered HTML and forms</text>
+          <text class="lbl" x="12" y="66">first-party JS bundles</text>
+          <text class="lbl" x="12" y="84">cookies and response headers</text>
+          <text class="lbl" x="12" y="102">sourceMappingURL comments</text>
+          <text class="lbl" x="12" y="120">read by 4 scanners</text>
+        </g>
+
+        <g class="node at-3 lit-3" transform="translate(240 180)">
+          <rect width="250" height="130" rx="10"/>
+          <text class="ttl" x="12" y="24">Header-level probes</text>
+          <g class="mono">
+            <text class="t-attacker" x="12" y="48">Origin: https://evil.com</text>
+            <text class="t-attacker" x="12" y="66">?redirect=https://evil.com</text>
+            <text x="12" y="84">GET /  (read headers)</text>
+            <text x="12" y="102">GET /static/app.js.map</text>
+          </g>
+          <text class="lbl" x="12" y="120">sent by 4 scanners</text>
+        </g>
+
+        <path class="wire at-2 info" d="M490 85 C 505 85, 505 100, 518 100" marker-end="url(#arr-shape)"/>
+        <path class="wire at-3 attacker" d="M490 245 C 505 245, 505 230, 518 230" marker-end="url(#arr-shape)"/>
+
+        <g class="node at-2 lit-5" transform="translate(520 20)">
+          <rect width="420" height="290" rx="10"/>
+          <text class="ttl" x="12" y="24">One rule per scanner</text>
+          <text class="lbl" x="12" y="42">scanner</text><text class="lbl" x="135" y="42">evidence</text><text class="lbl" x="352" y="42">severity</text>
+          <g class="mono">
+            <g class="row passive"><text class="t-info" x="12" y="66">mixed-content</text><text class="guard" x="135" y="66">https page, http:// script</text><text class="t-accent" x="352" y="66">MEDIUM</text></g>
+            <g class="row passive"><text class="t-info" x="12" y="92">sri</text><text class="guard" x="135" y="92">CDN script, no integrity=</text><text class="t-accent" x="352" y="92">MEDIUM</text></g>
+            <g class="row passive"><text class="t-info" x="12" y="118">client-exposure</text><text class="guard" x="135" y="118">JWT role = service_role</text><text class="t-attacker" x="352" y="118">CRITICAL</text></g>
+            <g class="row passive"><text class="t-info" x="12" y="144">csrf (passive)</text><text class="guard" x="135" y="144">cookie without SameSite</text><text class="t-accent" x="352" y="144">MEDIUM</text></g>
+            <g class="row active"><text class="t-attacker" x="12" y="170">cors</text><text class="guard" x="135" y="170">ACAO echoes evil.com</text><text class="t-attacker" x="352" y="170">HIGH</text></g>
+            <g class="row active"><text class="t-attacker" x="12" y="196">csrf (active)</text><text class="guard" x="135" y="196">forged Origin, still 2xx</text><text class="t-attacker" x="352" y="196">HIGH</text></g>
+            <g class="row active"><text class="t-attacker" x="12" y="222">open-redirect</text><text class="guard" x="135" y="222">Location: https://evil.com</text><text class="t-attacker" x="352" y="222">HIGH</text></g>
+            <g class="row active"><text class="t-attacker" x="12" y="248">security-headers</text><text class="guard" x="135" y="248">no strict-transport-security</text><text class="t-attacker" x="352" y="248">HIGH</text></g>
+            <g class="row active"><text class="t-attacker" x="12" y="274">source-map</text><text class="guard" x="135" y="274">200 and "mappings": in body</text><text class="t-attacker" x="352" y="274">HIGH</text></g>
+          </g>
+        </g>
+
+        <g class="only-4" transform="translate(20 232)">
+          <text class="lbl" x="0" y="0">Guards (step 4):</text>
+          <text class="lbl t-safe" x="0" y="18">SRI skips first-party URLs</text>
+          <text class="lbl t-safe" x="0" y="34">source-map needs real markers</text>
+          <text class="lbl t-safe" x="0" y="50">headers dedup server-wide</text>
+          <text class="lbl t-safe" x="0" y="66">frame-ancestors counts as XFO</text>
+        </g>
+        <g class="only-5" transform="translate(20 232)">
+          <text class="lbl" x="0" y="0">Result:</text>
+          <text class="lbl" x="0" y="18">LOW (http:// image) up to</text>
+          <text class="lbl" x="0" y="34">CRITICAL (service_role key)</text>
+          <text class="lbl" x="0" y="50">all 8 run in quick depth,</text>
+          <text class="lbl" x="0" y="66">url-only, no API key</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Ingestion renders the target once with Playwright and keeps everything it saw: the HTML, the first-party scripts, the cookies and response headers, and any <code>sourceMappingURL</code> comment. The eight scanners in this group all start from that.</p>
+      <p class="step"><span class="n">2</span><b>Four scanners never send a request.</b> Mixed-content, SRI, client-exposure and the passive half of CSRF pattern-match the snapshot: an <code>http://</code> script on an HTTPS page, a CDN script without <code>integrity=</code>, a Supabase JWT whose <code>role</code> claim is <code>service_role</code>, a cookie without <code>SameSite</code>.</p>
+      <p class="step"><span class="n">3</span><b>The other four send a few header-level requests</b> and read one thing in the reply: CORS reads <code>Access-Control-Allow-Origin</code>, CSRF reads the status code behind a forged <code>Origin</code>, open-redirect reads <code>Location</code>, security-headers reads the header map, source-map fetches the guessed <code>.map</code>.</p>
+      <p class="step"><span class="n">4</span>Each rule carries a guard against a cheap false positive: SRI ignores first-party URLs, source-map demands <code>"sources"</code> or <code>"mappings"</code> in the body because SPA catch-alls answer 200 to anything, security-headers collapses a server-wide miss into one finding, and clickjacking accepts CSP <code>frame-ancestors</code> in place of <code>X-Frame-Options</code>.</p>
+      <p class="step"><span class="n">5</span>Findings range from LOW (an <code>http://</code> image) to CRITICAL (a <code>service_role</code> key, or wildcard CORS with credentials). All eight run in the default <code>quick</code> depth and in url-only mode. Credentials are optional: they only let the probes land behind the login wall.</p>
+    </div>
+  </div>
+</section>
+
+<section id="scanners">
+  <h2>Scanners in this group</h2>
+  <div class="cards">
+    <a class="card" href="csrf.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><g class="n"><rect x="8" y="26" width="52" height="28" rx="4"/></g><text x="34" y="43" text-anchor="middle">evil.com</text><path class="w r" d="M60 40H132"/><text x="96" y="34" text-anchor="middle" class="fr">Origin forged</text><g class="n"><rect x="132" y="26" width="60" height="28" rx="4"/></g><text x="162" y="43" text-anchor="middle">POST 200</text></svg></div>
+      <h3>CSRF</h3><p>A state-changing request with a forged Origin that still gets a 2xx, cookies without SameSite, and POST forms without a token field.</p>
+      <div class="foot"><span class="pill dast">DAST</span><span class="pill high">Medium–High</span><span class="pill">csrf-scanner.md</span></div>
+    </a>
+    <a class="card" href="cors.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><text x="12" y="28" class="fr">Origin: https://evil.com</text><path class="w" d="M12 38 H 188"/><text x="12" y="58">ACAO: https://evil.com</text><circle class="fr" cx="182" cy="54" r="5"/></svg></div>
+      <h3>CORS</h3><p>Three Origin probes per path prefix and four rules in strict order, from wildcard-with-credentials (Critical) down to a bare wildcard (Medium).</p>
+      <div class="foot"><span class="pill dast">DAST</span><span class="pill crit">Medium–Critical</span><span class="pill">cors-scanner.md</span></div>
+    </a>
+    <a class="card" href="open-redirect.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><g class="n"><rect x="8" y="26" width="70" height="28" rx="4"/></g><text x="43" y="43" text-anchor="middle" style="font-size:9px">?next=evil.com</text><path class="w r" d="M78 40 H 122"/><text x="100" y="33" text-anchor="middle" class="fr">302</text><g class="n"><rect x="122" y="26" width="70" height="28" rx="4"/></g><text x="157" y="43" text-anchor="middle" class="fr">evil.com</text></svg></div>
+      <h3>Open redirect</h3><p>Seventeen parameter names and seven paths, four payloads in order, and a Location header that must point off-site before anything is reported.</p>
+      <div class="foot"><span class="pill dast">DAST</span><span class="pill high">Medium–High</span><span class="pill">open-redirect-scanner.md</span></div>
+    </a>
+    <a class="card" href="security-headers.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><text x="12" y="22" style="font-size:9px">strict-transport-security</text><circle class="fr" cx="180" cy="18" r="4"/><text x="12" y="40" style="font-size:9px">content-security-policy</text><circle class="fs" cx="180" cy="36" r="4"/><text x="12" y="58" style="font-size:9px">x-frame-options</text><circle class="fs" cx="180" cy="54" r="4"/><text x="12" y="74" style="font-size:9px">server: nginx/1.19.0</text><circle class="fr" cx="180" cy="70" r="4"/></svg></div>
+      <h3>Security headers</h3><p>Six protective headers, two disclosure headers, the frame-ancestors alternative, a version regex for Server, and server-wide deduplication.</p>
+      <div class="foot"><span class="pill dast">DAST</span><span class="pill high">Low–High</span><span class="pill">security-headers-scanner.md</span></div>
+    </a>
+    <a class="card" href="mixed-content.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><g class="n"><rect x="8" y="12" width="184" height="56" rx="4"/></g><text x="16" y="28" class="fs">https://app.example</text><text x="16" y="46" class="fr">&lt;script src="http://cdn…"&gt;</text><text x="16" y="62">&lt;img src="http://…"&gt;</text></svg></div>
+      <h3>Mixed content</h3><p>An HTTPS page that loads http:// scripts, styles or frames (Medium) or images (Low). Passive, from the snapshot; nothing is fetched.</p>
+      <div class="foot"><span class="pill dast">DAST</span><span class="pill med">Low–Medium</span><span class="pill">no md · from code</span></div>
+    </a>
+    <a class="card" href="sri.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><text x="12" y="30">&lt;script src="https://cdn…/x.js"</text><text x="12" y="52" class="fr">integrity="…" missing</text><circle class="fr" cx="182" cy="48" r="5"/></svg></div>
+      <h3>Subresource integrity</h3><p>Cross-origin scripts (Medium) and stylesheets (Low) loaded without an integrity hash. First-party resources are excluded.</p>
+      <div class="foot"><span class="pill dast">DAST</span><span class="pill med">Low–Medium</span><span class="pill">no md · from code</span></div>
+    </a>
+    <a class="card" href="source-map.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><g class="n"><rect x="8" y="26" width="76" height="28" rx="4"/></g><text x="46" y="43" text-anchor="middle" style="font-size:9px">GET app.js.map</text><path class="w a" d="M84 40 H 120"/><g class="n"><rect x="120" y="20" width="72" height="40" rx="4"/></g><text x="156" y="36" text-anchor="middle" style="font-size:9px">200</text><text x="156" y="52" text-anchor="middle" class="fs" style="font-size:9px">"mappings":</text></svg></div>
+      <h3>Source maps</h3><p>Guessed and discovered .map URLs are fetched and confirmed by their JSON markers, so an SPA's 200-for-everything never counts. First-party is High.</p>
+      <div class="foot"><span class="pill dast">DAST</span><span class="pill high">Low–High</span><span class="pill">no md · from code</span></div>
+    </a>
+    <a class="card" href="client-exposure.html">
+      <div class="thumb"><svg viewBox="0 0 200 80"><text x="12" y="26">eyJhbGciOi…</text><text x="12" y="46" class="fr">role: "service_role"</text><g class="n"><rect x="124" y="30" width="68" height="20" rx="3"/></g><text x="158" y="44" text-anchor="middle" class="fr">CRITICAL</text><text x="12" y="68" style="font-size:9px">process.env.DB_URL</text></svg></div>
+      <h3>Client exposure</h3><p>First-party JS only: a Supabase service_role JWT (Critical), internal or staging URLs, and un-replaced process.env placeholders (Low).</p>
+      <div class="foot"><span class="pill dast">DAST</span><span class="pill crit">Low–Critical</span><span class="pill">no md · from code</span></div>
+    </a>
+  </div>
+</section>
+
+<section id="glance">
+  <h2>At a glance</h2>
+  <p class="prose">All eight are DAST scanners that run in the default <code>quick</code> depth and need only a target URL. None needs an API key, a binary or <code>--depth deep</code>. Credentials are optional everywhere: the four that send requests attach the auth headers when they exist.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Scanner</th><th>What it looks at</th><th>What it reports</th><th>Severity</th><th>Needs</th></tr></thead>
+    <tbody>
+      <tr><td><a href="csrf.html">CSRF</a></td><td>Every POST/PUT/PATCH/DELETE endpoint, plus the snapshot's cookies and POST forms</td><td>Forged Origin accepted (2xx); cookie without SameSite or with SameSite=None; POST form with no known token field</td><td>Medium–High</td><td>URL; credentials optional</td></tr>
+      <tr><td><a href="cors.html">CORS</a></td><td>One GET per distinct two-segment path prefix, with three Origin values</td><td>Wildcard with credentials; reflected Origin; null Origin; bare wildcard</td><td>Medium–Critical</td><td>URL; credentials optional</td></tr>
+      <tr><td><a href="open-redirect.html">Open redirect</a></td><td>Parameters named like a redirect target and paths such as /login or /auth/callback</td><td>3xx with an off-site Location; JavaScript or meta-refresh redirect in the body</td><td>Medium–High</td><td>URL; credentials optional</td></tr>
+      <tr><td><a href="security-headers.html">Security headers</a></td><td>A GET to every unique URL, shortest first</td><td>HSTS, CSP, X-Content-Type-Options, Permissions-Policy, Referrer-Policy missing; no clickjacking protection; Server version; X-Powered-By</td><td>Low–High</td><td>URL; credentials optional</td></tr>
+      <tr><td><a href="mixed-content.html">Mixed content</a></td><td>Captured HTML and first-party JS of an HTTPS page</td><td>http:// script, link or iframe (Medium); http:// img (Low); at most 10 per kind</td><td>Low–Medium</td><td>HTTPS URL; no requests</td></tr>
+      <tr><td><a href="sri.html">SRI</a></td><td>Captured HTML: &lt;script src&gt; and &lt;link rel=stylesheet&gt; on other origins</td><td>External script without integrity (Medium); external stylesheet without integrity (Low); at most 20</td><td>Low–Medium</td><td>URL; no requests</td></tr>
+      <tr><td><a href="source-map.html">Source map</a></td><td>sourceMappingURL hits from ingestion plus &lt;asset&gt;.map for every first-party JS asset, up to 40</td><td>A reachable .map whose body contains "sources": or "mappings": first-party High, third-party Low</td><td>Low–High</td><td>URL; credentials optional</td></tr>
+      <tr><td><a href="client-exposure.html">Client exposure</a></td><td>First-party JS only (vendor bundles filtered out)</td><td>JWT with role service_role (Critical); internal, localhost or staging URL (Low); un-replaced process.env / import.meta.env name outside the public prefixes (Low)</td><td>Low–Critical</td><td>URL; no requests</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="why">
+  <h2>Why this class matters</h2>
+  <div class="callout why">
+    <div class="label">Why it matters</div>
+    <p>These controls are the browser's half of the security model. The server can be perfectly authenticated and still lose: a reflected CORS origin lets evil.com read a logged-in user's API responses; a missing SameSite attribute lets evil.com submit a transfer with the victim's cookie; an open redirect turns your domain into a phishing link; a missing CSP means an injected script runs unhindered; a service_role key in the bundle bypasses Row Level Security for anyone who views source. Each of these is one header or one line of configuration, which is why they are cheap to test and cheap to fix.</p>
+  </div>
+  <div class="callout breach">
+    <div class="label">Real-world breaches (from the scanner docs)</div>
+    <p><b>Netflix (2006)</b>: CSRF could change account email, password and DVD queue because the site lacked CSRF tokens. <b>ING Direct (2008)</b>: CSRF initiated fund transfers from a victim's account when they visited a malicious page while logged in. <b>Cryptocurrency exchanges (2016–2018)</b>: several reflected arbitrary Origin headers in CORS responses, letting attacker-controlled sites read authenticated responses with balances and API keys. <b>British Airways (2018)</b>: the Magecart XSS attack was worsened by the absence of a Content Security Policy; <code>script-src 'self'</code> would have blocked the injected third-party script. <b>Google (ongoing)</b>: its redirect endpoints have been repeatedly abused in phishing campaigns so links appear to originate from google.com.</p>
+  </div>
+</section>
+
+<footer class="foot">
+  <span><a href="index.html">All interactive docs</a></span>
+  <span>Sibling groups: <a href="group-injection.html">Injection</a> · <a href="group-access-control.html">Access control</a> · <a href="group-auth-sessions.html">Authentication and sessions</a> · <a href="group-business-logic.html">Business logic</a> · <a href="group-surface.html">Attack surface</a> · <a href="group-secrets-dependencies.html">Secrets and dependencies</a> · <a href="group-infrastructure.html">Infrastructure</a> · <a href="group-schema-middleware.html">Schemas and middleware</a></span>
+  <span>Sources: <a href="../scanners/csrf-scanner.md">csrf-scanner.md</a> · <a href="../scanners/cors-scanner.md">cors-scanner.md</a> · <a href="../scanners/open-redirect-scanner.md">open-redirect-scanner.md</a> · <a href="../scanners/security-headers-scanner.md">security-headers-scanner.md</a> · <a href="../scanners/README.md">scanners/README.md</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+</body>
+</html>

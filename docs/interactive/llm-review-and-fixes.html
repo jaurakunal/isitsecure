@@ -1,0 +1,500 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>LLM Review and AI Fixes · isitsecure</title>
+<meta name="description" content="How isitsecure picks which routes an LLM reads, what the LLM catches that pattern matching cannot, and how findings become diffs, local fixes and pull requests. Animated.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/isdoc.css">
+<style>
+  /* triggers: routes that never pass a gate fade at the last step */
+  #triggers .skip { transition: opacity .45s ease; }
+  #triggers.s7 .skip { opacity: .35; }
+  #triggers .gate > rect { transition: fill .35s, stroke .35s; }
+
+  /* centrality: import edges turn from faint to counted */
+  #centrality .edge { stroke: var(--line); stroke-dasharray: 3 4; }
+  #centrality.s2 .edge { stroke: var(--info); stroke-dasharray: none; }
+  #centrality.s3 .edge { stroke: var(--accent); }
+
+  /* catch: code highlight rows */
+  #catch .row { fill: var(--accent-soft); opacity: 0; transition: opacity .4s; }
+  #catch.s1 .row.r3 { opacity: 1; }
+  #catch.s2 .row.r7 { opacity: 1; }
+  #catch[data-step="3"] .row.r7 { fill: var(--attacker-soft); }
+  #catch .code text { white-space: pre; }
+  #catch .flow { stroke: var(--accent); stroke-dasharray: 5 5; }
+  #catch.s2 .flow { animation: flow 1s linear infinite; }
+
+  /* delivery: lane labels */
+  #delivery .lane-lbl { font-family: var(--font-mono); font-size: 11.5px; }
+</style>
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner">
+  <a class="brand" href="index.html"><span class="dot"></span>isitsecure <span class="muted">/ interactive docs</span></a>
+  <span class="crumb">› LLM Review and AI Fixes</span>
+  <span class="spacer"></span>
+  <a class="btn" href="../scanners/llm-code-reviewer.md" title="The markdown source for this page">source .md</a>
+  <button class="btn icon" data-theme-toggle type="button" aria-label="Toggle theme">☾</button>
+</div></nav>
+
+<main class="page">
+<header class="hero">
+  <div class="eyebrow">LLM-powered</div>
+  <h1>LLM Review and AI Fixes</h1>
+  <p class="lede">Pattern matchers find the universal bugs. Business logic bugs are specific to what your app does, so an LLM reads the code of the routes that matter most, and the same machinery then turns findings into diffs, applied fixes and pull requests.</p>
+  <div class="meta">
+    <span class="pill llm">LLM-powered</span><span class="pill crit">severity varies</span><span class="pill">business logic</span><span class="pill">phase 8 · phase 11</span><span class="pill">~$5–8 per code-only scan</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#triggers"><span class="n">01</span>Which routes get read</a>
+  <a href="#centrality"><span class="n">02</span>Import graph centrality</a>
+  <a href="#catch"><span class="n">03</span>What regex cannot see</a>
+  <a href="#code"><span class="n">04</span>Vulnerable vs fixed</a>
+  <a href="#fixgen"><span class="n">05</span>The fix generator</a>
+  <a href="#delivery"><span class="n">06</span>Three ways to deliver</a>
+  <a href="#limits"><span class="n">07</span>Cost and configuration</a>
+</nav>
+
+<section id="triggers">
+  <h2>Which routes get read</h2>
+  <p class="prose">Sending every route to the LLM is too expensive, so every mapped route is a candidate and the triggers decide which ones pass (the scene shows five; a sixth, the injection-pattern file flag at priority 5, adds up to 15 non-route files). Triggers run in priority order, a route selected by a higher-priority trigger is not selected again, and a 500-file budget caps the total. Four of the triggers have their own specialised system prompt.</p>
+
+  <div class="scene" id="triggers" data-scene data-interval="3000">
+    <figure class="stage">
+      <svg viewBox="0 0 960 340" role="img" aria-label="Eight mapped files on the left flow through five trigger gates in priority order into the LLM review box on the right; two routes match no trigger and are skipped.">
+        <defs><marker id="arrT" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <text class="lbl" x="20" y="36">Mapped routes and files</text>
+        <g class="mono">
+          <g class="node lit-1" transform="translate(20 50)"><rect width="240" height="24" rx="6"/><text x="10" y="16">POST   /api/checkout</text></g>
+          <g class="node lit-1" transform="translate(20 80)"><rect width="240" height="24" rx="6"/><text x="10" y="16">GET    /api/users/[id]</text></g>
+          <g class="node lit-1" transform="translate(20 110)"><rect width="240" height="24" rx="6"/><text x="10" y="16">POST   /api/tasks</text></g>
+          <g class="node lit-1" transform="translate(20 140)"><rect width="240" height="24" rx="6"/><text x="10" y="16">DELETE /api/tasks/[id]</text></g>
+          <g class="node lit-1" transform="translate(20 170)"><rect width="240" height="24" rx="6"/><text x="10" y="16">POST   /api/admin/run  eval()</text></g>
+          <g class="node lit-1 skip" transform="translate(20 200)"><rect width="240" height="24" rx="6"/><text x="10" y="16">GET    /api/plans</text></g>
+          <g class="node lit-1 skip" transform="translate(20 230)"><rect width="240" height="24" rx="6"/><text x="10" y="16">GET    /api/health</text></g>
+          <g class="node lit-1" transform="translate(20 260)"><rect width="240" height="24" rx="6"/><text x="10" y="16">lib/db.ts  · shared helper</text></g>
+          <text class="lbl at-7" x="268" y="216">skipped</text>
+          <text class="lbl at-7" x="268" y="246">skipped</text>
+        </g>
+
+        <!-- route → gate wires -->
+        <path class="wire at-2 accent" d="M260 62 C 300 62, 300 54, 338 54" marker-end="url(#arrT)"/>
+        <path class="wire at-3 accent" d="M260 92 C 300 92, 300 112, 338 112" marker-end="url(#arrT)"/>
+        <path class="wire at-4 accent" d="M260 122 C 300 122, 300 170, 338 170" marker-end="url(#arrT)"/>
+        <path class="wire at-4 accent" d="M260 152 C 300 152, 300 170, 338 170" marker-end="url(#arrT)"/>
+        <path class="wire at-5 accent" d="M260 182 C 300 182, 300 228, 338 228" marker-end="url(#arrT)"/>
+        <path class="wire at-6 accent" d="M260 272 C 300 272, 300 286, 338 286" marker-end="url(#arrT)"/>
+
+        <!-- gates -->
+        <g class="node gate lit-2" transform="translate(340 26)"><rect width="260" height="56" rx="8"/><text class="ttl" x="12" y="19">0 · Financial operation</text><text class="lbl" x="12" y="34">always · payment, checkout, billing</text><text class="lbl" x="12" y="47">prompt: races, idempotency, price</text></g>
+        <g class="node gate lit-3" transform="translate(340 84)"><rect width="260" height="56" rx="8"/><text class="ttl" x="12" y="19">1 · Cross-scanner flagged</text><text class="lbl" x="12" y="34">touches a SAST-flagged entity</text><text class="lbl" x="12" y="47">own system prompt</text></g>
+        <g class="node gate lit-4" transform="translate(340 142)"><rect width="260" height="56" rx="8"/><text class="ttl" x="12" y="19">2 · State mutation</text><text class="lbl" x="12" y="34">DB write plus a branch</text><text class="lbl" x="12" y="47">own system prompt</text></g>
+        <g class="node gate lit-5" transform="translate(340 200)"><rect width="260" height="56" rx="8"/><text class="ttl" x="12" y="19">3 · Risk indicator</text><text class="lbl" x="12" y="34">no auth · unowned id · service_role</text><text class="lbl" x="12" y="47">prompt: data flow and sanitisation</text></g>
+        <g class="node gate lit-6" transform="translate(340 258)"><rect width="260" height="56" rx="8"/><text class="ttl" x="12" y="19">4 · Import graph centrality</text><text class="lbl" x="12" y="34">helpers imported by many risky routes</text><text class="lbl" x="12" y="47">lib/db.ts ← 15 routes</text></g>
+
+        <!-- gate → LLM wires -->
+        <path class="wire at-2 accent" d="M600 54 C 650 54, 650 66, 698 66" marker-end="url(#arrT)"/>
+        <path class="wire at-3 accent" d="M600 112 C 650 112, 650 86, 698 86" marker-end="url(#arrT)"/>
+        <path class="wire at-4 accent" d="M600 170 C 650 170, 650 116, 698 116" marker-end="url(#arrT)"/>
+        <path class="wire at-5 accent" d="M600 228 C 650 228, 650 146, 698 146" marker-end="url(#arrT)"/>
+        <path class="wire at-6 accent" d="M600 286 C 650 286, 650 166, 698 166" marker-end="url(#arrT)"/>
+
+        <!-- LLM -->
+        <g class="node lit-7" transform="translate(700 26)">
+          <rect width="240" height="288" rx="10"/>
+          <text class="ttl" x="12" y="22">LLM review</text>
+          <text class="lbl" x="12" y="38">Claude or Gemini reads the source</text>
+          <g class="mono">
+            <text class="at-2" x="12" y="70">/api/checkout</text>
+            <text class="at-3" x="12" y="90">/api/users/[id]</text>
+            <text class="at-4" x="12" y="110">/api/tasks</text>
+            <text class="at-4" x="12" y="130">/api/tasks/[id]</text>
+            <text class="at-5" x="12" y="150">/api/admin/run</text>
+            <text class="at-6" x="12" y="170">lib/db.ts</text>
+          </g>
+          <text class="at-7 t-accent" x="12" y="200">6 of 8 files reviewed</text>
+          <text class="lbl at-7" x="12" y="220">higher-priority trigger wins on</text>
+          <text class="lbl at-7" x="12" y="235">duplicates; a file budget caps</text>
+          <text class="lbl at-7" x="12" y="250">the total; one prompt per trigger</text>
+          <text class="lbl at-7" x="12" y="272">~$5–8 per code-only scan</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The route mapper has listed every route, and the file index holds every source file. All of them are candidates for LLM review; none has been selected yet.</p>
+      <p class="step"><span class="n">2</span><b>Financial operation, priority 0, always.</b> Payment, checkout, billing and subscription routes go first, no matter what else is true. Their prompt is tuned for race conditions, idempotency and price manipulation.</p>
+      <p class="step"><span class="n">3</span><b>Cross-scanner flagged, priority 1.</b> A route that references a table or route named in an earlier SAST finding is worth a second, smarter read.</p>
+      <p class="step"><span class="n">4</span><b>State mutation, priority 2.</b> A route whose code both writes to the database and branches on a condition passes, whatever its HTTP method; plain reads do not qualify.</p>
+      <p class="step"><span class="n">5</span><b>Risk indicator, priority 3.</b> A route with no auth check, a user-supplied id without an ownership check, or <code>service_role</code> usage passes.</p>
+      <p class="step"><span class="n">6</span><b>Import graph centrality, priority 4.</b> Not a route at all: <code>lib/db.ts</code> is imported by 15 already-selected routes, so a bug in it has a huge blast radius. It is sent regardless of its own content (next scene).</p>
+      <p class="step"><span class="n">7</span>Two GET routes matched nothing and are skipped. Duplicates resolve to the higher-priority trigger, and if the file budget runs out the lower-priority routes are dropped first.</p>
+    </div>
+  </div>
+</section>
+
+<section id="centrality">
+  <h2>Import graph centrality</h2>
+  <p class="prose">The route-based triggers look at a route's own pattern or content. This one looks at the shape of the codebase: a module dependency graph is built, and non-route files with high fan-in from already-selected routes are reviewed too.</p>
+
+  <div class="scene" id="centrality" data-scene data-interval="2800">
+    <figure class="stage">
+      <svg viewBox="0 0 960 250" role="img" aria-label="Selected risky routes on the left all import lib/db.ts in the centre; the fan-in count of 15 meets the threshold of 2, so the helper is sent to LLM review.">
+        <defs><marker id="arrG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <text class="lbl" x="20" y="22">Routes already selected by triggers 0–3</text>
+        <g class="mono">
+          <g class="node" transform="translate(20 32)"><rect width="200" height="22" rx="6"/><text x="10" y="15">/api/checkout</text></g>
+          <g class="node" transform="translate(20 60)"><rect width="200" height="22" rx="6"/><text x="10" y="15">/api/users/[id]</text></g>
+          <g class="node" transform="translate(20 88)"><rect width="200" height="22" rx="6"/><text x="10" y="15">/api/tasks</text></g>
+          <g class="node" transform="translate(20 116)"><rect width="200" height="22" rx="6"/><text x="10" y="15">/api/tasks/[id]</text></g>
+          <g class="node" transform="translate(20 144)"><rect width="200" height="22" rx="6"/><text x="10" y="15">/api/admin/run</text></g>
+          <g class="node" transform="translate(20 172)"><rect width="200" height="22" rx="6"/><text x="10" y="15" class="lbl">+ 10 more risky routes</text></g>
+        </g>
+        <g class="at-1">
+          <path class="wire edge" d="M220 43 C 320 43, 320 120, 418 120"/>
+          <path class="wire edge" d="M220 71 C 320 71, 320 122, 418 122"/>
+          <path class="wire edge" d="M220 99 C 320 99, 320 124, 418 124"/>
+          <path class="wire edge" d="M220 127 C 320 127, 320 126, 418 126"/>
+          <path class="wire edge" d="M220 155 C 320 155, 320 128, 418 128"/>
+          <path class="wire edge" d="M220 183 C 320 183, 320 130, 418 130"/>
+        </g>
+        <text class="lbl at-1" x="320" y="212" text-anchor="middle">import edges from the dependency graph</text>
+
+        <g class="node at-1 lit-3" transform="translate(420 92)">
+          <rect width="170" height="64" rx="10"/>
+          <text class="ttl" x="12" y="22">lib/db.ts</text>
+          <text class="lbl" x="12" y="38">shared helper, not a route</text>
+          <text class="mono at-2 t-info" x="12" y="54">risk-route fan-in: 15</text>
+        </g>
+
+        <path class="wire at-3 accent" d="M590 124 H 648" marker-end="url(#arrG)"/>
+        <g class="node at-2 lit-3" transform="translate(650 56)">
+          <rect width="290" height="136" rx="10"/>
+          <text class="ttl" x="12" y="24">Centrality decision</text>
+          <g class="mono">
+            <text class="at-2" x="12" y="50">15 ≥ 2   (MIN_RISK_IMPORTER_COUNT)</text>
+            <text class="at-3 t-accent" x="12" y="74">→ send to LLM review, priority 4</text>
+          </g>
+          <text class="lbl at-3" x="12" y="100">reviewed regardless of its content:</text>
+          <text class="lbl at-3" x="12" y="116">a bug here reaches all 15 routes</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The scanner builds a module dependency graph from the repo's imports and computes a fan-in map: for each file, who imports it.</p>
+      <p class="step"><span class="n">2</span>For every non-route file it counts only the importers that are <b>already-selected risky routes</b>. <code>lib/db.ts</code> is imported by 15 of them.</p>
+      <p class="step"><span class="n">3</span>The count meets the threshold (at least 2 risk importers), so the helper is sent to review at priority 4 <b>regardless of what its own code looks like</b>. One bug in it would have the blast radius of all 15 routes.</p>
+    </div>
+  </div>
+</section>
+
+<section id="catch">
+  <h2>What the LLM catches that regex cannot</h2>
+  <p class="prose">A checkout route accepts a price from the client. No line of it matches any rule, because <code>amount: price</code> is ordinary code. Only something that understands what a checkout is can see the bug.</p>
+
+  <div class="scene" id="catch" data-scene data-interval="3200">
+    <figure class="stage">
+      <svg viewBox="0 0 960 330" role="img" aria-label="A checkout route's source on the left shows price read from the request body flowing into the order amount; on the right an attacker's request with price 0.01, the pattern scanners finding nothing, and the LLM's CRITICAL price-manipulation finding.">
+        <defs><marker id="arrX" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g class="node"><rect x="20" y="24" width="470" height="204" rx="10"/></g>
+        <text class="lbl" x="34" y="20">app/api/checkout/route.ts</text>
+        <rect class="row r3" x="26" y="66" width="458" height="18" rx="3"/>
+        <rect class="row r7" x="26" y="134" width="458" height="18" rx="3"/>
+        <g class="mono code">
+          <text x="30" y="44">export async function POST(request: Request) {</text>
+          <text x="30" y="61">  const user = getAuthUser(request)</text>
+          <text x="30" y="78">  const { plan, <tspan class="t-accent">price</tspan> } = await request.json()</text>
+          <text x="30" y="95"></text>
+          <text x="30" y="112">  const order = await db.insert("orders", {</text>
+          <text x="30" y="129">    user_id: user.id,</text>
+          <text x="30" y="146">    plan: plan,</text>
+          <text x="30" y="163">    <tspan class="t-attacker">amount: price</tspan>,</text>
+          <text x="30" y="180">    status: "paid"</text>
+          <text x="30" y="197">  })</text>
+          <text x="30" y="214">  return NextResponse.json({ order })</text>
+        </g>
+        <path class="wire flow at-2" d="M375 74 C 460 74, 460 159, 160 159" marker-end="url(#arrX)"/>
+        <text class="lbl at-2" x="400" y="98" text-anchor="end">client value → order amount</text>
+
+        <!-- attacker request -->
+        <g class="node at-3 lit-3" transform="translate(560 24)">
+          <rect width="380" height="70" rx="8" class="soft-attacker"/>
+          <text class="eyebrow" x="12" y="18" style="font-size:10px;fill:var(--attacker)">ATTACKER REQUEST</text>
+          <g class="mono"><text x="12" y="38">POST /api/checkout</text><text x="12" y="56">{"plan": "enterprise", "price": 0.01}</text></g>
+        </g>
+        <path id="xp3" class="wire at-3 attacker" d="M560 60 C 520 60, 510 78, 492 78" marker-end="url(#arrX)"/>
+
+        <!-- regex -->
+        <g class="node at-4 lit-4" transform="translate(560 110)">
+          <rect width="380" height="64" rx="8"/>
+          <text class="ttl" x="12" y="22">Pattern scanners</text>
+          <text class="mono" x="12" y="42">grep "amount: price"  →  matches no rule</text>
+          <text class="lbl" x="12" y="56">0 findings. It is ordinary, well-formed code.</text>
+        </g>
+
+        <!-- llm finding -->
+        <g class="node at-5 lit-5" transform="translate(560 190)">
+          <rect width="380" height="124" rx="8" class="soft-accent"/>
+          <text class="eyebrow" x="12" y="18" style="font-size:10px;fill:var(--attacker)">CRITICAL · LLM REVIEW</text>
+          <text class="ttl" x="12" y="38">Price manipulation</text>
+          <text class="lbl" x="12" y="56">price is accepted from the request body and</text>
+          <text class="lbl" x="12" y="70">used directly as the order amount. The</text>
+          <text class="lbl" x="12" y="84">enterprise plan sells for $0.01. Look the</text>
+          <text class="lbl" x="12" y="98">price up server-side from the plan instead.</text>
+          <text class="lbl t-accent" x="12" y="114">a checkout is where prices must be server-authoritative</text>
+        </g>
+
+        <!-- other classes -->
+        <g class="only-6">
+          <text class="lbl" x="30" y="248">Also found by reading, not matching:</text>
+          <text x="30" y="270">missing ownership checks</text>
+          <text x="30" y="290">race conditions in payment flows</text>
+          <text x="30" y="310">wrong RLS column: auth.uid() = id</text>
+          <text x="270" y="270">auth bypass via alternative paths</text>
+          <text x="270" y="290">coupons applied after payment</text>
+          <text x="270" y="310">negative quantities, self-referrals</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>The route is authenticated: <code>getAuthUser</code> runs first. Then it destructures <code>plan</code> and <code>price</code> straight out of the request body.</p>
+      <p class="step"><span class="n">2</span>That <code>price</code> flows, untouched, into <code>amount</code> on the inserted order, which is immediately marked <code>paid</code>. <b>The client decides what it pays.</b></p>
+      <p class="step" data-on="catchHook"><span class="n">3</span>An attacker sends <code>{"plan": "enterprise", "price": 0.01}</code> and buys the enterprise plan for one cent.</p>
+      <p class="step"><span class="n">4</span>Pattern scanners see nothing. There is no regex for "this amount should have come from the server"; <code>amount: price</code> is valid, ordinary code.</p>
+      <p class="step"><span class="n">5</span>The LLM reviewer, reading the route under the financial-operation prompt, reports a <b>CRITICAL price manipulation</b> finding and the fix: look the price up server-side from the selected plan.</p>
+      <p class="step"><span class="n">6</span>The same reading catches the other business logic classes: missing ownership checks (logged in is not the same as owns it), races in payment flows, the wrong RLS column, auth bypass through alternative code paths, and business rule violations.</p>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="callout why"><div class="label">Why business logic bugs are different</div><p>There is no regex for "this payment flow has no idempotency". The bugs are specific to your app rather than universal like SQL injection, and they often appear only when you understand a sequence of operations, which is why the reviewer gets whole route files, not snippets.</p></div>
+    <div class="callout breach"><div class="label">Real-world context</div><p><b>Starbucks (2015):</b> a race condition in the gift card balance transfer flow allowed double-spending. Nothing but reasoning about the code can see that a balance check is not atomic. <b>Multiple e-commerce platforms:</b> client-controlled price fields are a recurring bug bounty finding, always the same shape: the API accepts <code>price</code> from the body instead of looking it up.</p></div>
+  </div>
+</section>
+
+<section id="code">
+  <h2>Vulnerable vs fixed</h2>
+  <p class="prose">The fix is app-specific but the pattern is not: the server decides the price from the plan, and an unknown plan is an error.</p>
+  <div class="code-compare">
+    <div class="tabs" role="tablist">
+      <button class="tab bad" role="tab" aria-selected="true">BAD · price from the client</button>
+      <button class="tab good" role="tab" aria-selected="false">GOOD · price looked up server-side</button>
+    </div>
+    <div role="tabpanel"><pre><code>export async function POST(request: Request) {
+  const user = getAuthUser(request)
+  const { plan, <span class="k">price</span> } = await request.json()
+
+  const order = await db.insert(<span class="s">"orders"</span>, {
+    user_id: user.id,
+    plan: plan,
+<span class="hl bad">    amount: price,    <span class="c">// client-controlled price becomes the amount</span></span>
+    status: <span class="s">"paid"</span>
+  })
+
+  return NextResponse.json({ order })
+}</code></pre></div>
+    <div role="tabpanel" hidden><pre><code><span class="c">// FIX: Price manipulation — look up price server-side</span>
+const PLAN_PRICES = { starter: 9, pro: 29, enterprise: 99 }
+
+export async function POST(request: Request) {
+  const user = getAuthUser(request)
+  const { plan } = await request.json()
+
+<span class="hl good">  const amount = PLAN_PRICES[plan]</span>
+  if (!amount) return error(<span class="s">"Invalid plan"</span>)
+
+  const order = await db.insert(<span class="s">"orders"</span>, {
+    user_id: user.id,
+    plan: plan,
+    amount,           <span class="c">// server-authoritative</span>
+    status: <span class="s">"paid"</span>
+  })
+
+  return NextResponse.json({ order })
+}</code></pre></div>
+  </div>
+  <p class="prose">Two more of the common fixes the reviewer recommends, from the same doc:</p>
+<pre><code><span class="c">// FIX: Race condition — use atomic database operations</span>
+await db.query(
+  <span class="s">`UPDATE credits SET balance = balance - $1
+   WHERE user_id = $2 AND balance &gt;= $1 RETURNING balance`</span>,
+  [amount, userId]
+)
+
+<span class="c">// FIX: Missing ownership — always filter by authenticated user</span>
+const task = await db.query(
+  <span class="s">`SELECT * FROM tasks WHERE id = $1 AND user_id = $2`</span>, [taskId, userId]
+)</code></pre>
+</section>
+
+<section id="fixgen">
+  <h2>The fix generator</h2>
+  <p class="prose">Phase 11 is optional and runs after the report. For each critical and high finding that has a source location, the whole file and the finding go to the LLM with a security-aware system prompt, and a fixed file comes back.</p>
+
+  <div class="scene" id="fixgen" data-scene data-interval="2800">
+    <figure class="stage">
+      <svg viewBox="0 0 960 240" role="img" aria-label="A finding and its full source file are sent to the LLM with a fix-pattern system prompt; the response is parsed into fixed code and turned into a unified diff with an explanation.">
+        <defs><marker id="arrF" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+        <g class="node lit-1" transform="translate(20 36)">
+          <rect width="190" height="72" rx="8"/>
+          <text class="eyebrow" x="12" y="18" style="font-size:10px;fill:var(--attacker)">FINDING · CRITICAL</text>
+          <text class="ttl" x="12" y="38">SQL injection</text>
+          <text class="mono lbl" x="12" y="58">app/api/search/route.ts:14</text>
+        </g>
+        <g class="node lit-1" transform="translate(20 132)">
+          <rect width="190" height="72" rx="8"/>
+          <text class="ttl" x="12" y="24">Full source file</text>
+          <text class="lbl" x="12" y="44">the whole file, read from disk,</text>
+          <text class="lbl" x="12" y="60">not just the flagged snippet</text>
+        </g>
+        <path class="wire at-2 accent" d="M210 72 C 250 72, 250 110, 298 110" marker-end="url(#arrF)"/>
+        <path class="wire at-2 accent" d="M210 168 C 250 168, 250 130, 298 130" marker-end="url(#arrF)"/>
+
+        <g class="node at-2 lit-2" transform="translate(300 24)">
+          <rect width="260" height="196" rx="10"/>
+          <text class="ttl" x="12" y="22">LLM</text>
+          <text class="lbl" x="12" y="38">security-aware system prompt</text>
+          <g class="mono">
+            <text class="lbl" x="12" y="64">SQLi      → parameterized query</text>
+            <text class="lbl" x="12" y="82">XSS       → escape · textContent</text>
+            <text class="lbl" x="12" y="100">no auth   → getUserFromRequest()</text>
+            <text class="lbl" x="12" y="118">IDOR      → WHERE user_id = $userId</text>
+            <text class="lbl" x="12" y="136">mass asgn → pick allowed fields</text>
+            <text class="lbl" x="12" y="154">race      → SELECT … FOR UPDATE</text>
+            <text class="lbl" x="12" y="172">weak JWT  → restrict algs, expiry</text>
+          </g>
+        </g>
+        <path class="wire at-3 accent" d="M560 122 H 618" marker-end="url(#arrF)"/>
+        <g class="node at-3 lit-3" transform="translate(620 92)">
+          <rect width="140" height="60" rx="8"/>
+          <text class="ttl" x="12" y="24">Parse</text>
+          <text class="lbl" x="12" y="44">extract the fixed code</text>
+        </g>
+        <path class="wire at-4 accent" d="M760 122 H 798" marker-end="url(#arrF)"/>
+        <g class="node at-4 lit-4" transform="translate(800 36)">
+          <rect width="140" height="168" rx="8" class="soft-safe"/>
+          <text class="ttl" x="12" y="22">Unified diff</text>
+          <g class="mono">
+            <text x="12" y="48">--- a/route.ts</text>
+            <text x="12" y="64">+++ b/route.ts</text>
+            <text x="12" y="84" class="t-attacker">- `… ${q}`</text>
+            <text x="12" y="100" class="t-safe">+ $1, [q]</text>
+          </g>
+          <text class="lbl" x="12" y="128">+ explanation of</text>
+          <text class="lbl" x="12" y="143">what changed and why</text>
+        </g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Input: one critical or high finding with a code location, and the <b>full source file</b> it points at, read from disk.</p>
+      <p class="step"><span class="n">2</span>Both go to the LLM with a security-aware system prompt that carries the common fix patterns: parameterized queries for SQLi, escaping for XSS, an auth check, ownership in the WHERE clause, explicit field picking, row locking, strict JWT settings.</p>
+      <p class="step"><span class="n">3</span>The response is parsed to extract the fixed code.</p>
+      <p class="step"><span class="n">4</span>A unified diff between original and fixed code is generated, with an explanation of what changed and why. Everything downstream (markdown plan, local apply, pull requests, and the MCP <code>fix</code> tool) starts from this diff.</p>
+    </div>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Vulnerability</th><th>Fix pattern in the system prompt</th></tr></thead>
+      <tbody>
+        <tr><td>SQL injection</td><td>Parameterized queries / tagged template literals</td></tr>
+        <tr><td>XSS</td><td>HTML escaping, textContent, CSP headers</td></tr>
+        <tr><td>Missing auth</td><td>Add <code>getUserFromRequest()</code> check</td></tr>
+        <tr><td>IDOR</td><td>Add <code>WHERE user_id = $userId</code> to queries</td></tr>
+        <tr><td>Mass assignment</td><td>Explicitly pick allowed fields</td></tr>
+        <tr><td>Race condition</td><td>Database transactions with <code>SELECT … FOR UPDATE</code></td></tr>
+        <tr><td>Weak JWT</td><td>Restrict algorithms, strong secret, add expiration</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="delivery">
+  <h2>Three ways to deliver a fix</h2>
+  <p class="prose">The same diff reaches your code three ways, in increasing order of how much the tool does for you. The local mode is git-free and backs up first; the remote mode never touches your default branch.</p>
+
+  <div class="scene" id="delivery" data-scene data-interval="2800">
+    <figure class="stage">
+      <svg viewBox="0 0 960 310" role="img" aria-label="Three lanes: a markdown fix plan you apply yourself; a local flow that backs up, writes, re-scans and summarises; a remote flow that clones, groups fixes per category and opens capped pull requests on feature branches.">
+        <defs><marker id="arrV" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+
+        <text class="lane-lbl t-accent" x="20" y="30">a · isitsecure scan --repo ./my-app --output fixes -f fixes.md</text>
+        <g class="node at-2 lit-2" transform="translate(20 40)"><rect width="260" height="46" rx="8"/><text class="ttl" x="12" y="20">fixes.md</text><text class="lbl" x="12" y="37">a diff + explanation per finding</text></g>
+        <path class="wire at-2 accent" d="M280 63 H 318" marker-end="url(#arrV)"/>
+        <g class="node at-2 lit-2" transform="translate(320 40)"><rect width="330" height="46" rx="8"/><text class="ttl" x="12" y="20">You apply it</text><text class="lbl" x="12" y="37">paste into Cursor / Claude Code · git apply · review</text></g>
+
+        <text class="lane-lbl t-accent" x="20" y="128">b · isitsecure fix --repo ./my-app   (local, git-free)</text>
+        <g class="node at-3 lit-3" transform="translate(20 138)"><rect width="200" height="46" rx="8"/><text class="ttl" x="12" y="20">Safety-net backup</text><text class="lbl" x="12" y="37">git stash ref or file copy</text></g>
+        <path class="wire at-4 accent" d="M220 161 H 248" marker-end="url(#arrV)"/>
+        <g class="node at-4 lit-4" transform="translate(250 138)"><rect width="180" height="46" rx="8"/><text class="ttl" x="12" y="20">Write fixes</text><text class="lbl" x="12" y="37">in place, one per finding</text></g>
+        <path class="wire at-5 accent" d="M430 161 H 458" marker-end="url(#arrV)"/>
+        <g class="node at-5 lit-5" transform="translate(460 138)"><rect width="160" height="46" rx="8"/><text class="ttl" x="12" y="20">Re-scan</text><text class="lbl" x="12" y="37">is each finding gone?</text></g>
+        <path class="wire at-5 accent" d="M620 161 H 648" marker-end="url(#arrV)"/>
+        <g class="node at-5 lit-5" transform="translate(650 138)"><rect width="290" height="46" rx="8" class="soft-safe"/><text class="ttl" x="12" y="20">Plain-language summary</text><text class="lbl" x="12" y="37">fixed · needs review · couldn't fix</text></g>
+
+        <text class="lane-lbl t-accent" x="20" y="226">c · isitsecure fix --repo https://github.com/you/your-app --github-token $GITHUB_TOKEN</text>
+        <g class="node at-6 lit-6" transform="translate(20 236)"><rect width="150" height="56" rx="8"/><text class="ttl" x="12" y="22">Clone</text><text class="lbl" x="12" y="40">then generate fixes</text></g>
+        <path class="wire at-7 accent" d="M170 264 H 198" marker-end="url(#arrV)"/>
+        <g class="node at-7 lit-7" transform="translate(200 236)"><rect width="230" height="56" rx="8"/><text class="ttl" x="12" y="22">Group per category</text><text class="lbl" x="12" y="40">one commit per finding</text></g>
+        <path class="wire at-7 accent" d="M430 264 H 458" marker-end="url(#arrV)"/>
+        <g class="node at-7 lit-7" transform="translate(460 236)"><rect width="220" height="56" rx="8"/><text class="ttl" x="12" y="22">One PR per group</text><text class="lbl" x="12" y="40">feature branch, never default</text></g>
+        <path class="wire at-8 accent" d="M680 264 H 708" marker-end="url(#arrV)"/>
+        <g class="node at-8 lit-8" transform="translate(710 236)"><rect width="230" height="56" rx="8" class="soft-accent"/><text class="ttl" x="12" y="22">--max-prs 8 (default)</text><text class="lbl" x="12" y="40">excess low-severity → one batch PR</text></g>
+      </svg>
+    </figure>
+    <div class="scene-steps">
+      <p class="step"><span class="n">1</span>Three delivery modes share one fix generator: a <b>markdown plan</b>, a <b>local apply with verification</b>, and a <b>remote clone that opens pull requests</b>.</p>
+      <p class="step"><span class="n">2</span><b>Markdown fix plan.</b> <code>scan --output fixes</code> exports a unified diff and explanation per finding, designed to paste into Cursor or Claude Code ("apply all the security fixes in this document"), to <code>git apply</code>, or to review by hand.</p>
+      <p class="step"><span class="n">3</span><b>Local apply, step one: the safety net.</b> <code>fixes/safety_net.py</code> snapshots the working tree first, as a git stash-create ref or a file-copy backup. The flow is git-free, so it works in any directory.</p>
+      <p class="step"><span class="n">4</span>Fixes are written in place, one finding at a time. <code>--dry-run</code> previews without writing; <code>--severity critical</code> narrows the set.</p>
+      <p class="step"><span class="n">5</span>The code is <b>re-scanned to verify each finding is resolved</b>. <code>fixes/plain_results.py</code> buckets the outcome: <b>fixed</b> (re-scan confirms it is gone), <b>needs review</b> (written but still flagged), <b>couldn't fix</b> (no fix could be generated). <code>--technical</code> surfaces the git and backup mechanics.</p>
+      <p class="step"><span class="n">6</span><b>Remote.</b> Given a GitHub URL, <code>fixes/pr_flow.py</code> clones the repo and generates fixes. The token is used only for the push and the PR, and is never stored or logged.</p>
+      <p class="step"><span class="n">7</span>Fixed findings are grouped per category by default (also per-file, per-finding or single). Each group becomes <b>one pull request on a feature branch, with one commit per finding</b>. The default branch is never pushed to.</p>
+      <p class="step"><span class="n">8</span><code>--max-prs</code> caps the count at 8 by default. Excess low-severity categories are merged into a single batch PR, so nothing is dropped. Grouping depends on findings carrying their true category, which for LLM-review findings is assigned by <code>category_classifier.py</code>.</p>
+    </div>
+  </div>
+</section>
+
+<section id="limits">
+  <h2>Cost, configuration, and what it needs</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>What</th><th>Estimated cost</th><th>Needs</th></tr></thead>
+      <tbody>
+        <tr><td>Code-only scan with LLM review</td><td>~$5–8, depending on number of routes and file sizes</td><td><code>ANTHROPIC_API_KEY</code> or <code>GOOGLE_API_KEY</code> with <code>--llm google</code></td></tr>
+        <tr><td>Fix plan (<code>scan --output fixes</code>, <code>fix</code>)</td><td>~$1–3, depending on number of findings and file sizes</td><td>Same provider as the scan (<code>--llm anthropic</code> or <code>--llm google</code>)</td></tr>
+        <tr><td>Scan with <code>--llm none</code></td><td>$0</td><td>Nothing; reduced accuracy, no LLM review, no fixes</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="grid-2">
+    <div class="callout note"><div class="label">Deliberately not reviewed</div><p>Routes that match none of the triggers are not sent to the LLM. Routes with no risk pattern, no cross-scanner flag, no financial keywords and no write-plus-branch logic stay out, which is how the cost holds. Fix generation only considers findings that have a source code location, and only critical and high ones (the <code>fix</code> command's <code>--severity</code> can add medium).</p></div>
+    <div class="callout note"><div class="label">The MCP uses the same generator</div><p>The <code>fix</code> MCP tool calls the same <code>FixGenerator</code> and returns the diff for the host editor to apply instead of writing files. How that loop works is on <a href="mcp-loop.html">The MCP remediation loop</a>.</p></div>
+  </div>
+</section>
+
+<footer class="foot">
+  <span>Source: <a href="../scanners/llm-code-reviewer.md">llm-code-reviewer.md</a> · <a href="../scanners/fix-generator.md">fix-generator.md</a> · <a href="../architecture.md">architecture.md</a></span>
+  <span>Related: <a href="mcp-loop.html">The MCP remediation loop</a> · <a href="scan-pipeline.html">The scan pipeline</a></span>
+  <span><a href="index.html">All interactive docs</a></span>
+</footer>
+</main>
+
+<script src="assets/isdoc.js"></script>
+<script>
+(function () {
+  window.catchHook = function (scene, step, el) {
+    const svg = el.querySelector("svg");
+    IsDoc.clearPackets(svg);
+    const p = svg.getElementById("xp3");
+    if (p) IsDoc.packet(svg, p, { r: 5, cls: "f-attacker", duration: 900, hold: 500 });
+  };
+})();
+</script>
+</body>
+</html>
