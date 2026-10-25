@@ -439,6 +439,9 @@ class FixGenerator:
 # Safe source IO for the fix flows
 # ---------------------------------------------------------------------------
 
+_BOM = b"\xef\xbb\xbf"
+
+
 def resolve_fix_target(repo_path: str, rel_path: str) -> str:
     """Resolve a finding's file path inside the repo, or raise ValueError.
 
@@ -447,13 +450,29 @@ def resolve_fix_target(repo_path: str, rel_path: str) -> str:
     """
     from isitsecure.engine.shared.safe_path import resolve_within
 
-    parts = rel_path.replace("\\", "/").split("/")
-    if ".git" in parts:
+    def _has_git(path: str) -> bool:
+        # casefold: on case-insensitive filesystems (macOS, Windows) ``.GIT``
+        # and ``.Git`` are the real git directory.
+        return ".git" in [p.casefold() for p in path.replace("\\", "/").split("/")]
+
+    if _has_git(rel_path):
         raise ValueError(f"Refusing to touch .git metadata: {rel_path!r}")
     target = resolve_within(repo_path, rel_path)
-    real_rel = os.path.relpath(target, os.path.realpath(repo_path))
-    if ".git" in real_rel.replace("\\", "/").split("/"):
+    real_repo = os.path.realpath(repo_path)
+    if _has_git(os.path.relpath(target, real_repo)):
         raise ValueError(f"Refusing to touch .git metadata: {rel_path!r}")
+    # Belt and braces for odd spellings the name check cannot see: refuse when
+    # the target, or any existing ancestor inside the repo, IS the repo's .git.
+    git_dir = os.path.join(real_repo, ".git")
+    if os.path.exists(git_dir):
+        probe = target
+        while probe != real_repo and len(probe) > len(real_repo):
+            try:
+                if os.path.exists(probe) and os.path.samefile(probe, git_dir):
+                    raise ValueError(f"Refusing to touch .git metadata: {rel_path!r}")
+            except OSError:
+                pass
+            probe = os.path.dirname(probe)
     return target
 
 
@@ -476,5 +495,15 @@ def read_source_file(repo_path: str, rel_path: str) -> str | None:
 def write_source_file(repo_path: str, rel_path: str, content: str) -> None:
     """Write fixed content back as UTF-8 with its newlines exactly as given."""
     target = resolve_fix_target(repo_path, rel_path)
+    data = content.encode("utf-8")
+    # The model's reply rarely carries a UTF-8 BOM; keep the file's own.
+    if not data.startswith(_BOM):
+        try:
+            with open(target, "rb") as fh:
+                had_bom = fh.read(3) == _BOM
+        except OSError:
+            had_bom = False
+        if had_bom:
+            data = _BOM + data
     with open(target, "wb") as fh:
-        fh.write(content.encode("utf-8"))
+        fh.write(data)

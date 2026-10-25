@@ -33,6 +33,40 @@ class RescanFailed(RuntimeError):
     repository could not be ingested). The check did not run."""
 
 
+class RescanFindings(list):
+    """Re-scan findings plus the report's ``scanner_errors`` (``"name: reason"``).
+
+    A plain ``list`` subclass so callers that only want the findings are
+    unaffected; honest callers read ``scanner_errors`` too.
+    """
+
+    scanner_errors: list[str]
+
+    def __init__(self, findings=(), scanner_errors=()):
+        super().__init__(findings)
+        self.scanner_errors = list(scanner_errors)
+
+
+def failed_scanner_names(scanner_errors) -> tuple[set[str], bool]:
+    """Names of scanners that failed/timed out, and whether any entry could not
+    be mapped to a scanner name (then nothing may be trusted as "gone")."""
+    names: set[str] = set()
+    unmapped = False
+    for entry in scanner_errors or []:
+        name, sep, _reason = str(entry).partition(": ")
+        name = name.strip()
+        if sep and name and " " not in name:
+            names.add(name)
+        else:
+            unmapped = True
+    return names, unmapped
+
+
+def failure_blocks(scanner_name: str, failed: set[str], unmapped: bool) -> bool:
+    """True when a scanner failure means a missing finding proves nothing."""
+    return unmapped or scanner_name in failed
+
+
 @dataclass
 class VerifyResult:
     resolved: int = 0
@@ -108,7 +142,7 @@ async def _rescan_sast_findings(repo_path: str) -> list[dict]:
         # No report means the scan never ran (ingestion failure/abort). An
         # empty list here would read as "every finding is gone".
         raise RescanFailed(last_message or "the re-scan produced no report")
-    return report.get("findings", [])
+    return RescanFindings(report.get("findings", []), report.get("scanner_errors") or [])
 
 
 async def verify_findings_resolved(
@@ -135,10 +169,23 @@ async def verify_findings_resolved(
         return result
 
     present = {_sig_dict(d) for d in rescan}
+    failed, unmapped = failed_scanner_names(getattr(rescan, "scanner_errors", []))
+    blocked = 0
     for f in verifiable:
         if sig_obj(f) in present:
             result.still_present += 1
             result.still_present_titles.append(f.title)
+        elif failure_blocks(f.scanner_name, failed, unmapped):
+            # The scanner that raised it did not complete: absence is not proof.
+            blocked += 1
         else:
             result.resolved += 1
+    if blocked:
+        result.unverifiable += blocked
+        result.error = (
+            "re-scan scanner(s) failed or timed out: "
+            + ", ".join(sorted(failed) or ["unknown"])
+            + f"; {blocked} finding(s) could not be verified"
+        )
+        result.could_not_verify = blocked == len(verifiable)
     return result

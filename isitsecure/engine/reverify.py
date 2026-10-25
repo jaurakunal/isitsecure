@@ -25,7 +25,12 @@ from dataclasses import dataclass
 from enum import StrEnum
 from urllib.parse import urlparse
 
-from isitsecure.engine.fixes.verifier import LLM_SCANNERS, RescanFailed
+from isitsecure.engine.fixes.verifier import (
+    LLM_SCANNERS,
+    RescanFailed,
+    failed_scanner_names,
+    failure_blocks,
+)
 from isitsecure.engine.identity import finding_fingerprint
 from isitsecure.engine.models import DeepFinding
 
@@ -145,11 +150,19 @@ async def _target_reachable(url: str) -> bool:
         return False
 
 
+class _PresentFingerprints(set):
+    """Fingerprints still raised, plus the re-scan's ``scanner_errors``."""
+
+    scanner_errors: list[str]
+
+
 async def _sast_present_fingerprints(repo_path: str) -> set[str]:
     """Fingerprints still raised by a code-only re-scan of ``repo_path``."""
     from isitsecure.engine.fixes.verifier import _rescan_sast_findings
     rescan = await _rescan_sast_findings(repo_path)
-    return {d["fingerprint"] for d in rescan if d.get("fingerprint")}
+    present = _PresentFingerprints(d["fingerprint"] for d in rescan if d.get("fingerprint"))
+    present.scanner_errors = list(getattr(rescan, "scanner_errors", []))
+    return present
 
 
 def _dast_scanners_by_name() -> dict:
@@ -214,10 +227,18 @@ async def reverify_findings(
                 for f in sast:
                     verdict_by_id[f.id] = Verdict(f, status, str(exc))
             else:
+                failed, unmapped = failed_scanner_names(getattr(present, "scanner_errors", []))
                 for f in sast:
-                    status = (VerifyStatus.STILL_PRESENT
-                              if finding_fingerprint(f) in present else VerifyStatus.FIXED)
-                    verdict_by_id[f.id] = Verdict(f, status)
+                    if finding_fingerprint(f) in present:
+                        verdict_by_id[f.id] = Verdict(f, VerifyStatus.STILL_PRESENT)
+                    elif failure_blocks(f.scanner_name, failed, unmapped):
+                        # Its scanner failed/timed out in the re-scan: absence is not a fix.
+                        verdict_by_id[f.id] = Verdict(
+                            f, VerifyStatus.COULD_NOT_VERIFY,
+                            f"scanner {f.scanner_name} failed or timed out during the re-scan",
+                        )
+                    else:
+                        verdict_by_id[f.id] = Verdict(f, VerifyStatus.FIXED)
 
     # DAST — re-probe each finding's endpoint.
     if dast:

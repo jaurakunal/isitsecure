@@ -69,8 +69,11 @@ untracked or ignored; it stops without changing anything if no backup could be
 made), then re-scans to verify findings are resolved and prints how many were
 fixed / need review / couldn't be fixed. If the re-scan itself cannot run (for
 example the repository cannot be read), nothing is counted as confirmed fixed
-and the output says the re-check did not run. Fixes keep each file's newline
-style and trailing newline; files that are not valid UTF-8, finding paths
+and the output says the re-check did not run. If a re-scan scanner fails or
+times out, findings from that scanner are reported as could-not-verify, never as
+resolved. The server Fix All flow follows the same file rules (and returns you
+to a detached HEAD when it started there). Fixes keep each file's newline
+style, trailing newline and UTF-8 BOM; files that are not valid UTF-8, finding paths
 outside the repo, and anything under `.git/` are skipped; a reply that is
 truncated, ambiguous about its code fences, or identical to the input is
 rejected rather than written. A reply under 40% of the original length (for
