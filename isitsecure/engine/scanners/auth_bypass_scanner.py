@@ -31,7 +31,7 @@ from isitsecure.engine.models import (
     FindingSource,
 )
 from isitsecure.engine.shared.endpoint_prioritizer import PriorityDimension, rank
-from isitsecure.engine.shared.probe_capture import build_probe_capture
+from isitsecure.engine.shared.probe_capture import build_probe_capture, mask_jwts
 from isitsecure.engine.shared.progress import emit
 from isitsecure.engine.shared.time_budget import TimeBudget
 
@@ -256,8 +256,8 @@ class AuthBypassScanner:
                         ),
                         technical_detail=(
                             f"Endpoint: {endpoint.url}\n"
-                            f"Invalid user response: {body_invalid}\n"
-                            f"Valid-looking user response: {body_valid}"
+                            f"Invalid user response: {mask_jwts(body_invalid)}\n"
+                            f"Valid-looking user response: {mask_jwts(body_valid)}"
                         ),
                         evidence=(
                             f"Different error messages for invalid vs valid-looking "
@@ -421,7 +421,7 @@ class AuthBypassScanner:
                     technical_detail=(
                         f"Endpoint: {endpoint.url}\n"
                         f"Token found in: {token_found_in}\n"
-                        f"Response preview: {body}"
+                        f"Response preview: {mask_jwts(body)}"
                     ),
                     evidence=(
                         f"Reset token visible in {token_found_in} "

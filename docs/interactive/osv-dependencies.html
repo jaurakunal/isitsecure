@@ -51,8 +51,8 @@
 </div>
 
 <div class="callout why">
-  <div class="label">Known gap, checked against the live API</div>
-  <p>The scanner reads <code>summary</code>, <code>details</code>, <code>affected</code> and <code>database_specific.severity</code> from each entry in the <code>/v1/querybatch</code> response. A live query for <code>lodash@4.17.15</code> on 2026-10-25 returned only <code>id</code> and <code>modified</code> for each vulnerability. If that holds for every query, the later scenes show what the code is written to do, while real findings would fall back to Medium severity, an empty summary and the generic upgrade text. The usual fix is a follow-up <code>GET /v1/vulns/{id}</code> per unique id. This page describes the code as written; the scanner has not been changed.</p>
+  <div class="label">Batch response is a stub, so full records are fetched</div>
+  <p>The scanner reads <code>summary</code>, <code>details</code>, <code>affected</code> and <code>database_specific.severity</code> from each entry in the <code>/v1/querybatch</code> response. A live query for <code>lodash@4.17.15</code> on 2026-10-25 returned only <code>id</code> and <code>modified</code> for each vulnerability. The scanner therefore follows the batch query with a <code>GET /v1/vulns/{id}</code> per unique id (at most 100 ids, a few at a time, with a per-request timeout) and merges the full record in before reading severity, summary and fixed version. A CVSS v3.x vector in <code>severity[]</code> is converted to a base score. If a record cannot be fetched, its finding falls back to Medium severity and the generic upgrade text, and a progress message says so. If a batch query itself fails, the packages in it are reported as not checked rather than as clean.</p>
 </div>
 
 <section id="parse">
@@ -168,7 +168,7 @@
       <p class="step"><span class="n">2</span>The list is cut into slices of <b>100</b>. 230 packages make three batches of 100, 100 and 30. They run one after another, not in parallel.</p>
       <p class="step" data-on="osvSend"><span class="n">3</span>Each batch is one <code>POST</code> to <code>https://api.osv.dev/v1/querybatch</code> with a <code>queries</code> array. Every query is a package name, an ecosystem and a version. A fresh HTTP client with a <b>30 second timeout</b> is made per batch.</p>
       <p class="step" data-on="osvRecv"><span class="n">4</span>OSV answers with a <code>results</code> array in the same order as the queries. The scanner pairs each result with its dependency by position and <b>keeps only those with a non-empty <code>vulns</code> list</b>.</p>
-      <p class="step"><span class="n">5</span><b>Offline or slow.</b> A status other than 200, a timeout, a DNS failure or an unreadable reply logs a warning and returns an empty list for that batch. The scan does not abort and does not raise a finding, so the result is silent: an offline run reports zero vulnerable packages, which is the same as a clean one.</p>
+      <p class="step"><span class="n">5</span><b>Offline or slow.</b> A status other than 200, a timeout, a DNS failure or an unreadable reply logs a warning and returns an empty list for that batch. The scan does not abort and does not raise a finding, but it now logs a warning and emits a progress message such as <code>OSV: 12 of 12 package(s) could not be checked</code>, so an offline run no longer looks like a clean one.</p>
     </div>
   </div>
 </section>

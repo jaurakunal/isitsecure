@@ -1,6 +1,6 @@
 # Dependency Scanner
 
-**Type:** SAST | **Severity:** Low–Critical (High when unknown) | **Category:** Dependency Vulnerability
+**Type:** SAST | **Severity:** Low–Critical (Medium when unknown) | **Category:** Dependency Vulnerability
 
 ## What It Does
 
@@ -8,9 +8,9 @@ Reads `package.json` (the root and every workspace; `dependencies` and `devDepen
 
 How it works:
 - Each version is reduced to a bare number by stripping leading `^ ~ > = <` and spaces. No lockfile is read and `npm audit` is not run, so transitive dependencies are not checked.
-- Packages are sent to `https://api.osv.dev/v1/querybatch` in batches of 100 (30 s timeout), capped at 200 packages. The scan needs outbound HTTPS to api.osv.dev; offline it reports nothing.
+- Packages are sent to `https://api.osv.dev/v1/querybatch` in batches of 100 (30 s timeout), capped at 200 packages. The scan needs outbound HTTPS to api.osv.dev. Because the batch endpoint returns only `id` and `modified`, the full record for each unique vulnerability id is then fetched with `GET /v1/vulns/{id}` (at most 100 ids, 8 at a time, 10 s timeout each; failures degrade gracefully). If a batch query fails (offline, 429, 5xx) the scanner logs a warning and emits a progress message that N packages could not be checked, and reports no findings for them.
 - Each advisory returned becomes one finding (confidence 0.95).
-- Severity comes from the first `severity[]` score if it is a plain number (9.0+ Critical, 7.0+ High, 4.0+ Medium, else Low), otherwise from `database_specific.severity` (CRITICAL, HIGH, MODERATE/MEDIUM, LOW). A CVSS vector string is not decoded, and anything unreadable defaults to High.
+- Severity comes from `database_specific.severity` first (CRITICAL, HIGH, MODERATE/MEDIUM, LOW), otherwise from `severity[]`: a plain number or a CVSS v3.x vector, whose base score is computed from the metrics (9.0+ Critical, 7.0+ High, 4.0+ Medium, else Low). Anything unreadable defaults to Medium. The finding's fix suggestion names the first `fixed` version in `affected[].ranges[].events[]`. The same helper (`osv_enrichment.py`) is shared with the multi-ecosystem OSV scanner.
 
 ## Why It Matters
 

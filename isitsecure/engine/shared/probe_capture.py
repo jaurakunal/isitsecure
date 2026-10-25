@@ -6,6 +6,7 @@ DAST scanning for inclusion in findings and reports.
 
 from __future__ import annotations
 
+import re
 import shlex
 from datetime import datetime, timezone
 
@@ -42,8 +43,8 @@ def build_probe_capture(
     """
     sanitized_req_headers = sanitize_headers(headers)
     sanitized_resp_headers = sanitize_headers(response_headers)
-    truncated_req_body = body[: ProbeCaptureConfig.MAX_REQUEST_BODY_CAPTURE]
-    truncated_resp_body = response_body[: ProbeCaptureConfig.MAX_RESPONSE_BODY_CAPTURE]
+    truncated_req_body = redact_body(body)[: ProbeCaptureConfig.MAX_REQUEST_BODY_CAPTURE]
+    truncated_resp_body = redact_body(response_body)[: ProbeCaptureConfig.MAX_RESPONSE_BODY_CAPTURE]
 
     return DASTProbeCaptureEntry(
         timestamp=datetime.now(timezone.utc).isoformat(),
@@ -90,24 +91,69 @@ def build_curl_command(
     return " ".join(shlex.quote(p) for p in parts)
 
 
+_SENSITIVE_HEADER_NAMES = frozenset({
+    "set-cookie", "cookie", "authorization", "proxy-authorization",
+    "x-auth-token", "x-api-key", "apikey", "x-csrf-token",
+})
+_SENSITIVE_HEADER_SUBSTRINGS = ("token", "secret", "key", "session")
+_SENSITIVE_FIELD = (
+    r"(?:access_?token|refresh_?token|id_?token|token|password|passwd|secret|"
+    r"client_?secret|api_?key|apikey|authorization|session|session_?id|bearer)"
+)
+# "field": "value"  (JSON, tolerant of truncated bodies)
+_JSON_FIELD_RE = re.compile(
+    r'("' + _SENSITIVE_FIELD + r'"\s*:\s*)"(?:[^"\\]|\\.)*"', re.IGNORECASE
+)
+# field=value / field: value (form bodies, plain text, python-repr dicts)
+_KV_FIELD_RE = re.compile(
+    r"(['\"]?\b" + _SENSITIVE_FIELD + r"['\"]?\s*[=:]\s*)(['\"]?)[^&\s'\",;}]+",
+    re.IGNORECASE,
+)
+_BEARER_RE = re.compile(r"(\bBearer\s+)[A-Za-z0-9._~+/=-]{8,}", re.IGNORECASE)
+_JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*")
+REDACTED = "[REDACTED]"
+
+
+def _is_sensitive_header(name: str) -> bool:
+    lowered = name.lower()
+    return lowered in _SENSITIVE_HEADER_NAMES or any(
+        part in lowered for part in _SENSITIVE_HEADER_SUBSTRINGS
+    )
+
+
+def mask_token(value: str) -> str:
+    """Mask a token to at most an 8-char prefix plus its length."""
+    return f"{value[:8]}...[len={len(value)}]"
+
+
+def mask_jwts(text: str) -> str:
+    """Replace every JWT-looking string in ``text`` with a masked form."""
+    return _JWT_RE.sub(lambda m: mask_token(m.group(0)), text)
+
+
+def redact_body(body: str) -> str:
+    """Redact secrets (token/password JSON fields, bearer values, JWTs) in a body.
+
+    The rest of the body is preserved so evidence stays useful.
+    """
+    if not body:
+        return body
+    body = _JSON_FIELD_RE.sub(lambda m: f'{m.group(1)}"{REDACTED}"', body)
+    body = _KV_FIELD_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}{REDACTED}", body)
+    body = _BEARER_RE.sub(lambda m: f"{m.group(1)}{REDACTED}", body)
+    return _JWT_RE.sub(REDACTED, body)
+
+
 def sanitize_headers(headers: dict[str, str]) -> dict[str, str]:
-    """Redact sensitive header values (auth tokens, API keys).
+    """Redact sensitive header values, keeping header names.
 
-    Headers whose names match any entry in
-    ``ProbeCaptureConfig.SENSITIVE_HEADERS`` will have their values
-    truncated after ``ProbeCaptureConfig.REDACT_AFTER_CHARS`` characters
-    and replaced with the redact placeholder.
-
-    Args:
-        headers: Raw header dict.
-
-    Returns:
-        A new dict with sensitive values redacted.
+    Cookies, auth headers, API keys, CSRF tokens and any header whose name
+    contains token/secret/key/session get their value replaced entirely
+    with ``ProbeCaptureConfig.REDACT_PLACEHOLDER``.
     """
     sanitized: dict[str, str] = {}
     for name, value in headers.items():
-        if name.lower() in ProbeCaptureConfig.SENSITIVE_HEADERS:
-            if len(value) > ProbeCaptureConfig.REDACT_AFTER_CHARS:
-                value = value[: ProbeCaptureConfig.REDACT_AFTER_CHARS] + ProbeCaptureConfig.REDACT_PLACEHOLDER
+        if _is_sensitive_header(name):
+            value = ProbeCaptureConfig.REDACT_PLACEHOLDER
         sanitized[name] = value
     return sanitized
