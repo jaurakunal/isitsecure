@@ -86,7 +86,7 @@ not listed gets the 600s default):
 
 The authenticated and special passes use their own limits: IDOR cross-user and privilege escalation 1800s, DOM XSS 1800s, SAST-guided DAST 1800s. On the SAST side the git-secret scanner has 90s and the Semgrep taint analyzer 150s; every other SAST scanner gets the 600s default.
 
-**Timeout isolation**: If one scanner hangs or crashes, the rest continue. `run_scanner_safe()` wraps every scanner with timeout + exception handling, and publishes its deadline so a scanner short of time returns what it found rather than being cancelled holding it.
+**Timeout isolation**: If one scanner hangs or crashes, the rest continue. `run_scanner_safe()` wraps every scanner with timeout + exception handling, and publishes its deadline so a scanner short of time returns what it found rather than being cancelled holding it. A scanner that times out or crashes (including by `CancelledError`) is recorded in `DeepScanReport.scanner_errors`; the streamed runners always post a completion marker so the drain loop cannot wait forever. When `ingestion_errors` or `scanner_errors` is non-empty the launch verdict becomes an explicit "scan incomplete" state (never "safe to launch") and the grade is labelled provisional; the thresholds are unchanged, and critical/high findings still produce their normal verdicts.
 
 **Rate limiting**: All HTTP requests go through `RateLimitedClient` with configurable concurrency and per-request delays. This prevents getting blocked by the target's WAF.
 

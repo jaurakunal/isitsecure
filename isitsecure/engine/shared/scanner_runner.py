@@ -1,6 +1,7 @@
 """Safe scanner execution with timeout and error isolation."""
 
 import asyncio
+import contextvars
 import logging
 from typing import Any, Coroutine
 
@@ -9,6 +10,33 @@ from isitsecure.engine.shared.progress import emit
 from isitsecure.engine.shared.time_budget import scanner_deadline
 
 logger = logging.getLogger(__name__)
+
+
+# Ambient list that run_scanner_safe appends "name: timed out/failed" to. The
+# agent installs one per scan; tasks inherit it by reference.
+_scanner_failures: contextvars.ContextVar = contextvars.ContextVar(
+    "isitsecure_scanner_failures", default=None
+)
+
+
+def use_failure_log(log: list[str]) -> contextvars.Token:
+    """Record scanner failures into ``log`` for the current context."""
+    return _scanner_failures.set(log)
+
+
+def reset_failure_log(token: contextvars.Token) -> None:
+    try:
+        _scanner_failures.reset(token)
+    except ValueError:  # generator closed from a different context
+        _scanner_failures.set(None)
+
+
+def record_scanner_failure(scanner_name: str, reason: str) -> None:
+    log = _scanner_failures.get()
+    if log is not None:
+        entry = f"{scanner_name}: {reason}"
+        if entry not in log:
+            log.append(entry)
 
 
 class ScannerTimeouts:
@@ -87,7 +115,9 @@ async def run_scanner_safe(
             f"{scanner_name}: hard timeout at {timeout_seconds}s, "
             "findings lost"
         )
+        record_scanner_failure(scanner_name, "timed out")
         return []
     except Exception as e:
         logger.error("Scanner '%s' failed: %s", scanner_name, e, exc_info=True)
+        record_scanner_failure(scanner_name, "failed")
         return []

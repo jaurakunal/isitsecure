@@ -44,7 +44,8 @@ class ReportGenerator:
         grade_result = self._grade_result(report)
         grade = grade_result.grade
         verdict = plain_english.launch_verdict(
-            report.critical_count, report.high_count, report.medium_count
+            report.critical_count, report.high_count, report.medium_count,
+            incomplete=bool(report.coverage_gaps),
         )
         # Detected stack — threaded into per-finding remediation so DAST/
         # config findings get stack-tailored, copy-pasteable snippets (#48).
@@ -63,7 +64,10 @@ class ReportGenerator:
                 "headline": verdict.headline,
                 "detail": verdict.detail,
                 "line": verdict.as_line(),
+                "incomplete": verdict.incomplete,
             },
+            "scanner_errors": list(report.scanner_errors),
+            "ingestion_errors": list(report.ingestion_errors),
             "scan_mode": report.scan_mode,
             "target_url": report.target_url,
             "repo_url": report.repo_url,
@@ -117,6 +121,7 @@ class ReportGenerator:
             high=report.high_count,
             medium=report.medium_count,
             low=self._low_count(report),
+            provisional=bool(report.coverage_gaps),
         )
 
     def _calculate_grade(self, report: DeepScanReport) -> str:

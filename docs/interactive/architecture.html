@@ -398,7 +398,7 @@
       <tr><td>Playwright</td><td>URL ingestion falls back to httpx. No authenticated browser crawl, no DOM XSS.</td></tr>
       <tr><td>Language server for the project's language</td><td>LSP validation skipped. More false positives on missing-auth. A server for a different language is never substituted.</td></tr>
       <tr><td>Repository URL</td><td>SAST, cross-reference and guided DAST skipped. DAST-only scan.</td></tr>
-      <tr><td>Repository fails to clone</td><td>Code-only: scan stops, exit 1, no report. Full: DAST findings kept, the reason recorded in <code>ingestion_errors</code>, exit 1. A zero-finding report must never read as clean.</td></tr>
+      <tr><td>Repository fails to clone</td><td>Code-only: scan stops, exit 1, no report. Full: DAST findings kept, the reason recorded in <code>ingestion_errors</code>, exit 1. A zero-finding report must never read as clean: the launch verdict shows &ldquo;scan incomplete&rdquo; and the grade is labelled provisional. The same applies when a scanner times out or crashes (recorded in <code>scanner_errors</code>).</td></tr>
       <tr><td>Target URL</td><td>SAST-only scan.</td></tr>
       <tr><td>Credentials</td><td>Authenticated scanners skipped. No cross-user IDOR, no privilege escalation.</td></tr>
       <tr><td><code>semgrep</code> binary</td><td>Taint analyzer no-ops. Injection detection rests on the LLM layer.</td></tr>

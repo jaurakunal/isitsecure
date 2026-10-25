@@ -96,12 +96,14 @@ def _print_report_table(report) -> None:
             if (f.severity.value if hasattr(f.severity, "value") else f.severity)
             == "low"
         ),
+        provisional=bool(getattr(report, "coverage_gaps", None)),
     )
     grade = grade_result.grade
 
     # #57 — go/no-go launch verdict, rendered first and most prominently.
     verdict = plain_english.launch_verdict(
-        report.critical_count, report.high_count, report.medium_count
+        report.critical_count, report.high_count, report.medium_count,
+        incomplete=bool(getattr(report, "coverage_gaps", None)),
     )
     console.print()
     console.print(Panel(
@@ -110,6 +112,12 @@ def _print_report_table(report) -> None:
         title="Launch Readiness",
         border_style="green" if verdict.ready else "red",
     ))
+    if verdict.incomplete:
+        console.print(
+            "[yellow]Did not run: "
+            + "; ".join(report.coverage_gaps)
+            + "[/yellow]"
+        )
 
     console.print(Panel(
         f"[bold]Grade: {grade}[/bold] — {grade_result.label}\n"
