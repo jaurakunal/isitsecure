@@ -50,7 +50,7 @@
 
   <div class="scene" id="hook" data-scene data-interval="3800">
     <figure class="stage">
-      <svg viewBox="0 0 960 350" role="img" aria-label="An init script runs before the app and wraps twelve sinks. When app code assigns a URL-derived string to innerHTML, the wrapper checks the value for the canary pattern, records the hit and calls the original setter. The scanner then reads the recorded hits from the page.">
+      <svg viewBox="0 0 960 350" role="img" aria-label="An init script runs before the app and wraps twelve sinks. When app code assigns a URL-derived string to innerHTML, the wrapper checks that the canary markup arrived raw, records the hit and calls the original setter. The scanner then reads the recorded hits from the page.">
         <defs><marker id="arrD1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
 
         <g class="node lit-1 lit-2" transform="translate(20 20)">
@@ -73,8 +73,8 @@
           <text class="ttl" x="14" y="26">Wrapper</text>
           <g class="mono"><text x="14" y="48">_record('innerHTML', v)</text>
           <text x="14" y="66">orig.set.call(this, v)</text></g>
-          <text class="lbl" x="14" y="90">records v only if it matches</text>
-          <text class="lbl t-attacker" x="14" y="104">DOMXSS_CANARY_[a-f0-9]{8}</text>
+          <text class="lbl" x="14" y="90">records v only if raw markup</text>
+          <text class="lbl t-attacker" x="14" y="104">&lt;i id="DOMXSS_CANARY_…"&gt; arrives</text>
         </g>
         <path class="wire at-3 attacker" d="M615 83 H 668" marker-end="url(#arrD1)"/>
         <path id="dw1p" d="M617 83 H 664" fill="none" stroke="none"/>
@@ -117,7 +117,7 @@
           <rect width="200" height="64" rx="8"/><text class="ttl" x="12" y="26">1 · Query string</text><text class="lbl" x="12" y="46">17 page loads</text></g>
         <g class="node lit-1" transform="translate(236 14)">
           <rect width="708" height="64" rx="8"/>
-          <text class="mono" x="14" y="24">/page?<tspan class="t-attacker">q</tspan>=CANARY  ·  ?<tspan class="t-attacker">query</tspan>=…  ·  ?<tspan class="t-attacker">search</tspan>=…</text>
+          <text class="mono" x="14" y="24">/page?<tspan class="t-attacker">q</tspan>=&lt;i id=CANARY&gt;  ·  ?<tspan class="t-attacker">query</tspan>=…  ·  ?<tspan class="t-attacker">search</tspan>=…</text>
           <text class="lbl" x="14" y="44">q query search s keyword term redirect url next return callback ref page view tab id name</text>
           <text class="lbl" x="14" y="58">one name per load, then wait 1.5 s and read the hooks</text></g>
         <text class="ttl t-attacker at-5" x="930" y="36" text-anchor="end">hit: stop here</text>
@@ -126,7 +126,7 @@
           <rect width="200" height="64" rx="8"/><text class="ttl" x="12" y="26">2 · URL hash</text><text class="lbl" x="12" y="46">1 page load</text></g>
         <g class="node lit-2 at-2 skip" transform="translate(236 92)">
           <rect width="708" height="64" rx="8"/>
-          <text class="mono" x="14" y="24">/page#<tspan class="t-attacker">CANARY</tspan></text>
+          <text class="mono" x="14" y="24">/page#<tspan class="t-attacker">%3Ci id=CANARY%3E</tspan></text>
           <text class="lbl" x="14" y="44">the fragment never leaves the browser: no server log, no WAF sees it</text>
           <text class="lbl" x="14" y="58">runs only if lane 1 had no hit</text></g>
 
@@ -134,7 +134,7 @@
           <rect width="200" height="64" rx="8"/><text class="ttl" x="12" y="26">3 · postMessage</text><text class="lbl" x="12" y="46">4 message shapes</text></g>
         <g class="node lit-3 at-3 skip" transform="translate(236 170)">
           <rect width="708" height="64" rx="8"/>
-          <g class="mono"><text x="14" y="22">"CANARY"   {"data":"CANARY"}   {"type":"navigate","url":"CANARY"}</text>
+          <g class="mono"><text x="14" y="22">"&lt;i id=CANARY&gt;"   {"data":"&lt;i id=CANARY&gt;"}   {"type":"navigate","url":"…"}</text>
           <text x="14" y="40">{"html":"&lt;img src=x onerror=CANARY&gt;","action":"render"}</text></g>
           <text class="lbl" x="14" y="57">window.postMessage(msg, '*') after load; runs only if lanes 1 and 2 had no hit</text></g>
 
@@ -320,7 +320,8 @@ function Preview() {
         <tr><td>Time</td><td>300 s soft budget so the scan returns what it found rather than being cancelled. Per page: 15 s navigation timeout, 8 s network-idle wait, 1.5 s wait after each injection.</td></tr>
         <tr><td>Confidence and severity</td><td>High, 0.95. Every finding names the sink and the vector.</td></tr>
         <tr><td>One hit per page</td><td>Later vectors are skipped once one confirms, so a page with several flaws yields one finding.</td></tr>
-        <tr><td>Not hooked</td><td>Assigning <code>location.href</code> directly (it cannot be wrapped), and sinks outside the twelve listed. A call is recorded only when markup with an <code>id</code> of <code>DOMXSS_CANARY_</code> plus 8 hex characters reaches the sink raw.</td></tr>
+        <tr><td>Hash encoding</td><td>The hash vector sends the markup percent-encoded (<code>#%3Ci%20id%3D…</code>). An app that reads <code>location.hash</code> and inserts it without <code>decodeURIComponent</code> receives encoded text and is not flagged.</td></tr>
+        <tr><td>Not hooked</td><td>Assigning <code>location.href</code> directly (it cannot be wrapped), and sinks outside the twelve listed. <code>location.assign</code> and <code>location.replace</code> are in the list, but the hook installs inside a try/catch because Chromium may ignore or reject the override, so in practice about ten are active. A call is recorded only when markup with an <code>id</code> of <code>DOMXSS_CANARY_</code> plus 8 hex characters reaches the sink raw.</td></tr>
       </tbody>
     </table>
   </div>

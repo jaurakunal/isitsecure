@@ -61,7 +61,7 @@
 
   <div class="scene" id="shape" data-scene data-interval="3200">
     <figure class="stage">
-      <svg viewBox="0 0 960 360" role="img" aria-label="A target app feeds an endpoint inventory. Three lanes show one probe each: the HTTP probe fetches /.env and finds a 200 whose body contains an equals sign; the GraphQL scanner posts an introspection query and finds __schema in the body; the OpenAPI scanner reads openapi.yaml from the repository and finds no top-level security line. Each ends in a finding.">
+      <svg viewBox="0 0 960 360" role="img" aria-label="A target app feeds an endpoint inventory. Three lanes show one probe each: the HTTP probe fetches /.env and finds a 200 non-HTML response with a KEY=VALUE line; the GraphQL scanner posts an introspection query and finds __schema in the body; the OpenAPI scanner reads openapi.yaml from the repository and finds no top-level security line. Each ends in a finding.">
         <defs><marker id="arr-shape" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
 
         <!-- target + repo -->
@@ -101,7 +101,7 @@
           <text class="lbl" x="500" y="22">http_probe · DAST · fixed-cost path check on the base URL</text>
           <g class="node lit-3" transform="translate(500 32)"><rect width="140" height="58" rx="8"/><text class="lbl" x="12" y="18">request</text><text class="mono" x="12" y="40">GET /.env</text></g>
           <path class="wire at-3" d="M640 61 H 658" marker-end="url(#arr-shape)"/>
-          <g class="node lit-3" transform="translate(660 32)"><rect width="150" height="58" rx="8"/><text class="lbl" x="12" y="18">response</text><text class="mono" x="12" y="40">200 · body has "="</text></g>
+          <g class="node lit-3" transform="translate(660 32)"><rect width="150" height="58" rx="8"/><text class="lbl" x="12" y="18">response</text><text class="mono" x="12" y="40">200 · non-HTML KEY=VALUE</text></g>
           <path class="wire at-3" d="M810 61 H 828" marker-end="url(#arr-shape)"/>
           <g class="node verdict at-3 lit-3" transform="translate(830 32)"><rect width="110" height="58" rx="8"/><text class="t-attacker" x="12" y="24" style="font-weight:600">HIGH</text><text class="lbl" x="12" y="44">confidence 0.90</text></g>
         </g>
@@ -137,7 +137,7 @@
     <div class="scene-steps">
       <p class="step"><span class="n">1</span>Everything starts from the target URL. Playwright renders the page and keeps the HTML and every JavaScript file it pulled in. A repository is optional and only the static scanner uses it.</p>
       <p class="step"><span class="n">2</span><b>Endpoint discovery</b> turns bundles, a served spec, HTML forms and a short list of probed paths into the inventory. The scanners in this group take the inventory as given; the HTTP probe also derives the base URL (scheme plus host) from its first entry.</p>
-      <p class="step"><span class="n">3</span><b>HTTP probe.</b> Known paths are fetched on the base URL. <code>GET /.env</code> that returns <b>200 with an "=" in the body</b> is reported as an exposed sensitive file at High. Nothing is parsed or exploited; the string is the evidence.</p>
+      <p class="step"><span class="n">3</span><b>HTTP probe.</b> Known paths are fetched on the base URL. <code>GET /.env</code> that returns <b>200, a non-HTML content type and a <code>KEY=VALUE</code> line</b> is reported as an exposed sensitive file at High. An SPA shell that merely contains an "=" is ignored. Nothing is exploited.</p>
       <p class="step"><span class="n">4</span><b>GraphQL.</b> Only endpoints whose path contains <code>/graphql</code>, <code>/api/graphql</code> or <code>/gql</code> are touched. An introspection query that comes back <b>2xx with <code>__schema</code>, <code>__type</code> or <code>"types"</code> in the body</b> means the whole schema is public.</p>
       <p class="step"><span class="n">5</span><b>OpenAPI (SAST).</b> Any <code>.yaml</code>, <code>.yml</code> or <code>.json</code> file carrying an <code>openapi:</code> or <code>swagger:</code> marker is a spec. A spec with <b>no <code>securitySchemes</code> or no top-level <code>security:</code> line</b> describes an API that is public by default.</p>
       <p class="step"><span class="n">6</span>The three share one shape: a cheap probe, a string match, a finding whose confidence is fixed per check rather than measured. That is why they run early, run at quick depth, and need no credentials. The pages below show each scanner's full check list and the guards that keep the string match honest.</p>
@@ -177,7 +177,7 @@
     <thead><tr><th>Scanner</th><th>What it looks at</th><th>What it reports</th><th>Severity</th><th>Needs</th></tr></thead>
     <tbody>
       <tr><td><a href="endpoint-discovery.html">Endpoint discovery</a></td><td>Rendered HTML, every JS bundle and lazy chunk, 13 well-known spec paths per API base, forms and query links, probed API bases</td><td>Not findings: the categorised, ranked endpoint inventory the DAST scanners consume</td><td>n/a</td><td>Target URL. Credentials add the authenticated crawl; <code>--probe-writes</code> adds derived POST/PUT endpoints</td></tr>
-      <tr><td><a href="http-probe.html">HTTP probe</a></td><td>Four error-trigger paths and nine sensitive paths on the base URL, then OPTIONS, TRACE, forged Host and CRLF query payloads against ranked endpoints</td><td>Verbose error page, exposed <code>.git/HEAD</code> or <code>.env</code>, directory listing, TRACE or CONNECT enabled, Host header reflected, CRLF header injection</td><td>Medium to High</td><td>Target URL only. Quick depth. 900 s timeout, stops itself at 85 % of it</td></tr>
+      <tr><td><a href="http-probe.html">HTTP probe</a></td><td>Four error-trigger paths and eight sensitive paths on the base URL, then OPTIONS, TRACE, forged Host and CRLF query payloads against ranked endpoints</td><td>Verbose error page, exposed <code>.git/HEAD</code> or <code>.env</code>, directory listing, TRACE or CONNECT enabled, Host header reflected, CRLF header injection</td><td>Medium to High</td><td>Target URL only. Quick depth. 900 s timeout, stops itself at 85 % of it</td></tr>
       <tr><td><a href="graphql.html">GraphQL</a></td><td>Inventory entries whose path contains <code>/graphql</code>, <code>/api/graphql</code> or <code>/gql</code></td><td>Introspection enabled, no query depth limit, batch queries accepted</td><td>Low to Medium</td><td>Target URL only. Quick depth. 600 s timeout. Nothing runs if no path matches</td></tr>
       <tr><td><a href="openapi.html">OpenAPI spec</a></td><td><code>.yaml</code>, <code>.yml</code>, <code>.json</code> files in the indexed repo that contain an <code>openapi:</code> or <code>swagger:</code> marker</td><td>No global security scheme, <code>http://</code> server URL, Basic auth, API key in query, <code>security: []</code> override, sensitive path without global security</td><td>Medium to High</td><td>Repository only. No LLM, no binary</td></tr>
     </tbody>

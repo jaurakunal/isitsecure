@@ -130,7 +130,7 @@
         <g class="lane lane-4" transform="translate(0 178)">
           <text x="16" y="24">DOM XSS</text>
           <g class="node"><rect x="140" y="0" width="160" height="40" rx="6"/><text class="lbl" x="150" y="17">?q= · #hash · postMessage</text><text class="lbl" x="150" y="31">typed into inputs</text></g>
-          <g class="node at-2"><rect x="310" y="0" width="180" height="40" rx="6"/><text class="mono t-attacker" x="320" y="24">DOMXSS_CANARY_8f3a</text></g>
+          <g class="node at-2"><rect x="310" y="0" width="180" height="40" rx="6"/><text class="mono t-attacker" x="320" y="24">&lt;i id=CANARY&gt;</text></g>
           <path class="wire at-3 attacker" d="M490 20 H 504" marker-end="url(#arrG1)"/>
           <path class="wire at-4" d="M566 20 H 580" marker-end="url(#arrG1)"/>
           <g class="node at-4"><rect x="582" y="0" width="180" height="40" rx="6"/><text class="lbl" x="592" y="17">hooked innerHTML setter</text><text class="lbl" x="592" y="31">records the canary</text></g>
@@ -144,7 +144,7 @@
           <g class="node at-2"><rect x="310" y="0" width="180" height="40" rx="6"/><text class="mono t-attacker" x="320" y="16">test.html · test.svg</text><text class="mono t-attacker" x="320" y="31">../../../etc/passwd</text></g>
           <path class="wire at-3 attacker" d="M490 20 H 504" marker-end="url(#arrG1)"/>
           <path class="wire at-4" d="M566 20 H 580" marker-end="url(#arrG1)"/>
-          <g class="node at-4"><rect x="582" y="0" width="180" height="40" rx="6"/><text class="lbl" x="592" y="17">HTTP 2xx</text><text class="lbl" x="592" y="31">(nothing is fetched back)</text></g>
+          <g class="node at-4"><rect x="582" y="0" width="180" height="40" rx="6"/><text class="lbl" x="592" y="17">2xx + non-failure body</text><text class="lbl" x="592" y="31">stored-file evidence required</text></g>
           <g class="node rule at-5"><rect x="772" y="0" width="172" height="40" rx="6"/><text class="lbl" x="782" y="17">accepted = reported;</text><text class="lbl" x="782" y="31">the weakest oracle here</text></g>
         </g>
 
@@ -167,8 +167,8 @@
       <p class="step"><span class="n">1</span>Six scanners, one shape. Each starts from a place where outside data enters: a query, body or path parameter, a form field, a filename, a URL the server will fetch, or, for the static analyzer, a request object in the code.</p>
       <p class="step"><span class="n">2</span>Each sends a <b>marker it can recognise later</b>: a quote that breaks SQL, the cloud metadata address, a canary wrapped in angle brackets, a traversal filename. Taint analysis sends nothing; it marks the variable that holds request data and follows it.</p>
       <p class="step" data-on="shapeFlow"><span class="n">3</span>The target processes the marker. Everything goes through one rate-limited client, read-only payloads only, and every scanner checks its time budget per endpoint so it returns what it has instead of being cancelled.</p>
-      <p class="step"><span class="n">4</span>Each scanner reads <b>one specific signal</b>: a database error string or a delay, metadata text or an out-of-band callback, the canary with its brackets intact, a hooked browser sink, a 2xx, a sink call in code.</p>
-      <p class="step"><span class="n">5</span><b>The rule: report only when the signal is specific to the marker.</b> Canary text alone is not enough, the brackets must survive; a one-off delay is not enough, it must reproduce; a sink name in a bundle is not enough, the canary must arrive in a real browser. File upload's 2xx is the loosest rule in the group, and its page says so.</p>
+      <p class="step"><span class="n">4</span>Each scanner reads <b>one specific signal</b>: a database error string or a delay, metadata text or an out-of-band callback, the canary with its brackets intact, a hooked browser sink, a 2xx with evidence the file was stored, a sink call in code.</p>
+      <p class="step"><span class="n">5</span><b>The rule: report only when the signal is specific to the marker.</b> Canary text alone is not enough, the brackets must survive; a one-off delay is not enough, it must reproduce; a sink name in a bundle is not enough, the canary must arrive in a real browser. File upload needs more than a 2xx: the body must not be a failure and the stored file or name must be visible.</p>
       <p class="step"><span class="n">6</span>Every finding lands in one category, Injection Risk. That is what lets the correlator pair a dynamic hit with a static taint path on the same route and raise both to a confirmed finding.</p>
     </div>
   </div>
@@ -204,7 +204,7 @@
     </a>
     <a class="card" href="file-upload.html">
       <div class="thumb"><svg viewBox="0 0 200 80"><g class="n"><rect x="8" y="14" width="88" height="22" rx="4"/></g><text x="52" y="29" text-anchor="middle">test.svg</text><g class="n"><rect x="8" y="44" width="88" height="22" rx="4"/></g><text x="52" y="59" text-anchor="middle" class="fr">../../etc/passwd</text><path class="w r" d="M96 25 H 140 M96 55 H 140"/><g class="n"><rect x="140" y="28" width="52" height="24" rx="4"/></g><text x="166" y="44" text-anchor="middle">2xx</text></svg></div>
-      <h3>File upload</h3><p>Upload endpoints found by path, an HTML and an SVG file posted as multipart, three traversal filenames, and the one rule that decides: did the server say 2xx.</p>
+      <h3>File upload</h3><p>Upload endpoints found by path, an HTML and an SVG file posted as multipart, three traversal filenames, and the rule that decides: a 2xx with a non-failure body and evidence the file was stored.</p>
       <div class="foot"><span class="pill dast">DAST</span><span class="pill crit">High–Critical</span><span class="pill">file-upload-scanner.md</span></div>
     </a>
   </div>

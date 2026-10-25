@@ -54,7 +54,7 @@
 <header class="hero">
   <div class="eyebrow">DAST scanner</div>
   <h1>HTTP Probe</h1>
-  <p class="lede">Five cheap checks that ask a server what it gives away by default: a stack trace on a bad URL, a readable <code>.git</code> or <code>.env</code>, TRACE switched on, a Host header it repeats back, a newline it lets into a header. Each check sends one small request and decides on a string in what comes back.</p>
+  <p class="lede">Five cheap checks that ask a server what it gives away by default: a stack trace on a bad URL, a readable <code>.git</code> or <code>.env</code>, TRACE switched on, a Host header it repeats back, a newline it lets into a header. Each check sends one small request and decides on a marker in what comes back (for <code>.env</code>, a non-HTML <code>KEY=VALUE</code> line).</p>
   <div class="meta">
     <span class="pill dast">DAST</span><span class="pill high">Medium to High</span><span class="pill">Info disclosure / auth weakness</span><span class="pill">quick depth</span><span class="pill">no credentials needed</span>
   </div>
@@ -109,7 +109,7 @@
     </figure>
     <div class="scene-steps">
       <p class="step"><span class="n">1</span>Five checks, always in this order, over a client that sends at most 3 requests at once with a 0.2 s delay. If the session from the authenticated crawl exists, its headers ride along. There is no cap on how many ranked endpoints are used.</p>
-      <p class="step"><span class="n">2</span><b>Checks 1 and 2</b> fetch fixed paths on the base URL: four that should 404 and nine that should not be readable. They cost the same on a 10-endpoint app and a 1,000-endpoint app, so they run first.</p>
+      <p class="step"><span class="n">2</span><b>Checks 1 and 2</b> fetch fixed paths on the base URL: four that should 404 and eight that should not be readable. They cost the same on a 10-endpoint app and a 1,000-endpoint app, so they run first.</p>
       <p class="step"><span class="n">3</span><b>Checks 3 to 5</b> come after. Method tampering and CRLF walk every ranked endpoint; the Host check tries the base URL plus the first two. A large app cannot spend its whole budget on method tampering and never reach the check that finds an exposed <code>.env</code>.</p>
       <p class="step"><span class="n">4</span>Before each check the scanner asks whether its time budget is spent. If it is, the remaining checks are skipped and what has been found is returned. <a href="#clock">Section 03</a> shows why that matters.</p>
     </div>
@@ -141,7 +141,7 @@
           <path class="wire" d="M140 28 H 162" marker-end="url(#arr-hp2)"/>
           <g class="node req"><rect x="164" width="262" height="56" rx="8"/><text class="mono" x="176" y="24">GET /.git/HEAD  /.env …</text><text class="lbl" x="176" y="43">8 paths: 3 files, 5 directories</text></g>
           <path class="wire" d="M426 28 H 448" marker-end="url(#arr-hp2)"/>
-          <g class="node rule"><rect x="450" width="330" height="56" rx="8"/><text x="462" y="24" style="font-size:12.5px">200 AND indicator in the first 5000 chars</text><text class="lbl" x="462" y="43">"ref:" · "=" · "Disallow" · or "Index of /" for listings</text></g>
+          <g class="node rule"><rect x="450" width="330" height="56" rx="8"/><text x="462" y="24" style="font-size:12.5px">200 AND indicator in the first 5000 chars</text><text class="lbl" x="462" y="43">"ref:" · non-HTML KEY=VALUE · or "Index of /" for listings</text></g>
           <path class="wire" d="M780 28 H 794" marker-end="url(#arr-hp2)"/>
           <g class="node"><rect x="796" width="156" height="56" rx="8"/><text class="t-attacker" x="808" y="24" style="font-weight:600">HIGH or MEDIUM</text><text class="lbl" x="808" y="43">.git, .env are HIGH</text></g>
         </g>

@@ -12,7 +12,7 @@ Tests JWT (JSON Web Token) implementations for six vulnerability classes (the fo
 
 3. **Weak Secret Signing** — Tests 14 common secrets (`""`, `"secret"`, `"password"`, `"123456"`, `"your-256-bit-secret"`, etc.) by signing a forged token and sending it. If accepted, the secret can be brute-forced.
 
-4. **RS256/ES256 Key Confusion** — If the server uses RSA (RS256), attempts to use the RSA public key as an HMAC secret (HS256). The key is fetched only from `/.well-known/jwks.json`; a reachable JWKS (valid JSON with a `keys` array) is itself reported as an Info finding (0.50). The HMAC secret is the SubjectPublicKeyInfo PEM built from the JWK's `n`/`e` (also tried PEM-stripped and DER), which is what a confusable `jwt.verify(token, publicKeyPEM)` server uses; EC keys are skipped. This exploits libraries that don't enforce algorithm restrictions.
+4. **RS256 Key Confusion** — If the server uses RSA (RS256), attempts to use the RSA public key as an HMAC secret (HS256). The key is fetched only from `/.well-known/jwks.json`; a reachable JWKS (valid JSON with a `keys` array) is itself reported as an Info finding (0.50). The HMAC secret is the SubjectPublicKeyInfo PEM built from the JWK's `n`/`e` (also tried PEM-stripped and DER), which is what a confusable `jwt.verify(token, publicKeyPEM)` server uses; EC keys are skipped. This exploits libraries that don't enforce algorithm restrictions.
 
 5. **Token in URL** — Matches the discovered endpoint URLs (extracted from the JavaScript bundles) against `[?&](token|access_token|jwt|auth)=x.y.z`, i.e. JWT-shaped values passed as URL parameters (logged by proxies, cached by browsers).
 

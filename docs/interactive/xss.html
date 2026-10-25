@@ -129,7 +129,7 @@
       <p class="step" data-on="reflectStep"><span class="n">2</span>The canary goes into the query string with the session's auth headers. A response with status 400 or higher is skipped.</p>
       <p class="step"><span class="n">3</span><b>Flag only if the whole probe string, brackets included, is in the body and the Content-Type contains <code>text/html</code>.</b> That is reported as Confirmed reflected XSS, High, confidence 0.95.</p>
       <p class="step"><span class="n">4</span>If the brackets were encoded to <code>&amp;lt;</code> but the bare text <code>canary_xss_8f3a</code> is still in the page, the scanner does not stop. It looks at where the text landed and tries a breakout for that spot.</p>
-      <p class="step"><span class="n">5</span>The guard: a JSON endpoint that echoes the canary raw produces nothing, because both checks require <code>text/html</code>. This keeps API echoes out of the report. POST-body probes use the same guard, and the quote-only probes cannot produce a Confirmed result on their own; they only feed the context check.</p>
+      <p class="step"><span class="n">5</span>The guard: a JSON endpoint that echoes the canary raw produces nothing, because both checks require <code>text/html</code>. This keeps API echoes out of the report. POST-body probes use the same guard, and the quote-only probes cannot produce the "Confirmed reflected" result on their own; they only feed the context check.</p>
     </div>
   </div>
 </section>
@@ -245,7 +245,7 @@
         <g class="node at-3 lit-3" transform="translate(680 20)">
           <rect width="264" height="120" rx="10"/>
           <text class="ttl" x="14" y="26">POST reply</text>
-          <text class="mono" x="14" y="48">200</text>
+          <text class="mono" x="14" y="48">200 · text/html</text>
           <text class="mono t-attacker" x="14" y="68">&lt;canary_xss_8f3a_bio&gt;</text>
           <text class="lbl" x="14" y="92">full string back: High · 0.90</text>
           <text class="lbl" x="14" y="108">text only: Low · 0.40</text>
@@ -283,7 +283,7 @@
     <div class="scene-steps">
       <p class="step"><span class="n">1</span>Only POST, PUT and PATCH endpoints take part. The scanner uses the field names the crawler read from the real <code>&lt;form&gt;</code>, up to 25 of them, so app-specific names like <code>firstName</code> are covered. A fixed list of eight generic names is the fallback.</p>
       <p class="step"><span class="n">2</span>Each field gets its own canary, <code>&lt;canary_xss_ID_field&gt;</code>. The body goes out form-urlencoded first because real forms use it, then as JSON. Whichever variant reflects a canary is the one recorded.</p>
-      <p class="step"><span class="n">3</span>If a canary appears whole in the POST reply, the finding is "Confirmed reflected XSS via POST body", High, 0.90. If only the text appears, it is Low, 0.40.</p>
+      <p class="step"><span class="n">3</span>If a canary appears whole in a <code>text/html</code> POST reply (JSON and plain-text echoes are ignored, including for the Low result), the finding is "Confirmed reflected XSS via POST body", High, 0.90. If only the text appears, it is Low, 0.40.</p>
       <p class="step"><span class="n">4</span>Nothing in the reply? The value may be stored and rendered later. <b>Flag only if a GET of the same URL returns an HTML page containing the canary unescaped.</b> That is Stored XSS, Critical, 0.95.</p>
       <p class="step"><span class="n">5</span>The read-back is restricted to <code>text/html</code>. A JSON list that returns the stored string is not a false positive here; the browser-side scanner is the one that decides if the app renders it unsafely.</p>
     </div>

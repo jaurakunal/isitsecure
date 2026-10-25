@@ -218,8 +218,7 @@
             <text x="14" y="46">200 OK</text>
             <text x="14" y="62" class="ind">ami-id</text>
             <text x="14" y="78" class="ind">instance-id</text>
-            <text x="14" y="94" class="ind">iam/</text>
-            <text x="14" y="110" class="ind">meta-data/</text>
+            <text x="14" y="94" class="ind">iam/security-credentials</text>
           </g>
           <text class="lbl" x="150" y="62">indicators: AWS ami-id ·</text>
           <text class="lbl" x="150" y="76">instance-id · iam/security-credentials</text>
@@ -241,7 +240,7 @@
     <div class="scene-steps">
       <p class="step"><span class="n">1</span>The scanner starts from the endpoint inventory and the authenticated session the crawl produced: a bearer token, a session cookie, or both.</p>
       <p class="step"><span class="n">2</span>Only URL-shaped parameters are tested. A name qualifies if it contains a token such as <code>url</code>, <code>uri</code>, <code>link</code>, <code>href</code>, <code>src</code>, <code>image</code>, <code>avatar</code>, <code>callback</code>, <code>webhook</code>, <code>redirect</code>, <code>next</code> or <code>proxy</code>, so <code>imageUrl</code> and <code>callbackUri</code> match by substring while <code>q</code> is skipped. Query parameters and POST body fields both count.</p>
-      <p class="step" data-on="probeStep"><span class="n">3</span>Six probe URLs go into each such parameter: localhost in four spellings, the AWS metadata path and the GCP metadata host. The request carries the session cookie, because server-rendered routes often authenticate by cookie rather than a bearer header.</p>
+      <p class="step" data-on="probeStep"><span class="n">3</span>A benign baseline URL (<code>http://example.invalid/</code>) is sent first to record the normal response. Then six probe URLs go into each such parameter: localhost in four spellings, the AWS metadata path and the GCP metadata host. The request carries the session cookie, because server-rendered routes often authenticate by cookie rather than a bearer header.</p>
       <p class="step" data-on="probeStep"><span class="n">4</span><b>Flag only if the response body contains a success indicator</b>: <code>ami-id</code>, <code>instance-id</code> or <code>iam/security-credentials</code> for AWS, <code>computeMetadata</code> or <code>project/project-id</code> for GCP. The marker must be absent from a baseline response fetched with a benign URL first, so an ordinary HTML page or a docs page that merely mentions a marker is not flagged.</p>
       <p class="step"><span class="n">5</span>A hit is reported as SSRF on that parameter, with the probe URL as evidence. A plain 200 proves nothing either way: the server may have fetched the URL and discarded the body. That is blind SSRF, and it is handled out of band.</p>
     </div>
@@ -519,7 +518,7 @@ export async function GET(request: Request) {
   window.probeStep = function (scene, i, el) {
     const svg = el.querySelector("svg"); IsDoc.clearPackets(svg);
     if (i === 3) IsDoc.packet(svg, sel(svg, "#pw1p"), { cls: "f-attacker", label: "imageUrl=http://169.254.169.254/…", duration: 1100 });
-    if (i === 4) IsDoc.packet(svg, sel(svg, "#pw1r"), { cls: "f-info", label: "200 OK · ami-id · instance-id · iam/", duration: 1100 });
+    if (i === 4) IsDoc.packet(svg, sel(svg, "#pw1r"), { cls: "f-info", label: "200 OK · ami-id · instance-id · iam/security-credentials", duration: 1100 });
   };
 
   window.oobStep = function (scene, i, el) {
