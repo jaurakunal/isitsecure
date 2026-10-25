@@ -88,7 +88,7 @@
 
         <g class="node box b1" transform="translate(10 84)"><rect width="170" height="100" rx="10"/><text class="mono t-accent" x="12" y="24">1</text><text class="ttl" x="30" y="24">Verbose errors</text><text class="lbl" x="12" y="50">4 trigger paths</text><text class="lbl" x="12" y="68">on the base URL</text><text class="lbl t-attacker" x="12" y="86">stack trace → MEDIUM</text></g>
         <path class="wire" d="M180 134 H 200" marker-end="url(#arr-hp1)"/>
-        <g class="node box b2" transform="translate(202 84)"><rect width="170" height="100" rx="10"/><text class="mono t-accent" x="12" y="24">2</text><text class="ttl" x="30" y="24">Sensitive files</text><text class="lbl" x="12" y="50">9 known paths</text><text class="lbl" x="12" y="68">on the base URL</text><text class="lbl t-attacker" x="12" y="86">.git / .env → HIGH</text></g>
+        <g class="node box b2" transform="translate(202 84)"><rect width="170" height="100" rx="10"/><text class="mono t-accent" x="12" y="24">2</text><text class="ttl" x="30" y="24">Sensitive files</text><text class="lbl" x="12" y="50">8 known paths</text><text class="lbl" x="12" y="68">on the base URL</text><text class="lbl t-attacker" x="12" y="86">.git / .env → HIGH</text></g>
         <path class="wire" d="M372 134 H 392" marker-end="url(#arr-hp1)"/>
         <g class="node box b3" transform="translate(394 84)"><rect width="170" height="100" rx="10"/><text class="mono t-accent" x="12" y="24">3</text><text class="ttl" x="30" y="24">Method tampering</text><text class="lbl" x="12" y="50">OPTIONS, then TRACE</text><text class="lbl" x="12" y="68">every ranked endpoint</text><text class="lbl t-attacker" x="12" y="86">TRACE echo → HIGH</text></g>
         <path class="wire" d="M564 134 H 584" marker-end="url(#arr-hp1)"/>
@@ -139,7 +139,7 @@
         <g class="row r2" transform="translate(0 90)">
           <g class="node"><rect x="8" width="132" height="56" rx="8"/><text class="ttl" x="20" y="25">Sensitive files</text><text class="lbl" x="20" y="43">check 2</text></g>
           <path class="wire" d="M140 28 H 162" marker-end="url(#arr-hp2)"/>
-          <g class="node req"><rect x="164" width="262" height="56" rx="8"/><text class="mono" x="176" y="24">GET /.git/HEAD  /.env …</text><text class="lbl" x="176" y="43">9 paths: 4 files, 5 directories</text></g>
+          <g class="node req"><rect x="164" width="262" height="56" rx="8"/><text class="mono" x="176" y="24">GET /.git/HEAD  /.env …</text><text class="lbl" x="176" y="43">8 paths: 3 files, 5 directories</text></g>
           <path class="wire" d="M426 28 H 448" marker-end="url(#arr-hp2)"/>
           <g class="node rule"><rect x="450" width="330" height="56" rx="8"/><text x="462" y="24" style="font-size:12.5px">200 AND indicator in the first 5000 chars</text><text class="lbl" x="462" y="43">"ref:" · "=" · "Disallow" · or "Index of /" for listings</text></g>
           <path class="wire" d="M780 28 H 794" marker-end="url(#arr-hp2)"/>
@@ -180,16 +180,16 @@
     <div class="scene-steps">
       <p class="step"><span class="n">1</span>Five rows, five rules. Each ends in a fixed severity and confidence, and three of them stop at their first hit so a noisy app is not reported twenty times.</p>
       <p class="step"><span class="n">2</span><b>Verbose errors.</b> Four paths that should not exist, one of them a 500-character URL. Only a response with <b>status 400 or above</b> is read, and only a match against one of 12 patterns (stack frames, <code>Traceback</code>, <code>/usr/</code>, <code>/home/</code>, <code>/var/www/</code>, <code>node_modules/</code>, <code>.py", line N</code>, <code>.java:N)</code> and a few more) counts. A friendly 404 page matches none.</p>
-      <p class="step"><span class="n">3</span><b>Sensitive files.</b> A file path needs <b>200 and its marker</b>: <code>ref:</code> for <code>/.git/HEAD</code>, <code>=</code> for <code>/.env</code> and <code>/.env.local</code>, <code>Disallow</code> for <code>/robots.txt</code>. A directory path needs a listing banner such as <code>Index of /</code>. A <code>.git</code> or <code>.env</code> hit is HIGH at 0.90; a <code>robots.txt</code> hit or a listing is MEDIUM (listing 0.80).</p>
+      <p class="step"><span class="n">3</span><b>Sensitive files.</b> A file path needs <b>200 and its marker</b>: <code>ref:</code> for <code>/.git/HEAD</code>, a non-HTML response with <code>KEY=VALUE</code> lines for <code>/.env</code> and <code>/.env.local</code>. A directory path needs a listing banner such as <code>Index of /</code>. A <code>.git</code> or <code>.env</code> hit is HIGH at 0.90; a listing is MEDIUM (0.80).</p>
       <p class="step"><span class="n">4</span><b>Method tampering.</b> OPTIONS reads the <code>Allow</code> header (or <code>Access-Control-Allow-Methods</code>). TRACE listed is HIGH at 0.80, CONNECT listed is MEDIUM. Then a real TRACE request: <b>200 whose body contains "TRACE" or "Host:"</b> proves the server echoes requests back, HIGH at 0.90, and ends the check.</p>
-      <p class="step"><span class="n">5</span><b>Host header.</b> The forged name <code>evil-host-injection-test.com</code> is sent as <code>Host</code> and then as <code>X-Forwarded-Host</code>. <b>Seeing it echoed</b> in the body or in <code>Location</code> means a password-reset email or cached page could carry an attacker's host.</p>
+      <p class="step"><span class="n">5</span><b>Host header.</b> The forged name <code>evil-host-injection-test.com</code> is sent as <code>Host</code> and then as <code>X-Forwarded-Host</code>. Redirects are not followed, so the poisoned <code>Location</code> is read rather than fetched. <b>Seeing it echoed</b> in the body or in <code>Location</code> means a password-reset email or cached page could carry an attacker's host.</p>
       <p class="step"><span class="n">6</span><b>CRLF.</b> A payload with a line break and a canary header (<code>X-CRLF-Test: crlf_injected</code>) goes into query parameters named <code>url</code>, <code>redirect</code>, <code>next</code>, <code>return</code>, <code>callback</code>, <code>path</code>, <code>ref</code>, <code>location</code>, <code>goto</code>. Only <b>the canary showing up as a response header</b> confirms it; a body that merely repeats the text does not.</p>
     </div>
   </div>
 
   <div class="callout note">
     <div class="label">Worth knowing</div>
-    <p>The sensitive-file list includes <code>/robots.txt</code>. Any site whose <code>robots.txt</code> contains a <code>Disallow</code> line is reported as an exposed file at MEDIUM, because the rule is the string match and not a judgement about whether the file is sensitive. The same single-string logic is why a <code>.env</code> check needs the <code>=</code>: a 200 that serves the SPA shell for every path does not contain one in its first 5000 characters.</p>
+    <p><code>/robots.txt</code> is not on the list: it is public by design. The <code>.env</code> check does not trust a bare <code>=</code>, which any HTML page contains. It needs a response that is not HTML and has a <code>KEY=VALUE</code> line, so a single-page app that answers 200 with its shell for every path is not reported.</p>
   </div>
 </section>
 

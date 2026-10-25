@@ -10,7 +10,7 @@ Tests for Server-Side Request Forgery by injecting internal/cloud addresses into
 - **AWS metadata**: `http://169.254.169.254/latest/meta-data/` (IMDSv1)
 - **GCP metadata**: `http://metadata.google.internal/`
 
-The in-band check passes on a 2xx response whose body contains a metadata marker (`ami-id`, `instance-id`, `iam/`, `meta-data`, `computeMetadata`, `project/project-id`) or `<!DOCTYPE html>`; it is reported as High (0.80). Not probed today: RFC1918 ranges (`10.x.x.x`, `172.16.x.x`, `192.168.x.x`) and the Azure metadata endpoint. Blind (OOB) hits are reported as Critical.
+Before probing, the scanner fetches a baseline with a benign URL (`http://example.invalid/`). The in-band check passes on a 2xx response whose body contains a cloud-metadata marker (`ami-id`, `instance-id`, `iam/security-credentials`, `computeMetadata`, `project/project-id`) that the baseline body does not already contain. Generic page content (an HTML doctype, a bare `iam/` or `meta-data` substring) is not an indicator. It is reported as High (0.80). Not probed today: RFC1918 ranges (`10.x.x.x`, `172.16.x.x`, `192.168.x.x`) and the Azure metadata endpoint. Blind (OOB) hits are reported as Critical.
 
 The scanner also integrates with **OOB callbacks** for blind SSRF — where the server fetches the URL but doesn't return the response content. OOB detection proves the fetch happened via DNS/HTTP interaction with the callback server.
 

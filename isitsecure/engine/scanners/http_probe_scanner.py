@@ -224,8 +224,11 @@ class HTTPProbeScanner(AuthAwareScanner):
         for url in test_urls:
             for header_name in HTTPProbeConfig.HOST_HEADERS:
                 try:
+                    # Never follow: the poisoned Location points at the forged
+                    # host, and following it hides the redirect we look for.
                     resp = await client.get(
                         url, headers={header_name: evil_host},
+                        follow_redirects=False,
                     )
                     body = resp.text[:5000]
 
@@ -346,6 +349,19 @@ class HTTPProbeScanner(AuthAwareScanner):
                         confidence=HTTPProbeConfig.CONFIDENCE_SENSITIVE_FILE,
                     ))
 
+                elif check_type == "dotenv" and self._looks_like_dotenv(resp):
+                    findings.append(self._build_finding(
+                        endpoint_url=url,
+                        title=HTTPProbeConfig.TITLE_SENSITIVE_FILE.format(
+                            path=path,
+                        ),
+                        description=HTTPProbeConfig.DESC_SENSITIVE_FILE.format(
+                            url=url, path=path,
+                        ),
+                        severity=SeverityLevel.HIGH,
+                        confidence=HTTPProbeConfig.CONFIDENCE_SENSITIVE_FILE,
+                    ))
+
                 elif check_type == "listing":
                     if any(
                         p in body
@@ -367,6 +383,15 @@ class HTTPProbeScanner(AuthAwareScanner):
                 logger.debug("Directory check failed for %s: %s", url, e)
 
         return findings
+
+    @staticmethod
+    def _looks_like_dotenv(resp: object) -> bool:
+        """True for a non-HTML body with KEY=VALUE lines (not an SPA shell)."""
+        content_type = str(resp.headers.get("content-type", "")).lower()
+        body = resp.text[:5000]
+        if "html" in content_type or body.lstrip().startswith("<"):
+            return False
+        return bool(re.search(HTTPProbeConfig.DOTENV_LINE_PATTERN, body, re.MULTILINE))
 
     # ------------------------------------------------------------------
     # Check 5: CRLF / Header Injection

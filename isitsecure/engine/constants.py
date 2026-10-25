@@ -2917,11 +2917,17 @@ class SSRFConfig:
     )
 
     # Response indicators that suggest SSRF worked
+    # Cloud-metadata-specific tokens only. A generic page marker (an HTML
+    # doctype) or a bare "iam/" / "meta-data" substring matches ordinary pages
+    # ("william/", docs), so they are not indicators. An indicator also only
+    # counts when the benign-URL baseline response does not already contain it.
     SSRF_SUCCESS_INDICATORS = (
-        "ami-id", "instance-id", "iam/", "meta-data",  # AWS
+        "ami-id", "instance-id", "iam/security-credentials",  # AWS
         "computeMetadata", "project/project-id",  # GCP
-        "<!DOCTYPE html>",  # Got actual page content from internal
     )
+    # Benign value sent first as the baseline; the reserved .invalid TLD never
+    # resolves, so nothing real is fetched.
+    SSRF_BASELINE_URL = "http://example.invalid/"
 
     TITLE_SSRF = "Server-Side Request Forgery (SSRF) vulnerability"
     DESC_SSRF = (
@@ -6937,15 +6943,17 @@ class HTTPProbeConfig:
     # (path, check_type, indicator)
     SENSITIVE_PATHS = (
         ("/.git/HEAD", "content", "ref:"),
-        ("/.env", "content", "="),
-        ("/.env.local", "content", "="),
-        ("/robots.txt", "content", "Disallow"),
+        ("/.env", "dotenv", ""),
+        ("/.env.local", "dotenv", ""),
         ("/api/", "listing", ""),
         ("/static/", "listing", ""),
         ("/assets/", "listing", ""),
         ("/backup/", "listing", ""),
         ("/backups/", "listing", ""),
     )
+
+    # A real dotenv file has KEY=VALUE lines; "=" alone matches any HTML page.
+    DOTENV_LINE_PATTERN = r"^[ \t]*(?:export[ \t]+)?[A-Za-z_][A-Za-z0-9_.]*[ \t]*="
 
     DIRECTORY_LISTING_INDICATORS = (
         "Index of /",
