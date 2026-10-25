@@ -93,7 +93,7 @@ class GoRouteMapper:
             # Go tests live in *_test.go; skip them and vendored/test trees.
             if file_path.name.endswith("_test.go"):
                 continue
-            if should_skip_path(file_path, frozenset({"vendor", "test", "tests"})):
+            if should_skip_path(file_path, frozenset({"vendor", "test", "tests"}), root=root):
                 continue
             try:
                 content = file_path.read_text(errors="replace")

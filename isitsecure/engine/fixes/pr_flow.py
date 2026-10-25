@@ -34,6 +34,7 @@ import tempfile
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
 from isitsecure.engine.fixes.fix_generator import FixGenerator, FixResult
@@ -134,12 +135,16 @@ def is_remote_url(target: str | None) -> bool:
 
 
 def parse_github_url(url: str) -> RepoRef:
-    """Parse owner/repo/host from a git URL.
+    """Parse owner/repo/host from a git URL, strictly.
 
-    Accepts ``https://github.com/owner/repo(.git)``, ``http://…``,
-    ``ssh://git@github.com/owner/repo``, ``git@github.com:owner/repo.git``, and
-    a bare ``github.com/owner/repo``. Raises ``ValueError`` for anything that
-    doesn't yield a host + owner + repo.
+    Accepts ``https://github.com/owner/repo(.git)``, ``ssh://git@github.com/
+    owner/repo``, ``git@github.com:owner/repo.git`` and a bare
+    ``github.com/owner/repo``. For github.com the path must be exactly
+    ``owner/repo`` and the URL may carry no userinfo, query or fragment, so
+    look-alikes such as ``https://evil.com#@github.com/o/r`` can never be
+    mistaken for GitHub. Other hosts (http(s)/ssh/git) parse to their own host
+    with ``is_github`` False. Raises ``ValueError`` for anything that doesn't
+    yield a host + owner + repo.
     """
     if not url or not url.strip():
         raise ValueError("Empty repository URL")
@@ -148,29 +153,40 @@ def parse_github_url(url: str) -> RepoRef:
     # scp-like: git@host:owner/repo(.git)
     scp = re.match(r"^[\w.-]+@([\w.-]+):(.+)$", raw)
     if scp and "://" not in raw:
-        host = scp.group(1)
+        host = scp.group(1).lower()
         path = scp.group(2)
+        scheme = "ssh"
     else:
-        # Strip scheme (or supply a placeholder for bare host/owner/repo).
-        m = re.match(r"^(?:[a-zA-Z][a-zA-Z0-9+.-]*://)?(.+)$", raw)
-        rest = m.group(1) if m else raw
-        # Drop optional userinfo (e.g. git@ or x-access-token:tok@).
-        rest = re.sub(r"^[^/@]*@", "", rest)
-        parts = rest.split("/", 1)
-        if len(parts) != 2:
+        try:
+            parts = urlsplit(raw if "://" in raw else f"https://{raw}")
+            host = (parts.hostname or "").lower()
+            username, password = parts.username, parts.password
+        except ValueError as exc:
+            raise ValueError(f"Cannot parse owner/repo from URL: {url}") from exc
+        scheme = parts.scheme.lower()
+        path = parts.path
+        if scheme not in ("https", "http", "ssh", "git"):
+            raise ValueError(f"Unsupported URL scheme in: {url}")
+        if parts.query or parts.fragment or password is not None:
             raise ValueError(f"Cannot parse owner/repo from URL: {url}")
-        host = parts[0]
-        path = parts[1]
+        # Userinfo is only legitimate as the ssh login user ``git``.
+        if username and not (scheme == "ssh" and username == "git"):
+            raise ValueError(f"Unexpected credentials in repository URL: {url}")
 
     # path is "owner/repo(/...)(.git)"
-    path = path.strip("/")
-    segments = [s for s in path.split("/") if s]
+    segments = [s for s in path.strip("/").split("/") if s]
     if len(segments) < 2:
         raise ValueError(f"Cannot parse owner/repo from URL: {url}")
     owner = segments[0]
     repo = segments[1]
     if repo.endswith(".git"):
         repo = repo[: -len(".git")]
+
+    if host == "github.com":
+        if len(segments) != 2 or scheme == "http" or scheme == "git":
+            raise ValueError(f"Not a plain https/ssh GitHub repo URL: {url}")
+        if not re.fullmatch(r"[\w.-]+", owner) or not re.fullmatch(r"[\w.-]+", repo):
+            raise ValueError(f"Cannot parse owner/repo from URL: {url}")
 
     if not host or not owner or not repo:
         raise ValueError(f"Cannot parse owner/repo from URL: {url}")

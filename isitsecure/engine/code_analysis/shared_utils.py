@@ -6,6 +6,8 @@ and across Python and Java dependency scanners.
 
 from __future__ import annotations
 
+import asyncio
+import os
 import re
 from pathlib import Path
 
@@ -20,15 +22,60 @@ COMMON_SKIP_DIRS = frozenset({
 })
 
 
-def should_skip_path(file_path: Path, extra_skip: frozenset[str] = frozenset()) -> bool:
+def is_plain_in_root(root: Path | str, path: Path | str) -> bool:
+    """True when ``path`` sits under ``root`` without traversing any symlink.
+
+    A symlinked file or directory (in-repo or not) makes the resolved path
+    differ from the lexical one, so all symlinks are skipped: a scanned repo
+    must never be able to point the scanner at files outside the clone.
+    """
+    real_root = os.path.realpath(root)
+    try:
+        rel = os.path.relpath(os.path.abspath(path), os.path.abspath(root))
+    except ValueError:
+        return False
+    if rel == os.pardir or rel.startswith(os.pardir + os.sep):
+        return False
+    return os.path.realpath(path) == os.path.join(real_root, rel)
+
+
+def should_skip_path(
+    file_path: Path,
+    extra_skip: frozenset[str] = frozenset(),
+    root: Path | None = None,
+) -> bool:
     """Check if a file path should be skipped during scanning.
 
     Args:
         file_path: The file path to check.
         extra_skip: Additional directory names to skip (scanner-specific).
+        root: The scan root. When given, only the path *relative to it* is
+            matched against the skip list (a clone living under a directory
+            named ``build`` or ``env`` is still scanned) and anything reached
+            through a symlink is skipped.
     """
     skip = COMMON_SKIP_DIRS | extra_skip
-    return any(part in skip for part in file_path.parts)
+    parts = file_path.parts
+    if root is not None:
+        try:
+            parts = file_path.relative_to(root).parts
+        except ValueError:
+            return True
+        if not is_plain_in_root(root, file_path):
+            return True
+    return any(part in skip for part in parts)
+
+
+async def kill_and_reap(proc: asyncio.subprocess.Process) -> None:
+    """Kill a subprocess that outlived its timeout and wait for it to exit."""
+    try:
+        proc.kill()
+    except ProcessLookupError:
+        return
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=5)
+    except (asyncio.TimeoutError, Exception):
+        pass
 
 
 def normalize_route_pattern(pattern: str) -> str:

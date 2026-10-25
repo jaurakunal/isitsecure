@@ -81,7 +81,7 @@ class DjangoRouteMapper:
         urls_files.extend(root.rglob("**/urls/*.py"))
 
         for file_path in urls_files:
-            if should_skip_path(file_path):
+            if should_skip_path(file_path, root=root):
                 continue
             try:
                 content = file_path.read_text(errors="replace")

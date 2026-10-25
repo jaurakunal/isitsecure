@@ -84,7 +84,7 @@ class SpringRouteMapper:
 
         for ext in self.JAVA_EXTENSIONS:
             for file_path in root.rglob(f"*{ext}"):
-                if should_skip_path(file_path, frozenset({"test", "tests"})):
+                if should_skip_path(file_path, frozenset({"test", "tests"}), root=root):
                     continue
 
                 try:

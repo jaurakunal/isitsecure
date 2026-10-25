@@ -72,11 +72,11 @@ class TestParsing:
     @pytest.mark.parametrize("url,owner,repo,host", [
         ("https://github.com/octocat/Hello-World", "octocat", "Hello-World", "github.com"),
         ("https://github.com/octocat/Hello-World.git", "octocat", "Hello-World", "github.com"),
-        ("http://github.com/a/b/", "a", "b", "github.com"),
+        ("https://github.com/a/b/", "a", "b", "github.com"),
         ("git@github.com:octocat/Hello-World.git", "octocat", "Hello-World", "github.com"),
         ("ssh://git@github.com/octocat/Hello-World", "octocat", "Hello-World", "github.com"),
         ("github.com/octocat/Hello-World", "octocat", "Hello-World", "github.com"),
-        ("https://github.com/o/r/tree/main/sub", "o", "r", "github.com"),
+        ("https://gitlab.com/g/sub/proj", "g", "sub", "gitlab.com"),
         ("https://gitlab.com/group/proj", "group", "proj", "gitlab.com"),
     ])
     def test_parse_ok(self, url, owner, repo, host):
@@ -87,9 +87,9 @@ class TestParsing:
         assert parse_github_url("https://github.com/a/b").is_github is True
         assert parse_github_url("https://gitlab.com/a/b").is_github is False
 
-    def test_token_in_url_not_leaked_into_owner(self):
-        ref = parse_github_url("https://x-access-token:SECRET@github.com/a/b")
-        assert ref.owner == "a" and ref.repo == "b" and ref.host == "github.com"
+    def test_userinfo_in_https_url_is_rejected(self):
+        with pytest.raises(ValueError):
+            parse_github_url("https://x-access-token:SECRET@github.com/a/b")
 
     @pytest.mark.parametrize("bad", ["", "   ", "https://github.com/onlyowner", "not a url"])
     def test_parse_bad(self, bad):
