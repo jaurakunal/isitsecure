@@ -160,7 +160,7 @@ Each trigger type gets a **specialized system prompt**. The financial operation 
 
 ### Phase 9: Cross-Referencing
 
-The cross-referencer (`engine/cross_referencer.py`) pairs DAST and SAST findings by category:
+The cross-referencer (`engine/cross_referencer.py`) pairs DAST and SAST findings by category **and by target**:
 
 ```
 DAST: IDOR on /api/tasks/[id]    ──┐
@@ -168,7 +168,7 @@ DAST: IDOR on /api/tasks/[id]    ──┐
 SAST: Missing auth on tasks/[id]  ──┘
 ```
 
-Matching is by finding category only; it does not compare endpoints or file paths (route-file-to-endpoint alignment happens later, in `guided_dast/route_endpoint_matcher.py`). Six category pairs (DAST + SAST) produce a confirmed finding:
+A category match alone is not enough: unrelated findings that merely share a category (an IDOR on `/api/orders/1` and an IDOR in `admin/reports.py`) are left as separate, unboosted findings. A pair must also be *related*: the DAST endpoint shares a distinctive word (a path segment such as `orders`, or a query parameter name; generic words like `api` or `routes` do not count) with the SAST finding's file path or text, or both findings quote the same long opaque token (a leaked secret). Six category pairs (DAST + SAST) can produce a confirmed finding:
 - IDOR + IDOR → **Confirmed IDOR**
 - IDOR + Auth weakness (missing auth) → **IDOR with missing auth**
 - RLS misconfiguration + RLS misconfiguration → **Confirmed RLS gap**
@@ -176,7 +176,7 @@ Matching is by finding category only; it does not compare endpoints or file path
 - Exposed API endpoint + Auth weakness → **Confirmed exposed endpoint**
 - Injection risk + Injection risk → **Confirmed injection**
 
-Each SAST finding is consumed at most once (first match wins), and the confirmed finding takes the higher of the two severities boosted by one level (capped at critical). Confirmed findings are appended alongside the original DAST and SAST findings; the originals are not removed here.
+Each SAST finding is consumed at most once (first related match wins), and the confirmed finding takes the higher of the two severities boosted by one level (capped at critical; two INFO findings are not boosted). Confirmed findings are appended alongside the original DAST and SAST findings; the originals are not removed here.
 
 Cross-referenced findings get higher confidence and boosted severity because they're proven from both sides.
 
@@ -186,12 +186,14 @@ This is the core differentiator. Six strategies generate targeted DAST tests fro
 
 | Strategy | SAST Input | DAST Test Generated |
 |---|---|---|
-| **Auth Bypass** | Route missing auth check | Send unauthenticated request to the endpoint |
-| **IDOR Targeted** | Route missing ownership check | Request the endpoint's discovered URL with its own method; when a parameter name is known, send `{param: "00000000-0000-0000-0000-000000000001"}` as a JSON body (the path ID is not swapped) |
-| **Injection Targeted** | Raw SQL concatenation detected | Send `' OR '1'='1' --` to the flagged parameter |
-| **Mass Assignment** | Schema has `isAdmin` field | POST `{"isAdmin": true}` to the endpoint |
-| **Race Condition** | LLM flags TOCTOU | Fire 5 concurrent identical mutations |
+| **Auth Bypass** | Route missing auth check | Send an unauthenticated GET/HEAD to the endpoint (never a mutating method; the route is matched on whole path segments) |
+| **IDOR Targeted** | Route missing ownership check | Request the endpoint's discovered URL with its own method; when a parameter name is known, send `param=00000000-0000-0000-0000-000000000001` (query string for GET, JSON body otherwise; the path ID is not swapped) |
+| **Injection Targeted** | Raw SQL concatenation detected | Send `' OR '1'='1' --` (and a boolean-false twin and a UNION probe) to the flagged parameter. Payloads are read-only, never stacked statements |
+| **Mass Assignment** | Schema has `isAdmin` field | POST/PUT/PATCH (only the methods the route declares) `{"isAdmin": true}` to the endpoint |
+| **Race Condition** | LLM flags TOCTOU | Fire 5 concurrent mutations (payment-like endpoints are dry-run only) |
 | **RLS Bypass** | Table missing RLS policy | Query Supabase REST API with anon key |
+
+**A probe is a finding only when the response body shows it, never on a bare HTTP 200.** The runner puts parameters where the server reads them (query string for GET/HEAD/DELETE/OPTIONS, JSON body for POST/PUT/PATCH) and judges each strategy on evidence: SQLi needs a database error that a benign value does not produce (a bare 5xx under the payload is only a MEDIUM, low-confidence finding); XSS needs the payload reflected unescaped in a non-JSON response; RLS bypass needs rows returned (`[]` is what a protected table returns); unauthenticated access needs data that differs from the app's catch-all page (JSON data is CRITICAL, any other distinct page a low-confidence MEDIUM, a single-page-app shell nothing); an IDOR probe needs a JSON object that is not an HTML shell (MEDIUM, or LOW when the body is identical for any id); mass assignment is HIGH only when the privileged field is echoed back (otherwise LOW, "unverified"); a race needs more than one successful non-HTML response (MEDIUM when the bodies differ, otherwise LOW). Tests already covered by an existing finding on the same endpoint and category are skipped, and the five requests of a race batch are kept together.
 
 Commercial tools call DAST↔SAST correlation "IAST" and sell it as post-hoc matching. isitsecure's approach is **generative** — code findings create new dynamic tests that wouldn't have been run otherwise.
 
@@ -202,7 +204,7 @@ The active DAST injection scanner uses heuristics — response-size deltas and e
 The **injection adjudicator** (`engine/triage/injection_adjudicator.py`) runs before triage and hands the LLM, for each borderline DAST injection finding, the payload plus the **baseline (safe-value) response** and the **injected response**, asking whether the difference is genuinely caused by injection or is normal application behaviour. Findings judged benign are dropped. Design guarantees:
 
 - It only ever **removes** a candidate — never creates or mutates findings — and only DAST injection findings whose title is in the adjudicated set. The deterministic Semgrep taint (SAST) findings are never touched.
-- It **fails open** on any LLM or parse error (a failed/malformed response keeps every finding), and the prompt resolves genuine uncertainty to "genuine." It is a precision filter, not a hard guarantee: a confident-but-wrong `benign` verdict can still drop a true positive, so it trades a little recall for fewer false positives. The target's response bodies are fenced as untrusted data in the prompt so a hostile target cannot inject a "benign" verdict to suppress its own findings.
+- It **fails open** on any LLM or parse error (a failed/malformed response keeps every finding), and the prompt resolves genuine uncertainty to "genuine." It is a precision filter, not a hard guarantee: a confident-but-wrong `benign` verdict can still drop a true positive, so it trades a little recall for fewer false positives. The target's response bodies are fenced as untrusted data in the prompt, and the target-derived one-line fields (title, URL, payload, detail) are collapsed to a single line and length-bounded so a hostile target cannot forge a finding header or inject a "benign" verdict to suppress its own findings. The verdict array is read tolerantly (the last well-formed array, so bracketed prose around it is harmless) and a non-string `id` is ignored.
 - It is a **strict no-op without an LLM client**, so the deterministic `--llm none` scan (and the benchmark floor) is unaffected — the false positives it removes are a with-API-key precision improvement, not a change to the rule-based detection.
 
 To make this possible, the scanner attaches the baseline (safe-value) response body to the borderline findings — the NoSQL size-oracle findings and the error-based SQLi findings (`DeepFinding.baseline_response_preview`) — so the model has both sides to compare. For error-based SQLi this lets it separate a real injection (the SQL error appears only under the payload) from a false positive (the "error" text is already in the baseline, or isn't really a query error) — the flaky `vampi-secure` SQLi false positives (#125). As with the rest of this phase, that clean-up only happens when an API key is present; the `--llm none` scan still emits the raw finding.
@@ -212,12 +214,15 @@ To make this possible, the scanner attaches the baseline (safe-value) response b
 The triage service processes all findings through four stages:
 
 **Stage 0: Rule-based deduplication** (no LLM cost)
-- Pass 1: Exact title match → keep highest severity
-- Pass 2: Same file + line number → merge
-- Pass 3: Same scanner + category + file with 3+ findings → group into one
-- Pass 4: Fuzzy title match (60% word overlap) → deduplicate
+- Pass 1: Exact title match → keep highest severity (per location for one-handler-at-a-time categories; the other source locations are listed on the survivor)
+- Pass 2: Same file + line number **and same category** → merge (the other titles are listed under "Also affects")
+- Pass 3: Same scanner + category + file with 3+ findings → group into one (for one-handler-at-a-time categories the title is part of the key, so SQL injection, command injection and XSS in one file stay separate)
+- Pass 4: Fuzzy title match (60% word overlap; 90% for shared-root categories such as dependencies and secrets, whose titles differ in exactly the package or key type) within one category → deduplicate, never across differing locations of an instance-scoped finding
+
+**Finding fingerprints** (`engine/identity.py`) additionally carry a discriminator: the flagged source line (SAST, line number excluded) or the injected parameter name (DAST). Two same-titled findings in one file therefore get different fingerprints, so suppressing one does not hide the other and a newly added second instance shows up under `--baseline`. A finding without a discriminator keeps its original fingerprint value, and lookups against `.isitsecureignore` and baseline files accept either the current or the legacy fingerprint, so existing entries keep matching (a legacy entry still covers every instance, as it always did). SARIF results carry both: `isitsecure/v1` (legacy) and `isitsecure/v2` (current).
 
 **Stage 1: LLM enrichment** (batched, bounded concurrency)
+- The findings are sent inside an untrusted-data fence, and the model's output is validated before it is applied: `duplicate_ids` must be ids of the same batch; a CRITICAL/HIGH finding is removed only into a surviving finding that lists it in `merged_ids` with the same category and place and at least its severity (otherwise it is kept and a warning is logged); MEDIUM/LOW false-positive flags keep working; `severity_adjustment` moves a severity by at most one level from the scanner's own value
 - Assigns impact category (FINANCIAL, DATA_BREACH, LEGAL, OPERATIONAL, REPUTATIONAL)
 - Assigns likelihood level (ACTIVELY_EXPLOITABLE, REQUIRES_AUTH, REQUIRES_ADMIN, THEORETICAL)
 - Derives priority (1–4) from impact × likelihood matrix

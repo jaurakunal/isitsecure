@@ -121,11 +121,11 @@ class InjectionAdjudicator:
             baseline = self._fence(f.baseline_response_preview or "")
             parts.append(Cfg.FINDING_TEMPLATE.format(
                 id=f.id,
-                title=f.title,
-                method=f.http_method or "GET",
-                url=f.endpoint_url or "",
-                payload=f.request_payload or "",
-                detail=f.technical_detail or "",
+                title=self._inline(f.title),
+                method=self._inline(f.http_method or "GET"),
+                url=self._inline(f.endpoint_url or ""),
+                payload=self._inline(f.request_payload or ""),
+                detail=self._inline(f.technical_detail or ""),
                 open=Cfg.EVIDENCE_OPEN,
                 close=Cfg.EVIDENCE_CLOSE,
                 baseline_len=len(baseline),
@@ -143,17 +143,46 @@ class InjectionAdjudicator:
         return (cleaned.replace(Cfg.EVIDENCE_OPEN, "[open]")
                 .replace(Cfg.EVIDENCE_CLOSE, "[close]"))
 
+    @staticmethod
+    def _inline(value: str) -> str:
+        """Make a target-derived field safe to embed on ONE prompt line.
+
+        Titles, URLs, payloads and heuristic details can carry text from the
+        scanned application (a parameter or form name, a reflected value).
+        Collapsing whitespace keeps it from starting a new line, so it cannot
+        forge a ``--- Finding id:`` header or a verdict line; the evidence
+        delimiters are neutralised and the length bounded like the bodies.
+        """
+        collapsed = " ".join(str(value).split())[:Cfg.MAX_FIELD_CHARS]
+        return (collapsed.replace(Cfg.EVIDENCE_OPEN, "[open]")
+                .replace(Cfg.EVIDENCE_CLOSE, "[close]"))
+
+    @staticmethod
+    def _last_verdict_array(response: str) -> list | None:
+        """The last well-formed JSON array in ``response`` that holds verdicts.
+
+        Models preface or trail the array with prose containing brackets
+        ("Sure [see note] ..."), so a greedy first-``[``-to-last-``]`` match
+        fails; instead try every ``[`` and keep the last array that decodes.
+        """
+        decoder = json.JSONDecoder()
+        found: list | None = None
+        for match in re.finditer(r"\[", response):
+            try:
+                value, _ = decoder.raw_decode(response, match.start())
+            except ValueError:
+                continue
+            if isinstance(value, list) and any(
+                isinstance(i, dict) and "verdict" in i for i in value
+            ):
+                found = value
+        return found
+
     def _parse_benign_ids(self, response: str, batch_ids: set[str]) -> set[str]:
         """Extract ids the LLM marked benign. Only ids that were in the batch
         count; anything unparseable keeps all (returns empty set)."""
-        match = re.search(r"\[.*\]", response, re.DOTALL)
-        if not match:
-            return set()
-        try:
-            items = json.loads(match.group(0))
-        except (json.JSONDecodeError, ValueError):
-            return set()
-        if not isinstance(items, list):
+        items = self._last_verdict_array(response)
+        if items is None:
             return set()
 
         benign: set[str] = set()
@@ -161,6 +190,8 @@ class InjectionAdjudicator:
             if not isinstance(item, dict):
                 continue
             fid = item.get("id")
+            if not isinstance(fid, str):
+                continue
             verdict = str(item.get("verdict", "")).strip().lower()
             if fid in batch_ids and verdict == "benign":
                 benign.add(fid)

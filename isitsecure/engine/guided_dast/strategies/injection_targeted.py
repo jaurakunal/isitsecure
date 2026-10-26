@@ -29,7 +29,10 @@ class InjectionTargetedStrategy:
 
     _SQLI_PAYLOADS = (
         "' OR '1'='1' --",
-        "1; DROP TABLE users --",
+        # Boolean-false twin of the first payload: a response that differs
+        # between the two proves the input reaches the query. Nothing here
+        # may modify data on the live target (never a stacked DDL/DML query).
+        "' AND '1'='2' --",
         "' UNION SELECT NULL, NULL --",
     )
 

@@ -111,7 +111,7 @@ def _make_dast_finding(
         severity=severity,
         scanner_name="dast_scanner",
         evidence="DAST evidence",
-        **kwargs,
+        **{"endpoint_url": "https://example.com/api/users", **kwargs},
     )
 
 
@@ -126,7 +126,9 @@ def _make_sast_finding(
         severity=severity,
         scanner_name="sast_scanner",
         code_location=CodeLocation(file_path="src/api/route.ts", line_number=42),
-        **kwargs,
+        # Names the same endpoint as the default DAST finding, so the pair is
+        # genuinely related (the cross-referencer requires that link).
+        **{"description": "Handler for /api/users", **kwargs},
     )
 
 
@@ -350,7 +352,7 @@ class TestDeepSecurityScanAgent:
             severity=SeverityLevel.MEDIUM,
             category=FindingCategory.IDOR,
             title="IDOR in route",
-            description="Route missing ownership check",
+            description="Route /api/users missing ownership check",
             file_path="src/api/route.ts",
             line_number=10,
             confidence=0.85,
@@ -645,7 +647,7 @@ class TestSeverityOrder:
 
     def test_boosted_info_info(self) -> None:
         result = _SeverityOrder.boosted(SeverityLevel.INFO, SeverityLevel.INFO)
-        assert result == SeverityLevel.LOW
+        assert result == SeverityLevel.INFO  # two INFOs are not a reason to escalate
 
 
 # ===========================================================================

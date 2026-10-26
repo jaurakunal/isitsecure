@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 from isitsecure.config import CONFIG_DIR
+from isitsecure.engine.identity import matches_any
 
 if TYPE_CHECKING:
     from isitsecure.engine.models import DeepFinding
@@ -107,9 +108,13 @@ def save_baseline(
 def partition_new(
     findings: list[DeepFinding], baseline: set[str]
 ) -> tuple[list[DeepFinding], list[DeepFinding]]:
-    """Split findings into (new, known) relative to the baseline fingerprints."""
+    """Split findings into (new, known) relative to the baseline fingerprints.
+
+    A baseline written before fingerprints carried a discriminator holds the
+    legacy value; matching either keeps such a baseline valid.
+    """
     new: list[DeepFinding] = []
     known: list[DeepFinding] = []
     for f in findings:
-        (known if f.fingerprint in baseline else new).append(f)
+        (known if matches_any(f, baseline) else new).append(f)
     return new, known

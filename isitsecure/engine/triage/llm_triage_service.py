@@ -286,12 +286,27 @@ class LLMTriageService:
             best = _pick_best(group)
             if len(group) > 1:
                 others = [f for f in group if f.id != best.id]
-                extra_items = [f.title for f in others]
+                extra_items = [
+                    f"{f.title} ({_place_of(f)})" if _place_of(f) else f.title
+                    for f in others
+                ]
                 if extra_items:
                     best.description += (
                         "\n\nAlso affects: " + "; ".join(extra_items)
                     )
             return best
+
+        def _place_of(f: DeepFinding) -> str:
+            """Human-readable place of a finding: endpoint, else file:line."""
+            if f.endpoint_url:
+                return f.endpoint_url
+            if f.code_location:
+                loc = f.code_location
+                return (
+                    f"{loc.file_path}:{loc.line_number}"
+                    if loc.line_number else loc.file_path
+                )
+            return ""
 
         def _scope_of(f: DeepFinding) -> RemediationScope:
             return REMEDIATION_SCOPE.get(f.category, RemediationScope.INSTANCE)
@@ -317,6 +332,15 @@ class LLMTriageService:
             making.
             """
             best = _pick_best(group)
+            # Source locations of the findings folded into `best`: a secret
+            # or dependency finding reached from several files is one fix but
+            # must still say which files, or the others vanish from the report.
+            sources = sorted({
+                _place_of(f) for f in group
+                if f is not best and not f.endpoint_url and f.code_location
+            } - {_place_of(best)})
+            if sources:
+                best.description += "\n\nAlso found at: " + ", ".join(sources)
             endpoints = sorted({
                 f.endpoint_url for f in group if f.endpoint_url
             })
@@ -359,7 +383,12 @@ class LLMTriageService:
         loc_groups: dict[str, list[DeepFinding]] = defaultdict(list)
         for f in after_p1:
             if f.code_location and f.code_location.line_number:
-                key = f"{f.code_location.file_path}:{f.code_location.line_number}"
+                # Category is part of the identity: a SQL injection and a
+                # hardcoded password on one line are two vulnerabilities.
+                key = (
+                    f"{f.code_location.file_path}:{f.code_location.line_number}"
+                    f"|{f.category.value}"
+                )
                 # Same source line reached from two endpoints is still two
                 # fixes when the category says so — a shared handler with a
                 # missing ownership check needs one per route it serves.
@@ -371,7 +400,7 @@ class LLMTriageService:
 
         after_p2: list[DeepFinding] = []
         for group in loc_groups.values():
-            after_p2.append(_pick_best(group))
+            after_p2.append(_merge_group(group))
             removed += len(group) - 1
 
         # Pass 3: Same SAST scanner + same category + same file → merge
@@ -384,6 +413,10 @@ class LLMTriageService:
             if f.scanner_name in cls.SAST_ONLY_SCANNERS:
                 file_path = f.code_location.file_path if f.code_location else "__none"
                 key = f"{f.scanner_name}|{f.category.value}|{file_path}"
+                if _scope_of(f) is RemediationScope.INSTANCE:
+                    # One scanner flags SQLi, command injection and XSS in the
+                    # same file under one category; they are different bugs.
+                    key += f"|{f.title.lower().strip()}"
                 pattern_groups[key].append(f)
             else:
                 after_p3.append(f)
@@ -432,6 +465,10 @@ class LLMTriageService:
                     and f1.endpoint_url != f2.endpoint_url
                 ):
                     continue
+                # Different categories are different problems whatever the
+                # wording; titles overlapping across them is coincidence.
+                if f1.category != f2.category:
+                    continue
                 # The same holds across files, which the endpoint check
                 # cannot see: "Missing auth on /orders" and "Missing auth on
                 # /users" overlap on two words in three and are two handlers
@@ -439,12 +476,18 @@ class LLMTriageService:
                 # here, so it is the one where a wrong merge is most likely
                 # and least visible.
                 if (
-                    _scope_of(f1) is RemediationScope.INSTANCE
+                    RemediationScope.INSTANCE in (_scope_of(f1), _scope_of(f2))
                     and _location_of(f1) != _location_of(f2)
                 ):
                     continue
                 overlap = len(w1 & w2) / max(len(w1), len(w2))
-                if overlap >= 0.6:
+                # Shared-root titles differ in exactly the word that names
+                # the thing (package, key type, table): 2 words in 3 shared
+                # is "lodash" vs "express", not a wording variant.
+                threshold = (
+                    0.9 if _scope_of(f1) is RemediationScope.SHARED_ROOT else 0.6
+                )
+                if overlap >= threshold:
                     current_group.append(f2)
                     assigned.add(f2.id)
 
@@ -736,13 +779,18 @@ class LLMTriageService:
         Returns:
             Set of finding IDs the LLM flagged as duplicates/false positives.
         """
-        findings_json = self._serialize_findings(batch)
+        findings_json = self._serialize_findings(batch).replace(
+            TriageConfig.FINDINGS_OPEN, "[open]",
+        ).replace(TriageConfig.FINDINGS_CLOSE, "[close]")
+        original_severity = {f.id: f.severity for f in batch}
 
         user_prompt = TriageConfig.DEV_TRIAGE_USER_PROMPT.format(
             scan_mode=scan_mode.value,
             target=target,
             count=len(batch),
             findings_json=findings_json,
+            findings_open=TriageConfig.FINDINGS_OPEN,
+            findings_close=TriageConfig.FINDINGS_CLOSE,
         )
 
         try:
@@ -753,32 +801,145 @@ class LLMTriageService:
             )
 
             data = self._extract_json(response)
-            if data is None:
+            if not isinstance(data, dict):
                 return set()
 
             findings_by_id = {f.id: f for f in batch}
+            merge_claims: dict[str, set[str]] = {}
 
             # Apply enrichment to triaged findings
-            for enrichment in data.get("triaged_findings", []):
+            enrichments = data.get("triaged_findings", [])
+            for enrichment in enrichments if isinstance(enrichments, list) else []:
+                if not isinstance(enrichment, dict):
+                    continue
                 finding_id = enrichment.get("id")
-                if finding_id and finding_id in findings_by_id:
+                if isinstance(finding_id, str) and finding_id in findings_by_id:
+                    finding = findings_by_id[finding_id]
                     self._apply_enrichment(
-                        findings_by_id[finding_id], enrichment
+                        finding, enrichment,
+                        base_severity=original_severity[finding_id],
                     )
-                    # Link merged findings via related_finding_ids
+                    # Link merged findings via related_finding_ids; only real
+                    # findings of this batch can be a merge partner.
                     merged = enrichment.get("merged_ids", [])
-                    if merged:
-                        findings_by_id[finding_id].related_finding_ids.extend(
-                            mid for mid in merged
-                            if mid not in findings_by_id[finding_id].related_finding_ids
-                        )
+                    valid = [
+                        mid for mid in (merged if isinstance(merged, list) else [])
+                        if isinstance(mid, str)
+                        and mid in findings_by_id
+                        and mid != finding_id
+                    ]
+                    merge_claims.setdefault(finding_id, set()).update(valid)
+                    finding.related_finding_ids.extend(
+                        mid for mid in valid
+                        if mid not in finding.related_finding_ids
+                    )
 
-            # Return duplicate IDs for removal by the caller
-            return set(data.get("duplicate_ids", []))
+            # Return the duplicate IDs that survive validation
+            return self._validated_duplicates(
+                data.get("duplicate_ids", []),
+                findings_by_id, merge_claims, original_severity,
+            )
 
         except Exception as e:
             logger.warning("Batch triage failed (%d findings): %s", len(batch), e)
             return set()
+
+    # Severities that the LLM may never drop without a real merge target.
+    _PROTECTED_SEVERITIES = frozenset({SeverityLevel.CRITICAL, SeverityLevel.HIGH})
+    # Ladder for severity_adjustment (INFO is outside what the LLM may set).
+    _SEVERITY_LADDER = (
+        SeverityLevel.LOW, SeverityLevel.MEDIUM,
+        SeverityLevel.HIGH, SeverityLevel.CRITICAL,
+    )
+
+    @classmethod
+    def _clamp_severity(
+        cls, base: SeverityLevel, requested: SeverityLevel,
+    ) -> SeverityLevel:
+        """Move ``base`` toward ``requested`` by at most one level."""
+        ladder = cls._SEVERITY_LADDER
+        if base not in ladder or requested not in ladder:
+            return base
+        step = ladder.index(requested) - ladder.index(base)
+        return ladder[ladder.index(base) + max(-1, min(1, step))]
+
+    @classmethod
+    def _is_same_issue(
+        cls,
+        keep: DeepFinding,
+        dup: DeepFinding,
+        severity: dict[str, SeverityLevel],
+    ) -> bool:
+        """True when ``keep`` can legitimately absorb ``dup``.
+
+        Same category, same place (endpoint when both have one, else source
+        file), and ``keep`` at least as severe as ``dup``.
+        """
+        if keep.category != dup.category:
+            return False
+        if keep.endpoint_url and dup.endpoint_url:
+            same_place = keep.endpoint_url == dup.endpoint_url
+        elif keep.code_location and dup.code_location:
+            same_place = keep.code_location.file_path == dup.code_location.file_path
+        else:
+            same_place = False
+        if not same_place:
+            return False
+        ladder = cls._SEVERITY_LADDER
+        keep_sev = severity.get(keep.id, keep.severity)
+        dup_sev = severity.get(dup.id, dup.severity)
+        return (
+            keep_sev in ladder and dup_sev in ladder
+            and ladder.index(keep_sev) >= ladder.index(dup_sev)
+        )
+
+    def _validated_duplicates(
+        self,
+        raw: object,
+        findings_by_id: dict[str, DeepFinding],
+        merge_claims: dict[str, set[str]],
+        severity: dict[str, SeverityLevel],
+    ) -> set[str]:
+        """Filter the LLM's ``duplicate_ids`` down to ones that may be removed.
+
+        - only ids of this batch (never other batches', never non-strings);
+        - CRITICAL/HIGH findings go only into a surviving finding that claims
+          them in ``merged_ids`` and is the same issue (``_is_same_issue``);
+          otherwise they are kept and the refusal is logged;
+        - MEDIUM/LOW keep the documented false-positive semantics.
+        """
+        if not isinstance(raw, list):
+            return set()
+        requested = {
+            x for x in raw if isinstance(x, str) and x in findings_by_id
+        }
+        approved: set[str] = set()
+        for dup_id in requested:
+            dup = findings_by_id[dup_id]
+            targets = [
+                findings_by_id[k] for k, claimed in merge_claims.items()
+                if dup_id in claimed and k not in requested
+                and self._is_same_issue(findings_by_id[k], dup, severity)
+            ]
+            if targets:
+                place = (
+                    dup.endpoint_url
+                    or (dup.code_location.file_path if dup.code_location else "")
+                )
+                targets[0].description += (
+                    f"\n\nAlso reported as: {dup.title}"
+                    + (f" ({place})" if place else "")
+                )
+                approved.add(dup_id)
+            elif severity.get(dup_id, dup.severity) in self._PROTECTED_SEVERITIES:
+                logger.warning(
+                    "Triage LLM asked to drop %s finding %s without a valid "
+                    "merge target; keeping it",
+                    severity.get(dup_id, dup.severity).value, dup_id,
+                )
+            else:
+                approved.add(dup_id)
+        return approved
 
     # ------------------------------------------------------------------
     # Phase 2: Owner summary
@@ -909,7 +1070,10 @@ class LLMTriageService:
                 return None
 
     def _apply_enrichment(
-        self, finding: DeepFinding, enrichment: dict
+        self,
+        finding: DeepFinding,
+        enrichment: dict,
+        base_severity: SeverityLevel | None = None,
     ) -> None:
         """Apply LLM enrichment data to a finding."""
         impact_str = enrichment.get("impact", "")
@@ -932,9 +1096,14 @@ class LLMTriageService:
         if enrichment.get("remediation_guidance"):
             finding.remediation_guidance = enrichment["remediation_guidance"]
 
+        # One step from the scanner's own severity, and always measured from
+        # that original so repeated entries cannot walk it further.
         severity_adj = enrichment.get("severity_adjustment")
-        if severity_adj and severity_adj.upper() in self.SEVERITY_MAP:
-            finding.severity = self.SEVERITY_MAP[severity_adj.upper()]
+        if isinstance(severity_adj, str) and severity_adj.upper() in self.SEVERITY_MAP:
+            finding.severity = self._clamp_severity(
+                base_severity or finding.severity,
+                self.SEVERITY_MAP[severity_adj.upper()],
+            )
 
     def _parse_owner_summary_response(
         self,

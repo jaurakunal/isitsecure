@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import re
+from urllib.parse import parse_qsl, urlparse
+
 from isitsecure.engine.constants import CrossRefConfig
 from isitsecure.engine.models import CodeLocation, DeepFinding, FindingSource
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
@@ -35,9 +38,88 @@ class _SeverityOrder:
 
     @classmethod
     def boosted(cls, sev_a: SeverityLevel, sev_b: SeverityLevel) -> SeverityLevel:
-        """Return the higher of two severities, boosted by one level."""
+        """Return the higher of two severities, boosted by one level.
+
+        INFO stays INFO: agreement between two informational findings is
+        not a reason to turn them into a LOW finding.
+        """
         higher = max(cls.rank(sev_a), cls.rank(sev_b))
+        if higher == 0:
+            return cls.from_rank(0)
         return cls.from_rank(higher + 1)
+
+
+_WORD = re.compile(r"[a-z0-9]+")
+_MIN_TOKEN = 3
+_SECRET_TOKEN_MIN = 10
+# Path/file words shared by almost every app; matching on them proves nothing.
+_GENERIC_WORDS = frozenset({
+    "api", "rest", "graphql", "www", "http", "https", "com", "app", "main",
+    "index", "static", "assets", "public", "src", "lib", "routes", "route",
+    "controllers", "controller", "handlers", "handler", "views", "pages",
+    "server", "client", "js", "ts", "py", "json", "html", "get", "post",
+    "put", "delete", "patch", "the", "and", "for", "with", "this", "that",
+    "from", "not", "has", "code", "file", "line", "path", "user", "data",
+})
+_ID_SEGMENT = re.compile(r"^(?:v\d+|\d+|[0-9a-f]{8,}(?:-[0-9a-f]{4,})*)$")
+
+
+def _tokens(text: str) -> set[str]:
+    """Lower-case identifier words, with a trailing plural 's' folded away."""
+    out: set[str] = set()
+    for word in _WORD.findall(text.lower()):
+        if len(word) < _MIN_TOKEN or word in _GENERIC_WORDS:
+            continue
+        out.add(word[:-1] if word.endswith("s") and len(word) > _MIN_TOKEN else word)
+    return out
+
+
+def _endpoint_keys(url: str | None) -> set[str]:
+    """Distinctive path segments and query parameter names of a live URL."""
+    if not url:
+        return set()
+    parsed = urlparse(url)
+    keys: set[str] = set()
+    for seg in parsed.path.split("/"):
+        if seg and not _ID_SEGMENT.match(seg.lower()):
+            keys |= _tokens(seg.rsplit(".", 1)[0])
+    for name, _ in parse_qsl(parsed.query):
+        keys |= _tokens(name)
+    return keys
+
+
+def _long_tokens(text: str) -> set[str]:
+    """Long opaque tokens (key material / secret fragments) in free text."""
+    return {
+        w for w in re.findall(r"[A-Za-z0-9_\-]{%d,}" % _SECRET_TOKEN_MIN, text)
+        if not w.isalpha()
+    }
+
+
+def _finding_text(f: DeepFinding) -> str:
+    snippet = f.code_location.code_snippet if f.code_location else ""
+    return " ".join(
+        part for part in (f.title, f.description, f.evidence, f.technical_detail, snippet)
+        if part
+    )
+
+
+def findings_related(dast: DeepFinding, sast: DeepFinding) -> bool:
+    """True when the SAST finding plausibly describes the DAST finding's target.
+
+    A category match alone says nothing about whether two findings concern
+    the same code, so a pair must also share either a distinctive endpoint
+    word (path segment or parameter name) with the SAST finding's file
+    path/description, or a long opaque token (a leaked secret) in both.
+    """
+    sast_words = _tokens(
+        (sast.code_location.file_path if sast.code_location else "")
+        + " " + _finding_text(sast)
+    )
+    if _endpoint_keys(dast.endpoint_url) & sast_words:
+        return True
+    shared = _long_tokens(_finding_text(dast)) & _long_tokens(_finding_text(sast))
+    return bool(shared)
 
 
 class FindingCrossReferencer:
@@ -90,9 +172,12 @@ class FindingCrossReferencer:
         dast_findings: list[DeepFinding],
         sast_findings: list[DeepFinding],
     ) -> list[DeepFinding]:
-        """Match DAST and SAST findings by category and produce cross-ref insights.
+        """Match DAST and SAST findings and produce cross-ref insights.
 
-        Each SAST finding is consumed at most once (first match wins).
+        A pair needs a matching category AND evidence that both concern the
+        same endpoint/file (``findings_related``); unrelated findings of the
+        same category stay separate, unboosted findings. Each SAST finding is
+        consumed at most once (first related match wins).
         """
         cross_ref_findings: list[DeepFinding] = []
         used_sast_ids: set[str] = set()
@@ -103,7 +188,7 @@ class FindingCrossReferencer:
                     continue
 
                 matched_title = self._match_pair(dast.category, sast.category)
-                if matched_title is None:
+                if matched_title is None or not findings_related(dast, sast):
                     continue
 
                 cross_finding = self._build_cross_finding(dast, sast, matched_title)

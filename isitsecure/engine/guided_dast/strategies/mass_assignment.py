@@ -73,7 +73,7 @@ class MassAssignmentSchemaStrategy:
             )
 
             for ep in matched_endpoints:
-                for method in self._MUTATION_METHODS:
+                for method in self._methods_for(ep, repo_snapshot, finding):
                     payload = self._build_payload(field_names)
                     test_cases.append(GuidedTestCase(
                         source_finding_id=finding.id,
@@ -89,6 +89,36 @@ class MassAssignmentSchemaStrategy:
                     ))
 
         return test_cases
+
+    def _methods_for(
+        self,
+        ep: DiscoveredEndpoint,
+        repo_snapshot: RepoSnapshot,
+        finding: CodeFinding,
+    ) -> list[str]:
+        """Mutation methods this endpoint's route really declares.
+
+        Sending PUT/PATCH to a route that only declares POST (or the
+        reverse) is a wrong-method write against the live target. With no
+        route information, fall back to the discovered method if it mutates,
+        else POST only.
+        """
+        for route in repo_snapshot.route_map:
+            if (
+                route.http_methods
+                and self._matcher._file_matches_route(finding.file_path, route.file_path)
+                and (regex := self._matcher._pattern_to_regex(route.route_pattern))
+                and regex.search(self._matcher._extract_path(ep.url))
+            ):
+                declared = [
+                    m.upper() for m in route.http_methods
+                    if m.upper() in self._MUTATION_METHODS
+                ]
+                if declared:
+                    return declared
+        if ep.method.value in self._MUTATION_METHODS:
+            return [ep.method.value]
+        return ["POST"]
 
     def _extract_privileged_fields(self, finding: CodeFinding) -> list[str]:
         """Extract privileged field names from the finding's code snippet."""

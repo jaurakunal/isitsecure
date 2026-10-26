@@ -11,10 +11,15 @@ SRP: This module is responsible ONLY for test case execution and result
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import TYPE_CHECKING
+from urllib.parse import urlparse
 
-from isitsecure.engine.constants import GuidedDASTConfig, SharedPatterns
+import httpx
+
+from isitsecure.engine.constants import GuidedDASTConfig
+from isitsecure.engine.guided_dast import evidence
 from isitsecure.engine.guided_dast.protocols import (
     GuidedTestCase,
     GuidedTestStrategy,
@@ -75,6 +80,7 @@ class SASTGuidedDASTRunner:
 
     def __init__(self, strategies: list[GuidedTestStrategy]) -> None:
         self._strategies = strategies
+        self._catch_all_cache: dict[str, httpx.Response | None] = {}
 
     async def run(
         self,
@@ -165,7 +171,14 @@ class SASTGuidedDASTRunner:
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _url_key(url: str) -> str:
+        """Endpoint identity without query string or fragment."""
+        parsed = urlparse(url)
+        return f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+
+    @classmethod
     def _deduplicate(
+        cls,
         test_cases: list[GuidedTestCase],
         existing_findings: list[DeepFinding],
     ) -> list[GuidedTestCase]:
@@ -173,15 +186,25 @@ class SASTGuidedDASTRunner:
         existing_keys: set[str] = set()
         for f in existing_findings:
             if f.endpoint_url:
-                key = f"{f.endpoint_url}:{f.category.value}"
-                existing_keys.add(key)
+                existing_keys.add(
+                    f"{cls._url_key(f.endpoint_url)}:{f.category.value}",
+                )
 
         deduped: list[GuidedTestCase] = []
         seen_keys: set[str] = set()
 
         for tc in test_cases:
-            key = f"{tc.target_url}:{tc.test_type}:{tc.http_method}"
-            finding_key = f"{tc.target_url}:{tc.test_type}"
+            _, category = _TEST_TYPE_METADATA.get(
+                tc.test_type, (None, None),
+            )
+            finding_key = (
+                f"{cls._url_key(tc.target_url)}:{category.value}"
+                if category else ""
+            )
+            # The payload is part of the identity: the race batch is N
+            # requests to one url/method that differ only by payload.
+            payload_key = json.dumps(tc.payload, sort_keys=True, default=str)
+            key = f"{tc.target_url}:{tc.test_type}:{tc.http_method}:{payload_key}"
 
             if key in seen_keys or finding_key in existing_keys:
                 continue
@@ -230,6 +253,7 @@ class SASTGuidedDASTRunner:
     ) -> list[DeepFinding]:
         """Execute test cases and convert successful probes to DeepFindings."""
         findings: list[DeepFinding] = []
+        self._catch_all_cache = {}
 
         async with RateLimitedClient(
             max_concurrent=GuidedDASTConfig.MAX_CONCURRENT,
@@ -261,6 +285,55 @@ class SASTGuidedDASTRunner:
 
         return findings
 
+    @staticmethod
+    def _request_kwargs(
+        method: str, payload: dict | None, headers: dict,
+    ) -> dict:
+        """Put the payload where the server reads it for this method.
+
+        GET/HEAD/DELETE/OPTIONS carry parameters in the query string; a JSON
+        body on those is ignored by almost every server, so the parameter
+        would never reach the code the probe is aimed at.
+        """
+        kwargs: dict = {}
+        if payload:
+            if method.upper() in GuidedDASTConfig.QUERY_METHODS:
+                kwargs["params"] = payload
+            else:
+                kwargs["json"] = payload
+        if headers:
+            kwargs["headers"] = headers
+        return kwargs
+
+    async def _send(
+        self,
+        client: RateLimitedClient,
+        tc: GuidedTestCase,
+        payload: dict | None = None,
+    ) -> httpx.Response:
+        """Send a test case (optionally with a replacement payload)."""
+        body = tc.payload if payload is None else payload
+        return await client.request(
+            tc.http_method,
+            tc.target_url,
+            **self._request_kwargs(tc.http_method, body, tc.headers),
+        )
+
+    async def _catch_all(
+        self, client: RateLimitedClient, url: str,
+    ) -> httpx.Response | None:
+        """Response of a path that cannot exist on the same origin (cached)."""
+        parsed = urlparse(url)
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+        if origin not in self._catch_all_cache:
+            try:
+                self._catch_all_cache[origin] = await client.request(
+                    "GET", origin + GuidedDASTConfig.CATCH_ALL_PATH,
+                )
+            except Exception:
+                self._catch_all_cache[origin] = None
+        return self._catch_all_cache[origin]
+
     async def _execute_single_test(
         self,
         client: RateLimitedClient,
@@ -274,19 +347,13 @@ class SASTGuidedDASTRunner:
             return None
 
         try:
-            kwargs: dict = {}
-            if test_case.payload:
-                kwargs["json"] = test_case.payload
-            if test_case.headers:
-                kwargs["headers"] = test_case.headers
-
-            response = await client.request(
-                test_case.http_method, test_case.target_url, **kwargs,
-            )
-
-            if response.status_code in _SUCCESS_STATUS_CODES:
+            response = await self._send(client, test_case)
+            verdict = await self._judge(client, test_case, response)
+            if verdict:
+                severity, confidence, note = verdict
                 return self._test_case_to_finding(
                     test_case, response.status_code, response.text[:500],
+                    severity=severity, confidence=confidence, note=note,
                 )
 
         except Exception as e:
@@ -297,6 +364,116 @@ class SASTGuidedDASTRunner:
             )
 
         return None
+
+    # ------------------------------------------------------------------
+    # Verdicts: the response body decides, never the status code alone
+    # ------------------------------------------------------------------
+
+    async def _judge(
+        self,
+        client: RateLimitedClient,
+        tc: GuidedTestCase,
+        response: httpx.Response,
+    ) -> tuple[SeverityLevel, float, str] | None:
+        """Return (severity, confidence, evidence note) or None for no finding."""
+        ok = response.status_code in _SUCCESS_STATUS_CODES
+        t = tc.test_type
+        cfg = GuidedDASTConfig
+
+        if t == cfg.TEST_TYPE_SQLI:
+            return await self._judge_sqli(client, tc, response)
+
+        if not ok:
+            return None
+
+        if t == cfg.TEST_TYPE_XSS:
+            value = next(iter((tc.payload or {}).values()), None)
+            if isinstance(value, str) and evidence.reflects_unescaped(response, value):
+                return (SeverityLevel.HIGH, cfg.CONFIDENCE_BODY_EVIDENCE,
+                        cfg.EVIDENCE_REFLECTED)
+            return None
+
+        if t == cfg.TEST_TYPE_RLS_BYPASS:
+            parsed = evidence.json_body(response)
+            if isinstance(parsed, list) and parsed:
+                return (SeverityLevel.CRITICAL, cfg.CONFIDENCE_CONFIRMED,
+                        cfg.EVIDENCE_DATA)
+            return None  # `[]` is what a table WITH RLS returns to the anon key
+
+        if t == cfg.TEST_TYPE_IDOR:
+            return await self._judge_idor(client, tc, response)
+
+        if t == cfg.TEST_TYPE_MASS_ASSIGNMENT:
+            if evidence.is_html(response) or not response.text.strip():
+                return None
+            if tc.payload and evidence.echoes_field(
+                evidence.json_body(response), tc.payload,
+            ):
+                return (SeverityLevel.HIGH, cfg.CONFIDENCE_BODY_EVIDENCE,
+                        cfg.EVIDENCE_FIELD_ECHOED)
+            return (SeverityLevel.LOW, cfg.CONFIDENCE_WEAK, cfg.EVIDENCE_UNVERIFIED)
+
+        if t == cfg.TEST_TYPE_AUTH_BYPASS:
+            return await self._judge_auth_bypass(client, tc, response)
+
+        return None
+
+    async def _judge_sqli(
+        self,
+        client: RateLimitedClient,
+        tc: GuidedTestCase,
+        response: httpx.Response,
+    ) -> tuple[SeverityLevel, float, str] | None:
+        cfg = GuidedDASTConfig
+        benign = {k: cfg.BENIGN_VALUE for k in (tc.payload or {})}
+        signature = evidence.sql_error(response)
+        if signature:
+            baseline = await self._send(client, tc, benign)
+            if not evidence.sql_error(baseline):
+                return (SeverityLevel.CRITICAL, cfg.CONFIDENCE_BODY_EVIDENCE,
+                        cfg.EVIDENCE_SQL_ERROR.format(signature=signature))
+            return None
+        if response.status_code >= 500:
+            baseline = await self._send(client, tc, benign)
+            if baseline.status_code < 500:
+                return (SeverityLevel.MEDIUM, cfg.CONFIDENCE_PARTIAL,
+                        cfg.EVIDENCE_SERVER_ERROR.format(status=response.status_code))
+        return None
+
+    async def _judge_idor(
+        self,
+        client: RateLimitedClient,
+        tc: GuidedTestCase,
+        response: httpx.Response,
+    ) -> tuple[SeverityLevel, float, str] | None:
+        cfg = GuidedDASTConfig
+        if not tc.payload or evidence.is_html(response):
+            return None
+        if not evidence.has_data(evidence.json_body(response)):
+            return None
+        other = {k: cfg.BASELINE_ID for k in tc.payload}
+        baseline = await self._send(client, tc, other)
+        if baseline.status_code == response.status_code and baseline.text == response.text:
+            # Same body whatever the id: static data, not per-object access.
+            return (SeverityLevel.LOW, cfg.CONFIDENCE_WEAK, cfg.EVIDENCE_UNVERIFIED)
+        return (SeverityLevel.MEDIUM, cfg.CONFIDENCE_PARTIAL, cfg.EVIDENCE_DATA)
+
+    async def _judge_auth_bypass(
+        self,
+        client: RateLimitedClient,
+        tc: GuidedTestCase,
+        response: httpx.Response,
+    ) -> tuple[SeverityLevel, float, str] | None:
+        cfg = GuidedDASTConfig
+        if not response.text.strip():
+            return None
+        shell = await self._catch_all(client, tc.target_url)
+        if shell is not None and evidence.same_page(response, shell):
+            return None  # the app answers every path with this page
+        if evidence.has_data(evidence.json_body(response)):
+            return (SeverityLevel.CRITICAL, cfg.CONFIDENCE_BODY_EVIDENCE,
+                    cfg.EVIDENCE_DATA)
+        return (SeverityLevel.MEDIUM, cfg.CONFIDENCE_WEAK, cfg.EVIDENCE_UNVERIFIED)
 
     async def _execute_race_batch(
         self,
@@ -317,31 +494,36 @@ class SASTGuidedDASTRunner:
         findings: list[DeepFinding] = []
 
         try:
-            coros = []
-            for tc in batch:
-                kwargs: dict = {}
-                if tc.payload:
-                    kwargs["json"] = tc.payload
-                if tc.headers:
-                    kwargs["headers"] = tc.headers
-                coros.append(client.request(tc.http_method, tc.target_url, **kwargs))
-
-            responses = await asyncio.gather(*coros, return_exceptions=True)
-
-            # Check if multiple requests succeeded (indicates race condition)
-            success_count = sum(
-                1 for r in responses
-                if not isinstance(r, Exception) and r.status_code in _SUCCESS_STATUS_CODES
+            responses = await asyncio.gather(
+                *(self._send(client, tc) for tc in batch),
+                return_exceptions=True,
             )
 
+            # Successful, non-HTML responses only: an HTML shell "succeeds"
+            # for every request and says nothing about server-side state.
+            successes = [
+                r for r in responses
+                if not isinstance(r, Exception)
+                and r.status_code in _SUCCESS_STATUS_CODES
+                and not evidence.is_html(r)
+            ]
+            success_count = len(successes)
+
             if success_count > 1:
-                first_tc = batch[0]
+                # Distinct bodies (e.g. two different ids created) are some
+                # evidence of duplicated work; identical bodies are not.
+                distinct = len({r.text for r in successes}) > 1
                 findings.append(self._test_case_to_finding(
-                    first_tc,
-                    200,
+                    batch[0],
+                    successes[0].status_code,
                     GuidedDASTConfig.EVIDENCE_RACE_CONDITION.format(
                         count=success_count,
                         total=len(batch),
+                    ),
+                    severity=SeverityLevel.MEDIUM if distinct else SeverityLevel.LOW,
+                    confidence=(
+                        GuidedDASTConfig.CONFIDENCE_PARTIAL if distinct
+                        else GuidedDASTConfig.CONFIDENCE_WEAK
                     ),
                 ))
 
@@ -363,12 +545,16 @@ class SASTGuidedDASTRunner:
         test_case: GuidedTestCase,
         status_code: int,
         response_preview: str,
+        severity: SeverityLevel | None = None,
+        confidence: float | None = None,
+        note: str = "",
     ) -> DeepFinding:
-        """Convert a successful probe to a DeepFinding."""
-        severity, category = _TEST_TYPE_METADATA.get(
+        """Convert a probe verdict to a DeepFinding."""
+        default_severity, category = _TEST_TYPE_METADATA.get(
             test_case.test_type,
             (SeverityLevel.MEDIUM, FindingCategory.AUTH_WEAKNESS),
         )
+        severity = severity or default_severity
 
         return DeepFinding(
             source=FindingSource.SAST_GUIDED_DAST,
@@ -383,8 +569,11 @@ class SASTGuidedDASTRunner:
                 method=test_case.http_method,
                 url=test_case.target_url,
                 status=status_code,
+            ) + note,
+            confidence=(
+                GuidedDASTConfig.CONFIDENCE_CONFIRMED
+                if confidence is None else confidence
             ),
-            confidence=GuidedDASTConfig.CONFIDENCE_CONFIRMED,
             scanner_name=GuidedDASTConfig.SCANNER_NAME,
             endpoint_url=test_case.target_url,
             http_method=test_case.http_method,

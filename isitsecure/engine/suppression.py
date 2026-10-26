@@ -17,6 +17,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from isitsecure.engine.identity import legacy_fingerprint, matches_any
+
 if TYPE_CHECKING:
     from isitsecure.engine.models import DeepFinding
 
@@ -52,11 +54,15 @@ def load_suppressed_fingerprints(path: Path) -> set[str]:
 def partition(
     findings: list[DeepFinding], suppressed: set[str]
 ) -> tuple[list[DeepFinding], list[DeepFinding]]:
-    """Split findings into (active, suppressed) by fingerprint."""
+    """Split findings into (active, suppressed) by fingerprint.
+
+    A finding is suppressed by its current fingerprint or its legacy
+    (pre-discriminator) one, so older ignore files keep working.
+    """
     active: list[DeepFinding] = []
     hidden: list[DeepFinding] = []
     for f in findings:
-        (hidden if f.fingerprint in suppressed else active).append(f)
+        (hidden if matches_any(f, suppressed) else active).append(f)
     return active, hidden
 
 
@@ -91,6 +97,7 @@ def add_suppressions(
     by_fp: dict[str, DeepFinding] = {}
     for f in findings:
         by_fp.setdefault(f.fingerprint, f)
+        by_fp.setdefault(legacy_fingerprint(f), f)  # old fingerprints still resolve
 
     newly: list[DeepFinding] = []
     lines: list[str] = []
