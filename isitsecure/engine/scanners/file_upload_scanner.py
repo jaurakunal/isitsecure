@@ -359,9 +359,15 @@ class FileUploadScanner(AuthAwareScanner):
                     return f"response points at stored file URL {parsed.path}"
         if any(basename in h for h in haystacks):
             return "response references the stored file name"
-        if payload_marker:
+        if payload_marker and not self._looks_like_html(response):
             return self.NO_STORAGE_EVIDENCE
         return None
+
+    @staticmethod
+    def _looks_like_html(response: httpx.Response) -> bool:
+        """An HTML reply to an upload POST is an app shell or error page, not an API answer."""
+        ctype = response.headers.get("content-type", "").lower()
+        return "text/html" in ctype or response.text.lstrip()[:1] == "<"
 
     async def _upload_file(
         self,

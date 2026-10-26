@@ -104,3 +104,17 @@ async def test_unsanitised_name_echo_flags_traversal() -> None:
 
     findings = await _scan(post)
     assert FileUploadConfig.TITLE_PATH_TRAVERSAL in _titles(findings)
+
+
+@pytest.mark.asyncio
+async def test_html_catch_all_shell_is_not_even_low_tier() -> None:
+    """An SPA that answers every POST with its HTML shell is not an upload API."""
+
+    async def post(url, **kw):
+        return httpx.Response(
+            200,
+            text="<!doctype html><html><body><div id=app></div></body></html>",
+            headers={"content-type": "text/html"},
+        )
+
+    assert await _scan(post) == []
