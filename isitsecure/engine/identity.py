@@ -139,6 +139,11 @@ def finding_fingerprint(finding: DeepFinding) -> str:
     )
 
 
+def known_fingerprints(findings: list[DeepFinding]) -> set[str]:
+    """Every fingerprint (current and legacy) the given findings answer to."""
+    return {fp for f in findings for fp in (finding_fingerprint(f), legacy_fingerprint(f))}
+
+
 def matches_any(finding: DeepFinding, fingerprints: set[str]) -> bool:
     """True when the finding's current OR legacy fingerprint is in the set.
 

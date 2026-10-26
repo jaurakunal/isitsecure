@@ -112,3 +112,18 @@ def test_suppress_by_old_fingerprint_resolves_the_finding(tmp_path: Path) -> Non
     ignore = tmp_path / ".isitsecureignore"
     newly = S.add_suppressions(ignore, [a], [legacy_fingerprint(a)])
     assert [f.id for f in newly] == [a.id]
+
+
+def test_known_fingerprints_covers_current_and_legacy():
+    """The CLI's --suppress / verify --fingerprint accept either form."""
+    from isitsecure.engine.identity import (
+        finding_fingerprint,
+        known_fingerprints,
+        legacy_fingerprint,
+    )
+
+    a = _sast(10, "query = db.execute(user_a)")
+    known = known_fingerprints([a])
+    assert finding_fingerprint(a) in known
+    assert legacy_fingerprint(a) in known
+    assert finding_fingerprint(a) != legacy_fingerprint(a)
