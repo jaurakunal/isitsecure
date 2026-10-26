@@ -224,8 +224,11 @@ class HTTPProbeScanner(AuthAwareScanner):
         for url in test_urls:
             for header_name in HTTPProbeConfig.HOST_HEADERS:
                 try:
+                    # Never follow: the poisoned Location points at the forged
+                    # host, and following it hides the redirect we look for.
                     resp = await client.get(
                         url, headers={header_name: evil_host},
+                        follow_redirects=False,
                     )
                     body = resp.text[:5000]
 
@@ -247,6 +250,11 @@ class HTTPProbeScanner(AuthAwareScanner):
                     # Check Location header for redirects
                     location = resp.headers.get("location", "")
                     if evil_host in location:
+                        # A redirect to the SAME path (or '/') with only the
+                        # scheme/host changed is a canonicalising redirect
+                        # (http->https, trailing slash): reflection of the
+                        # Host, but rarely exploitable. Keep it, but low.
+                        canonical = self._is_canonical_redirect(url, location)
                         findings.append(self._build_finding(
                             endpoint_url=url,
                             title=HTTPProbeConfig.TITLE_HOST_INJECTION.format(
@@ -256,8 +264,14 @@ class HTTPProbeScanner(AuthAwareScanner):
                                 url=url, header=header_name,
                                 host=evil_host,
                             ),
-                            severity=SeverityLevel.HIGH,
-                            confidence=HTTPProbeConfig.CONFIDENCE_HOST_INJECTION,
+                            severity=(
+                                SeverityLevel.LOW if canonical else SeverityLevel.HIGH
+                            ),
+                            confidence=(
+                                min(0.4, HTTPProbeConfig.CONFIDENCE_HOST_INJECTION)
+                                if canonical
+                                else HTTPProbeConfig.CONFIDENCE_HOST_INJECTION
+                            ),
                         ))
                         return findings
 
@@ -265,6 +279,19 @@ class HTTPProbeScanner(AuthAwareScanner):
                     logger.debug("Host header check failed for %s: %s", url, e)
 
         return findings
+
+    @staticmethod
+    def _is_canonical_redirect(request_url: str, location: str) -> bool:
+        """True when Location keeps the request path (or is '/')."""
+        from urllib.parse import urlparse
+
+        try:
+            loc_path = urlparse(location).path or "/"
+            req_path = urlparse(request_url).path or "/"
+        except ValueError:
+            return False
+        norm = lambda p: p.rstrip("/") or "/"  # noqa: E731
+        return norm(loc_path) in (norm(req_path), "/")
 
     # ------------------------------------------------------------------
     # Check 3: Verbose Error Pages
@@ -346,6 +373,19 @@ class HTTPProbeScanner(AuthAwareScanner):
                         confidence=HTTPProbeConfig.CONFIDENCE_SENSITIVE_FILE,
                     ))
 
+                elif check_type == "dotenv" and self._looks_like_dotenv(resp):
+                    findings.append(self._build_finding(
+                        endpoint_url=url,
+                        title=HTTPProbeConfig.TITLE_SENSITIVE_FILE.format(
+                            path=path,
+                        ),
+                        description=HTTPProbeConfig.DESC_SENSITIVE_FILE.format(
+                            url=url, path=path,
+                        ),
+                        severity=SeverityLevel.HIGH,
+                        confidence=HTTPProbeConfig.CONFIDENCE_SENSITIVE_FILE,
+                    ))
+
                 elif check_type == "listing":
                     if any(
                         p in body
@@ -367,6 +407,15 @@ class HTTPProbeScanner(AuthAwareScanner):
                 logger.debug("Directory check failed for %s: %s", url, e)
 
         return findings
+
+    @staticmethod
+    def _looks_like_dotenv(resp: object) -> bool:
+        """True for a non-HTML body with KEY=VALUE lines (not an SPA shell)."""
+        content_type = str(resp.headers.get("content-type", "")).lower()
+        body = resp.text[:5000]
+        if "html" in content_type or body.lstrip().startswith("<"):
+            return False
+        return bool(re.search(HTTPProbeConfig.DOTENV_LINE_PATTERN, body, re.MULTILINE))
 
     # ------------------------------------------------------------------
     # Check 5: CRLF / Header Injection

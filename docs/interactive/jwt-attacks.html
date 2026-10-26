@@ -158,7 +158,7 @@
 
   <div class="scene" id="forge" data-scene data-interval="3600">
     <figure class="stage">
-      <svg viewBox="0 0 960 325" role="img" aria-label="The captured session token on the left is turned into a forged variant in the middle (alg none, weak secret, public key as HMAC secret) and sent to the target endpoint on the right; a 2xx response marks the server vulnerable.">
+      <svg viewBox="0 0 960 325" role="img" aria-label="The captured session token on the left is turned into a forged variant in the middle (alg none, weak secret, public key as HMAC secret) and sent to the target endpoint on the right; a 2xx response that a garbage-token control did not also get marks the server vulnerable.">
         <defs><marker id="arrJ2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
         <!-- captured token -->
         <g class="node lit-1" transform="translate(20 20)">
@@ -203,14 +203,14 @@
             <text class="mono" x="12" y="48">{"alg":"HS256","typ":"JWT"}</text>
             <text class="mono" x="12" y="66">{"sub":"42","role":"user"}</text>
             <text class="mono" x="12" y="84">HMAC-SHA256(…, key)</text>
-            <text class="mono t-attacker" x="12" y="108">key = RSA public key bytes</text>
-            <text class="lbl" x="12" y="130">n taken from /.well-known/jwks.json</text>
-            <text class="lbl" x="12" y="146">the server verifies RS256 with the same bytes</text>
+            <text class="mono t-attacker" x="12" y="108">key = RSA public key (PEM text)</text>
+            <text class="lbl" x="12" y="130">built from n and e in jwks.json</text>
+            <text class="lbl" x="12" y="146">the server verifies RS256 with the same key text</text>
           </g>
           <g class="only-5">
-            <text class="mono" x="12" y="52">alg:none       → 1 request</text>
-            <text class="mono" x="12" y="72">weak secrets   → up to 14 requests</text>
-            <text class="mono" x="12" y="92">key confusion  → 1 request per JWK</text>
+            <text class="mono" x="12" y="52">alg:none       → 1 + 2 control requests</text>
+            <text class="mono" x="12" y="72">weak secrets   → up to 14 + 2 control</text>
+            <text class="mono" x="12" y="92">key confusion  → up to 3 per RSA JWK</text>
             <text class="lbl" x="12" y="120">same payload every time: sub 42, role user</text>
             <text class="lbl" x="12" y="136">the server, not the payload, is under test</text>
           </g>
@@ -227,14 +227,14 @@
             <g class="only-2"><text class="mono t-attacker" x="12" y="104">200 OK</text><text class="lbl" x="12" y="122">accepted → CRITICAL</text><text class="lbl" x="12" y="138">confidence 0.95</text></g>
             <g class="only-3"><text class="mono" x="12" y="104">401 ×5, then</text><text class="mono t-attacker" x="12" y="120">200 OK with "changeme"</text><text class="lbl" x="12" y="138">accepted → CRITICAL · 0.90</text></g>
             <g class="only-4"><text class="mono t-attacker" x="12" y="104">200 OK</text><text class="lbl" x="12" y="122">accepted → CRITICAL · 0.95</text><text class="lbl" x="12" y="138">the open JWKS itself: INFO</text></g>
-            <g class="only-5"><text class="lbl" x="12" y="104">any 2xx = finding</text><text class="lbl" x="12" y="120">any 4xx = nothing reported</text><text class="lbl" x="12" y="136">first hit stops the loop</text></g>
+            <g class="only-5"><text class="lbl" x="12" y="104">2xx unlike control = finding</text><text class="lbl" x="12" y="120">any 4xx = nothing reported</text><text class="lbl" x="12" y="136">first hit stops the loop</text></g>
           </g>
         </g>
         <!-- decision rule -->
         <g class="node at-2" transform="translate(20 200)">
           <rect width="920" height="62" rx="10"/>
           <text class="ttl" x="12" y="22">Decision rule</text>
-          <text x="12" y="46">Status <tspan class="t-attacker">200 to 299</tspan> after a forged token = the server trusted a signature it never really checked = <tspan class="t-attacker">vulnerable</tspan>. Any 4xx = rejected, no finding.</text>
+          <text x="12" y="46">Status <tspan class="t-attacker">200 to 299</tspan> after a forged token (while a garbage-token control is rejected) = the server trusted a signature it never really checked = <tspan class="t-attacker">vulnerable</tspan>. Any 4xx = rejected, no finding.</text>
         </g>
         <!-- annotations -->
         <g transform="translate(20 296)">
@@ -250,8 +250,8 @@
       <p class="step"><span class="n">1</span><b>Capture.</b> The authenticated crawl logged in as User A; the scanner takes that session's <code>access_token</code>, splits it on the dots and decodes the payload. No request has been sent yet.</p>
       <p class="step" data-on="jwtForge"><span class="n">2 · ALG NONE</span>The header is rewritten to <code>{"alg":"none"}</code> and the signature is dropped, leaving a token that ends in a dot. It goes to one authenticated endpoint as <code>Authorization: Bearer</code>. <b>Accepted means anyone can forge a token for any user without knowing the secret.</b></p>
       <p class="step" data-on="jwtForge"><span class="n">3 · WEAK SECRET</span>The same payload is signed with HS256 under each of fourteen common secrets: <code>"secret"</code>, <code>"password"</code>, <code>"123456"</code>, <code>"your-256-bit-secret"</code>, the empty string and more. One request each. <b>Accepted means the secret can be brute-forced offline, and the finding names it.</b></p>
-      <p class="step" data-on="jwtForge"><span class="n">4 · KEY CONFUSION</span>If <code>/.well-known/jwks.json</code> is served, the RSA public key is taken from it and used as an HMAC secret to sign an HS256 token. A server that lets the header choose the algorithm verifies it with the same public bytes. <b>Accepted means RS256 to HS256 confusion, CRITICAL.</b></p>
-      <p class="step"><span class="n">5</span>The rule never changes: a forged token that gets a 2xx proves the server did not verify the signature it should have. A 4xx is a pass and produces nothing. The payload is never escalated during these three tests; the server's check is what is being measured.</p>
+      <p class="step" data-on="jwtForge"><span class="n">4 · KEY CONFUSION</span>If <code>/.well-known/jwks.json</code> is served, the RSA public key is taken from it, encoded as the PEM text that <code>jwt.verify(token, pem)</code> receives (also tried stripped and as DER), and used as an HMAC secret to sign an HS256 token. EC keys are skipped. A server that lets the header choose the algorithm verifies it with the same public bytes. <b>Accepted means RS256 to HS256 confusion, CRITICAL.</b></p>
+      <p class="step"><span class="n">5</span>The rule never changes: a forged token that gets a 2xx while a garbage-token negative control is rejected proves the server did not verify the signature it should have; if the control is accepted too, the endpoint ignores the token and nothing is reported. The controls are fetched once per scan; if a control request fails, a forged 2xx is still reported but at 0.2 lower confidence. A public endpoint with dynamic bodies (timestamps, nonces) can hide a real bypass. A 4xx is a pass and produces nothing. The payload is never escalated during these three tests; the server's check is what is being measured.</p>
     </div>
   </div>
 </section>
@@ -447,9 +447,9 @@ const decoded = jwt.verify(token, PUBLIC_KEY, { <span class="k">algorithms</span
       <thead><tr><th>Test</th><th>Needs</th><th>Reports when</th><th>Severity · confidence</th></tr></thead>
       <tbody>
         <tr><td>Missing claims</td><td>a session JWT</td><td><code>exp</code>, <code>iat</code> or <code>iss</code> absent from the payload</td><td>no exp 0.75 · others 0.60</td></tr>
-        <tr><td>alg:none</td><td>session JWT + one authenticated endpoint</td><td>forged token gets a 2xx</td><td>Critical · 0.95</td></tr>
-        <tr><td>Weak secret</td><td>session JWT + endpoint</td><td>any of 14 secrets yields a 2xx; first hit stops</td><td>Critical · 0.90</td></tr>
-        <tr><td>Key confusion</td><td>a reachable <code>/.well-known/jwks.json</code></td><td>HS256 token signed with the public key gets a 2xx; the open JWKS alone is Info</td><td>Critical · 0.95 (JWKS 0.50)</td></tr>
+        <tr><td>alg:none</td><td>session JWT + one authenticated endpoint</td><td>forged token gets a 2xx and the garbage-token control does not</td><td>Critical · 0.95</td></tr>
+        <tr><td>Weak secret</td><td>session JWT + endpoint</td><td>any of 14 secrets yields a 2xx the control did not get; first hit stops</td><td>Critical · 0.90</td></tr>
+        <tr><td>Key confusion</td><td>a reachable <code>/.well-known/jwks.json</code></td><td>HS256 token signed with the PEM-encoded public key gets a 2xx the control did not; the open JWKS alone (valid JSON with a <code>keys</code> array) is Info</td><td>Critical · 0.95 (JWKS 0.50)</td></tr>
         <tr><td>Token in URL</td><td>discovered endpoints only</td><td>a URL matches the token-in-query pattern</td><td>0.85</td></tr>
       </tbody>
     </table>

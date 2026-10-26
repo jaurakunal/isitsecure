@@ -2,6 +2,8 @@
 
 from unittest.mock import AsyncMock, patch
 
+import json
+
 import httpx
 import pytest
 
@@ -34,6 +36,12 @@ def _make_response(body: str = "OK", status_code: int = 200) -> httpx.Response:
     )
 
 
+def _storing_response(kwargs: dict) -> httpx.Response:
+    """A success body that echoes the stored (unsanitised) filename."""
+    filename = kwargs["files"]["file"][0]
+    return _make_response(json.dumps({"success": True, "file": filename}), 200)
+
+
 class TestFileUploadScannerProtocol:
     """Protocol compliance tests."""
 
@@ -63,7 +71,7 @@ class TestDangerousFileTypes:
         endpoint = _make_endpoint()
 
         async def mock_post(url: str, **kwargs: object) -> httpx.Response:
-            return _make_response('{"success":true}', status_code=200)
+            return _storing_response(kwargs)
 
         with patch(
             "isitsecure.engine.scanners.file_upload_scanner.RateLimitedClient"
@@ -118,7 +126,7 @@ class TestPathTraversal:
         endpoint = _make_endpoint()
 
         async def mock_post(url: str, **kwargs: object) -> httpx.Response:
-            return _make_response('{"success":true}', status_code=200)
+            return _storing_response(kwargs)
 
         with patch(
             "isitsecure.engine.scanners.file_upload_scanner.RateLimitedClient"
@@ -143,7 +151,7 @@ class TestPathTraversal:
         endpoint = _make_endpoint()
 
         async def mock_post(url: str, **kwargs: object) -> httpx.Response:
-            return _make_response('{"ok":true}', status_code=200)
+            return _storing_response(kwargs)
 
         with patch(
             "isitsecure.engine.scanners.file_upload_scanner.RateLimitedClient"
@@ -225,7 +233,7 @@ class TestEdgeCases:
         endpoint = _make_endpoint(url="https://target.com/upload")
 
         async def mock_post(url: str, **kwargs: object) -> httpx.Response:
-            return _make_response('{"ok":true}', status_code=200)
+            return _storing_response(kwargs)
 
         with patch(
             "isitsecure.engine.scanners.file_upload_scanner.RateLimitedClient"

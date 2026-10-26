@@ -17,6 +17,7 @@ import asyncio
 import logging
 import time
 import uuid
+from urllib.parse import quote
 try:
     from playwright.async_api import Page, async_playwright
 except ImportError:  # pragma: no cover
@@ -41,15 +42,26 @@ logger = logging.getLogger(__name__)
 # into them.  Results are collected via ``window.__domxss_findings``.
 # ------------------------------------------------------------------
 
+# It is an IIFE: Playwright's ``add_init_script`` evaluates the string as source
+# and never calls it, so a bare arrow function would define the hooks and then
+# do nothing (no sink was ever hooked).
+#
+# A hit is recorded only when the injected markup survived RAW into the sink,
+# i.e. ``<i id="CANARY">`` / ``<img ... id="CANARY">`` appears verbatim. A flow
+# that HTML-escaped (``&lt;i id=&quot;CANARY&quot;&gt;``), encoded or stripped the
+# markup characters still contains the bare canary token but is NOT exploitable,
+# so it is not a finding.
 _SINK_HOOK_SCRIPT = """
-() => {
+(() => {
+    if (window.__domxss_findings) return;
     window.__domxss_findings = [];
 
-    const CANARY_RE = /DOMXSS_CANARY_[a-f0-9]{8}/;
+    const CANARY_RE = /DOMXSS_CANARY_[a-f0-9]{8}/i;
+    const RAW_MARKUP_RE = /<(?:i|img)\\b[^>]*\\bid=["']?DOMXSS_CANARY_[a-f0-9]{8}/i;
 
     function _record(sink, value) {
         const match = typeof value === 'string' && CANARY_RE.exec(value);
-        if (!match) return;
+        if (!match || !RAW_MARKUP_RE.test(value)) return;
         window.__domxss_findings.push({
             sink: sink,
             canary: match[0],
@@ -126,17 +138,21 @@ _SINK_HOOK_SCRIPT = """
     } catch(e) {}
 
     // --- location.assign / location.replace ---
-    const origAssign = location.assign.bind(location);
-    location.assign = function(url) {
-        _record('location.assign', url);
-        return origAssign(url);
-    };
+    // (unforgeable in Chromium: the assignment is ignored or throws, so guard it
+    // to keep the hooks below installed)
+    try {
+        const origAssign = location.assign.bind(location);
+        location.assign = function(url) {
+            _record('location.assign', url);
+            return origAssign(url);
+        };
 
-    const origReplace = location.replace.bind(location);
-    location.replace = function(url) {
-        _record('location.replace', url);
-        return origReplace(url);
-    };
+        const origReplace = location.replace.bind(location);
+        location.replace = function(url) {
+            _record('location.replace', url);
+            return origReplace(url);
+        };
+    } catch (e) {}
 
     // --- window.open ---
     const origOpen = window.open.bind(window);
@@ -157,7 +173,7 @@ _SINK_HOOK_SCRIPT = """
         if (typeof fn === 'string') _record('setInterval', fn);
         return origSetInterval(fn, ...rest);
     };
-}
+})();
 """
 
 
@@ -380,7 +396,9 @@ class DOMXSSScanner:
         canary: str,
     ) -> list[dict]:
         """Navigate to the URL with a canary in a query parameter."""
-        injected_url = inject_query_param(url, param_name, canary)
+        injected_url = inject_query_param(
+            url, param_name, self._markup_payload(canary),
+        )
         return await self._navigate_and_collect(page, injected_url)
 
     async def _inject_via_hash(
@@ -390,7 +408,7 @@ class DOMXSSScanner:
         canary: str,
     ) -> list[dict]:
         """Navigate to the URL with a canary in the hash fragment."""
-        injected_url = f"{url}#{canary}"
+        injected_url = f"{url}#{quote(self._markup_payload(canary), safe='')}"
         return await self._navigate_and_collect(page, injected_url)
 
     async def _inject_via_postmessage(
@@ -403,8 +421,11 @@ class DOMXSSScanner:
         await self._safe_navigate(page, url)
 
         # Send canary via postMessage in multiple formats
+        # The payload carries markup characters, so JS-string-escape the quotes
+        # for the double-quoted templates in POSTMESSAGE_PAYLOADS.
+        marker = self._markup_payload(canary).replace('"', '\\"')
         for payload in DOMXSSConfig.POSTMESSAGE_PAYLOADS:
-            formatted = payload.replace("{canary}", canary)
+            formatted = payload.replace("{canary}", marker)
             try:
                 await page.evaluate(
                     f"window.postMessage({formatted}, '*')"
@@ -626,6 +647,16 @@ class DOMXSSScanner:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _markup_payload(canary: str) -> str:
+        """The injected value: an inert element whose id is the canary.
+
+        The sink hook only records a call when this markup arrives RAW, so a
+        flow that HTML-escapes, encodes or strips ``<``/``"`` (and would merely
+        contain the bare canary token) is not reported as DOM XSS.
+        """
+        return f'<i id="{canary}">'
 
     @staticmethod
     def _generate_canary() -> str:

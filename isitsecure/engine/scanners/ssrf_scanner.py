@@ -131,10 +131,11 @@ class SSRFScanner(AuthAwareScanner):
     ) -> list[DeepFinding]:
         """Test a single parameter with all SSRF probes."""
         findings: list[DeepFinding] = []
+        baseline = await self._fetch_baseline(client, endpoint, param_name)
 
         for probe_url, probe_label in SSRFConfig.SSRF_PROBES:
             finding = await self._send_ssrf_probe(
-                client, endpoint, param_name, probe_url, probe_label
+                client, endpoint, param_name, probe_url, probe_label, baseline
             )
             if finding:
                 findings.append(finding)
@@ -143,6 +144,22 @@ class SSRFScanner(AuthAwareScanner):
 
         return findings
 
+    async def _fetch_baseline(
+        self,
+        client: RateLimitedClient,
+        endpoint: DiscoveredEndpoint,
+        param_name: str,
+    ) -> str:
+        """Body returned for a benign URL; empty if the request fails."""
+        try:
+            url = inject_query_param(
+                endpoint.url, param_name, SSRFConfig.SSRF_BASELINE_URL
+            )
+            return (await client.get(url)).text
+        except Exception as exc:
+            logger.debug("SSRF baseline failed for %s: %s", endpoint.url, exc)
+            return ""
+
     async def _send_ssrf_probe(
         self,
         client: RateLimitedClient,
@@ -150,6 +167,7 @@ class SSRFScanner(AuthAwareScanner):
         param_name: str,
         probe_url: str,
         probe_label: str,
+        baseline: str = "",
     ) -> DeepFinding | None:
         """Inject an SSRF probe URL and check the response."""
         try:
@@ -164,7 +182,7 @@ class SSRFScanner(AuthAwareScanner):
                 return None
 
             body = response.text
-            if self._response_indicates_ssrf(body):
+            if self._response_indicates_ssrf(body, baseline):
                 return DeepFinding(
                     source=FindingSource.DAST_URL,
                     category=FindingCategory.INJECTION_RISK,
@@ -203,11 +221,12 @@ class SSRFScanner(AuthAwareScanner):
     # Helpers
     # ------------------------------------------------------------------
 
-    def _response_indicates_ssrf(self, body: str) -> bool:
-        """Check if the response body contains SSRF success indicators."""
+    def _response_indicates_ssrf(self, body: str, baseline: str = "") -> bool:
+        """Check for a cloud-metadata indicator absent from the baseline body."""
         body_lower = body.lower()
+        baseline_lower = baseline.lower()
         return any(
-            indicator.lower() in body_lower
-            for indicator in SSRFConfig.SSRF_SUCCESS_INDICATORS
+            ind.lower() in body_lower and ind.lower() not in baseline_lower
+            for ind in SSRFConfig.SSRF_SUCCESS_INDICATORS
         )
 

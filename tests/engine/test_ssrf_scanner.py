@@ -124,7 +124,7 @@ class TestSSRFDetection:
 
         async def mock_get(url: str, **kwargs: object) -> httpx.Response:
             if "127.0.0.1" in url:
-                return _make_response("<!DOCTYPE html><html>internal page</html>")
+                return _make_response("ami-id\ninstance-id\niam/security-credentials/role")
             return _make_response("OK")
 
         with patch(

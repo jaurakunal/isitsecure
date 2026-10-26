@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>File Upload · isitsecure</title>
-<meta name="description" content="How the isitsecure file upload scanner finds upload endpoints by path, posts an HTML file, an SVG file and three path traversal filenames as multipart, and decides on the status code alone. Animated.">
+<meta name="description" content="How the isitsecure file upload scanner finds upload endpoints by path, posts an HTML file, an SVG file and three path traversal filenames as multipart, and accepts an upload only on a 2xx with a non-failure body and evidence the file was stored. Animated.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <link rel="stylesheet" href="assets/isdoc.css">
@@ -32,7 +32,7 @@
 <header class="hero">
   <div class="eyebrow">DAST scanner</div>
   <h1>File Upload</h1>
-  <p class="lede">An upload endpoint that accepts anything lets an attacker plant a script on your domain or write outside the upload folder. The scanner finds endpoints whose path looks like an upload, posts an HTML file, an SVG file and three traversal filenames as multipart form data, and judges each by one thing: did the server answer 2xx.</p>
+  <p class="lede">An upload endpoint that accepts anything lets an attacker plant a script on your domain or write outside the upload folder. The scanner finds endpoints whose path looks like an upload, posts an HTML file, an SVG file and three traversal filenames as multipart form data, and judges each by a 2xx with a non-failure body plus evidence that the file was stored.</p>
   <div class="meta">
     <span class="pill dast">DAST</span><span class="pill crit">High–Critical</span><span class="pill">Injection Risk</span><span class="pill">file_upload_scanner</span>
   </div>
@@ -41,7 +41,7 @@
 <nav class="toc" aria-label="Sections">
   <a href="#detect-sec"><span class="n">01</span>Finding upload endpoints</a>
   <a href="#probe-sec"><span class="n">02</span>The five probes</a>
-  <a href="#limit-sec"><span class="n">03</span>What 2xx proves</a>
+  <a href="#limit-sec"><span class="n">03</span>What acceptance proves</a>
   <a href="#why"><span class="n">04</span>Why it matters</a>
   <a href="#breach"><span class="n">05</span>Breach</a>
   <a href="#fix-sec"><span class="n">06</span>The fix</a>
@@ -108,7 +108,7 @@
 
   <div class="scene" id="probe" data-scene data-interval="3800">
     <figure class="stage">
-      <svg viewBox="0 0 960 330" role="img" aria-label="The scanner posts a multipart request with one part named file. An html or svg file accepted with a 2xx status is a High finding. A traversal filename accepted with a 2xx status is a Critical finding and ends the traversal probes for that endpoint. Any non-2xx status is not a finding.">
+      <svg viewBox="0 0 960 330" role="img" aria-label="The scanner posts a multipart request with one part named file. An html or svg file accepted (2xx, non-failure body, evidence of storage) is a High finding. A traversal filename accepted the same way, with the raw name echoed back, is a Critical finding and ends the traversal probes for that endpoint. Any non-2xx status, failure body or missing storage evidence is not a finding.">
         <defs><marker id="arrF2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
 
         <g class="node lit-1 lit-2 lit-3" transform="translate(20 20)">
@@ -131,10 +131,10 @@
           <rect width="404" height="168" rx="10"/>
           <text class="ttl" x="14" y="26">Response</text>
           <g class="only-2 only-3"><text class="mono t-attacker" x="14" y="52">201 Created</text>
-            <text class="lbl" x="14" y="76">200 &lt;= status &lt; 300  →  accepted</text></g>
+            <text class="lbl" x="14" y="76">2xx + non-failure body + storage evidence → accepted</text></g>
           <g class="only-4"><text class="mono t-safe" x="14" y="52">415 Unsupported Media Type</text>
             <text class="lbl" x="14" y="76">outside 200 to 299  →  not accepted</text></g>
-          <text class="lbl" x="14" y="106">The body of the reply is never read.</text>
+          <text class="lbl" x="14" y="106">The body is read; a same-host URL may be fetched back.</text>
           <text class="lbl" x="14" y="122">A network error counts as not accepted.</text>
         </g>
         <path id="fw1p" d="M402 80 H 534" fill="none" stroke="none"/>
@@ -160,19 +160,19 @@
     <div class="scene-steps">
       <p class="step"><span class="n">1</span>Each probe is a multipart POST with a single part named <code>file</code>, carrying a filename, a part content type and a tiny body. The session's auth headers are attached when the scan has a session.</p>
       <p class="step" data-on="probeStep"><span class="n">2</span><b>Type probes.</b> <code>test.html</code> (<code>text/html</code>) and <code>test.svg</code> (<code>image/svg+xml</code>), each with a script payload. A 2xx for either is a High finding titled "File upload accepts dangerous file types", because an uploaded HTML or SVG file served back runs script on your origin.</p>
-      <p class="step" data-on="probeStep"><span class="n">3</span><b>Traversal probes.</b> A harmless <code>test</code> body under three filenames in order. The first 2xx is a Critical finding, "File upload vulnerable to path traversal", and the remaining names are skipped for that endpoint.</p>
-      <p class="step" data-on="probeStep"><span class="n">4</span><b>The decision rule is the status code and nothing else.</b> Anything from 200 to 299 is "accepted". A 4xx, a 5xx or a failed connection is not.</p>
+      <p class="step" data-on="probeStep"><span class="n">3</span><b>Traversal probes.</b> A harmless <code>test</code> body under three filenames in order. The first accepted one (2xx that echoes the unsanitised name) is a Critical finding, "File upload vulnerable to path traversal", and the remaining names are skipped for that endpoint.</p>
+      <p class="step" data-on="probeStep"><span class="n">4</span><b>A 2xx alone is not enough.</b> The body must not be a failure shape (such as <code>success: false</code> or an <code>error</code> field), and there must be evidence of storage: a same-host URL from the response that serves the uploaded file back (or whose path ends in the uploaded extension), or the response referencing the stored name. If a type probe gets a clean 2xx but none of that evidence, it is still reported, at Medium and confidence 0.4, saying evidence of storage was not found. For traversal probes the response must echo the unsanitised filename. A 4xx, a 5xx or a failed connection is never accepted. A server that stores only the basename is not reported for traversal.</p>
     </div>
   </div>
 </section>
 
 <section id="limit-sec">
-  <h2>What a 2xx does and does not prove</h2>
-  <p class="prose">Because the rule reads only the status, the finding means "the server did not refuse this". It is a strong lead, and sometimes a false alarm. The four replies below show where the line is.</p>
+  <h2>What acceptance does and does not prove</h2>
+  <p class="prose">A 2xx alone is not enough: the body must not be a failure shape and there must be evidence the file was stored. The finding still does not prove the file is served as active content. The four replies below show where the line is.</p>
 
   <div class="scene" id="limit" data-scene data-interval="3800">
     <figure class="stage">
-      <svg viewBox="0 0 960 250" role="img" aria-label="Four example replies. A 400 is no finding. A 201 with a URL is a true finding. A 200 whose body says the type is not allowed is still flagged. A 400 asking for a field named avatar means the scanner never tested the endpoint, a silent miss.">
+      <svg viewBox="0 0 960 250" role="img" aria-label="Four example replies. A 400 is no finding. A 201 with a URL that serves the file back is a true finding. A 200 whose body says the type is not allowed is skipped. A 400 asking for a field named avatar means the scanner never tested the endpoint, a silent miss.">
         <g class="node at-1 lit-1" transform="translate(20 20)"><rect width="224" height="190" rx="10"/>
           <text class="ttl" x="14" y="26">400 Bad Request</text>
           <text class="mono" x="14" y="54">{"error":"bad type"}</text>
@@ -184,15 +184,15 @@
           <text class="mono" x="14" y="54">{"url":"/u/test.svg"}</text>
           <text class="lbl" x="14" y="84">status inside 2xx</text>
           <text class="ttl t-attacker" x="14" y="130">High finding</text>
-          <text class="lbl" x="14" y="152">a real accept; the URL is not</text>
-          <text class="lbl" x="14" y="166">fetched back by the scanner</text></g>
+          <text class="lbl" x="14" y="152">a real accept; the URL is</text>
+          <text class="lbl" x="14" y="166">fetched back and serves the file</text></g>
         <g class="node at-3 lit-3" transform="translate(486 20)"><rect width="224" height="190" rx="10"/>
           <text class="ttl" x="14" y="26">200 OK</text>
           <text class="mono" x="14" y="54">{"error":"bad type"}</text>
           <text class="lbl" x="14" y="84">status inside 2xx</text>
-          <text class="ttl t-accent" x="14" y="130">High finding</text>
-          <text class="lbl" x="14" y="152">possible false alarm: the body</text>
-          <text class="lbl" x="14" y="166">refuses, the status does not</text></g>
+          <text class="ttl t-safe" x="14" y="130">no finding</text>
+          <text class="lbl" x="14" y="152">failure body skipped: the body</text>
+          <text class="lbl" x="14" y="166">refuses, though the status does not</text></g>
         <g class="node at-4 lit-4" transform="translate(719 20)"><rect width="224" height="190" rx="10"/>
           <text class="ttl" x="14" y="26">400 Bad Request</text>
           <text class="mono" x="14" y="54">missing field "avatar"</text>
@@ -204,8 +204,8 @@
     </figure>
     <div class="scene-steps">
       <p class="step"><span class="n">1</span>A refusing server answers 4xx. No finding, no noise.</p>
-      <p class="step"><span class="n">2</span>A server that stores the file answers 2xx, often with a URL. That is the finding. The scanner never opens the URL to check how the file is served or whether a traversal name escaped the folder.</p>
-      <p class="step"><span class="n">3</span>Some APIs return 200 and put the refusal in the JSON body. The scanner reports these too, since it never reads the body, so treat a High finding as "verify this upload by hand".</p>
+      <p class="step"><span class="n">2</span>A server that stores the file answers 2xx, usually with a URL or the stored name. The scanner opens a same-host URL to see if the payload is served back, and for traversal checks that the raw name was echoed.</p>
+      <p class="step"><span class="n">3</span>Some APIs return 200 and put the refusal in the JSON body. The scanner reads the body and skips these failure shapes. A bare <code>{"success": true}</code> that never mentions the file is also not reported.</p>
       <p class="step"><span class="n">4</span>The part is always named <code>file</code>. An endpoint that requires a different field name rejects every probe and is silently skipped.</p>
     </div>
   </div>
@@ -323,9 +323,9 @@ export async function POST(request: Request) {
         <tr><td>Types tested</td><td>Only <code>.html</code> and <code>.svg</code>. Server-executable types such as <code>.php</code>, <code>.jsp</code> and <code>.sh</code> are not probed.</td></tr>
         <tr><td>Traversal names</td><td><code>../../../etc/passwd</code>, <code>..\..\..\etc\passwd</code>, <code>....//....//etc/passwd</code>. One finding per endpoint at most.</td></tr>
         <tr><td>Content-type mismatch</td><td>Not tested. Each file is posted with a content type that matches its extension.</td></tr>
-        <tr><td>Proof</td><td>Status code from 200 to 299. The scanner does not read the reply body, fetch the stored file, or check where a traversal name landed.</td></tr>
+        <tr><td>Proof</td><td>A 2xx status, a body that is not a failure shape, and storage evidence: a same-host URL from the response that serves the payload back or ends in the uploaded extension, or the response referencing the stored name. Without storage evidence a type probe is reported only as Medium at confidence 0.4. Traversal probes need the raw filename echoed. The scanner does not check where a traversal name actually landed on disk.</td></tr>
         <tr><td>Form field</td><td>Always <code>file</code>.</td></tr>
-        <tr><td>Safety</td><td>Bodies are a few bytes and scripts only alert. Accepted files stay on the target, so remove test files such as <code>test.html</code> and <code>test.svg</code> if the server stored them.</td></tr>
+        <tr><td>Safety</td><td>Bodies are a few bytes and scripts only alert. The scanner also issues follow-up GETs to same-host URLs named in the reply (never URLs with a query string or a path containing logout, signout, delete, remove, destroy or reset). Accepted files stay on the target, so remove test files such as <code>test.html</code> and <code>test.svg</code> if the server stored them.</td></tr>
         <tr><td>Time</td><td>Endpoints are probed in order and the scanner stops cooperatively before its hard timeout, returning the findings gathered so far.</td></tr>
       </tbody>
     </table>

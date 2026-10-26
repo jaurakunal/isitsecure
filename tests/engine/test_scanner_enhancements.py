@@ -321,6 +321,10 @@ class TestJWTClaimManipulation:
         payload = scanner._decode_jwt_payload(token)
 
         async def mock_get(url, **kwargs):
+            # Garbage-token negative control is rejected; the rest accepted.
+            auth = kwargs.get("headers", {}).get("Authorization", "")
+            if "invalid.invalid.invalid" in auth:
+                return _make_httpx_response(401, "unauthorized")
             return _make_httpx_response(200, '{"data":"admin stuff"}')
 
         mock_client = AsyncMock()
