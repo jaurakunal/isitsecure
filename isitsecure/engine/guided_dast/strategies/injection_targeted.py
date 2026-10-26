@@ -6,6 +6,7 @@ by SAST injection pattern analysis.
 
 from __future__ import annotations
 
+import logging
 import re
 
 from isitsecure.engine.code_analysis.models import CodeFinding
@@ -16,6 +17,8 @@ from isitsecure.engine.guided_dast.route_endpoint_matcher import (
     RouteEndpointMatcher,
 )
 from isitsecure.engine.models import DiscoveredEndpoint
+
+logger = logging.getLogger(__name__)
 
 
 class InjectionTargetedStrategy:
@@ -28,11 +31,10 @@ class InjectionTargetedStrategy:
     _INJECTION_KEYWORDS = ("injection", "unsanitized", "user input", "sql", "xss")
 
     _SQLI_PAYLOADS = (
+        # The tautology can match (and so touch) every row, so these probes
+        # are only ever sent with a SAFE method (see ``_probe_method``), and
+        # never with a stacked DDL/DML query.
         "' OR '1'='1' --",
-        # Boolean-false twin of the first payload: a response that differs
-        # between the two proves the input reaches the query. Nothing here
-        # may modify data on the live target (never a stacked DDL/DML query).
-        "' AND '1'='2' --",
         "' UNION SELECT NULL, NULL --",
     )
 
@@ -49,6 +51,8 @@ class InjectionTargetedStrategy:
 
     def __init__(self) -> None:
         self._matcher = RouteEndpointMatcher()
+        # Endpoints skipped because they only expose unsafe methods.
+        self.skipped_notes: list[str] = []
 
     @property
     def handles_scanner_names(self) -> list[str]:
@@ -76,6 +80,9 @@ class InjectionTargetedStrategy:
             )
 
             for ep in matched_endpoints:
+                method = self._probe_method(ep, repo_snapshot, finding)
+                if method is None:
+                    continue
                 for param in param_names:
                     # SQLi payloads
                     for payload in self._SQLI_PAYLOADS:
@@ -84,7 +91,7 @@ class InjectionTargetedStrategy:
                             source_scanner=finding.scanner_name,
                             test_type=GuidedDASTConfig.TEST_TYPE_SQLI,
                             target_url=ep.url,
-                            http_method=ep.method.value,
+                            http_method=method,
                             payload={param: payload},
                             description=GuidedDASTConfig.DESC_INJECTION.format(
                                 injection_type="SQLi", param=param, url=ep.url,
@@ -99,7 +106,7 @@ class InjectionTargetedStrategy:
                             source_scanner=finding.scanner_name,
                             test_type=GuidedDASTConfig.TEST_TYPE_XSS,
                             target_url=ep.url,
-                            http_method=ep.method.value,
+                            http_method=method,
                             payload={param: payload},
                             description=GuidedDASTConfig.DESC_INJECTION.format(
                                 injection_type="XSS", param=param, url=ep.url,
@@ -108,6 +115,37 @@ class InjectionTargetedStrategy:
                         ))
 
         return test_cases
+
+    def _probe_method(
+        self,
+        ep: DiscoveredEndpoint,
+        repo_snapshot: RepoSnapshot,
+        finding: CodeFinding,
+    ) -> str | None:
+        """Safe method to probe ``ep`` with, or None (skipped, never unsafe).
+
+        An unsafe-method endpoint (DELETE/PUT/PATCH/POST) is probed with GET
+        only when its route also declares GET; a tautology sent with DELETE
+        could wipe rows.
+        """
+        safe = GuidedDASTConfig.SAFE_METHODS
+        if ep.method.value in safe:
+            return ep.method.value
+        for route in repo_snapshot.route_map:
+            if (
+                "GET" in [m.upper() for m in route.http_methods]
+                and self._matcher._file_matches_route(finding.file_path, route.file_path)
+                and (regex := self._matcher._pattern_to_regex(route.route_pattern))
+                and regex.search(self._matcher._extract_path(ep.url))
+            ):
+                return "GET"
+        note = (
+            f"Skipped injection probe of {ep.method.value} {ep.url}: "
+            "only unsafe methods are exposed and a probe could modify data"
+        )
+        self.skipped_notes.append(note)
+        logger.info(note)
+        return None
 
     def _is_injection_finding(self, finding: CodeFinding) -> bool:
         """Check if the finding indicates injection risk."""

@@ -109,16 +109,6 @@ class RaceConditionScanner:
                 except Exception:
                     return 0
 
-            # Control: one sequential replay. If the server accepts it, the
-            # operation has no exactly-once rule, so concurrent successes are
-            # not a race (a correct "add comment" endpoint does the same).
-            # If it is rejected (409/4xx) the endpoint DOES enforce a limit
-            # on replays, and concurrent successes then break that invariant.
-            control_status = await send_one()
-            sequential_accepted = (
-                control_status in RaceConditionConfig.SUCCESS_STATUS_CODES
-            )
-
             try:
                 tasks = [
                     send_one()
@@ -132,6 +122,18 @@ class RaceConditionScanner:
                     )
                 )
                 return None
+
+            # Control: ONE sequential replay sent AFTER the burst (sending it
+            # first would consume a single-use resource and make every
+            # concurrent request fail, hiding the classic race). If the
+            # replay is rejected (409/4xx) the endpoint DOES enforce a limit
+            # on replays, so concurrent successes broke that invariant. If it
+            # is accepted, the operation has no exactly-once rule (a correct
+            # "add comment" endpoint does the same).
+            control_status = await send_one()
+            sequential_accepted = (
+                control_status in RaceConditionConfig.SUCCESS_STATUS_CODES
+            )
 
         success_count = sum(
             1 for s in statuses

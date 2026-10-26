@@ -45,6 +45,7 @@ from isitsecure.engine.models import (
     RemediationPhase,
     SecurityTheme,
 )
+from isitsecure.engine.identity import injected_parameter
 from isitsecure.engine.reporting import plain_english
 from isitsecure.engine.triage.priority_calculator import (
     calculate_priority,
@@ -844,6 +845,8 @@ class LLMTriageService:
             logger.warning("Batch triage failed (%d findings): %s", len(batch), e)
             return set()
 
+    # Most of a batch (as a fraction) the LLM may drop as plain false positives.
+    _MAX_PLAIN_DROP_FRACTION = 0.25
     # Severities that the LLM may never drop without a real merge target.
     _PROTECTED_SEVERITIES = frozenset({SeverityLevel.CRITICAL, SeverityLevel.HIGH})
     # Ladder for severity_adjustment (INFO is outside what the LLM may set).
@@ -872,15 +875,25 @@ class LLMTriageService:
     ) -> bool:
         """True when ``keep`` can legitimately absorb ``dup``.
 
-        Same category, same place (endpoint when both have one, else source
-        file), and ``keep`` at least as severe as ``dup``.
+        Same category, same place, and ``keep`` at least as severe as ``dup``.
+        "Same place" is the same endpoint AND the same injected parameter
+        (DAST), or the same file AND the same line (SAST): two distinct
+        SQL injections in one file, or on two parameters of one endpoint, are
+        different vulnerabilities and must not absorb each other.
         """
         if keep.category != dup.category:
             return False
         if keep.endpoint_url and dup.endpoint_url:
-            same_place = keep.endpoint_url == dup.endpoint_url
+            same_place = (
+                keep.endpoint_url == dup.endpoint_url
+                and injected_parameter(keep) == injected_parameter(dup)
+            )
         elif keep.code_location and dup.code_location:
-            same_place = keep.code_location.file_path == dup.code_location.file_path
+            same_place = (
+                keep.code_location.file_path == dup.code_location.file_path
+                and keep.code_location.line_number is not None
+                and keep.code_location.line_number == dup.code_location.line_number
+            )
         else:
             same_place = False
         if not same_place:
@@ -903,10 +916,14 @@ class LLMTriageService:
         """Filter the LLM's ``duplicate_ids`` down to ones that may be removed.
 
         - only ids of this batch (never other batches', never non-strings);
-        - CRITICAL/HIGH findings go only into a surviving finding that claims
-          them in ``merged_ids`` and is the same issue (``_is_same_issue``);
-          otherwise they are kept and the refusal is logged;
-        - MEDIUM/LOW keep the documented false-positive semantics.
+        - a finding the LLM presents as a duplicate (some surviving finding
+          claims it in ``merged_ids``) goes only into a target that is the same
+          issue (``_is_same_issue``), whatever its severity; CRITICAL/HIGH
+          without such a target are kept and the refusal is logged;
+        - an unclaimed MEDIUM/LOW id keeps the documented false-positive
+          semantics, but only a few per batch (``_MAX_PLAIN_DROP_FRACTION``):
+          a reply listing most of a batch is treated as untrusted and drops
+          nothing, so injected text cannot mass-delete findings.
         """
         if not isinstance(raw, list):
             return set()
@@ -914,6 +931,21 @@ class LLMTriageService:
             x for x in raw if isinstance(x, str) and x in findings_by_id
         }
         approved: set[str] = set()
+        claimed_ids = set().union(*merge_claims.values()) if merge_claims else set()
+        plain_cap = max(1, int(len(findings_by_id) * self._MAX_PLAIN_DROP_FRACTION))
+        plain = [
+            d for d in requested
+            if d not in claimed_ids
+            and severity.get(d, findings_by_id[d].severity)
+            not in self._PROTECTED_SEVERITIES
+        ]
+        plain_ok = len(plain) <= plain_cap
+        if not plain_ok:
+            logger.warning(
+                "Triage LLM flagged %d of %d findings as plain false positives "
+                "(cap %d); keeping them all",
+                len(plain), len(findings_by_id), plain_cap,
+            )
         for dup_id in requested:
             dup = findings_by_id[dup_id]
             targets = [
@@ -937,7 +969,12 @@ class LLMTriageService:
                     "merge target; keeping it",
                     severity.get(dup_id, dup.severity).value, dup_id,
                 )
-            else:
+            elif dup_id in claimed_ids:
+                logger.warning(
+                    "Triage LLM merged %s without a same-issue target; keeping it",
+                    dup_id,
+                )
+            elif plain_ok:
                 approved.add(dup_id)
         return approved
 

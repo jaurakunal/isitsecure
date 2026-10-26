@@ -100,8 +100,8 @@ class MassAssignmentSchemaStrategy:
 
         Sending PUT/PATCH to a route that only declares POST (or the
         reverse) is a wrong-method write against the live target. With no
-        route information, fall back to the discovered method if it mutates,
-        else POST only.
+        route information, fall back to the discovered method if it mutates;
+        never invent a POST (an unsafe request the app never advertised).
         """
         for route in repo_snapshot.route_map:
             if (
@@ -118,7 +118,7 @@ class MassAssignmentSchemaStrategy:
                     return declared
         if ep.method.value in self._MUTATION_METHODS:
             return [ep.method.value]
-        return ["POST"]
+        return []
 
     def _extract_privileged_fields(self, finding: CodeFinding) -> list[str]:
         """Extract privileged field names from the finding's code snippet."""

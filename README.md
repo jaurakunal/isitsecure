@@ -352,7 +352,7 @@ isitsecure scan https://your-app.com --suppress de0e57aeb5f61708 --suppress-reas
 isitsecure scan https://your-app.com --show-suppressed
 ```
 
-A fingerprint also covers the flagged source line (SAST, line number excluded) or the injected parameter (DAST), so two same-titled findings in one file get different fingerprints and suppressing one does not hide the other. Fingerprints recorded in an older `.isitsecureignore`, baseline or report (including for `--suppress` and `verify --fingerprint`) keep matching; a legacy entry still covers every instance. SARIF results carry both `isitsecure/v1` (legacy) and `isitsecure/v2` (current).
+A fingerprint also covers the flagged source line (SAST, line number excluded; only when the line is positively identified, otherwise the original value is kept) or the first injected parameter (DAST), so two same-titled findings in one file get different fingerprints and suppressing one does not hide the other. Fingerprints recorded in an older `.isitsecureignore`, baseline or report (including for `--suppress` and `verify --fingerprint`) keep matching; a legacy entry still covers every instance. SARIF results carry both `isitsecure/v1` (legacy) and `isitsecure/v2` (current).
 
 The `.isitsecureignore` file is plain text — one fingerprint per line, `#` comments for context — so suppressions live with your code and are reviewed like any other change. Delete a line to un-suppress.
 

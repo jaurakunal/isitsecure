@@ -224,13 +224,13 @@ class TestRaceConditionScanner:
         scanner = RaceConditionScanner()
         intercepted = [_make_intercepted()]
 
-        # Single-use endpoint with a check-then-act window: a sequential
-        # replay is rejected (409) but concurrent requests all pass the check.
+        # Single-use endpoint with a check-then-act window: the concurrent
+        # burst all passes the check, the post-burst replay is rejected (409).
         calls = {"n": 0}
 
         async def racy(*a, **k):
             calls["n"] += 1
-            if calls["n"] == 1:
+            if calls["n"] > RaceConditionConfig.CONCURRENT_REQUESTS:
                 return _make_response(409, "already redeemed")
             return _make_response(201, '{"id":"new"}')
 

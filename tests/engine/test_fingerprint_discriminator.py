@@ -122,8 +122,28 @@ def test_known_fingerprints_covers_current_and_legacy():
         legacy_fingerprint,
     )
 
-    a = _sast(10, "query = db.execute(user_a)")
+    a = _sast(10, _ctx(10, "query = db.execute(user_a)"))
     known = known_fingerprints([a])
     assert finding_fingerprint(a) in known
     assert legacy_fingerprint(a) in known
     assert finding_fingerprint(a) != legacy_fingerprint(a)
+
+
+def test_import_added_above_does_not_change_fingerprint_without_marker() -> None:
+    """LLM / unknown-line findings: the excerpt's first lines must not be hashed."""
+    before = _sast(10, "def f():\n    cur.execute(q + a)")
+    after = _sast(11, "import os\ndef f():\n    cur.execute(q + a)")
+    assert before.fingerprint == after.fingerprint
+
+
+def test_no_marker_snippet_uses_legacy_fingerprint() -> None:
+    from isitsecure.engine.identity import legacy_fingerprint
+    f = _sast(10, "some excerpt with no flagged-line marker")
+    assert f.fingerprint == legacy_fingerprint(f)
+
+
+def test_marker_import_added_above_unchanged_and_still_discriminates() -> None:
+    a = _sast(10, _ctx(10, "cur.execute('SELECT ' + a)"))
+    shifted = _sast(11, "1 | import os\n" + _ctx(11, "cur.execute('SELECT ' + a)"))
+    other = _sast(10, _ctx(10, "cur.execute('DELETE ' + b)"))
+    assert a.fingerprint == shifted.fingerprint != other.fingerprint

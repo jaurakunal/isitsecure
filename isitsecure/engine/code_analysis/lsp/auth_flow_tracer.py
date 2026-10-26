@@ -20,6 +20,8 @@ Strategy:
 from __future__ import annotations
 
 import asyncio
+import bisect
+import functools
 import logging
 import re
 from pathlib import Path
@@ -37,6 +39,84 @@ from isitsecure.engine.code_analysis.shared_utils import read_repo_file
 from isitsecure.engine.constants import LSPConfig, SharedPatterns
 
 logger = logging.getLogger(__name__)
+
+
+class _FileIndex:
+    """Per-file lookup tables, built once and shared by every route.
+
+    Judging each (route, method) used to re-split the whole file, re-scan it
+    for classes / handler exports and compare every decorator stack, which is
+    quadratic in the number of routes (4000 routes took minutes).
+    """
+
+    def __init__(self, text: str, stacks: list[dict]) -> None:
+        self.text = text
+        self.stacks = stacks
+        self.lines = text.split("\n")
+        offsets = [0]
+        for line in self.lines:
+            offsets.append(offsets[-1] + len(line) + 1)
+        self.line_offsets = offsets
+        self.class_positions = [
+            m.start() for m in re.finditer(r"\bclass\s+\w+", text)
+        ]
+        self.class_auth: dict[int, str] = {}
+        for st in stacks:
+            if st["class_pos"] is not None:
+                self.class_auth.setdefault(st["class_pos"], st["auth"])
+        self.route_stacks = [st for st in stacks if st["routes"]]
+        self.by_want: dict[str, list[tuple[int, str]]] = {}
+        for i, st in enumerate(stacks):
+            for deco_method, deco_path in st["routes"]:
+                want = AuthFlowTracer._normalise_route_path(deco_path)
+                self.by_want.setdefault(want, []).append((i, deco_method))
+        # Cheap pre-check: every procedure base name contains "rocedure".
+        self.has_procedure = "rocedure" in text
+        self.own_handler: dict[str, re.Match | None] = {}
+        self.own_scope: dict[str, tuple[str, int] | None] = {}
+        self.other_handler_export: bool | None = None
+
+    def line_of(self, offset: int) -> int:
+        """Zero-based line number of ``offset`` (== newlines before it)."""
+        return bisect.bisect_right(self.line_offsets, offset) - 1
+
+    def class_guard(self, position: int) -> str:
+        """Auth decorator on the class declaration enclosing ``position``."""
+        idx = bisect.bisect_left(self.class_positions, position) - 1
+        if idx < 0:
+            return ""
+        return self.class_auth.get(self.class_positions[idx], "")
+
+    def matching_stacks(self, route: RouteEntry, method: str) -> list[int]:
+        """Indices (in stack order) of the stacks declaring this route+method."""
+        have = AuthFlowTracer._normalise_route_path(route.route_pattern)
+        wants = {"", have}
+        wants.update(have[i + 1:] for i, ch in enumerate(have) if ch == "/")
+        verb = method.upper()
+        hits = {
+            i
+            for want in wants
+            for i, deco_method in self.by_want.get(want, ())
+            if deco_method in ("*", verb)
+        }
+        return sorted(hits)
+
+
+@functools.lru_cache(maxsize=8)
+def _local_import_names(content: str) -> tuple[str, ...]:
+    """Names imported with ``import {..} from`` a project-local module."""
+    names: list[str] = []
+    for match in re.finditer(
+        r"import\s*\{([^}]*)\}\s*from\s*[\'\"]([^\'\"]+)[\'\"]", content
+    ):
+        if not match.group(2).startswith(LSPConfig.LOCAL_MODULE_PREFIXES):
+            continue
+        for raw in match.group(1).split(","):
+            # `foo as bar` is called as `bar`
+            name = raw.split(" as ")[-1].strip()
+            if name and name not in names:
+                names.append(name)
+    return tuple(names)
 
 
 class AuthFlowTracer:
@@ -500,6 +580,7 @@ class AuthFlowTracer:
         stacks = self._decorator_stacks(text)
         patterns = {route.route_pattern for route in routes}
         pairs = sum(len(route.http_methods) for route in routes)
+        index = _FileIndex(text, stacks)
         results: dict[tuple[str, str], AuthFlowResult] = {}
         for route in routes:
             for method in route.http_methods:
@@ -509,6 +590,7 @@ class AuthFlowTracer:
                         sole_pattern=len(patterns) == 1,
                         sole_pair=pairs == 1,
                         is_python=route.file_path.endswith(".py"),
+                        index=index,
                     )
                 )
         return results
@@ -524,17 +606,21 @@ class AuthFlowTracer:
         sole_pattern: bool,
         sole_pair: bool,
         is_python: bool,
+        index: _FileIndex | None = None,
     ) -> AuthFlowResult:
+        index = index or _FileIndex(text, stacks)
         # Strategy 1: Procedure base (tRPC, NestJS, etc.)
-        result = await self._trace_procedure_auth(
-            text, abs_path, self._procedure_name(route.route_pattern)
-        )
+        result = None
+        if index.has_procedure:
+            result = await self._trace_procedure_auth(
+                text, abs_path, self._procedure_name(route.route_pattern)
+            )
         if result and result.has_verified_auth:
             return result
 
         # Strategy 3: Auth decorators (NestJS, Python, Spring, Fastify)
         result = self._decorator_auth_for_route(
-            text, stacks, route, method, sole_pair
+            text, stacks, route, method, sole_pair, index
         )
         if result and result.has_verified_auth:
             return result
@@ -543,7 +629,7 @@ class AuthFlowTracer:
         # handler that serves this route.
         scope = self._handler_scope(
             text, stacks, route, method,
-            sole_pattern=sole_pattern, is_python=is_python,
+            sole_pattern=sole_pattern, is_python=is_python, index=index,
         )
         if scope is not None:
             result = await self._trace_inline_auth(text, abs_path, scope)
@@ -768,6 +854,7 @@ class AuthFlowTracer:
         route: RouteEntry,
         method: str,
         sole_pair: bool,
+        index: _FileIndex | None = None,
     ) -> AuthFlowResult | None:
         """The auth decorator that sits on *this* route, or its class.
 
@@ -776,20 +863,17 @@ class AuthFlowTracer:
         Fastify option objects) fall back to the old file-wide check only when
         the file serves a single route.
         """
-        route_stacks = [st for st in stacks if st["routes"]]
-        if not route_stacks:
+        index = index or _FileIndex(text, stacks)
+        if not index.route_stacks:
             return self._check_decorator_auth(text) if sole_pair else None
 
-        matched = [
-            st for st in route_stacks
-            if any(self._route_decorator_matches(r, route, method) for r in st["routes"])
-        ]
+        matched = [stacks[i] for i in index.matching_stacks(route, method)]
         if not matched:
             return None
 
         guards = []
         for st in matched:
-            guard = st["auth"] or self._class_guard(stacks, text, st["start"])
+            guard = st["auth"] or index.class_guard(st["start"])
             if not guard:
                 return None
             guards.append(guard)
@@ -993,19 +1077,9 @@ class AuthFlowTracer:
         """
         scope_text = content if scope_text is None else scope_text
         symbols: list[str] = []
-        for match in re.finditer(
-            r"import\s*\{([^}]*)\}\s*from\s*[\'\"]([^\'\"]+)[\'\"]", content
-        ):
-            names, module = match.group(1), match.group(2)
-            if not module.startswith(LSPConfig.LOCAL_MODULE_PREFIXES):
-                continue
-            for raw in names.split(","):
-                # `foo as bar` is called as `bar`
-                name = raw.split(" as ")[-1].strip()
-                if not name or name in symbols:
-                    continue
-                if re.search(rf"\b{re.escape(name)}\s*\(", scope_text):
-                    symbols.append(name)
+        for name in _local_import_names(content):
+            if re.search(rf"\b{re.escape(name)}\s*\(", scope_text):
+                symbols.append(name)
         return symbols[: LSPConfig.MAX_INLINE_TRACE_SYMBOLS]
 
     _HANDLER_METHODS = "GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS"
@@ -1019,47 +1093,57 @@ class AuthFlowTracer:
         *,
         sole_pattern: bool,
         is_python: bool,
+        index: _FileIndex | None = None,
     ) -> tuple[str, int] | None:
         """The code that serves ``method`` of ``route``, as (text, offset).
 
         None means the file's shape does not say which code that is, so no
         inline evidence may be credited to the route.
         """
-        # Next.js route handlers: `export async function POST(...)`.
-        own = re.search(
-            rf"export\s+(?:async\s+)?(?:function\s+{re.escape(method.upper())}\b"
-            rf"|const\s+{re.escape(method.upper())}\s*=)",
-            text,
-        )
+        index = index or _FileIndex(text, stacks)
+        verb = method.upper()
+        # Next.js route handlers: `export async function POST(...)`. The
+        # answer depends only on the method, so it is computed once per file.
+        if verb not in index.own_handler:
+            index.own_handler[verb] = re.search(
+                rf"export\s+(?:async\s+)?(?:function\s+{re.escape(verb)}\b"
+                rf"|const\s+{re.escape(verb)}\s*=)",
+                text,
+            )
+        own = index.own_handler[verb]
         if own:
-            line = text.count("\n", 0, own.start())
-            span = self._block_span(text, line)
-            block = text[span[0]:span[1]]
-            if "{" not in block:
-                return text, 0  # `export const GET = handler`: body is elsewhere
-            return self._with_local_helpers(text, block, span[0])
-        if re.search(
-            rf"export\s+(?:async\s+)?(?:function|const)\s+(?:{self._HANDLER_METHODS})\b",
-            text,
-        ):
+            if verb not in index.own_scope:
+                span = self._block_span(text, index.line_of(own.start()), index)
+                block = text[span[0]:span[1]]
+                if "{" not in block:
+                    index.own_scope[verb] = (text, 0)  # body is elsewhere
+                else:
+                    index.own_scope[verb] = self._with_local_helpers(
+                        text, block, span[0]
+                    )
+            return index.own_scope[verb]
+        if index.other_handler_export is None:
+            index.other_handler_export = bool(re.search(
+                rf"export\s+(?:async\s+)?(?:function|const)\s+(?:{self._HANDLER_METHODS})\b",
+                text,
+            ))
+        if index.other_handler_export:
             return None  # other methods have handlers, this one does not
 
         # A recognised route decorator: the function that follows it.
-        for stack in stacks:
-            if any(
-                self._route_decorator_matches(r, route, method)
-                for r in stack["routes"]
-            ):
-                line = text.count("\n", 0, stack["end"]) + 1
-                lines = text.split("\n")
-                while line < len(lines) and not lines[line].strip():
-                    line += 1
-                span = (
-                    self._indent_span(text, line)
-                    if is_python
-                    else self._block_span(text, line)
-                )
-                return text[span[0]:span[1]], span[0]
+        matching = index.matching_stacks(route, method)
+        if matching:
+            stack = stacks[matching[0]]
+            lines = index.lines
+            line = index.line_of(stack["end"]) + 1
+            while line < len(lines) and not lines[line].strip():
+                line += 1
+            span = (
+                self._indent_span(text, line, index)
+                if is_python
+                else self._block_span(text, line, index)
+            )
+            return text[span[0]:span[1]], span[0]
 
         return (text, 0) if sole_pattern else None
 
@@ -1087,9 +1171,11 @@ class AuthFlowTracer:
         return block + "\n" + "\n".join(extra), offset
 
     @staticmethod
-    def _indent_span(text: str, line: int) -> tuple[int, int]:
+    def _indent_span(
+        text: str, line: int, index: _FileIndex | None = None
+    ) -> tuple[int, int]:
         """Offsets of the indentation-delimited block starting at ``line``."""
-        lines = text.split("\n")
+        lines = index.lines if index else text.split("\n")
         if not (0 <= line < len(lines)):
             return 0, len(text)
         base = len(lines[line].expandtabs(4)) - len(lines[line].expandtabs(4).lstrip())
@@ -1099,17 +1185,26 @@ class AuthFlowTracer:
             if current.strip() and (len(current) - len(current.lstrip())) <= base:
                 break
             end += 1
+        if index:
+            return index.line_offsets[line], min(index.line_offsets[end], len(text))
         start_offset = sum(len(l) + 1 for l in lines[:line])
         end_offset = sum(len(l) + 1 for l in lines[:end])
         return start_offset, min(end_offset, len(text))
 
     @classmethod
-    def _block_span(cls, text: str, line: int) -> tuple[int, int]:
+    def _block_span(
+        cls, text: str, line: int, index: _FileIndex | None = None
+    ) -> tuple[int, int]:
         """Offsets of the declaration at ``line`` (see ``_enclosing_block``)."""
-        lines = text.split("\n")
+        lines = index.lines if index else text.split("\n")
         if not (0 <= line < len(lines)):
             return 0, len(text)
         end = cls._block_end_line(lines, line)
+        if index:
+            return (
+                index.line_offsets[line],
+                min(index.line_offsets[end + 1] - 1, len(text)),
+            )
         start_offset = sum(len(l) + 1 for l in lines[:line])
         end_offset = sum(len(l) + 1 for l in lines[: end + 1]) - 1
         return start_offset, min(end_offset, len(text))

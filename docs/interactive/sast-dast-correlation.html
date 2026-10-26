@@ -50,7 +50,7 @@
 
 <section id="matcher">
   <h2>Phase 9: two streams, one matcher</h2>
-  <p class="prose">After the scanners finish, every finding carries a source and a category. The cross-referencer walks the DAST stream and, for each finding, looks for the first unused SAST finding whose category completes one of its pair rules <b>and that concerns the same target</b> (a shared endpoint word with its file path or text, or the same leaked token). A hit produces a new confirmed finding that links both originals. Findings without a partner pass through untouched.</p>
+  <p class="prose">After the scanners finish, every finding carries a source and a category. The cross-referencer walks the DAST stream and, for each finding, looks for the first unused SAST finding whose category completes one of its pair rules <b>and that concerns the same target</b> (a shared endpoint word with its file path or text, with camelCase and PascalCase names split into words so <code>/api/v1/accounts/7</code> meets <code>AccountController.java</code>, or the same leaked token). A hit produces a new confirmed finding that links both originals. Findings without a partner pass through untouched.</p>
 
   <div class="scene" id="xref" data-scene data-interval="3200">
     <figure class="stage">

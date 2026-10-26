@@ -176,6 +176,36 @@ class SASTGuidedDASTRunner:
         parsed = urlparse(url)
         return f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
 
+    @staticmethod
+    def _covered_test_types(finding: DeepFinding) -> set[str]:
+        """Guided test types an existing finding already covers.
+
+        Category alone is too coarse (an XSS finding must not suppress the
+        SQLi probe on the same path, an auth finding not the race test), so
+        the title/scanner name narrows the category to a test type. An
+        ambiguous finding covers every test type of its category.
+        """
+        types = {
+            t for t, (_, cat) in _TEST_TYPE_METADATA.items()
+            if cat == finding.category
+        }
+        text = f"{finding.title} {finding.scanner_name}".lower()
+        cfg = GuidedDASTConfig
+        if finding.category == FindingCategory.AUTH_WEAKNESS:
+            is_race = "race" in text
+            narrowed = {cfg.TEST_TYPE_RACE_CONDITION} if is_race else {
+                cfg.TEST_TYPE_AUTH_BYPASS,
+            }
+            return narrowed
+        if finding.category == FindingCategory.INJECTION_RISK:
+            is_xss = any(k in text for k in ("xss", "cross-site", "script"))
+            is_sqli = any(k in text for k in ("sql", "union"))
+            if is_xss and not is_sqli:
+                return {cfg.TEST_TYPE_XSS}
+            if is_sqli and not is_xss:
+                return {cfg.TEST_TYPE_SQLI}
+        return types
+
     @classmethod
     def _deduplicate(
         cls,
@@ -186,21 +216,16 @@ class SASTGuidedDASTRunner:
         existing_keys: set[str] = set()
         for f in existing_findings:
             if f.endpoint_url:
-                existing_keys.add(
-                    f"{cls._url_key(f.endpoint_url)}:{f.category.value}",
-                )
+                for test_type in cls._covered_test_types(f):
+                    existing_keys.add(
+                        f"{cls._url_key(f.endpoint_url)}:{test_type}",
+                    )
 
         deduped: list[GuidedTestCase] = []
         seen_keys: set[str] = set()
 
         for tc in test_cases:
-            _, category = _TEST_TYPE_METADATA.get(
-                tc.test_type, (None, None),
-            )
-            finding_key = (
-                f"{cls._url_key(tc.target_url)}:{category.value}"
-                if category else ""
-            )
+            finding_key = f"{cls._url_key(tc.target_url)}:{tc.test_type}"
             # The payload is part of the identity: the race batch is N
             # requests to one url/method that differ only by payload.
             payload_key = json.dumps(tc.payload, sort_keys=True, default=str)
@@ -343,6 +368,17 @@ class SASTGuidedDASTRunner:
         if test_case.dry_run:
             logger.info(
                 GuidedDASTConfig.MSG_DRY_RUN.format(url=test_case.target_url),
+            )
+            return None
+
+        if (
+            test_case.test_type in GuidedDASTConfig.SAFE_METHOD_ONLY_TEST_TYPES
+            and test_case.http_method.upper() not in GuidedDASTConfig.SAFE_METHODS
+        ):
+            # Defence in depth: injection/XSS payloads can match every row.
+            logger.info(
+                "Skipped %s probe with unsafe method %s on %s",
+                test_case.test_type, test_case.http_method, test_case.target_url,
             )
             return None
 

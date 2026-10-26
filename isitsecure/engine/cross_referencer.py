@@ -61,12 +61,16 @@ _GENERIC_WORDS = frozenset({
     "put", "delete", "patch", "the", "and", "for", "with", "this", "that",
     "from", "not", "has", "code", "file", "line", "path", "user", "data",
 })
+_CAMEL_BOUNDARY = re.compile(r"([a-z0-9])([A-Z])")
+_ACRONYM_BOUNDARY = re.compile(r"([A-Z]+)([A-Z][a-z])")
 _ID_SEGMENT = re.compile(r"^(?:v\d+|\d+|[0-9a-f]{8,}(?:-[0-9a-f]{4,})*)$")
 
 
 def _tokens(text: str) -> set[str]:
     """Lower-case identifier words, with a trailing plural 's' folded away."""
     out: set[str] = set()
+    # AccountController / orderItems -> "Account Controller" / "order Items"
+    text = _ACRONYM_BOUNDARY.sub(r"\1 \2", _CAMEL_BOUNDARY.sub(r"\1 \2", text))
     for word in _WORD.findall(text.lower()):
         if len(word) < _MIN_TOKEN or word in _GENERIC_WORDS:
             continue

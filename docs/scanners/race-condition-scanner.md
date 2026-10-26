@@ -8,9 +8,9 @@ Tests for Time-of-Check-to-Time-of-Use (TOCTOU) vulnerabilities by sending multi
 
 Technique:
 1. Takes the authenticated POST, PUT and PATCH requests captured during the crawl that carried a body and already succeeded once, de-duplicated by URL path, up to 10 endpoints
-2. Replays the request once sequentially as a control
-3. Fires N = 10 concurrent copies of the same request using a shared HTTP client (maximizing timing overlap)
-4. If 2+ concurrent requests return success (200/201/204) AND the sequential control was rejected, the endpoint enforces a replay rule that the concurrent burst broke, and it is flagged (High, confidence 0.80). If the control was accepted too, the endpoint has no exactly-once rule (a correct add-comment or create-note endpoint behaves this way), so only a lower-confidence Info note "Concurrent duplicate ... accepted (no uniqueness enforced)" (0.30) is reported
+2. Fires N = 10 concurrent copies of the same request using a shared HTTP client (maximizing timing overlap)
+3. Then replays the request once sequentially as a control. The control goes AFTER the burst: sent first, it would consume a single-use resource (coupon, one-time transfer) and every concurrent request would fail, hiding the race. If the control gets no response the result is not reported
+4. If 2+ concurrent requests return success (200/201/204) AND the post-burst control was rejected, the endpoint enforces a replay rule that the concurrent burst broke, and it is flagged (High, confidence 0.80). If the post-burst control was accepted too, the endpoint has no exactly-once rule (a correct add-comment or create-note endpoint behaves this way), so only a lower-confidence Info note "Concurrent duplicate ... accepted (no uniqueness enforced)" (0.30) is reported
 
 There is no keyword targeting: every captured mutation is replayed regardless of what it does. The classes of bug this is meant to surface are:
 - Balance deductions (credits, wallet, gift cards)

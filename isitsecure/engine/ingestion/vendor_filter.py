@@ -53,7 +53,7 @@ class VendorAssetFilter:
         return domain.split(".", 1)[0]
 
     def _is_sibling_domain(self, asset_domain: str) -> bool:
-        """``example-static.com`` serving ``example.com``: same brand prefix.
+        """``example-static.com`` serving ``example.com``: same brand label.
 
         Only for hosts under a single owner-registrable suffix; shared hosting
         domains (``x.vercel.app``) never count as siblings of each other.
@@ -63,8 +63,11 @@ class VendorAssetFilter:
             return False
         a, b = self._brand_label(site), self._brand_label(asset)
         shortest = min(len(a), len(b))
+        # The labels must be equal, or one must be the other plus "-suffix"
+        # (example-static.com for example.com). A bare shared prefix is not
+        # enough: shopify.com is not a sibling of shop.com.
         return shortest >= InjectionScannerConfig.SIBLING_LABEL_MIN_LENGTH and (
-            a.startswith(b) or b.startswith(a)
+            a == b or a.startswith(b + "-") or b.startswith(a + "-")
         )
 
     def is_vendor_asset(self, asset_url: str, content: str) -> bool:

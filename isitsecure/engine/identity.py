@@ -61,23 +61,36 @@ def _squash(text: str) -> str:
     return " ".join(text.split())[:_DISCRIMINATOR_MAX]
 
 
+def injected_parameter(finding: DeepFinding) -> str:
+    """Name of the injected parameter a DAST finding recorded, or ""."""
+    match = _PAYLOAD_PARAM.match(finding.request_payload or "")
+    return match.group(1) if match else ""
+
+
 def _discriminator(finding: DeepFinding) -> str:
     """What tells two same-titled findings in one file / on one path apart.
 
     SAST: the flagged source line (line NUMBER is deliberately excluded, so
-    edits above the finding do not change it). DAST: the injected parameter
-    name. Empty when the finding gives nothing to tell it apart by.
+    edits above the finding do not change it), and ONLY when that line is
+    positively identified by the ``>>>`` marker. A snippet without the marker
+    (unknown line, or an LLM-written excerpt) would make the discriminator the
+    first lines of the excerpt, so an import added at the top of a file would
+    change the fingerprint: such findings keep the legacy value instead.
+
+    DAST: the first injected parameter name the scanner recorded in
+    ``request_payload``. Known limitation: the name is only as stable as the
+    scanner's choice of which parameter it reports; a scanner that reports a
+    different parameter on a later scan yields a different fingerprint (the
+    legacy fingerprint still matches old ignore/baseline entries).
+
+    Empty when the finding gives nothing positive to tell it apart by.
     """
     loc = finding.code_location
     if loc and loc.file_path:
-        snippet = loc.code_snippet or ""
-        match = _FLAGGED_LINE.search(snippet)
-        return _squash(match.group(1) if match else snippet)
-    if finding.request_payload:
-        match = _PAYLOAD_PARAM.match(finding.request_payload)
-        if match:
-            return f"param:{match.group(1)}"
-    return ""
+        match = _FLAGGED_LINE.search(loc.code_snippet or "")
+        return _squash(match.group(1)) if match else ""
+    param = injected_parameter(finding)
+    return f"param:{param}" if param else ""
 
 
 def compute_fingerprint(

@@ -1133,8 +1133,15 @@ class SecretScannerConfig:
         "your-password", "xxx", "xxxx", "xxxxxxxx", "dummy", "placeholder",
     })
     # Templated/interpolated credentials are not literal secrets.
-    DB_URL_TEMPLATE_MARKERS = ("${", "{{", "<", "%s", "%(", "$(")
-    DB_URL_CREDENTIALS_PATTERN = r"^[a-z+]+://([^:@/\s]+):([^@/\s]*)@"
+    # A bare "<" can be part of a real password; only a whole <placeholder>
+    # (see DB_URL_ANGLE_PLACEHOLDER) marks a template.
+    DB_URL_TEMPLATE_MARKERS = ("${", "{{", "%s", "%(", "$(")
+    DB_URL_ANGLE_PLACEHOLDER = r"<[^<>\s]*>"
+    # scheme://user: -- the password runs from here to the last "@" before
+    # the host (it may contain "/" and other printable characters).
+    DB_URL_CREDENTIALS_PATTERN = r"^[a-z+]+://([^:@/\s]+):"
+    # password=/pwd= given as a query parameter instead of userinfo.
+    DB_URL_QUERY_PASSWORD_PATTERN = r"[?&;](?:password|passwd|pwd)=([^&;\s#]*)"
     DB_URL_PLACEHOLDER_SEVERITY = SeverityLevel.MEDIUM.value
     JWT_ROLE_PATTERN = r'"role"\s*:\s*"([^"]+)"'
     JWT_ROLE_SERVICE = "service_role"
@@ -1835,7 +1842,10 @@ class RLSPolicyAnalyzerConfig:
 
     # SQL patterns for parsing migrations
     CREATE_TABLE_PATTERN = r'CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:public\.)?["\']?(\w+)["\']?'
-    ENABLE_RLS_PATTERN = r'ALTER\s+TABLE\s+(?:public\.)?["\']?(\w+)["\']?\s+ENABLE\s+ROW\s+LEVEL\s+SECURITY'
+    ENABLE_RLS_PATTERN = (
+        r'ALTER\s+TABLE\s+(?:ONLY\s+)?(?:IF\s+EXISTS\s+)?(?:public\.)?["\']?(\w+)["\']?'
+        r'\s+ENABLE\s+ROW\s+LEVEL\s+SECURITY'
+    )
     # Policy names may be quoted and contain spaces ("Enable read access for all users").
     CREATE_POLICY_PATTERN = (
         r'CREATE\s+POLICY\s+(?:"([^"]+)"|\'([^\']+)\'|(\w+))\s+ON\s+'
@@ -3172,6 +3182,9 @@ class MassAssignmentConfig:
     ECHO_CONTROL_FIELD = "isitsecure_ctl"
     ECHO_CONTROL_VALUE = "isitsecure-ctl-7f3a"
     CONFIDENCE_ECHO_ONLY = 0.30
+    # The echo control request failed, so reflection could not be told from
+    # persistence: report the reflected field with reduced confidence.
+    CONFIDENCE_NO_CONTROL = 0.55
     TITLE_ECHO_ONLY = (
         "Endpoint echoes request fields (mass assignment not confirmed)"
     )
@@ -3179,8 +3192,9 @@ class MassAssignmentConfig:
         "The endpoint {url} reflects arbitrary fields from a {method} request "
         "body, including privileged ones ({fields}), but it reflects made-up "
         "fields just as readily, so the reflection does not show that the "
-        "values were persisted. Re-read the object (GET) after the write, or "
-        "review the handler for field allow-listing."
+        "values were persisted (a read-back GET did not show the privileged "
+        "field stored, or no read-back was possible). Review the handler for "
+        "field allow-listing."
     )
     TITLE_MASS_ASSIGNMENT = "Mass assignment: extra fields accepted"
     DESC_MASS_ASSIGNMENT = (
@@ -7268,6 +7282,9 @@ class GuidedDASTConfig:
     BASELINE_ID = "00000000-0000-0000-0000-000000000002"
     CATCH_ALL_PATH = "/isitsecure-no-such-path-7f3a"
     SAFE_METHODS = ("GET", "HEAD")
+    # Payloads that can match every row / run script are only ever sent with
+    # a safe method.
+    SAFE_METHOD_ONLY_TEST_TYPES = ("sqli_targeted", "xss_targeted")
     QUERY_METHODS = ("GET", "HEAD", "DELETE", "OPTIONS")
 
     # Scanner identity

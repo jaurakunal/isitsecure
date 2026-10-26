@@ -351,16 +351,33 @@ class GitSecretScanner:
             spec = base["database_url"]
             if any(m in value for m in cfg.DB_URL_TEMPLATE_MARKERS):
                 return None
-            creds = re.match(cfg.DB_URL_CREDENTIALS_PATTERN, value, re.IGNORECASE)
-            if not creds or not creds.group(2):
+            if re.search(cfg.DB_URL_ANGLE_PLACEHOLDER, value):
+                return None
+            password = self._db_url_password(value)
+            if not password:
                 return None  # no embedded password: nothing secret
-            if creds.group(2).lower() in cfg.PLACEHOLDER_DB_PASSWORDS:
+            if password.lower() in cfg.PLACEHOLDER_DB_PASSWORDS:
                 return (
                     SeverityLevel(cfg.DB_URL_PLACEHOLDER_SEVERITY),
                     spec["description"],
                 )
             return SeverityLevel(spec["severity"]), spec["description"]
         return None
+
+    @staticmethod
+    def _db_url_password(value: str) -> str | None:
+        """Password embedded in a DB URL: userinfo first, then a query parameter."""
+        cfg = SecretScannerConfig
+        creds = re.match(cfg.DB_URL_CREDENTIALS_PATTERN, value, re.IGNORECASE)
+        if creds:
+            # The password may hold "/" or "?"-free printable characters; it
+            # ends at the last "@" before the query string.
+            head = value.split("?", 1)[0]
+            at = head.rfind("@")
+            if at >= creds.end():
+                return value[creds.end():at]
+        query = re.search(cfg.DB_URL_QUERY_PASSWORD_PATTERN, value, re.IGNORECASE)
+        return query.group(1) if query else None
 
     @staticmethod
     def _jwt_role(token: str) -> str | None:

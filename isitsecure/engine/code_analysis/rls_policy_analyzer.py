@@ -145,6 +145,9 @@ class RLSPolicyAnalyzer:
         """Split SQL into statements with comments removed."""
         content = re.sub(r"/\*.*?\*/", " ", content, flags=re.DOTALL)
         content = re.sub(r"--[^\n]*", " ", content)
+        # An unterminated "/*" comments out the rest of the file: earlier
+        # statements stay analysed, nothing after it is executed.
+        content = content.split("/*", 1)[0]
         return [stmt.strip() for stmt in content.split(";") if stmt.strip()]
 
     @staticmethod

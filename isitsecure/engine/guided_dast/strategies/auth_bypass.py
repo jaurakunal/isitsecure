@@ -6,6 +6,8 @@ authentication or authorization checks.
 
 from __future__ import annotations
 
+import re
+
 from isitsecure.engine.code_analysis.models import CodeFinding
 from isitsecure.engine.code_analysis.protocols import RepoSnapshot
 from isitsecure.engine.constants import GuidedDASTConfig
@@ -95,7 +97,11 @@ class AuthBypassGuidedStrategy:
         candidates = []
         for route in repo_snapshot.route_map:
             regex = matcher._pattern_to_regex(route.route_pattern)
-            if regex and regex.search(path) and route.http_methods:
+            if (
+                regex
+                and re.match(regex.pattern, path)  # anchored: /api is not /foo/api
+                and route.http_methods
+            ):
                 candidates.append(route)
         candidates.sort(
             key=lambda r: not (
