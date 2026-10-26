@@ -4,7 +4,7 @@
 
 ## What It Does
 
-Sends POST/PUT/PATCH requests to every discovered state-changing endpoint, one extra field per request, from a list of seven: `role=admin`, `is_admin=true`, `is_verified=true`, `email_verified=true`, `plan=enterprise`, `credits=99999`, `permissions=all`. It checks if the server accepts them (2xx with the field present in the response). Every finding is High (confidence 0.85); the severity does not vary by field.
+Sends POST/PUT/PATCH requests to every discovered state-changing endpoint, one extra field per request, from a list of seven: `role=admin`, `is_admin=true`, `is_verified=true`, `email_verified=true`, `plan=enterprise`, `credits=99999`, `permissions=all`. It checks if the server accepts them (2xx with the field present in a JSON response). Every confirmed finding is High (confidence 0.85); the severity does not vary by field. Non-JSON responses (HTML catch-all pages) are never evidence. Before the fields are sent, a control request with a made-up field is made: if the endpoint echoes that too, it is a pure echo endpoint and reflection proves nothing about persistence, so the reflected fields collapse into a single Low "Endpoint echoes request fields (mass assignment not confirmed)" note (0.30) instead of one High per field.
 
 When the URL contains `supabase` or `rest/v1`, the list is replaced by three fields: `role`, `is_admin` and `stripe_customer_id`.
 

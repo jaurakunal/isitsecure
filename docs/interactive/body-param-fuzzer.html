@@ -97,10 +97,10 @@
         <g class="node ln l1 lit-1" transform="translate(20 14)"><rect width="920" height="76" rx="8"/>
           <text class="ttl" x="12" y="22">SQL injection · 3 payloads</text>
           <text class="mono" x="12" y="44">' OR '1'='1' --</text>
-          <text class="mono" x="12" y="62">1; DROP TABLE users--</text>
+          <text class="mono" x="12" y="62">1'; SELECT--</text>
           <path class="wire" d="M262 40 H 306" marker-end="url(#arr-bp2)"/>
-          <text class="ttl" x="320" y="22">the response text matches one of 13 error patterns</text>
-          <text class="lbl" x="320" y="44">SQL syntax · SQLSTATE · ORA-nnnnn · Traceback · Internal Server Error …</text>
+          <text class="ttl" x="320" y="22">the response text matches a database-specific error pattern</text>
+          <text class="lbl" x="320" y="44">SQL syntax · SQLSTATE · ORA-nnnnn · syntax error at or near …</text>
           <text class="lbl" x="320" y="62">third payload: ' UNION SELECT NULL,NULL--</text>
           <text class="ttl t-attacker" x="908" y="22" text-anchor="end">CRITICAL · 0.90</text></g>
 
@@ -136,10 +136,10 @@
       </svg>
     </figure>
     <div class="scene-steps">
-      <p class="step"><span class="n">1</span><b>SQL injection.</b> Three payloads go into one field. If the response text matches any of 13 error patterns the server leaked a database error, which means the value was placed in a query. This is the only Critical check.</p>
+      <p class="step"><span class="n">1</span><b>SQL injection.</b> Three payloads go into one field. If the response text matches a database-specific error pattern that the recorded response did not already contain, the server leaked a database error, which means the value was placed in a query. This is the only Critical check. Generic crash strings (Traceback, TypeError, Internal Server Error) no longer count; a payload that only turns a success into a 5xx is a Medium "Possible SQL injection".</p>
       <p class="step"><span class="n">2</span><b>XSS reflection.</b> Two canary payloads. If the exact string comes back in the response, the field is echoed without encoding. It is High, not Critical, because where the echo ends up decides whether it runs.</p>
       <p class="step"><span class="n">3</span><b>Type confusion.</b> Seven wrong types replace a string-valued field. A 5xx means the handler did not guard the type. It is Medium: a crash, not yet an exploit.</p>
-      <p class="step"><span class="n">4</span><b>Prototype pollution.</b> The three keys are added to the body. Node.js can merge them onto <code>Object.prototype</code>, which can bypass authorisation checks. The scanner reports when the server answers below 400.</p>
+      <p class="step"><span class="n">4</span><b>Prototype pollution.</b> The three keys are added to the body. Node.js can merge them onto <code>Object.prototype</code>, which can bypass authorisation checks. The scanner reports High only when a follow-up clean request returns the unique marker (the pollution persisted); a server that merely answers below 400 gets a single Low "not confirmed" note per request.</p>
     </div>
   </div>
 </section>
@@ -190,19 +190,19 @@
             <g class="node"><rect x="559" y="44" width="100" height="22" rx="6" class="soft-info"/><text class="mono" x="567" y="59">syntax error</text></g>
             <g class="node"><rect x="667" y="44" width="100" height="22" rx="6" class="soft-info"/><text class="mono" x="675" y="59">unterminated</text></g>
             <g class="node"><rect x="775" y="44" width="72" height="22" rx="6" class="soft-info"/><text class="mono" x="783" y="59">SQLSTATE</text></g>
-          <text class="lbl" x="12" y="94">any runtime error</text>
+          <text class="lbl" x="12" y="94">no longer counted</text>
           <g class="node"><rect x="190" y="78" width="93" height="22" rx="6" class="soft-attacker"/><text class="mono" x="198" y="93">stack trace</text></g>
             <g class="node"><rect x="291" y="78" width="79" height="22" rx="6" class="soft-attacker"/><text class="mono" x="299" y="93">Traceback</text></g>
             <g class="node"><rect x="378" y="78" width="79" height="22" rx="6" class="soft-attacker"/><text class="mono" x="386" y="93">TypeError</text></g>
             <g class="node"><rect x="465" y="78" width="86" height="22" rx="6" class="soft-attacker"/><text class="mono" x="473" y="93">ValueError</text></g>
             <g class="node"><rect x="559" y="78" width="163" height="22" rx="6" class="soft-attacker"/><text class="mono" x="567" y="93">Internal Server Error</text></g>
             <g class="node"><rect x="730" y="78" width="156" height="22" rx="6" class="soft-attacker"/><text class="mono" x="738" y="93">NullPointerException</text></g>
-          <text class="lbl" x="12" y="130">one regex pass over the response text, with no baseline request to compare against</text></g>
+          <text class="lbl" x="12" y="130">one regex pass over the response text, compared with the recorded response; generic runtime errors are no longer counted</text></g>
       </svg>
     </figure>
     <div class="scene-steps">
       <p class="step"><span class="n">1</span><b>A strict server is clean.</b> A schema validator that rejects unknown keys answers 400, which is not below 400, so no finding is made.</p>
-      <p class="step"><span class="n">2</span><b>Acceptance is the test.</b> A server that quietly drops the key answers 200 and is reported, even though nothing was polluted.</p>
+      <p class="step"><span class="n">2</span><b>Read-back is the test.</b> A server that quietly drops the key answers 200 and is no longer reported as High: only a Low "not confirmed" note remains, unless a clean follow-up request shows the marker.</p>
       <p class="step"><span class="n">3</span><b>The scanner cannot tell the last two apart.</b> It never reads <code>Object.prototype</code> back or sends a follow-up request, so a High finding means the pollution key was accepted. Treat it as a lead and confirm that a property you set on the prototype shows up elsewhere.</p>
       <p class="step"><span class="n">4</span><b>The SQL error list is broad.</b> Seven patterns are database wording. Six, from <code>stack trace</code> to <code>Internal Server Error</code>, match any crashing handler, so a Critical finding can come from a failure that involves no SQL. Check the response preview before acting on it.</p>
     </div>

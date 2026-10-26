@@ -126,9 +126,11 @@ class TestPrototypePollution:
         ):
             findings = await fuzzer.scan(intercepted, _make_session())
 
-        proto_findings = [f for f in findings if "Prototype pollution" in f.title]
-        assert len(proto_findings) >= 1
-        assert proto_findings[0].severity == SeverityLevel.HIGH
+        # Accepted-but-unconfirmed is a single LOW note, never HIGH.
+        proto_findings = [f for f in findings if "prototype-pollution key" in f.title]
+        assert len(proto_findings) == 1
+        assert proto_findings[0].severity == SeverityLevel.LOW
+        assert not [f for f in findings if "Prototype pollution via" in f.title]
 
     @pytest.mark.asyncio
     async def test_no_finding_when_proto_rejected(self) -> None:

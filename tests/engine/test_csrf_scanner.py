@@ -350,8 +350,8 @@ class TestCSRFScanner:
 
             findings = await self.scanner.scan(endpoints=endpoints)
 
-        # All 3 state-changing endpoints should be tested
-        assert client_instance.request.call_count == 3
+        # All 3 state-changing endpoints tested (forged probe + control each)
+        assert client_instance.request.call_count == 6
         origin_findings = [
             f for f in findings
             if f.title == CSRFConfig.TITLE_FORGED_ORIGIN

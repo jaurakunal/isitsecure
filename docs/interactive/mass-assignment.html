@@ -44,7 +44,7 @@
 
 <section id="probe-sec">
   <h2>One field per request, every write endpoint</h2>
-  <p class="prose">The scanner does not need to know what the endpoint expects. It picks every endpoint that writes, sends a body that contains only an escalation field, and checks whether the server echoes it back with the same value.</p>
+  <p class="prose">The scanner does not need to know what the endpoint expects. It picks every endpoint that writes, sends a body that contains only an escalation field, and checks whether the server echoes it back with the same value in a JSON response. A control request with a made-up field detects pure echo endpoints, which collapse into one Low note, and HTML pages are never evidence.</p>
 
   <div class="scene" id="probe" data-scene data-interval="3600">
     <figure class="stage">

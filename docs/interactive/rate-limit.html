@@ -145,7 +145,7 @@
     <div class="scene-steps">
       <p class="step"><span class="n">1</span>The scanner launches 10, then 50, then 100 requests at once with <code>asyncio.gather</code>, always against the same endpoint and with the endpoint's own method.</p>
       <p class="step"><span class="n">2</span>All 10 get through and none is a 429. The burst produces no finding, and the scanner <b>waits 5 seconds</b> so the counter can reset before the next size.</p>
-      <p class="step"><span class="n">3</span>In the burst of 50, 30 replies are accepted and 20 are 429. <b>A mixed burst is MEDIUM, confidence 0.90</b>: it reports roughly where the limiter bites, so you can compare it with what you intended.</p>
+      <p class="step"><span class="n">3</span>In the burst of 50, 30 replies are accepted and 20 are 429. <b>A mixed burst is INFO, confidence 0.90</b>: it reports roughly where the limiter bites, so you can compare it with what you intended. It is skipped when the sequential run already measured a threshold.</p>
       <p class="step"><span class="n">4</span>The scanner stops at the first burst that shows a threshold. The burst of 100 is never sent.</p>
     </div>
   </div>
@@ -191,9 +191,9 @@
           <text class="lbl" x="12" y="66">beta also 429: stop, silent</text>
           <text class="mono t-attacker" x="12" y="98">beta passed:</text>
           <text class="mono t-accent" x="12" y="120">MEDIUM · 0.90</text>
-          <text class="lbl" x="12" y="144">the counter follows the</text>
-          <text class="lbl" x="12" y="160">Authorization value, not</text>
-          <text class="lbl" x="12" y="176">the address it came from</text>
+          <text class="lbl" x="12" y="144">the limiter is keyed on the</text>
+          <text class="lbl" x="12" y="160">client-supplied Authorization header, not</text>
+          <text class="lbl" x="12" y="176">the address: rotating it bypasses the limit</text>
         </g>
         <!-- session stripping -->
         <g class="node lit-5 at-5" transform="translate(20 258)">
@@ -288,7 +288,7 @@ export async function POST(request: Request) {
   </div>
   <div class="callout note">
     <div class="label">What it deliberately stays quiet about</div>
-    <p>It runs only at <code>--depth deep</code>, with a 900 s timeout and a time budget checked between endpoints, because the three measurements can send over 300 requests to each one. It uses a plain HTTP client on purpose, not the throttled one the other scanners use. Requests carry no body and no credentials of their own, so a limiter that only counts failed logins, or only reacts to a particular payload, may never trip. A dropped connection ends the sequential loop and is treated like a run with no 429 seen.</p>
+    <p>It runs only at <code>--depth deep</code>, with a 900 s timeout and a time budget checked between endpoints, because the three measurements can send over 300 requests to each one. It uses a plain HTTP client on purpose, not the throttled one the other scanners use. Requests carry no body and no credentials of their own, so a limiter that only counts failed logins, or only reacts to a particular payload, may never trip. A dropped connection ends the sequential loop as inconclusive (a reset or WAF throttle): no High "no rate limiting" finding is raised, and the responses received before the cut-off are reported as an Info threshold.</p>
   </div>
 </section>
 

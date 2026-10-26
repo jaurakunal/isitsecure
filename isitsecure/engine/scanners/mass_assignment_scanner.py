@@ -129,14 +129,80 @@ class MassAssignmentScanner(AuthAwareScanner):
             else MassAssignmentConfig.ESCALATION_FIELDS
         )
 
+        echoes = await self._endpoint_echoes_input(client, endpoint)
+        if echoes is None:
+            return findings
+
+        reflected: list[DeepFinding] = []
         for field_name, field_value in escalation_fields:
             finding = await self._test_field(
                 client, endpoint, field_name, field_value
             )
             if finding:
-                findings.append(finding)
+                reflected.append(finding)
 
+        if not echoes:
+            return reflected
+        if reflected:
+            # Pure echo endpoint: collapse the reflections into one low note.
+            first = reflected[0]
+            first.severity = SeverityLevel.LOW
+            first.title = MassAssignmentConfig.TITLE_ECHO_ONLY
+            first.description = MassAssignmentConfig.DESC_ECHO_ONLY.format(
+                url=endpoint.url,
+                method=endpoint.method.value,
+                fields=", ".join(
+                    (f.request_payload or "")[:60] for f in reflected[:5]
+                ),
+            )
+            first.confidence = MassAssignmentConfig.CONFIDENCE_ECHO_ONLY
+            findings.append(first)
         return findings
+
+    async def _endpoint_echoes_input(
+        self,
+        client: RateLimitedClient,
+        endpoint: DiscoveredEndpoint,
+    ) -> bool | None:
+        """Control request: does the endpoint reflect an unknown field?
+
+        Returns True when it does (a pure echo), False when it does not, and
+        None when the control could not be sent.
+        """
+        body = json.dumps(
+            {
+                MassAssignmentConfig.ECHO_CONTROL_FIELD:
+                    MassAssignmentConfig.ECHO_CONTROL_VALUE
+            }
+        )
+        try:
+            response = await client.request(
+                method=endpoint.method.value,
+                url=endpoint.url,
+                content=body,
+                headers={
+                    "Content-Type": self.CONTENT_TYPE_JSON,
+                    "Prefer": MassAssignmentConfig.PREFER_RETURN_REPRESENTATION,
+                },
+            )
+        except Exception as exc:
+            logger.debug(
+                MassAssignmentConfig.ERROR_MASS_ASSIGNMENT_FAILED.format(
+                    endpoint=endpoint.url, error=str(exc)
+                )
+            )
+            return None
+        if not (
+            self.HTTP_STATUS_OK_LOWER
+            <= response.status_code
+            < self.HTTP_STATUS_OK_UPPER
+        ):
+            return False
+        return self._field_in_response(
+            MassAssignmentConfig.ECHO_CONTROL_FIELD,
+            MassAssignmentConfig.ECHO_CONTROL_VALUE,
+            response.text,
+        )
 
     async def _test_field(
         self,
@@ -223,8 +289,9 @@ class MassAssignmentScanner(AuthAwareScanner):
         try:
             data = json.loads(response_body)
         except (json.JSONDecodeError, TypeError):
-            # Fallback: string matching
-            return str(field_name) in response_body and str(field_value) in response_body
+            # Not JSON (SPA shell, plain text): a bare substring match would
+            # fire on any HTML page that contains the words "role"/"admin".
+            return False
 
         return _contains_field(data, field_name, field_value)
 

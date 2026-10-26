@@ -141,8 +141,8 @@
     </figure>
     <div class="scene-steps">
       <p class="step"><span class="n">1</span><b>Wildcard plus credentials is CRITICAL, 0.95.</b> <code>ACAO: *</code> together with <code>ACAC: true</code> is the worst case: any website can read authenticated responses.</p>
-      <p class="step"><span class="n">2</span><b>An echoed origin is HIGH, 0.90.</b> If ACAO equals the exact Origin the scanner sent, the server mirrors any caller. The scanner does not check ACAC for this rule, so it fires whether or not credentials are allowed.</p>
-      <p class="step"><span class="n">3</span><b>ACAO: null is HIGH, 0.85.</b> A page in a sandboxed iframe sends <code>Origin: null</code>, so allowing it lets an attacker reach the API from a sandbox.</p>
+      <p class="step"><span class="n">2</span><b>An echoed origin is HIGH, 0.90, when credentials are allowed.</b> If ACAO equals the exact Origin the scanner sent, the server mirrors any caller. With ACAC: true the visitor's cookies ride along; without it only credential-less data is exposed, so it drops to MEDIUM, 0.70.</p>
+      <p class="step"><span class="n">3</span><b>ACAO: null is HIGH, 0.85, when credentials are allowed (MEDIUM, 0.70 otherwise).</b> A page in a sandboxed iframe sends <code>Origin: null</code>, so allowing it lets an attacker reach the API from a sandbox. This rule is checked before the echoed-origin rule, so a null-only server gets this title.</p>
       <p class="step"><span class="n">4</span><b>A wildcard without credentials is MEDIUM, 0.70.</b> Any site can read the response, but not with the victim's cookies.</p>
       <p class="step"><span class="n">5</span>Anything else is silent: a fixed allowed origin, or no header. A response with no ACAO header never reaches these rules at all.</p>
     </div>
@@ -236,7 +236,7 @@ const origin = request.headers.get(<span class="s">"Origin"</span>)
   <div class="callout note">
     <div class="label">What it deliberately stays quiet about</div>
     <p>The probes are plain GET requests, so a route that only sets CORS headers on an OPTIONS preflight is not seen. A response with no <code>Access-Control-Allow-Origin</code> is never reported, and only one endpoint per path prefix is tested, so a single route that differs from its siblings can be missed. Credentials are optional: with them, the probes carry the scan's auth headers.</p>
-    <p>One order quirk: for the <code>Origin: null</code> probe a server that answers <code>ACAO: null</code> already matches the echoed-origin rule, so it is reported as High, 0.90 with the title for a reflected origin. The null-origin rule only fires when ACAO is <code>null</code> for a different probe.</p>
+    <p>The null-origin rule is evaluated before the echoed-origin rule, so a server that answers <code>ACAO: null</code> to the <code>Origin: null</code> probe is reported under the null-origin title.</p>
   </div>
 </section>
 

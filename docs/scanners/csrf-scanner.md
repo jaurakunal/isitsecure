@@ -4,10 +4,10 @@
 
 ## What It Does
 
-Tests for Cross-Site Request Forgery by sending state-changing requests (POST, PUT, PATCH, DELETE) with a forged `Origin` and `Referer` (`https://evil-attacker.com`) and checking if the server accepts them. The probe sends an empty body and treats any 2xx response as acceptance, which is reported as High (confidence 0.90). Also analyzes:
+Tests for Cross-Site Request Forgery by sending state-changing requests (POST, PUT, PATCH, DELETE) with a forged `Origin` and `Referer` (`https://evil-attacker.com`) and checking if the server accepts them. The probe sends an empty body. A 2xx answer is reported as High (confidence 0.90) only when it is a real acceptance: the scan is not authenticated by an `Authorization`/API-key header alone (browsers never attach those cross-site, so such endpoints are skipped), the body is not an HTML document (single-page-app catch-all) or a `{"success": false}` / `{"error": ...}` rejection, and a control request carrying the endpoint's own `Origin` is accepted the same way. Also analyzes:
 
 - **Cookie SameSite attribute** — cookies in the response snapshot with no `SameSite` attribute, or with `SameSite=None`, are reported as Medium (0.70)
-- **Hidden CSRF token fields** — checks whether POST forms on the scanned page include a hidden field with a known CSRF token name (`csrf_token`, `_csrf`, `authenticity_token`, `xsrf-token`, `token`, ...); a form without one is reported as Medium (0.85)
+- **Hidden CSRF token fields** — checks whether POST forms on the scanned page include a hidden field (either `type`/`name` attribute order) with a known CSRF token name (`csrf_token`, `_csrf`, `authenticity_token`, `xsrf-token`, `token`, ...); a form without one is reported as Medium (0.85)
 
 ## Why It Matters
 

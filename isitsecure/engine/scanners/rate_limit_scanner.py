@@ -135,9 +135,17 @@ class RateLimitScanner(AuthAwareScanner):
 
         try:
             # Phase 1: Measure threshold with sequential requests
-            threshold = await self._measure_threshold(client, endpoint)
+            threshold, dropped = await self._measure_threshold(client, endpoint)
 
-            if threshold is None:
+            if dropped:
+                # The connection was cut mid-run: a throttle (reset/WAF) or a
+                # flaky server, never proof that nothing limits requests.
+                # Report the observed cut-off as informational only.
+                if threshold:
+                    findings.append(
+                        self._build_threshold_finding(endpoint, threshold)
+                    )
+            elif threshold is None:
                 # No 429 received even at max requests -- no rate limiting
                 findings.append(
                     self._build_no_rate_limit_finding(endpoint)
@@ -148,9 +156,15 @@ class RateLimitScanner(AuthAwareScanner):
                     self._build_threshold_finding(endpoint, threshold)
                 )
 
-            # Phase 2: Test burst sizes to check behavior under load
-            burst_findings = await self._test_burst_sizes(client, endpoint)
-            findings.extend(burst_findings)
+            # Phase 2: Test burst sizes to check behavior under load. Skipped
+            # when the sequential pass already reported a threshold (same
+            # title and locus, would only duplicate it).
+            if not findings:
+                burst_findings = await self._test_burst_sizes(client, endpoint)
+                findings.extend(burst_findings)
+            elif findings[0].title == RateLimitConfig.TITLE_NO_RATE_LIMIT:
+                burst_findings = await self._test_burst_sizes(client, endpoint)
+                findings.extend(burst_findings)
 
             # Phase 3: Test IP-based vs user-based rate limiting
             ip_finding = await self._test_ip_vs_user_rate_limit(client, endpoint)
@@ -170,15 +184,18 @@ class RateLimitScanner(AuthAwareScanner):
         self,
         client: httpx.AsyncClient,
         endpoint: DiscoveredEndpoint,
-    ) -> int | None:
+    ) -> tuple[int | None, bool]:
         """Send sequential requests to measure when 429 first appears.
 
         Sends requests one at a time with minimal delay, counting how
-        many succeed before the first 429 response.
+        many real responses arrive before the first 429 response.
 
         Returns:
-            The number of successful requests before 429, or None if
-            no 429 was received within MAX_SEQUENTIAL_REQUESTS.
+            ``(threshold, dropped)``. ``threshold`` is the number of
+            responses before 429, or None if no 429 was received within
+            MAX_SEQUENTIAL_REQUESTS. When the connection was dropped before
+            either outcome, ``dropped`` is True and ``threshold`` is the
+            number of responses actually received.
         """
         successful_count = 0
 
@@ -190,19 +207,19 @@ class RateLimitScanner(AuthAwareScanner):
                 )
 
                 if response.status_code == self.HTTP_STATUS_TOO_MANY_REQUESTS:
-                    return successful_count
+                    return successful_count, False
 
                 if isinstance(response, httpx.Response):
                     successful_count += 1
 
             except Exception:
-                # Connection errors count as potential rate limiting
-                break
+                # Dropped connection: inconclusive, not "no rate limiting"
+                return successful_count, True
 
             await asyncio.sleep(RateLimitConfig.MIN_DELAY_BETWEEN_REQUESTS)
 
         # Never got a 429
-        return None
+        return None, False
 
     async def _test_burst_sizes(
         self,
@@ -245,7 +262,7 @@ class RateLimitScanner(AuthAwareScanner):
                         DeepFinding(
                             source=FindingSource.DAST_URL,
                             category=FindingCategory.AUTH_WEAKNESS,
-                            severity=SeverityLevel.MEDIUM,
+                            severity=SeverityLevel.INFO,
                             title=RateLimitConfig.TITLE_RATE_LIMIT_THRESHOLD,
                             description=RateLimitConfig.DESC_RATE_LIMIT_THRESHOLD.format(
                                 url=endpoint.url,
@@ -300,12 +317,13 @@ class RateLimitScanner(AuthAwareScanner):
         client: httpx.AsyncClient,
         endpoint: DiscoveredEndpoint,
     ) -> DeepFinding | None:
-        """Test if rate limiting is per-IP only or also per-user.
+        """Test whether the rate limit is keyed on the client-supplied identity.
 
-        Sends two batches of requests from the same IP with different
-        fake auth headers. If the second batch also gets rate-limited,
-        the limit is IP-based. If the second batch succeeds, the limit
-        is per-user only (which is weaker).
+        Trips the limit with one fake Authorization header, then retries from
+        the same IP with a different one. If the second request is NOT
+        limited, the limiter is keyed on the (attacker-controlled)
+        Authorization header, so rotating it bypasses the limit. If it is also
+        limited, the limit is keyed on the IP.
         """
         # First, trigger rate limiting with one identity
         first_auth = RateLimitConfig.TEST_AUTH_HEADER_ALPHA
@@ -359,10 +377,12 @@ class RateLimitScanner(AuthAwareScanner):
                     f"Immediately tried with '{second_auth}' from same IP\n"
                     f"Second request was NOT rate limited "
                     f"(status: {response.status_code})\n"
-                    f"Rate limiting appears to be per-user, not per-IP"
+                    f"The limit is keyed on the client-supplied Authorization "
+                    f"header, not on the IP: rotating it bypasses the limit"
                 ),
                 evidence=(
-                    f"Different auth headers bypass rate limit on {endpoint.url}"
+                    f"Rotating the Authorization header bypasses the rate "
+                    f"limit on {endpoint.url}"
                 ),
                 confidence=RateLimitConfig.CONFIDENCE_THRESHOLD_MEASURED,
                 scanner_name=self.scanner_name,

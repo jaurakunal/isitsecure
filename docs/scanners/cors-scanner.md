@@ -8,9 +8,9 @@ Tests Cross-Origin Resource Sharing configuration by sending GET requests with f
 
 1. **Wildcard + Credentials** — Sends `Origin: https://evil.com` and checks if the response has `Access-Control-Allow-Origin: *` with `Access-Control-Allow-Credentials: true`. This is the most dangerous combo — any website can read authenticated responses. **Severity: Critical.**
 
-2. **Arbitrary Origin Reflected** — Checks if the response mirrors back whatever Origin is sent. This means any website can make authenticated cross-origin requests. **Severity: High.**
+2. **Null Origin Allowed** — Sends `Origin: null` (used by sandboxed iframes). If the server answers `Access-Control-Allow-Origin: null`, attackers can use sandboxed iframes to read responses. This rule is checked before the reflected-origin rule, so a `null`-only server gets this title. **Severity: High** with `Access-Control-Allow-Credentials: true`, otherwise **Medium**.
 
-3. **Null Origin Allowed** — Sends `Origin: null` (used by sandboxed iframes). If accepted, attackers can use sandboxed iframes to steal data. **Severity: High.**
+3. **Arbitrary Origin Reflected** — Checks if the response mirrors back whatever Origin is sent. With credentials allowed, any website can make authenticated cross-origin requests and read the answer (**Severity: High**). Without `Access-Control-Allow-Credentials: true` the browser withholds cookies, so only credential-less data is exposed, the same exposure as a wildcard without credentials (**Severity: Medium**, confidence 0.70).
 
 4. **Wildcard Without Credentials** — `Access-Control-Allow-Origin: *` without credentials. Less dangerous but still allows any site to read public responses. **Severity: Medium.**
 

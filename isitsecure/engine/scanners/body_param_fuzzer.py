@@ -125,14 +125,21 @@ class BodyParamFuzzer:
                             if f:
                                 findings.append(f)
 
-                # Prototype pollution (tested per-request, not per-param)
+                # Prototype pollution (tested per-request, not per-param).
+                # Unconfirmed "accepted" notes are reported once per request.
+                accepted_noted = False
                 for proto_key, proto_value in BodyParamFuzzerConfig.PROTOTYPE_POLLUTION_PAYLOADS:
                     f = await self._fuzz_param(
                         client, req, body, proto_key, proto_value,
                         headers, "prototype_pollution",
                     )
-                    if f:
-                        findings.append(f)
+                    if not f:
+                        continue
+                    if f.severity == SeverityLevel.LOW:
+                        if accepted_noted:
+                            continue
+                        accepted_noted = True
+                    findings.append(f)
 
         logger.info(
             "BodyParamFuzzer: %d findings from %d mutations",
@@ -164,7 +171,12 @@ class BodyParamFuzzer:
             path = urlparse(original_req.url).path
 
             if fuzz_type == "sqli":
-                if self._has_sql_error(resp.text):
+                # A DB error already in the recorded (unfuzzed) response is
+                # not caused by the payload.
+                baseline = original_req.response_body_preview
+                if self._has_sql_error(resp.text) and not self._has_sql_error(
+                    baseline
+                ):
                     return self._make_finding(
                         SeverityLevel.CRITICAL,
                         BodyParamFuzzerConfig.TITLE_SQL_ERROR.format(param=param),
@@ -172,6 +184,20 @@ class BodyParamFuzzer:
                             param=param, method=method, path=path,
                         ),
                         BodyParamFuzzerConfig.CONFIDENCE_SQL_ERROR,
+                        original_req.url, method, resp.text,
+                        json.dumps(fuzzed_body, default=str),
+                    )
+                if resp.status_code >= 500 and original_req.response_status < 500:
+                    return self._make_finding(
+                        SeverityLevel.MEDIUM,
+                        BodyParamFuzzerConfig.TITLE_SQL_GENERIC_CRASH.format(
+                            param=param,
+                        ),
+                        BodyParamFuzzerConfig.DESC_SQL_GENERIC_CRASH.format(
+                            param=param, method=method, path=path,
+                            status=resp.status_code,
+                        ),
+                        BodyParamFuzzerConfig.CONFIDENCE_SQL_GENERIC_CRASH,
                         original_req.url, method, resp.text,
                         json.dumps(fuzzed_body, default=str),
                     )
@@ -190,17 +216,37 @@ class BodyParamFuzzer:
                     )
 
             elif fuzz_type == "prototype_pollution":
-                # Server accepted __proto__ / constructor key without 400
                 if resp.status_code < 400:
+                    # Read-back: a CLEAN follow-up request must now carry the
+                    # marker, otherwise this is just an ignored unknown key.
+                    follow = await client.request(
+                        method, original_req.url,
+                        headers=headers,
+                        content=json.dumps(body, default=str),
+                    )
+                    marker = BodyParamFuzzerConfig.PROTOTYPE_POLLUTION_MARKER
+                    if marker in follow.text:
+                        return self._make_finding(
+                            SeverityLevel.HIGH,
+                            BodyParamFuzzerConfig.TITLE_PROTOTYPE_POLLUTION.format(
+                                param=param,
+                            ),
+                            BodyParamFuzzerConfig.DESC_PROTOTYPE_POLLUTION.format(
+                                param=param, method=method, path=path,
+                            ),
+                            BodyParamFuzzerConfig.CONFIDENCE_PROTOTYPE_POLLUTION,
+                            original_req.url, method, follow.text,
+                            json.dumps(fuzzed_body, default=str),
+                        )
                     return self._make_finding(
-                        SeverityLevel.HIGH,
-                        BodyParamFuzzerConfig.TITLE_PROTOTYPE_POLLUTION.format(
+                        SeverityLevel.LOW,
+                        BodyParamFuzzerConfig.TITLE_PROTOTYPE_ACCEPTED.format(
                             param=param,
                         ),
-                        BodyParamFuzzerConfig.DESC_PROTOTYPE_POLLUTION.format(
+                        BodyParamFuzzerConfig.DESC_PROTOTYPE_ACCEPTED.format(
                             param=param, method=method, path=path,
                         ),
-                        BodyParamFuzzerConfig.CONFIDENCE_PROTOTYPE_POLLUTION,
+                        BodyParamFuzzerConfig.CONFIDENCE_PROTOTYPE_ACCEPTED,
                         original_req.url, method, resp.text,
                         json.dumps(fuzzed_body, default=str),
                     )

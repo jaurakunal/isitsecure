@@ -224,11 +224,19 @@ class TestRaceConditionScanner:
         scanner = RaceConditionScanner()
         intercepted = [_make_intercepted()]
 
+        # Single-use endpoint with a check-then-act window: a sequential
+        # replay is rejected (409) but concurrent requests all pass the check.
+        calls = {"n": 0}
+
+        async def racy(*a, **k):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return _make_response(409, "already redeemed")
+            return _make_response(201, '{"id":"new"}')
+
         with patch("httpx.AsyncClient") as MockClient:
             client_instance = AsyncMock()
-            client_instance.request = AsyncMock(
-                return_value=_make_response(201, '{"id":"new"}')
-            )
+            client_instance.request = racy
             MockClient.return_value.__aenter__ = AsyncMock(
                 return_value=client_instance
             )
@@ -239,6 +247,29 @@ class TestRaceConditionScanner:
         race = [f for f in findings if "race condition" in f.title.lower()]
         assert len(race) >= 1
         assert race[0].severity == SeverityLevel.HIGH
+
+    @pytest.mark.asyncio
+    async def test_idempotent_create_endpoint_not_high(self):
+        """A correct add-comment endpoint accepts every request: no race."""
+        scanner = RaceConditionScanner()
+        intercepted = [_make_intercepted(url="https://example.com/api/comment")]
+
+        with patch("httpx.AsyncClient") as MockClient:
+            client_instance = AsyncMock()
+            client_instance.request = AsyncMock(
+                return_value=_make_response(201, '{"id":"c"}')
+            )
+            MockClient.return_value.__aenter__ = AsyncMock(
+                return_value=client_instance
+            )
+            MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            findings = await scanner.scan(intercepted, _make_session())
+
+        assert not [f for f in findings if f.severity == SeverityLevel.HIGH]
+        assert not [f for f in findings if "race condition" in f.title.lower()]
+        # kept as a lower-confidence note, not silent
+        assert [f for f in findings if f.severity == SeverityLevel.INFO]
 
     @pytest.mark.asyncio
     async def test_no_finding_when_all_fail(self):

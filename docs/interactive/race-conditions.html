@@ -158,7 +158,7 @@
 
 <section id="scanner-sec">
   <h2>How the scanner tests it</h2>
-  <p class="prose">The scanner does not reason about the code. It picks the state-changing requests the authenticated crawl already saw succeed, fires N identical copies of one at the same instant over one shared connection, and counts how many the server accepts. One success is normal. Two or more means the check did not hold.</p>
+  <p class="prose">The scanner does not reason about the code. It picks the state-changing requests the authenticated crawl already saw succeed, fires N identical copies of one at the same instant over one shared connection, and counts how many the server accepts. A sequential control replay goes first: if the server rejects it, the endpoint enforces a limit on replays, and two or more concurrent successes mean the check did not hold.</p>
 
   <div class="scene" id="scanner" data-scene data-interval="3000">
     <figure class="stage">
@@ -226,7 +226,7 @@
       <p class="step"><span class="n">2</span><b>One connection.</b> The copies are sent through a single shared HTTP client, so they travel the same connection and reach the server as close together as the network allows. Separate connections would spread them out and hide the race.</p>
       <p class="step" data-on="rcFire"><span class="n">3</span><b>Fire.</b> Ten identical copies of the request leave in one burst, byte-for-byte the same body and the same session headers as the original.</p>
       <p class="step" data-on="rcReply"><span class="n">4</span><b>Responses.</b> Each copy gets its own status. A server that serialises correctly accepts one and rejects the rest; this one accepted three.</p>
-      <p class="step"><span class="n">5</span><b>Decision.</b> Count the copies that returned 200, 201 or 204. <b>Two or more successes means the endpoint has a race condition</b>: it is reported as HIGH with confidence 0.80, and the success count goes in the description.</p>
+      <p class="step"><span class="n">5</span><b>Decision.</b> Count the copies that returned 200, 201 or 204. <b>Two or more successes while the sequential control was rejected means the endpoint has a race condition</b>: it is reported as HIGH with confidence 0.80, and the success count goes in the description. If the control was accepted too (an add-comment style endpoint), only an Info note at 0.30 is kept.</p>
       <p class="step"><span class="n">6</span><b>The quiet case.</b> One success and nine rejections is exactly what a locked or atomic implementation produces, so nothing is reported. Any 2xx below the threshold is treated as normal.</p>
     </div>
   </div>

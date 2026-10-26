@@ -2346,7 +2346,9 @@ class BodyParamFuzzerConfig:
     # Fuzzing payloads per type
     SQLI_PAYLOADS = (
         "' OR '1'='1' --",
-        "1; DROP TABLE users--",
+        # Harmless stacked-statement syntax breaker (a bare SELECT is a
+        # parser error on every engine). Never send a destructive statement.
+        "1'; SELECT--",
         "' UNION SELECT NULL,NULL--",
     )
     XSS_PAYLOADS = (
@@ -2364,15 +2366,41 @@ class BodyParamFuzzerConfig:
     )
 
     # Prototype pollution payloads (Node.js specific)
+    # A unique marker lets us tell real pollution (the marker shows up in a
+    # later CLEAN request's response) from an echo of what we just sent.
+    PROTOTYPE_POLLUTION_MARKER = "isitsecure_pp_7f3a"
     PROTOTYPE_POLLUTION_PAYLOADS = (
-        ("__proto__", {"polluted": "true"}),
-        ("constructor", {"prototype": {"polluted": "true"}}),
-        ("__proto__.polluted", "true"),
+        ("__proto__", {"polluted": PROTOTYPE_POLLUTION_MARKER}),
+        ("constructor", {"prototype": {"polluted": PROTOTYPE_POLLUTION_MARKER}}),
+        ("__proto__.polluted", PROTOTYPE_POLLUTION_MARKER),
     )
 
     CONFIDENCE_PROTOTYPE_POLLUTION = 0.90
+    CONFIDENCE_PROTOTYPE_ACCEPTED = 0.30
+    CONFIDENCE_SQL_GENERIC_CRASH = 0.50
     TITLE_PROTOTYPE_POLLUTION = (
         "Prototype pollution via JSON body parameter '{param}'"
+    )
+    TITLE_PROTOTYPE_ACCEPTED = (
+        "Server accepts prototype-pollution key '{param}' (not confirmed)"
+    )
+    DESC_PROTOTYPE_ACCEPTED = (
+        "The server returned a 2xx response to a {method} request to "
+        "'{path}' containing the '{param}' key. No pollution was observed "
+        "in a follow-up clean request, so this is NOT confirmed: many APIs "
+        "simply ignore unknown keys. Review whether request bodies are "
+        "merged into shared objects without key filtering."
+    )
+    TITLE_SQL_GENERIC_CRASH = (
+        "Possible SQL injection via JSON body parameter '{param}' "
+        "(server error on injection payload)"
+    )
+    DESC_SQL_GENERIC_CRASH = (
+        "Sending an SQL syntax-breaking payload in the '{param}' field of a "
+        "{method} request to '{path}' turned a previously successful request "
+        "into a server error ({status}), but the response carries no "
+        "database-specific error text. This is not confirmed SQL injection: "
+        "any unhandled input can crash a handler. Verify manually."
     )
     DESC_PROTOTYPE_POLLUTION = (
         "The server accepted a request with the '{param}' key in a "
@@ -2384,21 +2412,21 @@ class BodyParamFuzzerConfig:
         "gadget chains, or denial of service."
     )
 
-    # Error indicators in responses
+    # Database-specific error indicators only. Generic crash strings
+    # ("Internal Server Error", "Traceback", "TypeError", ...) appear on any
+    # unhandled exception and are not evidence of SQL injection.
     ERROR_INDICATORS = (
         r"SQL syntax",
         r"pg_query",
         r"ORA-\d{5}",
         r"SQLITE_ERROR",
-        r"syntax error",
-        r"unterminated",
+        r"syntax error at or near",
+        r"near \"[^\"]*\": syntax error",
+        r"unterminated quoted string",
+        r"unclosed quotation mark",
         r"SQLSTATE",
-        r"stack trace",
-        r"Traceback",
-        r"TypeError",
-        r"ValueError",
-        r"Internal Server Error",
-        r"NullPointerException",
+        r"psycopg2?\.errors",
+        r"SQLException",
     )
 
     # Confidence
@@ -2469,6 +2497,21 @@ class RaceConditionConfig:
         "like payments, purchases, or balance updates, this could allow "
         "double-spending or duplicate resource creation. The server should use "
         "database transactions, optimistic locking, or idempotency keys."
+    )
+    # Lower-confidence tier: the endpoint accepted a sequential replay too, so
+    # concurrent successes are what an endpoint without a uniqueness rule does
+    # anyway (add comment, create note). Not evidence of a TOCTOU race.
+    CONFIDENCE_DUPLICATE_ACCEPTED = 0.30
+    TITLE_DUPLICATE_ACCEPTED = (
+        "Concurrent duplicate {method} '{path}' accepted (no uniqueness enforced)"
+    )
+    DESC_DUPLICATE_ACCEPTED = (
+        "Sending {total} concurrent {method} requests to '{path}' produced "
+        "{count} successful responses (HTTP 2xx), but a plain sequential "
+        "replay was accepted too, so there is no evidence of a time-of-check "
+        "to time-of-use race. If this operation must happen only once "
+        "(payment, redemption, balance change), add an idempotency key or "
+        "uniqueness constraint; if duplicates are valid, ignore this note."
     )
     ERROR_RACE_FAILED = "Race condition test failed for '{url}': {error}"
 
@@ -2797,8 +2840,10 @@ class RateLimitConfig:
         "Consider whether this threshold is sufficient to prevent brute-force attacks."
     )
     DESC_RATE_LIMIT_PER_IP = (
-        "The endpoint {url} applies rate limiting per IP address but not per user. "
-        "An attacker with multiple IPs (botnets, proxies) can bypass the limit."
+        "The endpoint {url} rate-limits per client-supplied identity (the "
+        "Authorization header), not per IP address: a second request from the "
+        "same IP with a different Authorization value was not limited. An "
+        "attacker can bypass the limit simply by rotating that header."
     )
     ERROR_RATE_LIMIT_SCAN_FAILED = "Rate limit scan failed for {endpoint}: {error}"
 
@@ -3121,6 +3166,22 @@ class MassAssignmentConfig:
     # Prefer header to get back the representation
     PREFER_RETURN_REPRESENTATION = "return=representation"
 
+    # Echo control: an unknown field with a unique value. If the endpoint
+    # reflects this too, it echoes arbitrary input and reflection of an
+    # escalation field proves nothing about persistence.
+    ECHO_CONTROL_FIELD = "isitsecure_ctl"
+    ECHO_CONTROL_VALUE = "isitsecure-ctl-7f3a"
+    CONFIDENCE_ECHO_ONLY = 0.30
+    TITLE_ECHO_ONLY = (
+        "Endpoint echoes request fields (mass assignment not confirmed)"
+    )
+    DESC_ECHO_ONLY = (
+        "The endpoint {url} reflects arbitrary fields from a {method} request "
+        "body, including privileged ones ({fields}), but it reflects made-up "
+        "fields just as readily, so the reflection does not show that the "
+        "values were persisted. Re-read the object (GET) after the write, or "
+        "review the handler for field allow-listing."
+    )
     TITLE_MASS_ASSIGNMENT = "Mass assignment: extra fields accepted"
     DESC_MASS_ASSIGNMENT = (
         "The endpoint {url} accepted the extra field '{field}' with value '{value}' "
@@ -6680,6 +6741,7 @@ class CORSConfig:
     CONFIDENCE_ORIGIN_REFLECTED = 0.90
     CONFIDENCE_NULL_ORIGIN = 0.85
     CONFIDENCE_WILDCARD_NO_CREDS = 0.70
+    CONFIDENCE_REFLECTED_NO_CREDS = 0.70
 
     # --- Titles ---
     TITLE_WILDCARD_CREDENTIALS = (
@@ -6885,10 +6947,20 @@ class AuthBypassConfig:
     )
 
     # --- Auth success indicators in response body ---
-    AUTH_SUCCESS_INDICATORS = (
-        "access_token", "accesstoken", "auth_token",
-        "jwt", "bearer", "session_id", "sessionid",
-        '"token"', "'token'",
+    # JSON field names (lowercased, ``_``/``-`` removed) that carry a freshly
+    # issued credential. A bare word like "token" in prose or an HTML shell is
+    # not evidence of a login: the field must exist with a non-empty value.
+    AUTH_SUCCESS_TOKEN_KEYS = (
+        "accesstoken", "authtoken", "idtoken", "token", "jwt",
+        "sessionid", "sessiontoken", "bearer",
+    )
+
+    # Throttling / lockout responses (any of these means a limiter exists)
+    LOCKOUT_STATUS_CODES = (423, 429)
+    LOCKOUT_BODY_INDICATORS = (
+        "account locked", "account is locked", "locked out",
+        "too many attempts", "too many failed", "too many requests",
+        "temporarily locked", "temporarily disabled", "try again later",
     )
 
     # --- Auth header bypass test labels ---
@@ -6898,6 +6970,23 @@ class AuthBypassConfig:
 
     # Base64 of admin:admin
     BASIC_AUTH_ADMIN_HEADER = "Basic YWRtaW46YWRtaW4="
+
+    # Control credential: an obviously invalid bearer token. A real protected
+    # endpoint must deny it; if it is served anyway the endpoint simply does
+    # not enforce auth (public / catch-all), which is a weaker finding.
+    CONTROL_INVALID_AUTH_HEADER = "Bearer isitsecure-invalid-token"
+    CONTROL_DENIED_STATUS_CODES = (401, 403)
+    CONFIDENCE_AUTH_NOT_ENFORCED = 0.60
+    TITLE_AUTH_NOT_ENFORCED = (
+        "Protected-looking endpoint serves data without authentication"
+    )
+    DESC_AUTH_NOT_ENFORCED = (
+        "The endpoint {url} returned a successful non-HTML response when "
+        "accessed with {bypass_method}, but it also accepted an obviously "
+        "invalid bearer token. The endpoint does not appear to enforce "
+        "authentication at all. If it is meant to be public this is "
+        "expected; if it serves protected data, add authentication."
+    )
 
     # --- Confidence values ---
     CONFIDENCE_USERNAME_ENUM_MESSAGE = 0.85

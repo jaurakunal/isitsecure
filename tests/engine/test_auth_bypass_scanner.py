@@ -171,6 +171,9 @@ class TestAuthBypassScanner:
 
         async def mock_request(method, url, **kwargs):
             headers = kwargs.get("headers", {})
+            if headers.get("Authorization") == AuthBypassConfig.CONTROL_INVALID_AUTH_HEADER:
+                # A real protected endpoint rejects an invalid token
+                return _make_httpx_response(status_code=401)
             if "Authorization" not in headers or not headers.get("Authorization", "").strip():
                 # No auth or empty auth -> should return 401, but server is broken
                 return _make_httpx_response(

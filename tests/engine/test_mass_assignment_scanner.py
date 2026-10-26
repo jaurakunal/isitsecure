@@ -256,8 +256,8 @@ class TestEdgeCases:
         assert not _dict_has_field({"name": "test"}, "role", "admin")
 
     def test_field_in_response_non_json(self) -> None:
-        """Non-JSON response should use string matching fallback."""
-        assert MassAssignmentScanner._field_in_response(
+        """Non-JSON bodies are never evidence (no substring fallback)."""
+        assert not MassAssignmentScanner._field_in_response(
             "role", "admin", "role=admin in response"
         )
         assert not MassAssignmentScanner._field_in_response(

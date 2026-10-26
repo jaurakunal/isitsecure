@@ -6,9 +6,9 @@
 
 Sends rapid bursts of requests to auth-sensitive endpoints (URLs containing `/login`, `/signin`, `/auth`, `/signup`, `/register`, `/password`, `/reset`, `/forgot`, `/token` or `/otp`) and checks:
 
-- **Threshold detection** — sends up to 150 sequential requests (0.05 s apart) and counts how many succeed before a 429 (Too Many Requests). A 429 gives an Info finding with the measured threshold (0.90); no 429 in 150 gives a High finding (0.85).
-- **Burst testing** — sends concurrent bursts of 10, 50, then 100 requests and stops at the first burst that returns a 429 (Medium, 0.90)
-- **Per-IP vs per-user** — after a 429 with one synthetic Authorization header, does a second synthetic header from the same address get through? If so, it is reported (Medium, 0.90).
+- **Threshold detection** — sends up to 150 sequential requests (0.05 s apart) and counts how many succeed before a 429 (Too Many Requests). A 429 gives an Info finding with the measured threshold (0.90); no 429 in 150 gives a High finding (0.85). If the connection is dropped or reset part-way through, the run is inconclusive (a throttle or WAF is cutting the connection), so the High finding is not raised; the number of responses received before the cut-off is reported as Info instead.
+- **Burst testing** — sends concurrent bursts of 10, 50, then 100 requests and stops at the first burst that returns a 429 (Info, 0.90; a working limiter is not a vulnerability). It is skipped when the sequential pass already reported a threshold, since it would duplicate that Info finding
+- **Limit keyed on the Authorization header** — after a 429 with one synthetic Authorization header, does a second synthetic header from the same address get through? If so, the limiter is keyed on a client-supplied value rather than the IP, so rotating the header bypasses it (Medium, 0.90). The finding keeps the title "Rate limit appears IP-based only" so existing baselines still match, but its description and detail now state the actual trigger.
 
 If the endpoint accepts all 150 sequential requests without returning 429, it has no rate limiting.
 
