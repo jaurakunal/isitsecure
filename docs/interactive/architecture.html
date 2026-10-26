@@ -456,7 +456,7 @@
     ["8 llm", "LLM code review", {r: ["repo_snapshot","sast_code_findings","auth_flow_results","mode"], w: ["all_findings","scanners_run"]},
       "Selects routes by the five triggers, using the SAST findings to spot routes flagged by two scanners, and appends what the model finds."],
     ["9 xref", "Cross-reference", {r: ["mode"], rw: ["all_findings"]},
-      "Pairs DAST and SAST findings by category and appends confirmed findings alongside the originals."],
+      "Pairs DAST and SAST findings by category and shared target and appends confirmed findings alongside the originals."],
     ["9.1 guided", "SAST-guided DAST", {r: ["sast_code_findings","endpoints","repo_snapshot","mode"], w: ["all_findings","scanners_run"]},
       "Reads code findings and the endpoint inventory, maps route files to live URLs, fires generated tests, and appends their findings."],
     ["9.2 logic", "LLM business logic", {r: ["endpoints","repo_snapshot","session_a","session_b","target_url","mode"], w: ["all_findings","scanners_run"]},

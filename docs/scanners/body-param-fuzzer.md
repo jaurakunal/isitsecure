@@ -1,6 +1,6 @@
 # Body Param Fuzzer
 
-**Type:** DAST (Special) | **Severity:** Medium to Critical | **Category:** Injection Risk
+**Type:** DAST (Special) | **Severity:** Low to Critical | **Category:** Injection Risk
 
 ## What It Does
 

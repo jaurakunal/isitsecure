@@ -1,6 +1,6 @@
 # Mass Assignment Scanner
 
-**Type:** DAST | **Severity:** High | **Category:** Privilege Escalation
+**Type:** DAST | **Severity:** Low to High | **Category:** Privilege Escalation
 
 ## What It Does
 

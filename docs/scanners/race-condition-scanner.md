@@ -1,6 +1,6 @@
 # Race Condition Scanner
 
-**Type:** DAST (Special) | **Severity:** High | **Category:** Business Logic
+**Type:** DAST (Special) | **Severity:** Info to High | **Category:** Business Logic
 
 ## What It Does
 

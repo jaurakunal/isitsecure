@@ -329,13 +329,15 @@ isitsecure scan URL --output sarif   # SARIF 2.1.0 for GitHub Code Scanning
 isitsecure scan URL --output fixes   # AI-generated fix plan (Markdown with diffs)
 ```
 
+SARIF results carry a per-result `security-severity` score, each rule takes the level and score of its most severe finding, and fingerprints are emitted as `isitsecure/v1` (legacy) and `isitsecure/v2`.
+
 If a scanner times out or crashes, or something you asked to scan could not be read, the table shows "Scan incomplete" instead of "safe to launch", labels the grade "Provisional (scan incomplete)", and lists what did not run. The JSON report carries `scanner_errors`, `ingestion_errors` and `launch_verdict.incomplete` (SARIF does not). This does not change the exit code: only an ingestion failure exits 1. The same state reaches the other consumers: the MCP `scan` result has `incomplete` and `coverage_gaps` (and `safe_to_launch` is false), the CI commit status is posted as `error` naming what did not run instead of `success`, and `isitsecure badge` labels an incomplete scan "provisional, scan incomplete" in grey. Work a scanner skipped (files the LLM review could not read, packages the dependency check could not look up) is listed in `scanner_errors` too.
 
 Probe captures in reports (the curl-reproducible request/response evidence) have their secrets redacted: cookies, `Authorization`/API-key/CSRF headers, any header whose name contains token/secret/key/session, token- or password-like JSON and form fields, Bearer values and JWTs are replaced with a `REDACTED` placeholder, and the rest of the body is kept so the evidence stays useful. JWTs quoted in auth-bypass finding text are masked to an 8-character prefix plus length. A capture's curl command will therefore not replay an authenticated request verbatim.
 
 ## Suppressing False Positives
 
-A finding you've reviewed and accepted (a false positive, or an accepted risk) shouldn't nag you on every scan. Each finding has a **stable fingerprint** — the same across runs, environments (localhost vs. prod), and code edits — shown under each row in the table output (`fp <hash>`) and in the JSON/SARIF output.
+A finding you've reviewed and accepted (a false positive, or an accepted risk) shouldn't nag you on every scan. Each finding has a **stable fingerprint** — the same across runs, environments (localhost vs. prod), and edits elsewhere in the file — shown under each row in the table output (`fp <hash>`) and in the JSON/SARIF output.
 
 Suppress one by adding its fingerprint to a repo-local **`.isitsecureignore`** file, which is committed and reviewable in pull requests:
 
@@ -349,6 +351,8 @@ isitsecure scan https://your-app.com --suppress de0e57aeb5f61708 --suppress-reas
 # Future scans hide it automatically; review what's hidden anytime:
 isitsecure scan https://your-app.com --show-suppressed
 ```
+
+A fingerprint also covers the flagged source line (SAST, line number excluded) or the injected parameter (DAST), so two same-titled findings in one file get different fingerprints and suppressing one does not hide the other. Fingerprints recorded in an older `.isitsecureignore`, baseline or report (including for `--suppress` and `verify --fingerprint`) keep matching; a legacy entry still covers every instance. SARIF results carry both `isitsecure/v1` (legacy) and `isitsecure/v2` (current).
 
 The `.isitsecureignore` file is plain text — one fingerprint per line, `#` comments for context — so suppressions live with your code and are reviewed like any other change. Delete a line to un-suppress.
 

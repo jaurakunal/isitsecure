@@ -103,7 +103,7 @@
 
   <div class="scene" id="burst" data-scene data-interval="3400">
     <figure class="stage">
-      <svg viewBox="0 0 960 330" role="img" aria-label="Three burst sizes. A burst of 10 all passes and the scanner waits 5 seconds. A burst of 50 has 30 accepted and 20 answered 429, a medium finding, and the burst of 100 is never sent.">
+      <svg viewBox="0 0 960 330" role="img" aria-label="Three burst sizes. A burst of 10 all passes and the scanner waits 5 seconds. A burst of 50 has 30 accepted and 20 answered 429, an informational finding, and the burst of 100 is never sent.">
         <!-- lane 1 -->
         <g class="node" transform="translate(20 20)">
           <rect width="170" height="70" rx="8"/>
@@ -126,7 +126,7 @@
         <rect class="bar-429 at-3" x="360" y="132" width="100" height="26"/>
         <text class="mono at-3" x="472" y="150">30 accepted · 20 × 429</text>
         <g class="at-3">
-          <text class="mono t-accent" x="760" y="136">MEDIUM · 0.90</text>
+          <text class="mono t-accent" x="760" y="136">INFO · 0.90</text>
           <text class="lbl" x="760" y="154">"Rate limit threshold measured"</text>
           <text class="lbl" x="760" y="170">about 30 requests per burst of 50</text>
         </g>
@@ -146,7 +146,7 @@
       <p class="step"><span class="n">1</span>The scanner launches 10, then 50, then 100 requests at once with <code>asyncio.gather</code>, always against the same endpoint and with the endpoint's own method.</p>
       <p class="step"><span class="n">2</span>All 10 get through and none is a 429. The burst produces no finding, and the scanner <b>waits 5 seconds</b> so the counter can reset before the next size.</p>
       <p class="step"><span class="n">3</span>In the burst of 50, 30 replies are accepted and 20 are 429. <b>A mixed burst is INFO, confidence 0.90</b>: it reports roughly where the limiter bites, so you can compare it with what you intended. It is skipped when the sequential run already measured a threshold.</p>
-      <p class="step"><span class="n">4</span>The scanner stops at the first burst that shows a threshold. The burst of 100 is never sent.</p>
+      <p class="step"><span class="n">4</span>The scanner stops at the first burst that shows a threshold, and the whole burst phase is skipped when the sequential run already measured one. The burst of 100 is never sent.</p>
     </div>
   </div>
 </section>
@@ -215,7 +215,7 @@
 
   <div class="callout note">
     <div class="label">Read the wording with care</div>
-    <p>The trigger is "a new identity from the same address was not refused". The finding's title says the limit "appears IP-based only" and its description says it is applied per IP and not per user, while its technical detail and the code comment call the same condition "per-user, not per-IP". The trigger itself is unambiguous: the allowance reset when only the Authorization header changed. Treat it as a limit that is keyed on a client-controlled value.</p>
+    <p>The trigger is "a new identity from the same address was not refused". The finding keeps the title "Rate limit appears IP-based only" so existing baselines still match, but its description and detail now state the actual condition: the limiter is keyed on the Authorization header. The trigger itself is unambiguous: the allowance reset when only the Authorization header changed. Treat it as a limit that is keyed on a client-controlled value.</p>
   </div>
 </section>
 
@@ -281,7 +281,7 @@ export async function POST(request: Request) {
       <thead><tr><th>Measurement</th><th>Requests per endpoint</th><th>Reports when</th><th>Severity · confidence</th></tr></thead>
       <tbody>
         <tr><td>Sequential run</td><td>up to 150, 0.05 s apart</td><td>no 429 in 150 requests; with a 429, the accepted count is reported</td><td>High · 0.85 / Info · 0.90</td></tr>
-        <tr><td>Concurrent bursts</td><td>10, 50, 100 at once, 5 s between</td><td>a burst holds both a 429 and a non-429 reply; stops at the first</td><td>Medium · 0.90</td></tr>
+        <tr><td>Concurrent bursts</td><td>10, 50, 100 at once, 5 s between</td><td>a burst holds both a 429 and a non-429 reply; stops at the first</td><td>Info · 0.90</td></tr>
         <tr><td>Identity switch</td><td>up to 20, then 1</td><td>429 for alpha, then beta is not 429</td><td>Medium · 0.90</td></tr>
       </tbody>
     </table>

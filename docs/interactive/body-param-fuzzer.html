@@ -203,8 +203,8 @@
     <div class="scene-steps">
       <p class="step"><span class="n">1</span><b>A strict server is clean.</b> A schema validator that rejects unknown keys answers 400, which is not below 400, so no finding is made.</p>
       <p class="step"><span class="n">2</span><b>Read-back is the test.</b> A server that quietly drops the key answers 200 and is no longer reported as High: only a Low "not confirmed" note remains, unless a clean follow-up request shows the marker.</p>
-      <p class="step"><span class="n">3</span><b>The scanner cannot tell the last two apart.</b> It never reads <code>Object.prototype</code> back or sends a follow-up request, so a High finding means the pollution key was accepted. Treat it as a lead and confirm that a property you set on the prototype shows up elsewhere.</p>
-      <p class="step"><span class="n">4</span><b>The SQL error list is broad.</b> Seven patterns are database wording. Six, from <code>stack trace</code> to <code>Internal Server Error</code>, match any crashing handler, so a Critical finding can come from a failure that involves no SQL. Check the response preview before acting on it.</p>
+      <p class="step"><span class="n">3</span><b>Only a persisted marker is High.</b> The keys carry a unique marker value. A follow-up clean request that returns the marker proves the pollution outlived the request; a server that only answered below 400 gets a Low, confidence 0.30 note. The scanner still does not read <code>Object.prototype</code> itself, so confirm a High by checking that a property set on the prototype shows up elsewhere.</p>
+      <p class="step"><span class="n">4</span><b>Only database wording counts.</b> Generic crash strings such as <code>stack trace</code> or <code>Internal Server Error</code> are no longer evidence, and a pattern already present in the recorded response is ignored. A payload that merely turns a successful request into a 5xx is a Medium "Possible SQL injection" at confidence 0.50. Check the response preview before acting on a finding.</p>
     </div>
   </div>
 </section>
