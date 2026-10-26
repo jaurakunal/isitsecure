@@ -13,6 +13,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import Callable
 from typing import Any
 
 from isitsecure.engine.auth.protocols import AuthSession
@@ -43,8 +44,23 @@ class SessionScanner:
     JWT_PAYLOAD_INDEX = 1
     SECONDS_PER_HOUR = 3600
 
-    def __init__(self, auth_session: AuthSession | None = None) -> None:
+    def __init__(
+        self,
+        auth_session: AuthSession | None = None,
+        auth_session_source: Callable[[], AuthSession | None] | None = None,
+    ) -> None:
         self._auth_session = auth_session
+        # The session is only known once the agent has authenticated, long
+        # after scanners are built; the factory passes a lazy accessor.
+        self._auth_session_source = auth_session_source
+
+    def _resolve_auth_session(self) -> AuthSession | None:
+        """The explicit session, else whatever the lazy source yields now."""
+        if self._auth_session:
+            return self._auth_session
+        if self._auth_session_source:
+            return self._auth_session_source()
+        return None
 
     @property
     def scanner_name(self) -> str:
@@ -82,9 +98,10 @@ class SessionScanner:
             findings.extend(cookie_findings)
 
         # Phase 3: Check JWT expiry from auth session
-        if self._auth_session and self._auth_session.access_token:
+        auth_session = self._resolve_auth_session()
+        if auth_session and auth_session.access_token:
             expiry_finding = self._check_token_expiry(
-                self._auth_session.access_token
+                auth_session.access_token
             )
             if expiry_finding:
                 findings.append(expiry_finding)

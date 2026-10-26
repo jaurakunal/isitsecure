@@ -35,6 +35,10 @@ from isitsecure.engine.models import (
     FindingSource,
     InterceptedRequest,
 )
+from isitsecure.engine.scanners.idor_scanner import (
+    clear_cookie_jar,
+    postgrest_rows_affected,
+)
 from isitsecure.engine.shared.progress import emit
 from isitsecure.engine.shared.rate_limited_client import (
     RateLimitedClient,
@@ -174,8 +178,16 @@ class PrivilegeEscalationScanner:
                     )
                 )
 
-            # Test 6: Mutation replay
-            if intercepted_requests and not budget.expired():
+            # Test 6: Mutation replay. The intercepted writes were performed by
+            # the crawl identity; replaying them only says something about
+            # privilege when a DISTINCT, supposedly more-privileged identity
+            # exists. With one credential set the "regular user" IS the
+            # original actor, so replay would re-run its own writes.
+            if (
+                intercepted_requests
+                and self._distinct_identity(admin_session, regular_user_session)
+                and not budget.expired()
+            ):
                 findings.extend(
                     await self._test_mutation_replay(
                         client, intercepted_requests,
@@ -259,13 +271,13 @@ class PrivilegeEscalationScanner:
         url = f"{supabase_url}/rest/v1/{table}?user_id=eq.{session.user_id}"
         headers = self._build_supabase_headers(session, anon_key)
         headers[SharedPatterns.HEADER_CONTENT_TYPE] = SharedPatterns.CONTENT_TYPE_JSON
-        headers["Prefer"] = RLSDeepScanConfig.SAFE_WRITE_PREFER
+        headers["Prefer"] = PrivilegeEscalationConfig.WRITE_PREFER_REPRESENTATION
 
         for field, value in PrivilegeEscalationConfig.ROLE_ESCALATION_FIELDS:
             payload = json.dumps({field: value})
             try:
                 resp = await client.patch(url, content=payload, headers=headers)
-                if resp.status_code in PrivilegeEscalationConfig.SUCCESS_WRITE_CODES:
+                if postgrest_rows_affected(resp.status_code, resp.text):
                     findings.append(self._make_finding(
                         SeverityLevel.CRITICAL,
                         PrivilegeEscalationConfig.TITLE_ROLE_ESCALATION.format(table=table),
@@ -292,7 +304,10 @@ class PrivilegeEscalationScanner:
         headers = self._build_auth_headers(session)
         try:
             resp = await client.get(endpoint.url, headers=headers)
-            if resp.status_code in PrivilegeEscalationConfig.SUCCESS_READ_CODES:
+            if (
+                resp.status_code in PrivilegeEscalationConfig.SUCCESS_READ_CODES
+                and not await self._is_public_html_shell(client, endpoint.url, resp)
+            ):
                 path = urlparse(endpoint.url).path
                 return self._make_finding(
                     SeverityLevel.HIGH,
@@ -330,7 +345,10 @@ class PrivilegeEscalationScanner:
             else:
                 resp = await client.get(endpoint.url, headers=headers)
 
-            if resp.status_code in PrivilegeEscalationConfig.SUCCESS_READ_CODES:
+            if (
+                resp.status_code in PrivilegeEscalationConfig.SUCCESS_READ_CODES
+                and not await self._is_public_html_shell(client, endpoint.url, resp)
+            ):
                 path = urlparse(endpoint.url).path
                 return self._make_finding(
                     SeverityLevel.MEDIUM,
@@ -368,9 +386,11 @@ class PrivilegeEscalationScanner:
             : PrivilegeEscalationConfig.MAX_DIFFERENTIAL_ENDPOINTS
         ]:
             try:
+                clear_cookie_jar(client)
                 admin_resp = await client.get(
                     ep.url, headers=self._build_auth_headers(admin_session),
                 )
+                clear_cookie_jar(client)  # admin's Set-Cookie must not reach 'regular'
                 regular_resp = await client.get(
                     ep.url, headers=self._build_auth_headers(regular_session),
                 )
@@ -427,7 +447,7 @@ class PrivilegeEscalationScanner:
         findings: list[DeepFinding] = []
         mutations = [
             r for r in intercepted
-            if r.method.upper() in PrivilegeEscalationConfig.MUTATION_METHODS
+            if r.method.upper() in PrivilegeEscalationConfig.REPLAY_METHODS
             and r.response_status in PrivilegeEscalationConfig.SUCCESS_MUTATION_CODES
         ]
 
@@ -447,15 +467,23 @@ class PrivilegeEscalationScanner:
 
                 if resp.status_code in PrivilegeEscalationConfig.SUCCESS_MUTATION_CODES:
                     path = urlparse(req.url).path
+                    # Only an admin-hinted path is evidence of an ADMIN
+                    # mutation; elsewhere it just means "any user may write".
+                    admin_path = any(
+                        ind in path.lower()
+                        for ind in PrivilegeEscalationConfig.ADMIN_PATH_INDICATORS
+                    )
                     findings.append(self._make_finding(
-                        SeverityLevel.HIGH,
+                        SeverityLevel.HIGH if admin_path else SeverityLevel.MEDIUM,
                         PrivilegeEscalationConfig.TITLE_MUTATION_REPLAY.format(
                             method=method, path=path,
                         ),
                         PrivilegeEscalationConfig.DESC_MUTATION_REPLAY.format(
                             method=method, path=path, status=resp.status_code,
                         ),
-                        PrivilegeEscalationConfig.CONFIDENCE_MUTATION_REPLAY,
+                        (PrivilegeEscalationConfig.CONFIDENCE_MUTATION_REPLAY
+                         if admin_path else
+                         PrivilegeEscalationConfig.CONFIDENCE_MUTATION_REPLAY_NON_ADMIN),
                         req.url, method, resp.text, req.request_body,
                     ))
             except Exception as exc:
@@ -478,7 +506,7 @@ class PrivilegeEscalationScanner:
         findings: list[DeepFinding] = []
         headers = self._build_supabase_headers(regular_session, anon_key)
         headers[SharedPatterns.HEADER_CONTENT_TYPE] = SharedPatterns.CONTENT_TYPE_JSON
-        headers["Prefer"] = RLSDeepScanConfig.SAFE_WRITE_PREFER
+        headers["Prefer"] = PrivilegeEscalationConfig.WRITE_PREFER_REPRESENTATION
 
         tested = 0
         for table, resource_ids in owned_resource_ids.items():
@@ -494,7 +522,7 @@ class PrivilegeEscalationScanner:
 
                 try:
                     resp = await client.patch(url, content=payload, headers=headers)
-                    if resp.status_code in PrivilegeEscalationConfig.SUCCESS_WRITE_CODES:
+                    if postgrest_rows_affected(resp.status_code, resp.text):
                         findings.append(self._make_finding(
                             SeverityLevel.CRITICAL,
                             PrivilegeEscalationConfig.TITLE_OBJECT_WRITE.format(table=table),
@@ -555,6 +583,42 @@ class PrivilegeEscalationScanner:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _distinct_identity(
+        other: AuthSession | None, session: AuthSession,
+    ) -> bool:
+        """True when `other` is a different credential than `session`."""
+        return bool(
+            other and other.access_token
+            and other.access_token != session.access_token
+        )
+
+    @staticmethod
+    def _looks_like_html(resp) -> bool:
+        ctype = resp.headers.get("content-type", "").lower()
+        head = resp.text.lstrip()[:200].lower()
+        return (
+            "text/html" in ctype
+            or head.startswith(("<!doctype html", "<html"))
+        )
+
+    async def _is_public_html_shell(self, client, url: str, resp) -> bool:
+        """An HTML 2xx is only a finding if anonymous callers are denied.
+
+        Single-page apps answer EVERY path with the same 200 HTML shell, so
+        an HTML response alone proves nothing. A genuine server-rendered
+        admin page is still reported when an unauthenticated request to the
+        same URL is refused (401/403/redirect).
+        """
+        if not self._looks_like_html(resp):
+            return False
+        try:
+            clear_cookie_jar(client)
+            anon = await client.get(url)
+        except Exception:
+            return True
+        return anon.status_code not in (301, 302, 303, 307, 308, 401, 403)
 
     @staticmethod
     def _build_auth_headers(session: AuthSession) -> dict[str, str]:

@@ -273,13 +273,16 @@ def create_deep_security_scan_agent(
     # QUICK depth (default) runs the fast, high-signal scanners and finishes in
     # seconds; the injection scanner runs with time-based (blind) SQLi disabled.
     deep = depth == ScanDepth.DEEP
+    # The agent stores the authenticated session on the JWT scanner once login
+    # completes; SessionScanner reads it lazily so its token-expiry check runs.
+    jwt_scanner = JWTScanner()
     dast_scanners = [
         ActiveInjectionScanner(time_based=deep),
         # Reflected + POST-body XSS runs at both depths; quick uses a tighter
         # budget and skips the static DOM pass (#118). Deep adds the DOM pass.
         XSSScanner(deep=deep),
         CSRFScanner(),
-        SessionScanner(),
+        SessionScanner(auth_session_source=lambda: jwt_scanner._auth_session),
         GraphQLScanner(),
         SSRFScanner(),
         FileUploadScanner(),
@@ -350,7 +353,7 @@ def create_deep_security_scan_agent(
         sast_scanners=sast_scanners,
         # Special scanners with non-standard scan() signatures
         idor_scanner=IDORScanner(probe_writes=probe_writes),
-        jwt_scanner=JWTScanner(),
+        jwt_scanner=jwt_scanner,
         rls_deep_scanner=RLSDeepScanner(),
         privilege_escalation_scanner=PrivilegeEscalationScanner(),
         # LLM reviewer

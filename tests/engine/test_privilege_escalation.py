@@ -181,7 +181,7 @@ class TestRoleEscalation:
     @pytest.mark.asyncio
     async def test_detects_role_escalation(self):
         scanner = PrivilegeEscalationScanner()
-        client = _mock_client_with(patch_response=_make_response(204))
+        client = _mock_client_with(patch_response=_make_response(200, '[{"id":"x"}]'))
         with _patch_client(client):
             findings = await scanner.scan(
                 _make_session(), supabase_url=SUPABASE_URL,
@@ -343,7 +343,7 @@ class TestMutationReplay:
         scanner = PrivilegeEscalationScanner()
         intercepted = [
             InterceptedRequest(
-                url="https://example.com/api/deals",
+                url="https://example.com/api/admin/deals",
                 method="POST",
                 response_status=201,
                 request_body='{"title":"New Deal"}',
@@ -352,7 +352,7 @@ class TestMutationReplay:
         client = _mock_client_with(request_response=_make_response(201, '{"id":"new"}'))
         with _patch_client(client):
             findings = await scanner.scan(
-                _make_session(), intercepted_requests=intercepted,
+                _make_session(), admin_session=_make_session("adm", "adm-token"), intercepted_requests=intercepted,
             )
         replay = [f for f in findings if "admin mutation" in f.title.lower()]
         assert len(replay) == 1
@@ -370,7 +370,7 @@ class TestMutationReplay:
         client = _mock_client_with(request_response=_make_response(403))
         with _patch_client(client):
             findings = await scanner.scan(
-                _make_session(), intercepted_requests=intercepted,
+                _make_session(), admin_session=_make_session("adm", "adm-token"), intercepted_requests=intercepted,
             )
         assert not [f for f in findings if "admin mutation" in f.title.lower()]
 
@@ -386,7 +386,7 @@ class TestMutationReplay:
         client = _mock_client_with(request_response=_make_response(201))
         with _patch_client(client):
             findings = await scanner.scan(
-                _make_session(), intercepted_requests=intercepted,
+                _make_session(), admin_session=_make_session("adm", "adm-token"), intercepted_requests=intercepted,
             )
         assert not [f for f in findings if "admin mutation" in f.title.lower()]
 
@@ -400,7 +400,7 @@ class TestObjectLevelWrite:
     async def test_detects_cross_user_write(self):
         scanner = PrivilegeEscalationScanner()
         resources = {"deals": ["uuid-admin-deal-1"]}
-        client = _mock_client_with(patch_response=_make_response(204))
+        client = _mock_client_with(patch_response=_make_response(200, '[{"id":"x"}]'))
         with _patch_client(client):
             findings = await scanner.scan(
                 _make_session(), supabase_url=SUPABASE_URL,

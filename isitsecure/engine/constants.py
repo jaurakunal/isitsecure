@@ -887,7 +887,25 @@ class CrossUserIDORConfig:
 
     # Safe write test: empty body PATCH
     SAFE_PATCH_BODY = SharedPatterns.SAFE_PATCH_BODY
-    SAFE_PATCH_PREFER_HEADER = SharedPatterns.SAFE_PATCH_PREFER
+    # return=representation (not minimal): PostgREST answers 204 both for
+    # "row updated" and "RLS filtered the row out, 0 rows affected" under
+    # return=minimal, so only a non-empty returned row set proves a write.
+    SAFE_PATCH_PREFER_HEADER = "return=representation"
+
+    # Write statuses (other than 2xx) that mean the request got PAST access
+    # control and then failed validation. Anything else non-2xx (404/405/410/
+    # 5xx) is a normal "hidden / not allowed / broken" answer, not an IDOR.
+    WRITE_PASSED_AUTH_STATUSES = (400, 409, 415, 422)
+    CONTROL_ID_NUMERIC = "999999999"
+    CONTROL_ID_OPAQUE = "isitsecure-nonexistent-0000"
+
+    # Keys whose values legitimately differ per request/viewer; ignored when
+    # deciding whether the attacker saw the same resource as the owner.
+    VOLATILE_KEY_PATTERN = (
+        r"(?i)(time|date|nonce|request_?id|req_?id|trace|etag|expir|csrf|"
+        r"viewer|is_?owner|is_?mine|is_?self)"
+    )
+    VOLATILE_KEY_SUFFIX_PATTERN = r"(_at|[a-z]At|_ts|^ts)$"
 
     # Supabase query params
     SUPABASE_SELECT_ID_ONLY = "select=id"
@@ -897,6 +915,10 @@ class CrossUserIDORConfig:
     CONFIDENCE_CONFIRMED_READ = 0.95
     CONFIDENCE_CONFIRMED_WRITE = 0.98
     CONFIDENCE_FULL_TABLE_LEAK = 0.99
+    CONFIDENCE_LIKELY_WRITE = 0.80
+    # Attacker's 4xx is identical on a nonexistent id: validation may simply
+    # run before the ownership check, so this is weak evidence.
+    CONFIDENCE_LIKELY_WRITE_AMBIGUOUS = 0.50
 
     ERROR_CROSS_USER_FAILED = "Cross-user IDOR test failed: {error}"
     ERROR_BASELINE_FAILED = "Baseline request failed for {url}: {error}"
@@ -1960,6 +1982,17 @@ class PrivilegeEscalationConfig:
     SUCCESS_READ_CODES = (200, 201)
     SUCCESS_WRITE_CODES = (200, 204)
     SUCCESS_MUTATION_CODES = (200, 201, 204)
+
+    # PostgREST answers 204 under return=minimal when RLS filtered the row out
+    # (0 rows affected), so Supabase writes use return=representation and need
+    # a non-empty row set.
+    WRITE_PREFER_REPRESENTATION = "return=representation"
+
+    # Replaying an intercepted request is a real write: never replay DELETE.
+    REPLAY_METHODS = ("POST", "PUT", "PATCH")
+    # Mutation replay on a path without an admin hint is only "any user may
+    # POST here" evidence, so it is reported below HIGH.
+    CONFIDENCE_MUTATION_REPLAY_NON_ADMIN = 0.60
 
     # Response preview length
     RESPONSE_PREVIEW_LENGTH = SharedPatterns.RESPONSE_PREVIEW_LENGTH
