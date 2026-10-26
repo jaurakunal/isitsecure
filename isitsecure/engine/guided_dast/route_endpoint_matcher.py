@@ -91,23 +91,14 @@ class RouteEndpointMatcher:
         if not route_pattern:
             return None
 
-        # Replace :param and [param] with wildcard
-        escaped = re.escape(route_pattern)
-        # re.escape will escape : and [ ] so we need to handle the original
-        regex_str = self._PARAM_PATTERN.sub(r"[^/]+", route_pattern)
-        # Escape the non-param parts properly
-        parts = self._PARAM_PATTERN.split(route_pattern)
+        # Walk the pattern: every :name / [name] becomes one path-segment
+        # wildcard, everything between is a regex-escaped literal.
         regex_str = ""
-        for i, part in enumerate(parts):
-            if part is None:
-                continue
-            if i % 3 == 0:
-                # Literal part — escape it
-                regex_str += re.escape(part)
-            else:
-                # Parameter name — already handled, add wildcard once per group
-                if i % 3 == 1:
-                    regex_str += "[^/]+"
+        last = 0
+        for match in self._PARAM_PATTERN.finditer(route_pattern):
+            regex_str += re.escape(route_pattern[last:match.start()]) + "[^/]+"
+            last = match.end()
+        regex_str += re.escape(route_pattern[last:])
 
         return re.compile(regex_str + r"/?$")
 
@@ -121,10 +112,13 @@ class RouteEndpointMatcher:
         finding_norm = finding_file.replace("\\", "/").rstrip("/")
         route_norm = route_file.replace("\\", "/").rstrip("/")
 
+        if not finding_norm or not route_norm:
+            # An empty path is a suffix of everything; it names no file.
+            return False
         return (
             finding_norm == route_norm
-            or finding_norm.endswith(route_norm)
-            or route_norm.endswith(finding_norm)
+            or finding_norm.endswith("/" + route_norm)
+            or route_norm.endswith("/" + finding_norm)
         )
 
     @staticmethod

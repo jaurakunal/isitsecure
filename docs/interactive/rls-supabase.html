@@ -238,11 +238,11 @@
       </svg>
     </figure>
     <div class="scene-steps">
-      <p class="step"><span class="n">1</span>Every <code>.sql</code> file under <code>supabase/migrations/</code> is collected and read as text. The analyzer understands Supabase's policy syntax, including multi-line <code>CREATE POLICY</code> statements.</p>
+      <p class="step"><span class="n">1</span>Every Supabase <code>.sql</code> migration (under <code>supabase/</code>, or using <code>auth.uid()</code>, <code>anon</code>/<code>authenticated</code>/<code>service_role</code>; Prisma and other <code>migrations/</code> folders are skipped) is read as text and replayed in file order. The analyzer understands Supabase's policy syntax, including multi-line <code>CREATE POLICY</code> statements and quoted policy names with spaces.</p>
       <p class="step"><span class="n">2</span><code>CREATE TABLE</code> statements give the set of tables. Here: <code>profiles</code>, <code>tasks</code>, <code>orders</code>.</p>
-      <p class="step"><span class="n">3</span><code>ALTER TABLE … ENABLE ROW LEVEL SECURITY</code> statements give the RLS set. <b>A table missing from it is CRITICAL</b>: the anon key grants read and write access to every row. That table gets no further checks, because policies are irrelevant while RLS is off.</p>
+      <p class="step"><span class="n">3</span><code>ALTER TABLE … ENABLE ROW LEVEL SECURITY</code> statements give the RLS set (a later <code>DISABLE ROW LEVEL SECURITY</code> removes the table again, and <code>DROP TABLE</code> / <code>DROP POLICY</code> undo earlier statements). <b>A table missing from it is CRITICAL</b>: the anon key grants read and write access to every row. That table gets no further checks, because policies are irrelevant while RLS is off.</p>
       <p class="step"><span class="n">4</span><code>CREATE POLICY</code> blocks are split and grouped per table. <b>RLS enabled with no policy is HIGH</b>: RLS without policies blocks all access, so the table is unusable rather than protected.</p>
-      <p class="step"><span class="n">5</span>Each policy's <code>USING</code> and <code>WITH CHECK</code> expressions are inspected. <b><code>USING (true)</code> or <code>1=1</code> is HIGH</b>: it disables RLS for that operation. A policy whose expressions never reference <code>auth.uid()</code> is reported at MEDIUM.</p>
+      <p class="step"><span class="n">5</span>Each policy's <code>USING</code> and <code>WITH CHECK</code> expressions are inspected. <b><code>USING (true)</code> or <code>1=1</code> is HIGH</b>: it disables RLS for that operation. A policy that only targets <code>service_role</code> is skipped. A policy whose expressions never reference <code>auth.uid()</code> is reported at MEDIUM.</p>
     </div>
   </div>
 </section>

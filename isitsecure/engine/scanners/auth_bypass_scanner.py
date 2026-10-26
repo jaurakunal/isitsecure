@@ -33,6 +33,11 @@ from isitsecure.engine.models import (
 from isitsecure.engine.shared.endpoint_prioritizer import PriorityDimension, rank
 from isitsecure.engine.shared.probe_capture import build_probe_capture, mask_jwts
 from isitsecure.engine.shared.progress import emit
+from isitsecure.engine.shared.response_shape import (
+    is_html_document,
+    json_signals_failure,
+    parse_json_body,
+)
 from isitsecure.engine.shared.time_budget import TimeBudget
 
 logger = logging.getLogger(__name__)
@@ -476,25 +481,20 @@ class AuthBypassScanner:
                 "password": AuthBypassConfig.TEST_PASSWORD_WRONG,
             }
 
-            last_status = None
             for _ in range(AuthBypassConfig.LOCKOUT_ATTEMPT_COUNT):
                 resp = await client.post(endpoint.url, json=payload)
-                last_status = resp.status_code
+                if self._is_throttled(resp):
+                    logger.debug(
+                        "AuthBypassScanner: lockout/throttle (%d) on %s — GOOD",
+                        resp.status_code, endpoint.url,
+                    )
+                    return None
                 await asyncio.sleep(AuthBypassConfig.LOCKOUT_PROBE_DELAY_SECONDS)
-
-            # After many failures, check if account is locked
-            if last_status == self.HTTP_STATUS_LOCKED:
-                # Lockout works — this is good, no finding needed
-                logger.debug(
-                    "AuthBypassScanner: lockout detected (423) on %s — GOOD",
-                    endpoint.url,
-                )
-                return None
 
             # Try one more request to see if we can still attempt login
             final_resp = await client.post(endpoint.url, json=payload)
 
-            if final_resp.status_code != self.HTTP_STATUS_LOCKED:
+            if not self._is_throttled(final_resp):
                 return DeepFinding(
                     source=FindingSource.DAST_URL,
                     category=FindingCategory.AUTH_WEAKNESS,
@@ -531,6 +531,17 @@ class AuthBypassScanner:
 
         return None
 
+    @classmethod
+    def _is_throttled(cls, resp: httpx.Response) -> bool:
+        """True when the response shows lockout or rate limiting (423/429 or
+        a lock message): any of them means the login is protected."""
+        if resp.status_code in AuthBypassConfig.LOCKOUT_STATUS_CODES:
+            return True
+        body = resp.text[: AuthBypassConfig.RESPONSE_BODY_PREVIEW_LENGTH].lower()
+        return any(
+            phrase in body for phrase in AuthBypassConfig.LOCKOUT_BODY_INDICATORS
+        )
+
     # ------------------------------------------------------------------
     # Phase 4: Default credentials
     # ------------------------------------------------------------------
@@ -550,6 +561,29 @@ class AuthBypassScanner:
             "AuthBypassScanner: [authorized test] default credentials on %s",
             endpoint.url,
         )
+
+        # Control: a deliberately wrong password must be rejected. An endpoint
+        # that "logs in" anyone (mock / catch-all API) is not default creds.
+        try:
+            control = await client.post(
+                endpoint.url,
+                json={
+                    "email": AuthBypassConfig.TEST_USERNAME_NONEXISTENT,
+                    "password": AuthBypassConfig.TEST_PASSWORD_WRONG,
+                },
+            )
+        except Exception as exc:
+            logger.debug(
+                AuthBypassConfig.ERROR_SCAN_FAILED.format(
+                    phase="default credentials",
+                    endpoint=endpoint.url,
+                    error=str(exc),
+                )
+            )
+            return findings
+        if self._is_successful_auth(control):
+            return findings
+        await asyncio.sleep(AuthBypassConfig.CREDENTIAL_TEST_DELAY_SECONDS)
 
         for username, password in AuthBypassConfig.DEFAULT_CREDENTIAL_PAIRS:
             try:
@@ -615,16 +649,46 @@ class AuthBypassScanner:
     def _is_successful_auth(self, resp: httpx.Response) -> bool:
         """Check if a response indicates successful authentication.
 
-        Looks for 2xx status with auth token indicators in the response body.
+        Requires a 2xx JSON response (never an HTML document) that carries a
+        non-empty credential field (access_token, token, jwt, ...), and no
+        failure flag. A page that merely mentions "token" or "bearer" is not
+        a login.
         """
         if not (self.HTTP_STATUS_OK_MIN <= resp.status_code <= self.HTTP_STATUS_OK_MAX):
             return False
+        if is_html_document(resp.text):
+            return False
+        data = parse_json_body(resp.text)
+        if not isinstance(data, (dict, list)) or json_signals_failure(data):
+            return False
+        return self._has_token_field(data)
 
-        body_lower = resp.text.lower()
-        return any(
-            indicator in body_lower
-            for indicator in AuthBypassConfig.AUTH_SUCCESS_INDICATORS
-        )
+    @classmethod
+    def _has_token_field(cls, data: object, depth: int = 0) -> bool:
+        """True if the JSON holds a non-empty credential field (depth <= 3)."""
+        if depth > 3:
+            return False
+        if isinstance(data, dict):
+            for key, value in data.items():
+                norm = str(key).lower().replace("_", "").replace("-", "")
+                if (
+                    norm in AuthBypassConfig.AUTH_SUCCESS_TOKEN_KEYS
+                    and isinstance(value, str)
+                    and value.strip()
+                ):
+                    return True
+                if cls._has_token_field(value, depth + 1):
+                    return True
+        elif isinstance(data, list):
+            return any(cls._has_token_field(v, depth + 1) for v in data[:5])
+        return False
+
+    @staticmethod
+    def _is_real_data_response(resp: httpx.Response) -> bool:
+        """False for HTML documents (SPA shells) and JSON failure bodies."""
+        if is_html_document(resp.text):
+            return False
+        return not json_signals_failure(parse_json_body(resp.text))
 
     # ------------------------------------------------------------------
     # Phase 5: Authentication header bypass
@@ -657,6 +721,28 @@ class AuthBypassScanner:
             ),
         ]
 
+        # Control: an obviously invalid token. A protected endpoint denies it.
+        try:
+            control = await client.request(
+                method=endpoint.method.value,
+                url=endpoint.url,
+                headers={
+                    "Authorization": AuthBypassConfig.CONTROL_INVALID_AUTH_HEADER
+                },
+            )
+        except Exception as exc:
+            logger.debug(
+                AuthBypassConfig.ERROR_SCAN_FAILED.format(
+                    phase="auth header bypass",
+                    endpoint=endpoint.url,
+                    error=str(exc),
+                )
+            )
+            return findings
+        control_denied = (
+            control.status_code in AuthBypassConfig.CONTROL_DENIED_STATUS_CODES
+        )
+
         for label, headers in bypass_tests:
             try:
                 resp = await client.request(
@@ -665,7 +751,10 @@ class AuthBypassScanner:
                     headers=headers,
                 )
 
-                if self.HTTP_STATUS_OK_MIN <= resp.status_code <= self.HTTP_STATUS_OK_MAX:
+                if (
+                    self.HTTP_STATUS_OK_MIN <= resp.status_code <= self.HTTP_STATUS_OK_MAX
+                    and self._is_real_data_response(resp)
+                ):
                     capture = build_probe_capture(
                         method=endpoint.method.value,
                         url=endpoint.url,
@@ -681,9 +770,20 @@ class AuthBypassScanner:
                         DeepFinding(
                             source=FindingSource.DAST_URL,
                             category=FindingCategory.AUTH_WEAKNESS,
-                            severity=SeverityLevel.HIGH,
-                            title=AuthBypassConfig.TITLE_AUTH_HEADER_BYPASS,
-                            description=AuthBypassConfig.DESC_AUTH_HEADER_BYPASS.format(
+                            severity=(
+                                SeverityLevel.HIGH if control_denied
+                                else SeverityLevel.MEDIUM
+                            ),
+                            title=(
+                                AuthBypassConfig.TITLE_AUTH_HEADER_BYPASS
+                                if control_denied
+                                else AuthBypassConfig.TITLE_AUTH_NOT_ENFORCED
+                            ),
+                            description=(
+                                AuthBypassConfig.DESC_AUTH_HEADER_BYPASS
+                                if control_denied
+                                else AuthBypassConfig.DESC_AUTH_NOT_ENFORCED
+                            ).format(
                                 url=endpoint.url,
                                 bypass_method=label,
                             ),
@@ -697,7 +797,11 @@ class AuthBypassScanner:
                                 f"Endpoint {endpoint.url} returned "
                                 f"{resp.status_code} with {label}"
                             ),
-                            confidence=AuthBypassConfig.CONFIDENCE_AUTH_BYPASS,
+                            confidence=(
+                                AuthBypassConfig.CONFIDENCE_AUTH_BYPASS
+                                if control_denied
+                                else AuthBypassConfig.CONFIDENCE_AUTH_NOT_ENFORCED
+                            ),
                             scanner_name=self.scanner_name,
                             endpoint_url=endpoint.url,
                             http_method=endpoint.method.value,

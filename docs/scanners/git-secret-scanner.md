@@ -6,11 +6,11 @@
 
 Scans the files at HEAD, the lines added by past commits, and the names of every file ever committed, for accidentally committed secrets. The history pass runs `git log --all --diff-filter=A -p` (last 500 non-merge commits), so it reads the diffs of commits that **add files**. Each added line is checked against these patterns:
 
-- **API keys**: Stripe live secret keys (`sk_live_`) and restricted keys (`rk_live_`), AWS access key IDs (AKIA...), Firebase/Google (`AIza...`), SendGrid, Twilio, OpenAI, Anthropic
-- **Supabase service role key**: matched as any `eyJ...eyJ...sig` JWT-shaped string, whatever its role or issuer
+- **API keys**: Stripe live secret keys (`sk_live_`) and restricted keys (`rk_live_`), AWS access key IDs (AKIA...), Firebase/Google (`AIza...`), SendGrid, Twilio, OpenAI (`sk-` and `sk-proj-` / `sk-svcacct-` / `sk-admin-`), Anthropic
+- **Supabase service role key**: a JWT-shaped string (`eyJ...eyJ...sig`) whose payload `role` claim decodes to `service_role` is Critical. The public Supabase **anon** (and `authenticated`) key that ships in every frontend is not reported. A JWT whose role cannot be confirmed (no `role` claim, or an unreadable payload) is kept as a Medium "JSON Web Token (role could not be confirmed)" finding rather than dropped
 - **Tokens**: GitHub personal access (`ghp_`) and OAuth (`gho_`) tokens
-- **Database credentials**: `postgres://`, `mysql://` and `mongodb://` connection URLs
-- **Private keys**: `-----BEGIN [RSA |EC |DSA ]PRIVATE KEY-----` headers
+- **Database credentials**: `postgres://`, `postgresql://`, `mysql://`, `mongodb://` and `mongodb+srv://` connection URLs that embed a `user:password@` pair (Critical). The password runs to the last `@` before the host, so an unencoded `/` or a bare `<` in it is still caught, and a `password=`/`passwd=`/`pwd=` query parameter with a value is treated the same way. URLs with no password, or with a templated one (`${DB_PASS}`, a whole `<password>` placeholder), are not reported; an obvious placeholder password (`password`, `changeme`, `example`, `xxx`...) is kept at Medium
+- **Private keys**: `-----BEGIN [RSA |EC |DSA |OPENSSH |ENCRYPTED |PGP ]PRIVATE KEY[ BLOCK]-----` headers
 - **Sensitive file names**: `.env` (and `.local`/`.production`/`.staging`), `.pem`, `.key`, `credentials.json`, service-account JSON, reported as High even if no pattern matches inside
 
 Matches shorter than 8 or longer than 500 characters are dropped. Symlinked files and symlinked `.env*` files are skipped, and git subprocesses that outlive their timeout are killed. There is no entropy-based or variable-name-based generic secret detection, no Stripe `sk_test_` pattern and no GitLab token pattern.

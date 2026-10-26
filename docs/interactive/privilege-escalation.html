@@ -264,7 +264,7 @@
       </svg>
     </figure>
     <div class="scene-steps">
-      <p class="step"><span class="n">1</span><b>Role self-elevation writes a real value.</b> For each of the five fields it PATCHes the user's own row. A 200 or 204 on any of them is a Critical finding for that field. This is the one probe that can actually promote the test account, so run it against accounts you can reset.</p>
+      <p class="step"><span class="n">1</span><b>Role self-elevation writes a real value.</b> For each of the five fields it PATCHes the user's own row. The PATCH asks for the updated row back; only a returned row is a Critical finding for that field (a bare 204 or an empty list means RLS filtered the row out). This is the one probe that can actually promote the test account, so run it against accounts you can reset.</p>
       <p class="step"><span class="n">2</span><b>Replay uses what the crawl captured.</b> Only POST, PUT, PATCH and DELETE requests that succeeded for User A are kept. They go out again with the regular token and the captured body. A success means the endpoint never checked the caller's role.</p>
       <p class="step"><span class="n">3</span><b>The row probe is designed to be harmless.</b> It targets rows User A owns, sends <code>{}</code> with <code>Prefer: return=minimal</code>, and stops after 15 rows. If User B's token is accepted for A's row, row-level security is not protecting it.</p>
       <p class="step"><span class="n">4</span><b>Status only.</b> None of the three confirms the change by reading the row afterwards, so each finding says the server accepted the request, not that data changed.</p>
@@ -326,7 +326,7 @@ export async function GET(request: Request) {
       <tr><td>8 RPC call</td><td>Supabase; function names found in JS</td><td>200/201</td><td>High · 0.80</td></tr>
     </tbody>
   </table></div>
-  <div class="callout note"><div class="label">What the status code cannot tell</div><p>Probes 3, 4 and 6 to 8 accept a 200 without checking the body (probe 1 only checks it is not an empty list), so a single-page app that answers 200 for every path, or a server that returns 204 without acting, can look like access. The confidence values are all below 1 for this reason. The scanner also trusts the session roles it is given: it assumes User A is the admin side, so with two ordinary accounts the differential compares two ordinary users.</p></div>
+  <div class="callout note"><div class="label">What the status code cannot tell</div><p>Probes 3 and 4 skip an HTML 200 unless an anonymous request to the same URL is refused, and the Supabase writes (2 and 7) need a returned row, but probes 6 and 8 still accept a 200 without reading the body (probe 1 only checks it is not an empty list). Mutation replay only runs with a distinct admin session, never replays DELETE, and is Medium unless the path looks administrative. The scanner still trusts the session roles it is given: it assumes User A is the admin side, so with two ordinary accounts the differential compares two ordinary users.</p></div>
 </section>
 
 <footer class="foot">

@@ -83,10 +83,6 @@ class TestParameterizedRouteMatch:
         assert "https://example.com/api/users/123" in urls
         assert "https://example.com/api/users/abc-def" in urls
 
-    @pytest.mark.xfail(
-        reason="Bug: _pattern_to_regex only handles :param (i%3==1), "
-        "not [param] (i%3==2). Bracket params are silently dropped.",
-    )
     def test_bracket_param_matches_id_segment(self, matcher: RouteEndpointMatcher) -> None:
         """/api/users/[id] matches /api/users/456."""
         endpoints = [

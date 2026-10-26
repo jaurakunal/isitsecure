@@ -10,7 +10,7 @@ Analyzes session management for three issues:
 
 2. **Cookie flags** — checks auth cookies (names containing `token`, `session`, `sid`, `jwt`, `__session`, `connect.sid`, etc.) for `HttpOnly` (prevents JS access, High) and `Secure` (HTTPS only, Medium) flags. Missing flags expose tokens to theft.
 
-3. **JWT expiration** — decodes the session JWT and checks the `exp` claim. A token with more than 24 hours of validity remaining is flagged (Medium, confidence 0.60). A token with no `exp`, or one already expired, is not reported here.
+3. **JWT expiration** — decodes the session JWT and checks the `exp` claim. A token with more than 24 hours of validity remaining is flagged (Medium, confidence 0.60). A token with no `exp`, or one already expired, is not reported here. The token comes from the authenticated session, which the factory wires in lazily (shared with the JWT scanner); an unauthenticated scan has no session, so this check is skipped.
 
 ## Why It Matters
 

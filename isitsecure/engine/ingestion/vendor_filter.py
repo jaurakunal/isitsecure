@@ -22,14 +22,53 @@ class VendorAssetFilter:
         self._site_domain = self._extract_registrable_domain(site_url)
 
     @staticmethod
-    def _extract_registrable_domain(url: str) -> str:
-        """Extract the registrable domain (last 2 parts) from a URL."""
+    def _registrable_domain(hostname: str) -> str:
+        """Registrable domain of a hostname, aware of multi-label suffixes.
+
+        ``shop.example.co.uk`` -> ``example.co.uk`` and
+        ``myapp.vercel.app`` -> ``myapp.vercel.app`` (each customer of a
+        hosting platform is a different site), not ``co.uk`` / ``vercel.app``.
+        """
+        parts = hostname.lower().split(".")
+        if len(parts) < 2:
+            return hostname.lower()
+        suffixes = InjectionScannerConfig.MULTI_LABEL_PUBLIC_SUFFIXES
+        for size in (3, 2):
+            if len(parts) > size and ".".join(parts[-size:]) in suffixes:
+                return ".".join(parts[-(size + 1):])
+        return ".".join(parts[-2:])
+
+    @classmethod
+    def _extract_registrable_domain(cls, url: str) -> str:
+        """Extract the registrable domain from a URL."""
         try:
             hostname = urlparse(url).hostname or ""
         except Exception:
             return ""
-        parts = hostname.lower().split(".")
-        return ".".join(parts[-2:]) if len(parts) >= 2 else hostname
+        return cls._registrable_domain(hostname)
+
+    @staticmethod
+    def _brand_label(domain: str) -> str:
+        """The label that names the site: ``example`` for ``example.co.uk``."""
+        return domain.split(".", 1)[0]
+
+    def _is_sibling_domain(self, asset_domain: str) -> bool:
+        """``example-static.com`` serving ``example.com``: same brand label.
+
+        Only for hosts under a single owner-registrable suffix; shared hosting
+        domains (``x.vercel.app``) never count as siblings of each other.
+        """
+        site, asset = self._site_domain, asset_domain
+        if site.count(".") != 1 or asset.count(".") != 1:
+            return False
+        a, b = self._brand_label(site), self._brand_label(asset)
+        shortest = min(len(a), len(b))
+        # The labels must be equal, or one must be the other plus "-suffix"
+        # (example-static.com for example.com). A bare shared prefix is not
+        # enough: shopify.com is not a sibling of shop.com.
+        return shortest >= InjectionScannerConfig.SIBLING_LABEL_MIN_LENGTH and (
+            a == b or a.startswith(b + "-") or b.startswith(a + "-")
+        )
 
     def is_vendor_asset(self, asset_url: str, content: str) -> bool:
         """Check if an asset is vendor/framework code."""
@@ -61,10 +100,13 @@ class VendorAssetFilter:
         if hostname_lower in InjectionScannerConfig.THIRD_PARTY_SCRIPT_DOMAINS:
             return True
 
-        parts = hostname_lower.split(".")
-        asset_domain = ".".join(parts[-2:]) if len(parts) >= 2 else hostname_lower
+        asset_domain = self._registrable_domain(hostname_lower)
 
-        if self._site_domain and asset_domain != self._site_domain:
+        if (
+            self._site_domain
+            and asset_domain != self._site_domain
+            and not self._is_sibling_domain(asset_domain)
+        ):
             return True
 
         return False
@@ -79,6 +121,10 @@ class VendorAssetFilter:
             path = urlparse(asset_url).path or ""
         except Exception:
             return False
+
+        # The application's own chunks live under the framework's prefix.
+        if any(re.search(p, path) for p in cfg.FIRST_PARTY_FRAMEWORK_PATH_PATTERNS):
+            return any(re.search(p, path) for p in cfg.FRAMEWORK_BUNDLE_PATH_PATTERNS)
 
         for prefix in cfg.FRAMEWORK_PATH_PREFIXES:
             if prefix in path:

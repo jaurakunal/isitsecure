@@ -47,6 +47,33 @@ from urllib.parse import quote
 logger = logging.getLogger(__name__)
 
 
+def clear_cookie_jar(client: object) -> None:
+    """Drop cookies the shared client's jar accumulated from earlier responses.
+
+    The RateLimitedClient keeps ONE persistent httpx jar. When a scanner mixes
+    identities (owner / anonymous / attacker) on it, a Set-Cookie from the
+    owner's response would be replayed on the "anonymous" and attacker
+    requests, so call this before every request that must carry only its own
+    explicit credentials.
+    """
+    inner = getattr(client, "_client", None)
+    if isinstance(inner, httpx.AsyncClient):
+        inner.cookies.clear()
+
+
+def postgrest_rows_affected(status: int | None, body: str) -> bool:
+    """True when a PostgREST write (Prefer: return=representation) hit a row.
+
+    204 (what ``return=minimal`` yields for both "updated" and "RLS filtered
+    the row out") and an empty array prove nothing. A non-empty array/object
+    body proves the write reached a row.
+    """
+    if status not in (200, 201):
+        return False
+    text = re.sub(r"\s+", "", body or "")
+    return text.startswith("{") or (text.startswith("[") and text != "[]")
+
+
 class IDORScanner:
     """Tests API endpoints for IDOR vulnerabilities.
 
@@ -1145,16 +1172,29 @@ class IDORScanner:
         attacker = await self._authed_request(client, method, url, session_b, body)
         if attacker is None:
             return None
+        control_status: int | None = None
         if is_write:
-            if attacker.status_code in (401, 403):
-                return None
+            if not (200 <= attacker.status_code < 300):
+                # Only a validation-type 4xx shows B got PAST access control;
+                # 401/403/404/405/410/5xx are ordinary secure/broken answers.
+                if (attacker.status_code
+                        not in CrossUserIDORConfig.WRITE_PASSED_AUTH_STATUSES):
+                    return None
+                # Control: same write on an id that cannot exist. If the
+                # status is identical, validation simply runs before any
+                # ownership check and the evidence is weak.
+                control_url = self._control_url(url, owner_id)
+                if control_url:
+                    control = await self._authed_request(
+                        client, method, control_url, session_b, body)
+                    control_status = control.status_code if control else None
         else:
             if not (200 <= attacker.status_code < 300):
                 return None
             # The attacker must see the SAME resource the owner sees. If the
             # bodies differ, the id was ignored/coerced to the attacker's own
             # data (endpoint is caller-scoped) — not cross-user access.
-            if owner.text != attacker.text:
+            if not self._same_resource(owner.text, attacker.text):
                 return None
 
         probe = IDORProbeResult(
@@ -1181,8 +1221,13 @@ class IDORScanner:
             # body) still proves B got PAST access control to A's resource.
             result.risk_level = (IDORRiskLevel.CONFIRMED if succeeded
                                  else IDORRiskLevel.LIKELY)
-            result.confidence = (CrossUserIDORConfig.CONFIDENCE_CONFIRMED_WRITE
-                                 if succeeded else 0.80)
+            if succeeded:
+                result.confidence = CrossUserIDORConfig.CONFIDENCE_CONFIRMED_WRITE
+            elif control_status == attacker.status_code:
+                result.confidence = (
+                    CrossUserIDORConfig.CONFIDENCE_LIKELY_WRITE_AMBIGUOUS)
+            else:
+                result.confidence = CrossUserIDORConfig.CONFIDENCE_LIKELY_WRITE
         else:
             result.read_accessible = True
             result.risk_level = IDORRiskLevel.CONFIRMED
@@ -1190,9 +1235,64 @@ class IDORScanner:
         return result
 
     @staticmethod
+    def _stable_leaves(data: object) -> set[tuple[str, str]]:
+        """(key, value) scalar leaves of a JSON body, minus per-request fields."""
+        leaves: set[tuple[str, str]] = set()
+        volatile = re.compile(CrossUserIDORConfig.VOLATILE_KEY_PATTERN)
+        suffix = re.compile(CrossUserIDORConfig.VOLATILE_KEY_SUFFIX_PATTERN)
+
+        def walk(obj: object, key: str) -> None:
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    k = str(k)
+                    if volatile.search(k) or suffix.search(k):
+                        continue
+                    walk(v, k)
+            elif isinstance(obj, list):
+                for item in obj:
+                    walk(item, key)
+            elif obj is not None:
+                leaves.add((key, json.dumps(obj, sort_keys=True)))
+
+        walk(data, "")
+        return leaves
+
+    @classmethod
+    def _same_resource(cls, owner_text: str, attacker_text: str) -> bool:
+        """Did the attacker see the owner's resource, ignoring per-request noise?
+
+        Identical bodies match. Otherwise (both JSON) every stable field the
+        owner saw must also be in the attacker's body: timestamps, request
+        ids and viewer flags may differ, but a caller-scoped endpoint that
+        returned the attacker's OWN data will differ in identifying fields.
+        """
+        if owner_text == attacker_text:
+            return True
+        try:
+            owner = json.loads(owner_text)
+            attacker = json.loads(attacker_text)
+        except ValueError:
+            return False
+        owner_leaves = cls._stable_leaves(owner)
+        return bool(owner_leaves) and owner_leaves <= cls._stable_leaves(attacker)
+
+    @staticmethod
+    def _control_url(url: str, owner_id: str) -> str | None:
+        """`url` with the resource id swapped for one that cannot exist."""
+        enc = quote(str(owner_id), safe="")
+        idx = url.rfind(enc)
+        if idx < 0:
+            return None
+        control = (CrossUserIDORConfig.CONTROL_ID_NUMERIC
+                   if str(owner_id).isdigit()
+                   else CrossUserIDORConfig.CONTROL_ID_OPAQUE)
+        return url[:idx] + control + url[idx + len(enc):]
+
+    @staticmethod
     async def _authed_request(client, method, url, session, body):
         """HTTP request applying a session's auth headers (or none for anon)."""
         headers = dict(session.headers) if session else {}
+        clear_cookie_jar(client)
         try:
             if body is not None:
                 headers.setdefault("Content-Type", "application/json")
@@ -1398,6 +1498,7 @@ class IDORScanner:
         if body is not None:
             kwargs["content"] = body
 
+        clear_cookie_jar(client)
         try:
             response = await client.request(method, url, **kwargs)
         except httpx.HTTPError as exc:
@@ -1443,12 +1544,15 @@ class IDORScanner:
 
     @staticmethod
     def _is_write_success(probe: IDORProbeResult) -> bool:
-        """Check if a PATCH probe indicates the server accepted the write."""
+        """Check if a PATCH probe proves the write reached a row.
+
+        A bare 200/204 is not enough: PostgREST answers 204 for zero rows
+        affected (RLS filtered the target out), so require returned rows.
+        """
         if probe.error:
             return False
-        if probe.probed_status is None:
-            return False
-        return probe.probed_status in (200, 201, 204)
+        return postgrest_rows_affected(
+            probe.probed_status, probe.probed_body_preview)
 
     @staticmethod
     def _assess_cross_user_risk(

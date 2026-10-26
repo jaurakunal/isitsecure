@@ -6,6 +6,8 @@ authentication or authorization checks.
 
 from __future__ import annotations
 
+import re
+
 from isitsecure.engine.code_analysis.models import CodeFinding
 from isitsecure.engine.code_analysis.protocols import RepoSnapshot
 from isitsecure.engine.constants import GuidedDASTConfig
@@ -52,7 +54,9 @@ class AuthBypassGuidedStrategy:
 
             for ep in matched_endpoints:
                 # Test each HTTP method the route supports
-                methods = self._get_methods_for_endpoint(ep, repo_snapshot)
+                methods = self._get_methods_for_endpoint(
+                    ep, repo_snapshot, finding.file_path,
+                )
                 for method in methods:
                     test_cases.append(GuidedTestCase(
                         source_finding_id=finding.id,
@@ -78,10 +82,35 @@ class AuthBypassGuidedStrategy:
     def _get_methods_for_endpoint(
         ep: DiscoveredEndpoint,
         repo_snapshot: RepoSnapshot,
+        finding_file: str = "",
     ) -> list[str]:
-        """Get HTTP methods for an endpoint from the route map."""
+        """Safe (read-only) HTTP methods to probe for an endpoint.
+
+        The route is found by matching the endpoint's path against the route
+        pattern as whole path segments (a pattern like ``/api`` must not
+        claim ``/api/health``), preferring the route declared in the file
+        SAST flagged. Only GET/HEAD are ever sent unauthenticated: an
+        anonymous DELETE/POST/PUT would change data on the live target.
+        """
+        matcher = RouteEndpointMatcher()
+        path = matcher._extract_path(ep.url)
+        candidates = []
         for route in repo_snapshot.route_map:
-            if route.route_pattern and route.route_pattern in ep.url:
-                if route.http_methods:
-                    return route.http_methods
-        return [ep.method.value]
+            regex = matcher._pattern_to_regex(route.route_pattern)
+            if (
+                regex
+                and re.match(regex.pattern, path)  # anchored: /api is not /foo/api
+                and route.http_methods
+            ):
+                candidates.append(route)
+        candidates.sort(
+            key=lambda r: not (
+                finding_file
+                and matcher._file_matches_route(finding_file, r.file_path)
+            ),
+        )
+        declared = candidates[0].http_methods if candidates else [ep.method.value]
+        return [
+            m.upper() for m in declared
+            if m.upper() in GuidedDASTConfig.SAFE_METHODS
+        ]

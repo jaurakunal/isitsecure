@@ -188,8 +188,9 @@ class TestCrossUserWriteIDOR:
                 # Attacker READ -> 403 (read blocked)
                 return _mock_response(status_code=403, body="")
             else:
-                # Attacker PATCH -> 204 (write accepted!)
-                return _mock_response(status_code=204, body="")
+                # Attacker PATCH -> 200 + returned row (write reached the row)
+                return _mock_response(
+                    status_code=200, body='[{"id":"resource-uuid-1"}]')
 
         with patch(
             "isitsecure.engine.scanners.idor_scanner.RateLimitedClient"

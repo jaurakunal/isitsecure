@@ -130,7 +130,7 @@
 
   <div class="scene" id="lock" data-scene data-interval="3400">
     <figure class="stage">
-      <svg viewBox="0 0 960 336" role="img" aria-label="Left: eleven login attempts as tiles, with the rule that only a 423 status counts as a lockout. Right: seven default credential pairs tried in order, the third accepted, the last four never sent.">
+      <svg viewBox="0 0 960 336" role="img" aria-label="Left: eleven login attempts as tiles, with the rule that a 423 or 429 status counts as a lockout. Right: seven default credential pairs tried in order, the third accepted, the last four never sent.">
         <!-- lockout -->
         <g class="node lit-1 lit-2" transform="translate(20 20)">
           <rect width="440" height="300" rx="10"/>
@@ -152,9 +152,9 @@
             <text class="mono" x="14" y="146">last status 423?</text>
             <text class="mono t-safe" x="14" y="166">yes: the lockout works, silent</text>
             <text class="mono" x="14" y="190">no: send an 11th attempt</text>
-            <text class="mono t-attacker" x="14" y="210">still not 423: MEDIUM · 0.60</text>
-            <text class="lbl" x="14" y="244">Only 423 counts as a lock. Any other status, a 429</text>
-            <text class="lbl" x="14" y="260">included, is reported as no lockout.</text>
+            <text class="mono t-attacker" x="14" y="210">no 423/429: MEDIUM · 0.60</text>
+            <text class="lbl" x="14" y="244">A 423 or 429, or a lock message, counts as a lock.</text>
+            <text class="lbl" x="14" y="260">Anything else is reported as no lockout.</text>
           </g>
         </g>
         <!-- default creds -->
@@ -172,16 +172,16 @@
             <g class="at-4"><text class="dim" x="14" y="206">user@user.com / password123</text></g><text class="at-4 lbl" x="270" y="206">not sent</text>
             <text class="until-4 lbl" x="14" y="140">(the remaining four wait their turn)</text>
           </g>
-          <text class="lbl at-3" x="14" y="240">success = 2xx and a word such as access_token,</text>
-          <text class="lbl at-3" x="14" y="256">jwt, bearer, session_id or "token" in the body</text>
+          <text class="lbl at-3" x="14" y="240">success = 2xx JSON (not an HTML page) with a non-empty</text>
+          <text class="lbl at-3" x="14" y="256">access_token, token, jwt or session_id field</text>
           <text class="mono t-attacker at-4" x="14" y="284">CRITICAL · 0.95 · stops at the first hit</text>
         </g>
       </svg>
     </figure>
     <div class="scene-steps">
       <p class="step"><span class="n">1</span><b>Lockout.</b> The scanner sends the same wrong login ten times, 0.2 s apart. A server that locks accounts would start answering 423 (Locked).</p>
-      <p class="step"><span class="n">2</span>It reads the <b>last status</b>. A 423 means the lock works and the scanner reports nothing. Anything else earns an 11th attempt, and if that is still not 423 the finding is MEDIUM, confidence 0.60. A rate limiter that answers 429 does not satisfy this check; the <a href="rate-limit.html">rate limit scanner</a> covers that.</p>
-      <p class="step"><span class="n">3</span><b>Default credentials.</b> Seven pairs run in a fixed order, half a second apart. A pair succeeds only when the reply is 2xx <b>and</b> the body contains a token-like word. A 200 that just says <code>{"error":"bad login"}</code> is not a success.</p>
+      <p class="step"><span class="n">2</span>It watches every status. A 423 or 429 (or a lock message such as "too many attempts") means a lock or throttle works and the scanner reports nothing. Otherwise an 11th attempt is sent, and if it is not throttled either the finding is MEDIUM, confidence 0.60. The <a href="rate-limit.html">rate limit scanner</a> measures the throttle itself.</p>
+      <p class="step"><span class="n">3</span><b>Default credentials.</b> Seven pairs run in a fixed order, half a second apart. A wrong-password control login must be rejected first. A pair succeeds only when the reply is 2xx, is JSON rather than an HTML page, and carries a non-empty credential field such as <code>access_token</code>. A 200 that just says <code>{"error":"bad login"}</code> is not a success.</p>
       <p class="step"><span class="n">4</span>The third pair, <code>admin@admin.com / admin123</code>, returns a token. That is <b>CRITICAL, confidence 0.95</b>, with the request and reply saved as evidence. The scanner stops at the first hit, so the last four pairs are never sent.</p>
     </div>
   </div>
@@ -233,7 +233,7 @@
       <p class="step"><span class="n">1</span>Reset endpoints get one POST for an email that cannot exist. A well-built reset form answers every email the same way and sends the link by mail. The page shows a safe reply and a leaking one side by side.</p>
       <p class="step"><span class="n">2</span><b>Leak check.</b> The scanner lower-cases the first 500 characters of the body, then the response headers, and looks for seven token-like strings. A hit is <b>HIGH, confidence 0.90</b>, because anyone who can submit the form can then reset that account. The check is a plain substring search, so a header such as <code>Set-Cookie: csrftoken=…</code> also contains <code>token=</code>.</p>
       <p class="step"><span class="n">3</span><b>Header bypass.</b> Endpoints with <code>requires_auth</code> set, or a path containing <code>/api/user</code>, <code>/api/account</code>, <code>/api/profile</code>, <code>/api/settings</code>, <code>/api/admin</code>, <code>/dashboard/api</code> or <code>/api/me</code>, are tried with three headers, in order. The first two are refused.</p>
-      <p class="step"><span class="n">4</span>The third, a Basic header for <code>admin:admin</code>, is answered 200. <b>Any 2xx counts</b>: that is HIGH, confidence 0.85, and one bypass per endpoint is enough evidence. The endpoints are ranked by the shared prioritizer so the most auth-looking ones go first.</p>
+      <p class="step"><span class="n">4</span>The third, a Basic header for <code>admin:admin</code>, is answered 200. A control request with an invalid bearer token is sent first. A 2xx that is not an HTML page or a failure body is <b>HIGH, confidence 0.85</b> when that control was denied (401/403), and a Medium "serves data without authentication" note (0.60) when the invalid token was served too. One bypass per endpoint is enough evidence. The endpoints are ranked by the shared prioritizer so the most auth-looking ones go first.</p>
     </div>
   </div>
 </section>
@@ -334,7 +334,7 @@ const attempts = await getLoginAttempts(email)
   </div>
   <div class="callout note">
     <div class="label">Fix timing as well</div>
-    <p>The same message and status are not enough if one path hashes a password and the other returns early. Run the same work, or a dummy hash, when the account does not exist, so the 0.5 s timing check has nothing to see. The lockout check only recognises status 423, so a lock that answers with another code is reported even though it works.</p>
+    <p>The same message and status are not enough if one path hashes a password and the other returns early. Run the same work, or a dummy hash, when the account does not exist, so the 0.5 s timing check has nothing to see. The lockout check recognises 423, 429 and common lock messages, so a lock that answers with another code and no message is still reported even though it works.</p>
   </div>
 </section>
 
@@ -347,8 +347,8 @@ const attempts = await getLoginAttempts(email)
         <tr><td>Username enumeration</td><td>2 per login endpoint</td><td>a known phrase pair in the two bodies; timing gap above 0.5 s; different status codes</td><td>High · 0.85 / Medium · 0.65 / Medium · 0.70</td></tr>
         <tr><td>Reset token leak</td><td>1 per reset endpoint</td><td>one of 7 token strings in the first 500 body characters or in the headers</td><td>High · 0.90</td></tr>
         <tr><td>Account lockout</td><td>10, plus 1 if needed</td><td>the last status is not 423</td><td>Medium · 0.60</td></tr>
-        <tr><td>Default credentials</td><td>up to 7 per login endpoint</td><td>2xx and a token-like word in the body</td><td>Critical · 0.95</td></tr>
-        <tr><td>Auth header bypass</td><td>up to 3 per protected endpoint</td><td>any 2xx to the no-header, empty-Bearer or Basic admin:admin request</td><td>High · 0.85</td></tr>
+        <tr><td>Default credentials</td><td>up to 7 per login endpoint, plus 1 control</td><td>control rejected; 2xx JSON with a non-empty token field</td><td>Critical · 0.95</td></tr>
+        <tr><td>Auth header bypass</td><td>up to 3 per protected endpoint, plus 1 control</td><td>non-HTML 2xx to the no-header, empty-Bearer or Basic admin:admin request while an invalid token is denied</td><td>High · 0.85</td></tr>
       </tbody>
     </table>
   </div>

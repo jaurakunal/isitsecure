@@ -161,6 +161,20 @@ export async function PATCH(request: Request) {
 }
 ```
 
+Only a *rejecting* auth call counts. Strong terminals (`jwt.verify(`, `supabase.auth.getUser(`,
+`getServerSession(`, `verifyIdToken(`, signature checks...) vouch on their own. Generic
+lookups (`getUser(`, `getSession(`, `getToken(`, `authenticate(`) only count when the same
+handler also refuses the caller (401/403, `status: 401`, `redirect(`...). Password checks
+(`bcrypt.compare`, `argon2.verify`) never count, since they make a route a login endpoint,
+not a guarded one, and calls that appear only in comments are ignored.
+
+Evidence is credited to the route it belongs to, not to the whole file: an
+`@UseGuards`/`@login_required` decorator vouches for the route it decorates (or for every
+route of a class it decorates), a `protectedProcedure` only for the procedures declared with
+it, and an inline `getServerSession()` only for the exported handler (`GET`, `POST`, ...) or
+helper that contains it. When the file's shape does not say which code serves a route, the
+route is left reported. Tab- and space-indented files are delimited the same way.
+
 No pattern list can name `getUserFromRequest` — it's your project's invention —
 so the tracer resolves the call and looks for the terminal in **that function's
 own body**, not the whole module. Scoping matters: helpers cluster, so a login

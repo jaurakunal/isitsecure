@@ -380,7 +380,7 @@
 
 <section id="correlate">
   <h2>Correlation: proving it from both sides</h2>
-  <p class="prose">A dynamic finding says the app misbehaved. A static finding says the code looks wrong. When the two categories form a known pair, a confirmed finding is added and its severity rises. The pairing is by category; aligning an endpoint to its route file is the job of the guided-DAST matcher. isitsecure also runs the relationship forward: a code finding becomes a new dynamic test.</p>
+  <p class="prose">A dynamic finding says the app misbehaved. A static finding says the code looks wrong. When the two categories form a known pair, a confirmed finding is added and its severity rises. The pairing is by category plus a shared target (a distinctive word from the endpoint in the SAST file path or text, or the same leaked token); aligning an endpoint to its route file is the job of the guided-DAST matcher. isitsecure also runs the relationship forward: a code finding becomes a new dynamic test.</p>
 
   <div class="scene" id="xref" data-scene data-interval="3000">
     <figure class="stage">
@@ -401,7 +401,7 @@
     </figure>
     <div class="scene-steps">
       <p class="step"><span class="n">1</span>Two independent findings arrive: the dynamic scanner read another user's task by swapping an id, and the static analyzer found no auth check in a route file.</p>
-      <p class="step"><span class="n">2</span>The cross-referencer pairs them <b>by category</b>: IDOR + missing auth, RLS bypass + missing RLS, injection + injection risk, secret exposure + secret in code. Each SAST finding is consumed once. The confirmed finding is added alongside the originals with higher confidence and boosted severity.</p>
+      <p class="step"><span class="n">2</span>The cross-referencer pairs them <b>by category and shared target</b>: IDOR + missing auth, RLS bypass + missing RLS, injection + injection risk, secret exposure + secret in code. Same-category findings with no shared endpoint word stay separate. Each SAST finding is consumed once. The confirmed finding is added alongside the originals with higher confidence and boosted severity.</p>
       <p class="step"><span class="n">3</span>Some static findings have no dynamic counterpart because no scanner thought to try. Here the schema exposes an <code>isAdmin</code> column on a route that accepts a body.</p>
       <p class="step"><span class="n">4</span>SAST-guided DAST turns that into a test: POST <code>{"isAdmin": true}</code> to the endpoint. Six strategies exist (auth bypass, targeted IDOR, targeted injection, mass assignment, race condition, RLS bypass). Commercial tools match after the fact; this generates tests that would not otherwise run.</p>
     </div>

@@ -150,14 +150,15 @@ class TestGenerateMassAssignmentTests:
     def test_uses_mutation_methods(
         self, strategy: MassAssignmentSchemaStrategy, repo_snapshot: RepoSnapshot,
     ) -> None:
-        """Test cases use POST, PUT, and PATCH methods."""
+        """Only the mutation methods the route declares are sent (POST, PUT)."""
         findings = [_finding()]
         endpoints = [_endpoint()]
 
         cases = strategy.generate_tests(findings, endpoints, repo_snapshot)
 
         methods = {c.http_method for c in cases}
-        assert methods == {"POST", "PUT", "PATCH"}
+        assert methods == {"POST", "PUT"}
+        assert "PATCH" not in methods  # route does not declare PATCH
 
     def test_no_privileged_fields_no_tests(
         self, strategy: MassAssignmentSchemaStrategy, repo_snapshot: RepoSnapshot,

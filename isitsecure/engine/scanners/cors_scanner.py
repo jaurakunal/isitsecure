@@ -218,8 +218,8 @@ class CORSScanner(AuthAwareScanner):
 
         Rules:
         - Wildcard + credentials -> CRITICAL (credential theft)
-        - Arbitrary origin reflected -> HIGH
-        - Null origin allowed -> HIGH
+        - Arbitrary origin reflected -> HIGH with credentials, else MEDIUM
+        - Null origin allowed -> HIGH with credentials, else MEDIUM
         - Wildcard without credentials -> MEDIUM (data leakage)
         """
         # Rule 1: Wildcard with credentials is the most dangerous
@@ -240,29 +240,17 @@ class CORSScanner(AuthAwareScanner):
                 capture=capture,
             )
 
-        # Rule 2: Arbitrary origin reflected back
-        if acao == origin and origin != CORSConfig.WILDCARD_ORIGIN:
+        # Rule 2: Null origin allowed. Must be tested BEFORE the reflected
+        # rule, otherwise ``acao == origin`` swallows the ``null`` probe.
+        # Without ACAC: true the browser withholds cookies, so the attacker
+        # can only read public data: keep it, but at MEDIUM.
+        if acao == CORSConfig.NULL_ORIGIN and origin == CORSConfig.NULL_ORIGIN:
             return self._build_finding(
                 endpoint=endpoint,
-                severity=SeverityLevel.HIGH,
-                title=CORSConfig.TITLE_ORIGIN_REFLECTED,
-                description=CORSConfig.DESC_ORIGIN_REFLECTED.format(
-                    url=endpoint.url, origin=origin,
+                severity=(
+                    SeverityLevel.HIGH if credentials_enabled
+                    else SeverityLevel.MEDIUM
                 ),
-                origin=origin,
-                probe_label=probe_label,
-                acao=acao,
-                credentials_enabled=credentials_enabled,
-                status_code=status_code,
-                confidence=CORSConfig.CONFIDENCE_ORIGIN_REFLECTED,
-                capture=capture,
-            )
-
-        # Rule 3: Null origin allowed
-        if acao == CORSConfig.NULL_ORIGIN:
-            return self._build_finding(
-                endpoint=endpoint,
-                severity=SeverityLevel.HIGH,
                 title=CORSConfig.TITLE_NULL_ORIGIN,
                 description=CORSConfig.DESC_NULL_ORIGIN.format(
                     url=endpoint.url,
@@ -272,7 +260,36 @@ class CORSScanner(AuthAwareScanner):
                 acao=acao,
                 credentials_enabled=credentials_enabled,
                 status_code=status_code,
-                confidence=CORSConfig.CONFIDENCE_NULL_ORIGIN,
+                confidence=(
+                    CORSConfig.CONFIDENCE_NULL_ORIGIN if credentials_enabled
+                    else CORSConfig.CONFIDENCE_REFLECTED_NO_CREDS
+                ),
+                capture=capture,
+            )
+
+        # Rule 3: Arbitrary origin reflected back. HIGH only when
+        # credentials are allowed; a credential-less reflection exposes the
+        # same data as the wildcard-no-credentials case (MEDIUM).
+        if acao == origin and origin != CORSConfig.WILDCARD_ORIGIN:
+            return self._build_finding(
+                endpoint=endpoint,
+                severity=(
+                    SeverityLevel.HIGH if credentials_enabled
+                    else SeverityLevel.MEDIUM
+                ),
+                title=CORSConfig.TITLE_ORIGIN_REFLECTED,
+                description=CORSConfig.DESC_ORIGIN_REFLECTED.format(
+                    url=endpoint.url, origin=origin,
+                ),
+                origin=origin,
+                probe_label=probe_label,
+                acao=acao,
+                credentials_enabled=credentials_enabled,
+                status_code=status_code,
+                confidence=(
+                    CORSConfig.CONFIDENCE_ORIGIN_REFLECTED if credentials_enabled
+                    else CORSConfig.CONFIDENCE_REFLECTED_NO_CREDS
+                ),
                 capture=capture,
             )
 

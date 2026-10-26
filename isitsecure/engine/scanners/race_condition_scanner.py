@@ -123,6 +123,18 @@ class RaceConditionScanner:
                 )
                 return None
 
+            # Control: ONE sequential replay sent AFTER the burst (sending it
+            # first would consume a single-use resource and make every
+            # concurrent request fail, hiding the classic race). If the
+            # replay is rejected (409/4xx) the endpoint DOES enforce a limit
+            # on replays, so concurrent successes broke that invariant. If it
+            # is accepted, the operation has no exactly-once rule (a correct
+            # "add comment" endpoint does the same).
+            control_status = await send_one()
+            sequential_accepted = (
+                control_status in RaceConditionConfig.SUCCESS_STATUS_CODES
+            )
+
         success_count = sum(
             1 for s in statuses
             if s in RaceConditionConfig.SUCCESS_STATUS_CODES
@@ -130,25 +142,44 @@ class RaceConditionScanner:
 
         if success_count >= RaceConditionConfig.SUCCESS_THRESHOLD:
             path = urlparse(req.url).path
+            if control_status == 0:
+                # Control never got a response: cannot tell, stay quiet.
+                return None
+            confirmed = not sequential_accepted
             return DeepFinding(
                 source=FindingSource.DAST_AUTHENTICATED,
                 category=FindingCategory.AUTH_WEAKNESS,
-                severity=SeverityLevel.HIGH,
-                title=RaceConditionConfig.TITLE_RACE_CONDITION.format(
-                    method=method, path=path,
+                severity=(
+                    SeverityLevel.HIGH if confirmed else SeverityLevel.INFO
                 ),
-                description=RaceConditionConfig.DESC_RACE_CONDITION.format(
+                title=(
+                    RaceConditionConfig.TITLE_RACE_CONDITION
+                    if confirmed
+                    else RaceConditionConfig.TITLE_DUPLICATE_ACCEPTED
+                ).format(method=method, path=path),
+                description=(
+                    RaceConditionConfig.DESC_RACE_CONDITION
+                    if confirmed
+                    else RaceConditionConfig.DESC_DUPLICATE_ACCEPTED
+                ).format(
                     total=RaceConditionConfig.CONCURRENT_REQUESTS,
                     method=method, path=path, count=success_count,
                 ),
-                confidence=RaceConditionConfig.CONFIDENCE_RACE,
+                confidence=(
+                    RaceConditionConfig.CONFIDENCE_RACE
+                    if confirmed
+                    else RaceConditionConfig.CONFIDENCE_DUPLICATE_ACCEPTED
+                ),
                 scanner_name=self.scanner_name,
                 endpoint_url=req.url,
                 http_method=method,
                 request_payload=req.request_body[
                     : RaceConditionConfig.RESPONSE_PREVIEW_LENGTH
                 ] if req.request_body else "",
-                response_preview=f"Concurrent results: {list(statuses)}",
+                response_preview=(
+                    f"Sequential control: {control_status}; "
+                    f"concurrent results: {list(statuses)}"
+                ),
             )
 
         return None

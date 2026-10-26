@@ -203,6 +203,7 @@ def _apply_trust_filters(
     the composition can be unit-tested directly.
     """
     from isitsecure.engine import baseline as _baseline
+    from isitsecure.engine import identity as _identity
     from isitsecure.engine import suppression as _suppression
 
     # --- Suppression -----------------------------------------------------
@@ -215,7 +216,7 @@ def _apply_trust_filters(
             err_console.print(
                 f"[green]Suppressed {len(newly)} finding(s)[/green] in [dim]{ignore_path}[/dim]"
             )
-        unmatched = set(suppress) - {f.fingerprint for f in report.findings}
+        unmatched = set(suppress) - _identity.known_fingerprints(report.findings)
         if unmatched:
             err_console.print(
                 f"[yellow]No finding in this scan matched: {', '.join(sorted(unmatched))}[/yellow]"
@@ -557,12 +558,15 @@ def verify(
         err_console.print(f"[red]Could not read report {report}: {exc}[/red]")
         raise typer.Exit(2) from exc
 
+    from isitsecure.engine import identity as _identity
+
     findings = [DeepFinding.model_validate(d) for d in data.get("findings", [])]
     unknown: set[str] = set()
     if fingerprint:
         wanted = set(fingerprint)
-        findings = [f for f in findings if f.fingerprint in wanted]
-        unknown = wanted - {f.fingerprint for f in findings}
+        known = _identity.known_fingerprints(findings)
+        findings = [f for f in findings if _identity.matches_any(f, wanted)]
+        unknown = wanted - known
         if unknown:
             err_console.print(
                 f"[yellow]Not in report: {', '.join(sorted(unknown))}[/yellow]"

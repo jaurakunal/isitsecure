@@ -7,6 +7,7 @@ credentials, and .env files that were committed and later removed.
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import math
 import re
@@ -278,10 +279,18 @@ class GitSecretScanner:
             severity_str = config["severity"]
             description = config["description"]
 
-            severity = SeverityLevel(severity_str)
+            validator = config.get("validator")
 
             for match in re.finditer(pattern, content):
                 secret_value = match.group(0)
+                severity = SeverityLevel(severity_str)
+                description = config["description"]
+
+                if validator:
+                    verdict = self._apply_validator(validator, secret_value)
+                    if verdict is None:
+                        continue
+                    severity, description = verdict
 
                 # Skip if too short or too long
                 if len(secret_value) < SecretScannerConfig.MIN_SECRET_LENGTH:
@@ -320,6 +329,70 @@ class GitSecretScanner:
                 )
 
         return findings
+
+    def _apply_validator(
+        self, validator: str, value: str
+    ) -> tuple[SeverityLevel, str] | None:
+        """Refine a regex hit. None = not a secret; (severity, description) otherwise."""
+        cfg = SecretScannerConfig
+        base = cfg.SECRET_PATTERNS
+        if validator == "jwt_role":
+            role = self._jwt_role(value)
+            if role == cfg.JWT_ROLE_SERVICE:
+                spec = base["supabase_service_role"]
+                return SeverityLevel(spec["severity"]), spec["description"]
+            if role in cfg.JWT_ROLE_PUBLIC:
+                return None  # public client-side key by design
+            return (
+                SeverityLevel(cfg.JWT_UNKNOWN_ROLE_SEVERITY),
+                cfg.JWT_UNKNOWN_ROLE_DESCRIPTION,
+            )
+        if validator == "db_url_credentials":
+            spec = base["database_url"]
+            if any(m in value for m in cfg.DB_URL_TEMPLATE_MARKERS):
+                return None
+            if re.search(cfg.DB_URL_ANGLE_PLACEHOLDER, value):
+                return None
+            password = self._db_url_password(value)
+            if not password:
+                return None  # no embedded password: nothing secret
+            if password.lower() in cfg.PLACEHOLDER_DB_PASSWORDS:
+                return (
+                    SeverityLevel(cfg.DB_URL_PLACEHOLDER_SEVERITY),
+                    spec["description"],
+                )
+            return SeverityLevel(spec["severity"]), spec["description"]
+        return None
+
+    @staticmethod
+    def _db_url_password(value: str) -> str | None:
+        """Password embedded in a DB URL: userinfo first, then a query parameter."""
+        cfg = SecretScannerConfig
+        creds = re.match(cfg.DB_URL_CREDENTIALS_PATTERN, value, re.IGNORECASE)
+        if creds:
+            # The password may hold "/" or "?"-free printable characters; it
+            # ends at the last "@" before the query string.
+            head = value.split("?", 1)[0]
+            at = head.rfind("@")
+            if at >= creds.end():
+                return value[creds.end():at]
+        query = re.search(cfg.DB_URL_QUERY_PASSWORD_PATTERN, value, re.IGNORECASE)
+        return query.group(1) if query else None
+
+    @staticmethod
+    def _jwt_role(token: str) -> str | None:
+        """Best-effort ``role`` claim of a JWT payload (tolerates truncation)."""
+        parts = token.split(".")
+        if len(parts) < 2:
+            return None
+        payload = parts[1]
+        payload += "=" * (-len(payload) % 4)
+        try:
+            text = base64.urlsafe_b64decode(payload).decode("utf-8", "ignore")
+        except (ValueError, TypeError):
+            return None
+        m = re.search(SecretScannerConfig.JWT_ROLE_PATTERN, text)
+        return m.group(1) if m else None
 
     def _mask_secret(self, secret_value: str) -> str:
         """Mask the middle of a secret, preserving prefix and suffix."""

@@ -246,7 +246,7 @@
     <table>
       <thead><tr><th>Item</th><th>Value</th><th>Where it comes from</th></tr></thead>
       <tbody>
-        <tr><td>Input</td><td>first-party JavaScript only, vendor and framework bundles filtered out; empty input returns nothing</td><td><code>snapshot.first_party_js_content</code></td></tr>
+        <tr><td>Input</td><td>first-party JavaScript only, vendor and framework bundles filtered out (Next.js <code>/_next/static/chunks/app|pages/</code> page chunks, webpack app bundles and sibling-brand CDN domains count as first-party); empty input returns nothing</td><td><code>snapshot.first_party_js_content</code></td></tr>
         <tr><td>service_role JWT</td><td>token matches <code>eyJ….eyJ….sig</code>; payload <code>role</code> lowercased equals <code>service_role</code> → CRITICAL, confidence 0.98; <code>anon</code> ignored</td><td><code>_JWT_RE</code>, <code>_check_service_role_jwt</code></td></tr>
         <tr><td>Internal URL</td><td><code>http(s)://</code> then localhost, 127.0.0.1, 0.0.0.0, 10.x, 192.168.x, 172.16-31.x, <code>*.local</code> / <code>*.internal</code> / <code>*.test</code>, or a host beginning with staging, stg, dev, qa, internal, preprod or uat → LOW, confidence 0.75</td><td><code>_INTERNAL_URL_RE</code></td></tr>
         <tr><td>Un-replaced env</td><td><code>process.env.NAME</code> or <code>import.meta.env.NAME</code>, NAME upper case, 3+ characters, no public prefix → LOW, confidence 0.7</td><td><code>_PROCESS_ENV_RE</code>, <code>_IMPORT_META_ENV_RE</code>, <code>_PUBLIC_ENV_PREFIXES</code></td></tr>

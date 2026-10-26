@@ -1,15 +1,15 @@
 # Body Param Fuzzer
 
-**Type:** DAST (Special) | **Severity:** Medium to Critical | **Category:** Injection Risk
+**Type:** DAST (Special) | **Severity:** Low to Critical | **Category:** Injection Risk
 
 ## What It Does
 
 Fuzzes JSON body parameters from intercepted authenticated requests (up to 20 successful POST/PUT/PATCH captures, up to 10 keys each; at most 123 requests per captured write) with:
 
-- **SQL injection** — injects three payloads (for example `' OR '1'='1' --`) and checks the reply against a 13-pattern error regex, with no baseline comparison. Six of the patterns are generic runtime errors (`stack trace`, `Traceback`, `TypeError`, `ValueError`, `Internal Server Error`, `NullPointerException`), so a crash message can match (Critical)
+- **SQL injection** — injects three payloads (for example `' OR '1'='1' --`; the stacked-statement probe is the harmless syntax breaker `1'; SELECT--`, never a destructive statement) and checks the reply against database-specific error patterns (`SQL syntax`, `SQLSTATE`, `ORA-nnnnn`, `syntax error at or near`, ...) that are not already present in the recorded response (Critical). Generic crash strings no longer count; a payload that turns a successful request into a 5xx without a database error is reported as a Medium "Possible SQL injection" (confidence 0.50)
 - **XSS reflection** — injects two canary HTML payloads and checks if they are reflected verbatim (High)
 - **Type confusion** — for string-valued keys, sends seven other values (number, boolean, empty array, null, -1, 0, a large number) and reports a 5xx response (Medium, 0.70)
-- **Prototype pollution** — adds `__proto__`, `constructor.prototype` and `__proto__.polluted` keys to the body and reports when the server answers with a status below 400 (High). It does not verify that the server merged them; a server that simply ignores unknown keys is reported too
+- **Prototype pollution** — adds `__proto__`, `constructor.prototype` and `__proto__.polluted` keys to the body with a unique marker value. It reports High only when a follow-up clean request returns the marker (the pollution persisted). A server that merely answers below 400 gets one Low "accepts prototype-pollution key (not confirmed)" note per request (confidence 0.30)
 
 ## Why It Matters
 

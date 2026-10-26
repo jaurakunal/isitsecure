@@ -17,6 +17,7 @@ import json
 from typing import Any
 
 from isitsecure import __version__
+from isitsecure.engine.identity import legacy_fingerprint
 from isitsecure.engine.models import DeepScanReport, DeepFinding
 
 
@@ -90,17 +91,27 @@ class SARIFRenderer:
     ) -> tuple[list[dict], dict[str, int]]:
         """Build SARIF rule definitions and a rule_id → index mapping.
 
-        Each unique (scanner_name, category) pair becomes one rule.
+        Each unique (scanner_name, category) pair becomes one rule. A rule's
+        default level and ``security-severity`` are those of its MOST severe
+        finding, not of whichever came first (code-scanning buckets alerts by
+        the rule's score); each result still carries its own level and score.
+        Rule ids are unchanged so existing alerts keep their identity.
         """
         rules: list[dict] = []
         rule_index: dict[str, int] = {}
+        worst: dict[str, str] = {}
+        for finding in findings:
+            rid = self._rule_id(finding)
+            sev = self._severity_value(finding)
+            if rid not in worst or self._rank(sev) > self._rank(worst[rid]):
+                worst[rid] = sev
 
         for finding in findings:
             rule_id = self._rule_id(finding)
             if rule_id in rule_index:
                 continue
 
-            severity = self._severity_value(finding)
+            severity = worst[rule_id]
             rule_index[rule_id] = len(rules)
             rules.append({
                 "id": rule_id,
@@ -143,8 +154,11 @@ class SARIFRenderer:
 
         # Stable fingerprint for dedup across runs (#38). Must NOT be finding.id
         # (a per-scan random uuid) — that defeats cross-run dedup.
+        # v1 is the original value (kept so alerts uploaded earlier still
+        # match); v2 also tells apart same-titled findings in one file.
         result["fingerprints"] = {
-            "isitsecure/v1": finding.fingerprint,
+            "isitsecure/v1": legacy_fingerprint(finding),
+            "isitsecure/v2": finding.fingerprint,
         }
 
         # Properties
@@ -152,6 +166,7 @@ class SARIFRenderer:
             "scanner": finding.scanner_name,
             "source": finding.source.value if hasattr(finding.source, "value") else str(finding.source),
             "confidence": finding.confidence,
+            "security-severity": self._SEVERITY_TO_SCORE.get(severity, "5.0"),
         }
 
         if finding.priority:
@@ -211,6 +226,12 @@ class SARIFRenderer:
         if finding.remediation_guidance:
             parts.append(f"**Remediation:** {finding.remediation_guidance}")
         return "\n\n".join(parts)
+
+    @classmethod
+    def _rank(cls, severity: str) -> int:
+        """Order of a severity string (unknown values rank lowest)."""
+        order = ("info", "low", "medium", "high", "critical")
+        return order.index(severity) if severity in order else -1
 
     @staticmethod
     def _rule_id(finding: DeepFinding) -> str:

@@ -88,7 +88,7 @@
           <rect width="270" height="290" rx="10"/>
           <text class="ttl" x="14" y="26">Per endpoint</text>
           <text class="mono" x="14" y="62">/api/users/1</text>
-          <text class="lbl" x="14" y="80">probe 1 echoed: HIGH, stop</text>
+          <text class="lbl" x="14" y="80">probe 1 echoed + ACAC: HIGH, stop</text>
           <text class="lbl" x="14" y="96">probes 2 and 3 are never sent</text>
           <text class="mono" x="14" y="136">/api/orders/9</text>
           <text class="lbl at-4" x="14" y="154">no ACAO header on any probe</text>
@@ -114,7 +114,7 @@
 
   <div class="scene" id="rules-scene" data-scene data-interval="3600">
     <figure class="stage">
-      <svg viewBox="0 0 960 320" role="img" aria-label="Five ordered rules. Wildcard with credentials is Critical, an echoed origin is High, a null origin is High, a wildcard without credentials is Medium, and anything else is silent.">
+      <svg viewBox="0 0 960 320" role="img" aria-label="Five ordered rules. Wildcard with credentials is Critical, an echoed origin is High with credentials and Medium without, a null origin is checked before it and follows the same split, a wildcard without credentials is Medium, and anything else is silent.">
         <defs><marker id="arrCo2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
         <text class="lbl" x="34" y="22">ACAO in the response</text>
         <text class="lbl" x="300" y="22">ACAC</text>
@@ -127,10 +127,10 @@
           <text class="mono t-attacker" x="380" y="28">CRITICAL</text><text class="mono" x="540" y="28">0.95</text><text class="lbl" x="650" y="28">any site reads logged-in data</text></g>
         <g class="rule r2 node lit-2" transform="translate(20 86)"><rect width="920" height="46" rx="8"/>
           <text class="mono" x="14" y="28">equals the Origin sent</text><text class="mono lbl" x="280" y="28">any</text>
-          <text class="mono t-attacker" x="380" y="28">HIGH</text><text class="mono" x="540" y="28">0.90</text><text class="lbl" x="650" y="28">server echoes whatever it is told</text></g>
+          <text class="mono t-attacker" x="380" y="28">HIGH</text><text class="mono" x="540" y="28">0.90</text><text class="lbl" x="650" y="28">echoes any caller · Medium 0.70 without ACAC</text></g>
         <g class="rule r3 node lit-3" transform="translate(20 140)"><rect width="920" height="46" rx="8"/>
           <text class="mono" x="14" y="28">null</text><text class="mono lbl" x="280" y="28">any</text>
-          <text class="mono t-attacker" x="380" y="28">HIGH</text><text class="mono" x="540" y="28">0.85</text><text class="lbl" x="650" y="28">sandboxed iframes can read it</text></g>
+          <text class="mono t-attacker" x="380" y="28">HIGH</text><text class="mono" x="540" y="28">0.85</text><text class="lbl" x="650" y="28">sandbox reads it · Medium 0.70 without ACAC</text></g>
         <g class="rule r4 node lit-4" transform="translate(20 194)"><rect width="920" height="46" rx="8"/>
           <text class="mono" x="14" y="28">*</text><text class="mono lbl" x="280" y="28">not true</text>
           <text class="mono t-accent" x="380" y="28">MEDIUM</text><text class="mono" x="540" y="28">0.70</text><text class="lbl" x="650" y="28">any site reads public responses</text></g>
@@ -141,8 +141,8 @@
     </figure>
     <div class="scene-steps">
       <p class="step"><span class="n">1</span><b>Wildcard plus credentials is CRITICAL, 0.95.</b> <code>ACAO: *</code> together with <code>ACAC: true</code> is the worst case: any website can read authenticated responses.</p>
-      <p class="step"><span class="n">2</span><b>An echoed origin is HIGH, 0.90.</b> If ACAO equals the exact Origin the scanner sent, the server mirrors any caller. The scanner does not check ACAC for this rule, so it fires whether or not credentials are allowed.</p>
-      <p class="step"><span class="n">3</span><b>ACAO: null is HIGH, 0.85.</b> A page in a sandboxed iframe sends <code>Origin: null</code>, so allowing it lets an attacker reach the API from a sandbox.</p>
+      <p class="step"><span class="n">2</span><b>An echoed origin is HIGH, 0.90, when credentials are allowed.</b> If ACAO equals the exact Origin the scanner sent, the server mirrors any caller. With ACAC: true the visitor's cookies ride along; without it only credential-less data is exposed, so it drops to MEDIUM, 0.70.</p>
+      <p class="step"><span class="n">3</span><b>ACAO: null is HIGH, 0.85, when credentials are allowed (MEDIUM, 0.70 otherwise).</b> A page in a sandboxed iframe sends <code>Origin: null</code>, so allowing it lets an attacker reach the API from a sandbox. This rule is checked before the echoed-origin rule, so a null-only server gets this title.</p>
       <p class="step"><span class="n">4</span><b>A wildcard without credentials is MEDIUM, 0.70.</b> Any site can read the response, but not with the victim's cookies.</p>
       <p class="step"><span class="n">5</span>Anything else is silent: a fixed allowed origin, or no header. A response with no ACAO header never reaches these rules at all.</p>
     </div>
@@ -227,8 +227,8 @@ const origin = request.headers.get(<span class="s">"Origin"</span>)
       <thead><tr><th>Rule</th><th>Reports when</th><th>Severity · confidence</th></tr></thead>
       <tbody>
         <tr><td>Wildcard + credentials</td><td><code>ACAO: *</code> and <code>ACAC: true</code></td><td>Critical · 0.95</td></tr>
-        <tr><td>Origin reflected</td><td>ACAO equals the Origin sent (not <code>*</code>)</td><td>High · 0.90</td></tr>
-        <tr><td>Null origin</td><td><code>ACAO: null</code></td><td>High · 0.85</td></tr>
+        <tr><td>Null origin (checked first)</td><td><code>ACAO: null</code></td><td>High · 0.85 with <code>ACAC: true</code>, otherwise Medium · 0.70</td></tr>
+        <tr><td>Origin reflected</td><td>ACAO equals the Origin sent (not <code>*</code>)</td><td>High · 0.90 with <code>ACAC: true</code>, otherwise Medium · 0.70</td></tr>
         <tr><td>Wildcard, no credentials</td><td><code>ACAO: *</code> without <code>ACAC: true</code></td><td>Medium · 0.70</td></tr>
       </tbody>
     </table>
@@ -236,7 +236,7 @@ const origin = request.headers.get(<span class="s">"Origin"</span>)
   <div class="callout note">
     <div class="label">What it deliberately stays quiet about</div>
     <p>The probes are plain GET requests, so a route that only sets CORS headers on an OPTIONS preflight is not seen. A response with no <code>Access-Control-Allow-Origin</code> is never reported, and only one endpoint per path prefix is tested, so a single route that differs from its siblings can be missed. Credentials are optional: with them, the probes carry the scan's auth headers.</p>
-    <p>One order quirk: for the <code>Origin: null</code> probe a server that answers <code>ACAO: null</code> already matches the echoed-origin rule, so it is reported as High, 0.90 with the title for a reflected origin. The null-origin rule only fires when ACAO is <code>null</code> for a different probe.</p>
+    <p>The null-origin rule is evaluated before the echoed-origin rule, so a server that answers <code>ACAO: null</code> to the <code>Origin: null</code> probe is reported under the null-origin title.</p>
   </div>
 </section>
 

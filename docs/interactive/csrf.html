@@ -93,7 +93,7 @@
       <p class="step"><span class="n">1</span>Discovery hands over its endpoint list. <b>Only POST, PUT, PATCH and DELETE are kept</b>, because a GET is not supposed to change anything and is not the CSRF surface.</p>
       <p class="step"><span class="n">2</span>Each kept endpoint is called once with its own method, <code>Origin: https://evil-attacker.com</code> and a matching forged <code>Referer</code>. The body is empty. Requests are sent three at a time, 0.3 s apart.</p>
       <p class="step"><span class="n">3</span>The scanner reads one thing: the status code. A server that validates <code>Origin</code> answers 403. A server that ignores it processes the request and answers normally.</p>
-      <p class="step"><span class="n">4</span><b>Any 2xx is a HIGH finding at confidence 0.90</b>: the endpoint did not refuse a request from a foreign origin. A 4xx stays silent, which also means an endpoint that rejects the empty body with 400 or 422 is not reported.</p>
+      <p class="step"><span class="n">4</span><b>A real 2xx acceptance is a HIGH finding at confidence 0.90</b>: the endpoint did not refuse a request from a foreign origin, and a control request with its own Origin is accepted the same way. HTML pages and success:false / error bodies do not count, and scans that authenticate with an Authorization or API-key header only are skipped (browsers never send those cross-site). A 4xx stays silent, which also means an endpoint that rejects the empty body with 400 or 422 is not reported.</p>
     </div>
   </div>
 </section>
@@ -271,7 +271,7 @@ const origin = request.headers.get(<span class="s">"Origin"</span>)
   </div>
   <div class="callout note">
     <div class="label">What it deliberately stays quiet about</div>
-    <p>The probe sends an empty body, so an endpoint that validates input before it checks anything else may answer 400 and be missed. A 2xx is taken as acceptance without checking that the endpoint really uses cookie authentication or that anything changed. The form and cookie checks cover the snapshot page only, not every page of the app. Credentials are optional: with them, the probe carries the auth headers.</p>
+    <p>The probe sends an empty body, so an endpoint that validates input before it checks anything else may answer 400 and be missed. A 2xx is taken as acceptance when it is not an HTML page or a failure body and the control request succeeds too, but the scanner does not read the record back to prove that anything changed. The form and cookie checks cover the snapshot page only, not every page of the app. Credentials are optional: with them, the probe carries the auth headers.</p>
   </div>
 </section>
 

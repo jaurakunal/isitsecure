@@ -16,6 +16,7 @@ OCP: New route mappers are added to the ``route_mappers`` list without
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import json
 import logging
 import os
@@ -580,7 +581,9 @@ class RepoIngestionService:
                 continue
 
             file_name = path.name
-            is_key_file = file_name in RepoIngestionConfig.KEY_FILE_NAMES
+            is_key_file = file_name in RepoIngestionConfig.KEY_FILE_NAMES or (
+                self._matches_key_file_pattern(file_name, relative.as_posix())
+            )
             has_code_ext = any(
                 file_name.endswith(ext)
                 for ext in RepoIngestionConfig.CODE_EXTENSIONS
@@ -596,6 +599,19 @@ class RepoIngestionService:
                     logger.warning("Failed to read file: %s", path)
 
         return file_index, total_files, total_size
+
+    @staticmethod
+    def _matches_key_file_pattern(file_name: str, rel_path: str) -> bool:
+        """True for key-file variants (Dockerfile.prod, compose.yaml, ...)."""
+        name = file_name.lower()
+        if name.endswith(RepoIngestionConfig.KEY_FILE_EXCLUDE_SUFFIXES):
+            return False
+        rel = rel_path.lower()
+        return any(
+            fnmatch.fnmatchcase(rel if "/" in pat else name, pat)
+            or ("/" in pat and fnmatch.fnmatchcase(rel, "*/" + pat))
+            for pat in RepoIngestionConfig.KEY_FILE_PATTERNS
+        )
 
     def _find_env_files(self, clone_path: str) -> list[str]:
         """Find .env files (names only, for secret scanning)."""

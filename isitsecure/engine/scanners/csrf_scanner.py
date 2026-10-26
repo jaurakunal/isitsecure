@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import re
 from http.cookies import SimpleCookie
+from urllib.parse import urlparse
 
 from isitsecure.engine.constants import CSRFConfig, DeepScanConfig
 from isitsecure.engine.shared.progress import emit
@@ -25,6 +26,11 @@ from isitsecure.engine.shared.rate_limited_client import RateLimitedClient
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
 from isitsecure.engine.ingestion.snapshot import CodebaseSnapshot
 from isitsecure.engine.shared.auth_aware import AuthAwareScanner
+from isitsecure.engine.shared.response_shape import (
+    is_html_document,
+    json_signals_failure,
+    parse_json_body,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +46,11 @@ class CSRFScanner(AuthAwareScanner):
     REQUEST_DELAY_SECONDS = 0.3
     MAX_RESPONSE_PREVIEW_LENGTH = 300
     FORM_PATTERN = r'<form[^>]*method\s*=\s*["\']?post["\']?[^>]*>(.*?)</form>'
-    HIDDEN_INPUT_PATTERN = r'<input[^>]*type\s*=\s*["\']hidden["\']?[^>]*name\s*=\s*["\']([^"\']+)["\']'
+    # Either attribute order: ``type`` before ``name`` or ``name`` before ``type``.
+    HIDDEN_INPUT_PATTERN = (
+        r'<input(?=[^>]*type\s*=\s*["\']?hidden["\']?)'
+        r'[^>]*name\s*=\s*["\']([^"\']+)["\']'
+    )
 
     @property
     def scanner_name(self) -> str:
@@ -133,13 +143,23 @@ class CSRFScanner(AuthAwareScanner):
     ) -> DeepFinding | None:
         """Send request with forged Origin header.
 
-        If the endpoint responds with a 2xx status, it does not validate
-        the Origin header and is susceptible to CSRF.
+        A forged-Origin 2xx only proves missing Origin validation when the
+        request is also CSRF-able and the answer is a real acceptance:
+        - bearer/API-key only auth is not sent by browsers cross-site, skip;
+        - a control request with the endpoint's own Origin must also succeed
+          (otherwise the 2xx is not comparable);
+        - an HTML document or ``{"success": false}`` body is a shell or a
+          rejection, not an accepted state change.
         """
+        if self._auth_is_header_only():
+            return None
+
         headers = {
             "Origin": CSRFConfig.FORGED_ORIGIN,
             "Referer": CSRFConfig.FORGED_REFERER,
         }
+        parsed = urlparse(endpoint.url)
+        own_origin = f"{parsed.scheme}://{parsed.netloc}"
 
         try:
             response = await client.request(
@@ -149,7 +169,19 @@ class CSRFScanner(AuthAwareScanner):
             )
 
             # 2xx response with forged origin means no origin validation
-            if 200 <= response.status_code < 300:
+            if 200 <= response.status_code < 300 and self._is_real_acceptance(
+                response
+            ):
+                control = await client.request(
+                    method=endpoint.method.value,
+                    url=endpoint.url,
+                    headers={"Origin": own_origin, "Referer": own_origin + "/"},
+                )
+                if not (
+                    200 <= control.status_code < 300
+                    and self._is_real_acceptance(control)
+                ):
+                    return None
                 return DeepFinding(
                     source=FindingSource.DAST_URL,
                     category=FindingCategory.AUTH_WEAKNESS,
@@ -163,11 +195,14 @@ class CSRFScanner(AuthAwareScanner):
                     technical_detail=(
                         f"Sent {endpoint.method.value} {endpoint.url} with "
                         f"Origin: {CSRFConfig.FORGED_ORIGIN}\n"
-                        f"Response status: {response.status_code}"
+                        f"Response status: {response.status_code}\n"
+                        f"Control with Origin: {own_origin} -> "
+                        f"{control.status_code}"
                     ),
                     evidence=(
                         f"{endpoint.method.value} {endpoint.url} -> "
-                        f"{response.status_code} with forged Origin"
+                        f"{response.status_code} with forged Origin "
+                        f"(same as genuine-Origin control)"
                     ),
                     confidence=CSRFConfig.CONFIDENCE_FORGED_ORIGIN_ACCEPTED,
                     scanner_name=self.scanner_name,
@@ -186,6 +221,20 @@ class CSRFScanner(AuthAwareScanner):
             )
 
         return None
+
+    def _auth_is_header_only(self) -> bool:
+        """True when the scan authenticates with headers a browser never
+        attaches cross-site (Authorization / API key) and no cookie."""
+        names = {k.lower() for k in (self.auth_headers or {})}
+        return bool(names) and "cookie" not in names
+
+    @staticmethod
+    def _is_real_acceptance(response: object) -> bool:
+        """False for HTML shells and JSON failure bodies (not a state change)."""
+        text = getattr(response, "text", "") or ""
+        if is_html_document(text):
+            return False
+        return not json_signals_failure(parse_json_body(text))
 
     # ------------------------------------------------------------------
     # Phase 2: Cookie SameSite analysis

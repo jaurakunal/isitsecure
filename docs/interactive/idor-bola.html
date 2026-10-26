@@ -197,7 +197,7 @@
       <p class="step" data-on="cuHarvest"><span class="n">2</span><b>Harvest.</b> For an endpoint like <code>/api/tasks/{id}</code>, read the parent collection <code>/api/tasks</code> as A. The ids in that response are A's real objects, so no guessing. Both numeric and UUID shapes are handled.</p>
       <p class="step"><span class="n">3</span><b>Candidates.</b> If every harvested id is numeric, the candidate set is filtered to numeric ids so UUIDs are not wasted. A's email or user id is only injected when the path parameter is named like an identity (<code>user</code>, <code>email</code>, <code>account</code>), never into an opaque object-id slot.</p>
       <p class="step" data-on="cuOwner"><span class="n">4</span><b>Owner baseline.</b> A must be able to read its own object with a 2xx. If not, there is nothing to compare against and the id is skipped.</p>
-      <p class="step" data-on="cuAttacker"><span class="n">5</span><b>Attacker probe.</b> The same URL with B's token. B gets 200 and the body is byte-for-byte what A saw. Object 42 belongs to A, so the server never checked ownership.</p>
+      <p class="step" data-on="cuAttacker"><span class="n">5</span><b>Attacker probe.</b> The same URL with B's token. B gets 200 and the body matches what A saw (identical, or equal once per-request fields such as timestamps and request ids are ignored). Object 42 belongs to A, so the server never checked ownership.</p>
       <p class="step"><span class="n">6</span><b>Confirmed.</b> This is the only path to CONFIRMED: it proves B can read A's object. The two guards in the next scene run inside this step and are what keep it honest.</p>
     </div>
   </div>
