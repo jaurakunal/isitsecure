@@ -4,7 +4,7 @@
 
 ## What It Does
 
-Analyzes Dockerfiles (`Dockerfile`, `Dockerfile.dev`/`.prod`/`.staging`) and Docker Compose files (`docker-compose[.dev|.prod].yml/.yaml`, `compose.yml/.yaml`) for security best practices. The root-user and HEALTHCHECK checks are skipped for any path containing "dev". Dockerfile checks:
+Analyzes Dockerfiles (`Dockerfile`, `Dockerfile.dev`/`.prod`/`.staging`) and Docker Compose files (`docker-compose[.dev|.prod].yml/.yaml`, `compose.yml/.yaml`) for security best practices. Ingestion indexes these by pattern (`Dockerfile*`, `*.Dockerfile`, `docker-compose*.y*ml`, `compose*.y*ml`), so `Dockerfile.prod` and `compose.yaml` are read; the same pattern indexing covers `requirements*.txt`, `openapi*.y*ml`, `swagger*.y*ml` and `.env.*` (template files such as `.env.example` excluded). The root-user and HEALTHCHECK checks are skipped for any path containing "dev". Dockerfile checks:
 
 1. **Running as root** — No `USER` directive means the container runs as root. If the container is compromised, the attacker has root access.
 

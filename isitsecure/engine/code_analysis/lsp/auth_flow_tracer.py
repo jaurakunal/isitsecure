@@ -170,6 +170,8 @@ class AuthFlowTracer:
         content = self._get_file_content(file_path)
         if not content:
             return {}
+        # Commented-out guards and mounts are not code (offsets are preserved).
+        content = self._strip_comments(content)
 
         # Middleware applied without a path guards every route on the router,
         # so it settles the whole file regardless of what the mounts say.
@@ -194,8 +196,7 @@ class AuthFlowTracer:
                     )
             return per_route
 
-        result = await self._trace_whole_file(content, abs_path)
-        return self._for_every_method(routes, result)
+        return await self._trace_routes_in_file(routes, content, abs_path)
 
     # ------------------------------------------------------------------
     # Go strategy: per-route, from the handler the mapper recorded
@@ -484,38 +485,118 @@ class AuthFlowTracer:
                 return position
         return fallback
 
-    async def _trace_whole_file(
-        self, content: str, abs_path: str
-    ) -> AuthFlowResult:
-        """Whole-file strategies, for files that do not mount routes."""
+    async def _trace_routes_in_file(
+        self, routes: list[RouteEntry], content: str, abs_path: str
+    ) -> dict[tuple[str, str], AuthFlowResult]:
+        """Whole-file strategies, judged per route and method.
 
+        Evidence found somewhere in the file is only credited to the routes it
+        can be attributed to: a guard on one handler, one decorator stack or
+        one tRPC procedure never vouches for its unguarded neighbours. When the
+        shape of the file does not let a route be attributed, it is not
+        vouched for (the finding stays, which is the safe direction).
+        """
+        text = self._strip_comments(content)
+        stacks = self._decorator_stacks(text)
+        patterns = {route.route_pattern for route in routes}
+        pairs = sum(len(route.http_methods) for route in routes)
+        results: dict[tuple[str, str], AuthFlowResult] = {}
+        for route in routes:
+            for method in route.http_methods:
+                results[(method, route.route_pattern)] = (
+                    await self._trace_route_in_file(
+                        route, method, text, stacks, abs_path,
+                        sole_pattern=len(patterns) == 1,
+                        sole_pair=pairs == 1,
+                        is_python=route.file_path.endswith(".py"),
+                    )
+                )
+        return results
+
+    async def _trace_route_in_file(
+        self,
+        route: RouteEntry,
+        method: str,
+        text: str,
+        stacks: list[dict],
+        abs_path: str,
+        *,
+        sole_pattern: bool,
+        sole_pair: bool,
+        is_python: bool,
+    ) -> AuthFlowResult:
         # Strategy 1: Procedure base (tRPC, NestJS, etc.)
-        result = await self._trace_procedure_auth(content, abs_path)
+        result = await self._trace_procedure_auth(
+            text, abs_path, self._procedure_name(route.route_pattern)
+        )
         if result and result.has_verified_auth:
             return result
 
         # Strategy 3: Auth decorators (NestJS, Python, Spring, Fastify)
-        result = self._check_decorator_auth(content)
+        result = self._decorator_auth_for_route(
+            text, stacks, route, method, sole_pair
+        )
         if result and result.has_verified_auth:
             return result
 
-        # Strategy 4: Inline auth calls (Next.js or direct)
-        result = await self._trace_inline_auth(content, abs_path)
-        if result and result.has_verified_auth:
-            return result
+        # Strategy 4: Inline auth calls (Next.js or direct), inside the
+        # handler that serves this route.
+        scope = self._handler_scope(
+            text, stacks, route, method,
+            sole_pattern=sole_pattern, is_python=is_python,
+        )
+        if scope is not None:
+            result = await self._trace_inline_auth(text, abs_path, scope)
+            if result and result.has_verified_auth:
+                return result
 
         return AuthFlowResult(confidence=0.5)
+
+    @staticmethod
+    def _procedure_name(route_pattern: str) -> str:
+        """``/trpc/user.wipe`` -> ``wipe``: the key the procedure is declared under."""
+        last = route_pattern.rstrip("/").rsplit("/", 1)[-1]
+        return last.rsplit(".", 1)[-1]
 
     # ------------------------------------------------------------------
     # Strategy 1: Procedure base auth tracing
     # ------------------------------------------------------------------
 
     async def _trace_procedure_auth(
-        self, content: str, abs_path: str
+        self, content: str, abs_path: str, route_name: str = ""
     ) -> AuthFlowResult | None:
-        """Trace procedure bases (tRPC, NestJS, etc.) to their auth middleware."""
+        """Trace procedure bases (tRPC, NestJS, etc.) to their auth middleware.
+
+        With ``route_name`` the verdict is the one for the procedure declared
+        under that key (``wipe: publicProcedure.mutation(...)``): a protected
+        neighbour never vouches for a public procedure. When the route cannot
+        be found in the file, a file that mixes public and protected bases is
+        ambiguous and is not vouched for.
+        """
+        protected_bases = LSPConfig.PROTECTED_PROCEDURE_BASES
+        if route_name:
+            declared = re.search(
+                rf'\b{re.escape(route_name)}\s*[:=]\s*(?P<base>[\w.]*[Pp]rocedure)\b',
+                content,
+            )
+            if declared:
+                base = declared.group("base")
+                if base in LSPConfig.PUBLIC_PROCEDURE_BASES:
+                    return AuthFlowResult(
+                        has_verified_auth=False,
+                        auth_method=f"{base} (intentionally public)",
+                        confidence=LSPConfig.CONFIDENCE_LSP_CONFIRMED,
+                    )
+                if base not in protected_bases:
+                    return None
+                protected_bases = (base,)
+            elif self._mixes_public_and_protected(content):
+                return None
+        elif self._mixes_public_and_protected(content):
+            return None
+
         # Check if any protected procedure base is used
-        for base in LSPConfig.PROTECTED_PROCEDURE_BASES:
+        for base in protected_bases:
             match = re.search(rf'\b{base}\b', content)
             if not match:
                 continue
@@ -562,7 +643,7 @@ class AuthFlowTracer:
         # Fallback: if a protected procedure base is imported (ESM or CJS)
         # in this file, trust it as auth-verified even if LSP couldn't trace
         # the definition.
-        for base in LSPConfig.PROTECTED_PROCEDURE_BASES:
+        for base in protected_bases:
             esm_pattern = rf'import\s+\{{[^}}]*{base}[^}}]*\}}\s+from'
             cjs_pattern = rf'(?:const|let|var)\s+\{{[^}}]*{base}[^}}]*\}}\s*=\s*require\s*\('
             if re.search(esm_pattern, content) or re.search(cjs_pattern, content):
@@ -588,6 +669,19 @@ class AuthFlowTracer:
                 )
 
         return None
+
+    @staticmethod
+    def _mixes_public_and_protected(content: str) -> bool:
+        """True when the file uses both public and protected procedure bases."""
+        public = any(
+            re.search(rf'\b{re.escape(base)}\b', content)
+            for base in LSPConfig.PUBLIC_PROCEDURE_BASES
+        )
+        protected = any(
+            re.search(rf'\b{base}\b', content)
+            for base in LSPConfig.PROTECTED_PROCEDURE_BASES
+        )
+        return public and protected
 
     # ------------------------------------------------------------------
     # Strategy 2: Express middleware tracing
@@ -667,12 +761,173 @@ class AuthFlowTracer:
                 )
         return None
 
+    def _decorator_auth_for_route(
+        self,
+        text: str,
+        stacks: list[dict],
+        route: RouteEntry,
+        method: str,
+        sole_pair: bool,
+    ) -> AuthFlowResult | None:
+        """The auth decorator that sits on *this* route, or its class.
+
+        A guard on another handler of the same file does not count. Routes the
+        file never declares through a recognised route decorator (Django views,
+        Fastify option objects) fall back to the old file-wide check only when
+        the file serves a single route.
+        """
+        route_stacks = [st for st in stacks if st["routes"]]
+        if not route_stacks:
+            return self._check_decorator_auth(text) if sole_pair else None
+
+        matched = [
+            st for st in route_stacks
+            if any(self._route_decorator_matches(r, route, method) for r in st["routes"])
+        ]
+        if not matched:
+            return None
+
+        guards = []
+        for st in matched:
+            guard = st["auth"] or self._class_guard(stacks, text, st["start"])
+            if not guard:
+                return None
+            guards.append(guard)
+        return AuthFlowResult(
+            has_verified_auth=True,
+            auth_method=guards[0],
+            middleware_chain=["decorator"],
+            confidence=LSPConfig.CONFIDENCE_LSP_CONFIRMED,
+            trace_depth=0,
+        )
+
+    @staticmethod
+    def _class_guard(stacks: list[dict], text: str, position: int) -> str:
+        """Auth decorator on the class declaration that encloses ``position``."""
+        enclosing = [
+            m.start() for m in re.finditer(r"\bclass\s+\w+", text)
+            if m.start() < position
+        ]
+        if not enclosing:
+            return ""
+        class_pos = enclosing[-1]
+        for st in stacks:
+            if st["class_pos"] == class_pos:
+                return st["auth"]
+        return ""
+
+    @staticmethod
+    def _normalise_route_path(path: str) -> str:
+        """Collapse path parameters so ``:id``, ``{id}`` and ``<int:id>`` agree."""
+        path = re.sub(r"<[^>]*>|\{[^}]*\}|:\w+|\[[^\]]*\]", "*", path)
+        return path.strip("/")
+
+    def _route_decorator_matches(
+        self, decorator: tuple[str, str], route: RouteEntry, method: str
+    ) -> bool:
+        """Does a route decorator's (method, path) describe this route entry?"""
+        deco_method, deco_path = decorator
+        if deco_method not in ("*", method.upper()):
+            return False
+        want = self._normalise_route_path(deco_path)
+        have = self._normalise_route_path(route.route_pattern)
+        return not want or have == want or have.endswith("/" + want)
+
+    @staticmethod
+    def _route_of_decorator(name: str, args: str) -> tuple[str, str] | None:
+        """(method, path) when the decorator declares a route, else None."""
+        path_match = re.search(r"""['"`]([^'"`]*)['"`]""", args)
+        path = path_match.group(1) if path_match else ""
+        verb = re.match(LSPConfig.ROUTE_DECORATOR_MAPPING, name) or re.match(
+            LSPConfig.ROUTE_DECORATOR_VERB, name
+        )
+        if verb:
+            v = verb.group("verb").upper()
+            return ("*" if v == "ALL" else v, path)
+        if re.match(LSPConfig.ROUTE_DECORATOR_ANY, name):
+            methods = re.search(r"methods\s*=\s*\[([^\]]*)\]", args)
+            if methods:
+                found = re.findall(r"[A-Za-z]+", methods.group(1))
+                if len(found) == 1:
+                    return (found[0].upper(), path)
+                return ("*", path)
+            enum = re.search(r"RequestMethod\.(\w+)", args)
+            if enum:
+                return (enum.group(1).upper(), path)
+            return ("GET" if name.endswith("route") else "*", path)
+        return None
+
+    @staticmethod
+    def _decorator_stacks(text: str) -> list[dict]:
+        """Group consecutive ``@decorator(...)`` lines into stacks.
+
+        Each stack records the auth decorator it carries (``auth``), the routes
+        it declares (``routes``: list of (method, path)), where it starts and,
+        when it sits on a class, the offset of that ``class`` keyword.
+        """
+        stacks: list[dict] = []
+        current: dict | None = None
+        pos = 0
+        for match in re.finditer(r"^[ \t]*@(?P<name>[\w.]+)", text, re.MULTILINE):
+            if match.start() < pos:
+                continue  # inside the previous decorator's arguments
+            end = match.end()
+            args = ""
+            if text[end:end + 1] == "(":
+                depth, i = 0, end
+                while i < len(text):
+                    if text[i] == "(":
+                        depth += 1
+                    elif text[i] == ")":
+                        depth -= 1
+                        if depth == 0:
+                            break
+                    i += 1
+                args = text[end + 1:i]
+                end = min(i + 1, len(text))
+            else:
+                end = text.find("\n", end)
+                end = len(text) if end < 0 else end
+            pos = end
+            full = text[match.start():end].strip()
+            if current is not None and not text[current["end"]:match.start()].strip():
+                stack = current
+            else:
+                stack = {
+                    "start": match.start(), "end": end, "auth": "",
+                    "routes": [], "class_pos": None,
+                }
+                stacks.append(stack)
+                current = stack
+            stack["end"] = end
+            if not stack["auth"]:
+                for pattern in LSPConfig.AUTH_DECORATOR_PATTERNS:
+                    found = re.search(pattern, full)
+                    if found:
+                        stack["auth"] = found.group(0)
+                        break
+            route = AuthFlowTracer._route_of_decorator(match.group("name"), args)
+            if route:
+                stack["routes"].append(route)
+        for stack in stacks:
+            following = re.match(
+                r"\s*(?:export\s+|default\s+|public\s+|abstract\s+|final\s+)*"
+                r"(?P<kw>class)\b",
+                text[stack["end"]:],
+            )
+            if following:
+                stack["class_pos"] = stack["end"] + following.start("kw")
+        return stacks
+
     # ------------------------------------------------------------------
     # Strategy 4: Inline auth tracing
     # ------------------------------------------------------------------
 
     async def _trace_inline_auth(
-        self, content: str, abs_path: str
+        self,
+        content: str,
+        abs_path: str,
+        scope: tuple[str, int] | None = None,
     ) -> AuthFlowResult | None:
         """Check for inline auth calls, following local helpers one hop.
 
@@ -687,8 +942,12 @@ class AuthFlowTracer:
         ``getUserFromRequest`` is this project's invention. Resolving it is
         exactly what go-to-definition is for, and not doing so meant every
         such route looked unauthenticated.
+
+        ``scope`` is (handler text, its offset in ``content``): only that text
+        is searched, so a guard in one handler never vouches for another.
         """
-        auth_method = self._find_auth_terminal(content)
+        scope_text, scope_offset = scope if scope else (content, 0)
+        auth_method = self._find_auth_terminal(scope_text)
         if auth_method:
             return AuthFlowResult(
                 has_verified_auth=True,
@@ -698,11 +957,13 @@ class AuthFlowTracer:
                 trace_depth=0,
             )
 
-        for symbol in self._called_local_imports(content):
-            match = re.search(rf"\b{re.escape(symbol)}\s*\(", content)
+        for symbol in self._called_local_imports(content, scope_text):
+            match = re.search(rf"\b{re.escape(symbol)}\s*\(", scope_text)
             if not match:
                 continue
-            line, char = self._offset_to_position(content, match.start())
+            line, char = self._offset_to_position(
+                content, scope_offset + match.start()
+            )
             definition = await self._trace_definition_body(abs_path, line, char)
             if not definition:
                 continue
@@ -719,14 +980,18 @@ class AuthFlowTracer:
         return None
 
     @staticmethod
-    def _called_local_imports(content: str) -> list[str]:
+    def _called_local_imports(
+        content: str, scope_text: str | None = None
+    ) -> list[str]:
         """Named imports from the project's own modules that this file calls.
 
         Package imports are skipped: a helper that verifies *this* app's
         sessions lives in the app. Note ``@/lib/auth`` is a project alias
         while ``@supabase/supabase-js`` is a package — only the former starts
-        with ``@/``.
+        with ``@/``. Imports are read from ``content``; a call only counts when
+        it appears in ``scope_text`` (the handler under analysis, default all).
         """
+        scope_text = content if scope_text is None else scope_text
         symbols: list[str] = []
         for match in re.finditer(
             r"import\s*\{([^}]*)\}\s*from\s*[\'\"]([^\'\"]+)[\'\"]", content
@@ -739,9 +1004,169 @@ class AuthFlowTracer:
                 name = raw.split(" as ")[-1].strip()
                 if not name or name in symbols:
                     continue
-                if re.search(rf"\b{re.escape(name)}\s*\(", content):
+                if re.search(rf"\b{re.escape(name)}\s*\(", scope_text):
                     symbols.append(name)
         return symbols[: LSPConfig.MAX_INLINE_TRACE_SYMBOLS]
+
+    _HANDLER_METHODS = "GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS"
+
+    def _handler_scope(
+        self,
+        text: str,
+        stacks: list[dict],
+        route: RouteEntry,
+        method: str,
+        *,
+        sole_pattern: bool,
+        is_python: bool,
+    ) -> tuple[str, int] | None:
+        """The code that serves ``method`` of ``route``, as (text, offset).
+
+        None means the file's shape does not say which code that is, so no
+        inline evidence may be credited to the route.
+        """
+        # Next.js route handlers: `export async function POST(...)`.
+        own = re.search(
+            rf"export\s+(?:async\s+)?(?:function\s+{re.escape(method.upper())}\b"
+            rf"|const\s+{re.escape(method.upper())}\s*=)",
+            text,
+        )
+        if own:
+            line = text.count("\n", 0, own.start())
+            span = self._block_span(text, line)
+            block = text[span[0]:span[1]]
+            if "{" not in block:
+                return text, 0  # `export const GET = handler`: body is elsewhere
+            return self._with_local_helpers(text, block, span[0])
+        if re.search(
+            rf"export\s+(?:async\s+)?(?:function|const)\s+(?:{self._HANDLER_METHODS})\b",
+            text,
+        ):
+            return None  # other methods have handlers, this one does not
+
+        # A recognised route decorator: the function that follows it.
+        for stack in stacks:
+            if any(
+                self._route_decorator_matches(r, route, method)
+                for r in stack["routes"]
+            ):
+                line = text.count("\n", 0, stack["end"]) + 1
+                lines = text.split("\n")
+                while line < len(lines) and not lines[line].strip():
+                    line += 1
+                span = (
+                    self._indent_span(text, line)
+                    if is_python
+                    else self._block_span(text, line)
+                )
+                return text[span[0]:span[1]], span[0]
+
+        return (text, 0) if sole_pattern else None
+
+    def _with_local_helpers(
+        self, text: str, block: str, offset: int
+    ) -> tuple[str, int]:
+        """A handler's text plus the bodies of same-file helpers it calls.
+
+        The offset stays the handler's own; helper bodies are appended so a
+        guard factored into ``requireUser()`` still vouches for its caller.
+        """
+        extra: list[str] = []
+        for decl in re.finditer(
+            r"(?:async\s+)?function\s+(\w+)|(?:const|let)\s+(\w+)\s*=\s*(?:async\s*)?\(",
+            text,
+        ):
+            name = decl.group(1) or decl.group(2)
+            if not re.search(rf"\b{re.escape(name)}\s*\(", block):
+                continue
+            if decl.start() >= offset and decl.start() < offset + len(block):
+                continue  # the handler itself
+            line = text.count("\n", 0, decl.start())
+            a, b = self._block_span(text, line)
+            extra.append(text[a:b])
+        return block + "\n" + "\n".join(extra), offset
+
+    @staticmethod
+    def _indent_span(text: str, line: int) -> tuple[int, int]:
+        """Offsets of the indentation-delimited block starting at ``line``."""
+        lines = text.split("\n")
+        if not (0 <= line < len(lines)):
+            return 0, len(text)
+        base = len(lines[line].expandtabs(4)) - len(lines[line].expandtabs(4).lstrip())
+        end = line + 1
+        while end < len(lines):
+            current = lines[end].expandtabs(4)
+            if current.strip() and (len(current) - len(current.lstrip())) <= base:
+                break
+            end += 1
+        start_offset = sum(len(l) + 1 for l in lines[:line])
+        end_offset = sum(len(l) + 1 for l in lines[:end])
+        return start_offset, min(end_offset, len(text))
+
+    @classmethod
+    def _block_span(cls, text: str, line: int) -> tuple[int, int]:
+        """Offsets of the declaration at ``line`` (see ``_enclosing_block``)."""
+        lines = text.split("\n")
+        if not (0 <= line < len(lines)):
+            return 0, len(text)
+        end = cls._block_end_line(lines, line)
+        start_offset = sum(len(l) + 1 for l in lines[:line])
+        end_offset = sum(len(l) + 1 for l in lines[: end + 1]) - 1
+        return start_offset, min(end_offset, len(text))
+
+    @staticmethod
+    def _strip_comments(content: str) -> str:
+        """Blank out comments, keeping every offset and newline in place.
+
+        A comment is not code: ``// TODO: add jwt.verify( here`` must not make
+        a route look guarded. String literals are respected (a ``//`` inside a
+        URL stays); a ' or " string ends at its line, so a stray apostrophe
+        cannot swallow the rest of the file. ``#`` only comments out whole
+        lines (Python/shell); trailing ``#`` is left alone because it is also
+        valid in JS (``this.#field``).
+        """
+        out: list[str] = []
+        i, n = 0, len(content)
+        quote = ""
+        line_start = True
+        while i < n:
+            c = content[i]
+            if quote:
+                out.append(c)
+                if c == "\\" and i + 1 < n:
+                    out.append(content[i + 1])
+                    i += 2
+                    continue
+                if c == quote or (c == "\n" and quote != "`"):
+                    quote = ""
+                line_start = c == "\n"
+                i += 1
+                continue
+            if c in "'\"`":
+                quote = c
+                out.append(c)
+                line_start = False
+                i += 1
+                continue
+            if content.startswith("//", i) or (c == "#" and line_start):
+                j = content.find("\n", i)
+                j = n if j < 0 else j
+                out.append(" " * (j - i))
+                i = j
+                continue
+            if content.startswith("/*", i):
+                j = content.find("*/", i + 2)
+                j = n if j < 0 else j + 2
+                out.append("".join("\n" if ch == "\n" else " " for ch in content[i:j]))
+                i = j
+                continue
+            out.append(c)
+            if c == "\n":
+                line_start = True
+            elif not c.isspace():
+                line_start = False
+            i += 1
+        return "".join(out)
 
     # ------------------------------------------------------------------
     # LSP-powered definition tracing
@@ -921,6 +1346,23 @@ class AuthFlowTracer:
         return match.start("target") + target.rfind(".") + 1
 
     @staticmethod
+    def _block_end_line(lines: list[str], line: int) -> int:
+        """Index of the last line of the declaration starting at ``line``."""
+        start = lines[line]
+        # A statement that opens no block is the whole declaration.
+        if start.count("{") <= start.count("}"):
+            return line
+        # Compare tab-expanded widths: a closing brace indented with tabs is
+        # at the same column as its opener whichever characters were used.
+        expanded = start.expandtabs(4)
+        indent = len(expanded) - len(expanded.lstrip())
+        for end in range(line + 1, len(lines)):
+            candidate = lines[end].expandtabs(4).rstrip().rstrip(";,)")
+            if candidate.strip() == "}" and len(candidate) - 1 == indent:
+                return end
+        return len(lines) - 1
+
+    @staticmethod
     def _enclosing_block(content: str, line: int) -> str:
         """The declaration starting at ``line``, up to its closing brace.
 
@@ -929,7 +1371,8 @@ class AuthFlowTracer:
         is ignored, so an assigned function — which closes on ``};`` or
         ``});`` rather than a bare brace — ends where it actually ends
         instead of running to the end of the file and picking up whatever
-        its neighbours do.
+        its neighbours do. Columns are compared tab-expanded, so a file
+        indented with tabs delimits the same way as one indented with spaces.
 
         Falls back to the remainder of the file if no such brace is found.
         """
@@ -937,21 +1380,10 @@ class AuthFlowTracer:
         if not (0 <= line < len(lines)):
             return content
 
-        start = lines[line]
-        # A statement that opens no block is the whole declaration. Scanning
-        # on for a closing brace it never opened runs into the *next*
-        # declaration's brace and returns a block that includes neighbours —
-        # which is how an alias to something unguarded could be vouched for
-        # by a guard defined twenty lines below it.
-        if start.count("{") <= start.count("}"):
-            return start
-
-        indent = len(start) - len(start.lstrip())
-        closing = (" " * indent) + "}"
-        for end in range(line + 1, len(lines)):
-            if lines[end].rstrip().rstrip(";,)") == closing:
-                return "\n".join(lines[line : end + 1])
-        return "\n".join(lines[line:])
+        end = AuthFlowTracer._block_end_line(lines, line)
+        if end == line:
+            return lines[line]
+        return "\n".join(lines[line : end + 1])
 
     # ------------------------------------------------------------------
     # Pattern matching helpers (DRY — shared across strategies)
@@ -961,17 +1393,28 @@ class AuthFlowTracer:
     def _find_auth_terminal(content: str) -> str:
         """Find auth terminal patterns in content.
 
-        Returns the matched auth method name, or empty string.
+        Comments are ignored. Generic lookups (``getUser(``, ``authenticate(``,
+        ``getToken(``, ``getSession(``) only count when the same code also
+        rejects the caller. Returns the matched auth method name, or "".
         """
+        content = AuthFlowTracer._strip_comments(content)
         for pattern in LSPConfig.AUTH_TERMINAL_PATTERNS:
             match = re.search(pattern, content)
             if match:
                 return match.group(0)
+        if AuthFlowTracer._has_enforcement(content) or any(
+            re.search(p, content) for p in LSPConfig.AUTH_REJECTION_PATTERNS
+        ):
+            for pattern in LSPConfig.AUTH_WEAK_TERMINAL_PATTERNS:
+                match = re.search(pattern, content)
+                if match:
+                    return match.group(0)
         return ""
 
     @staticmethod
     def _has_enforcement(content: str) -> bool:
-        """Check if content contains auth enforcement patterns."""
+        """Check if content contains auth enforcement patterns (outside comments)."""
+        content = AuthFlowTracer._strip_comments(content)
         return any(
             re.search(pattern, content)
             for pattern in LSPConfig.AUTH_ENFORCEMENT_PATTERNS

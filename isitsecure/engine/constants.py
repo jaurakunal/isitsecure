@@ -678,6 +678,24 @@ class RepoIngestionConfig:
         "go.mod",
     )
 
+    # Key files matched by glob (fnmatch, case-insensitive) on the file name, or
+    # on the repo-relative path when the pattern contains "/". These cover the
+    # variants the scanners look for (Dockerfile.prod, compose.yaml,
+    # requirements-dev.txt, openapi.yml, .env.development ...).
+    KEY_FILE_PATTERNS = (
+        "dockerfile*",
+        "*.dockerfile",
+        "docker-compose*.y*ml",
+        "compose*.y*ml",
+        "requirements*.txt",
+        "requirements/*.txt",
+        "openapi*.y*ml",
+        "swagger*.y*ml",
+        ".env.*",
+    )
+    # Template env files carry placeholders, not secrets.
+    KEY_FILE_EXCLUDE_SUFFIXES = (".example", ".sample", ".template", ".dist")
+
     # Directories to skip during indexing
     SKIP_DIRECTORIES = (
         "node_modules",
@@ -1038,6 +1056,9 @@ class SecretScannerConfig:
             "pattern": r"eyJ[a-zA-Z0-9_\-]+\.eyJ[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+",
             "severity": SeverityLevel.CRITICAL.value,
             "description": "Supabase service role key (bypasses RLS)",
+            # The JWT shape alone is not a secret: the public anon key has it too.
+            # The scanner decodes the payload ``role`` claim (see secret_scanner).
+            "validator": "jwt_role",
         },
         "stripe_secret_key": {
             "pattern": r"sk_live_[a-zA-Z0-9]{24,}",
@@ -1065,7 +1086,7 @@ class SecretScannerConfig:
             "description": "GitHub OAuth token",
         },
         "openai_key": {
-            "pattern": r"sk-[a-zA-Z0-9]{48}",
+            "pattern": r"sk-(?:(?:proj|svcacct|admin)-[a-zA-Z0-9_\-]{40,}|[a-zA-Z0-9]{48})",
             "severity": SeverityLevel.HIGH.value,
             "description": "OpenAI API key",
         },
@@ -1075,9 +1096,11 @@ class SecretScannerConfig:
             "description": "Anthropic API key",
         },
         "database_url": {
-            "pattern": r"(?:postgres|mysql|mongodb)://[^\s\"']+",
+            "pattern": r"(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?)://[^\s\"']+",
             "severity": SeverityLevel.CRITICAL.value,
             "description": "Database connection string",
+            # Only URLs that embed ``user:password@`` are secrets (see secret_scanner).
+            "validator": "db_url_credentials",
         },
         "firebase_key": {
             "pattern": r"AIza[0-9A-Za-z\-_]{35}",
@@ -1095,11 +1118,29 @@ class SecretScannerConfig:
             "description": "Twilio API key",
         },
         "private_key": {
-            "pattern": r"-----BEGIN (?:RSA |EC |DSA )?PRIVATE KEY-----",
+            "pattern": (
+                r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |ENCRYPTED |PGP )?"
+                r"PRIVATE KEY(?: BLOCK)?-----"
+            ),
             "severity": SeverityLevel.CRITICAL.value,
             "description": "Private key file content",
         },
     }
+
+    # Password values that mark a DB URL as a documentation/dev placeholder.
+    PLACEHOLDER_DB_PASSWORDS = frozenset({
+        "password", "changeme", "example", "yourpassword", "your_password",
+        "your-password", "xxx", "xxxx", "xxxxxxxx", "dummy", "placeholder",
+    })
+    # Templated/interpolated credentials are not literal secrets.
+    DB_URL_TEMPLATE_MARKERS = ("${", "{{", "<", "%s", "%(", "$(")
+    DB_URL_CREDENTIALS_PATTERN = r"^[a-z+]+://([^:@/\s]+):([^@/\s]*)@"
+    DB_URL_PLACEHOLDER_SEVERITY = SeverityLevel.MEDIUM.value
+    JWT_ROLE_PATTERN = r'"role"\s*:\s*"([^"]+)"'
+    JWT_ROLE_SERVICE = "service_role"
+    JWT_ROLE_PUBLIC = frozenset({"anon", "authenticated"})
+    JWT_UNKNOWN_ROLE_SEVERITY = SeverityLevel.MEDIUM.value
+    JWT_UNKNOWN_ROLE_DESCRIPTION = "JSON Web Token (role could not be confirmed)"
 
     # Files that should never be committed
     SENSITIVE_FILE_PATTERNS = (
@@ -1795,7 +1836,37 @@ class RLSPolicyAnalyzerConfig:
     # SQL patterns for parsing migrations
     CREATE_TABLE_PATTERN = r'CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:public\.)?["\']?(\w+)["\']?'
     ENABLE_RLS_PATTERN = r'ALTER\s+TABLE\s+(?:public\.)?["\']?(\w+)["\']?\s+ENABLE\s+ROW\s+LEVEL\s+SECURITY'
-    CREATE_POLICY_PATTERN = r'CREATE\s+POLICY\s+["\']?(\w+)["\']?\s+ON\s+(?:public\.)?["\']?(\w+)["\']?'
+    # Policy names may be quoted and contain spaces ("Enable read access for all users").
+    CREATE_POLICY_PATTERN = (
+        r'CREATE\s+POLICY\s+(?:"([^"]+)"|\'([^\']+)\'|(\w+))\s+ON\s+'
+        r'(?:public\.)?["\']?(\w+)["\']?'
+    )
+    DISABLE_RLS_PATTERN = (
+        r'ALTER\s+TABLE\s+(?:ONLY\s+)?(?:IF\s+EXISTS\s+)?(?:public\.)?["\']?(\w+)["\']?'
+        r'\s+(?:DISABLE|NO\s+FORCE)\s+ROW\s+LEVEL\s+SECURITY'
+    )
+    DROP_POLICY_PATTERN = (
+        r'DROP\s+POLICY\s+(?:IF\s+EXISTS\s+)?(?:"([^"]+)"|\'([^\']+)\'|(\w+))\s+ON\s+'
+        r'(?:public\.)?["\']?(\w+)["\']?'
+    )
+    DROP_TABLE_PATTERN = r'DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(.+)'
+    # Role list of ``CREATE POLICY ... TO role1, role2`` (before USING / WITH CHECK).
+    POLICY_ROLES_PATTERN = r'\bTO\s+([\w"\s,]+?)(?=\s+(?:USING|WITH)\b|\s*$)'
+    # Roles that bypass or are not reachable from the public API: a policy that
+    # only targets these is not an anon/authenticated exposure.
+    PRIVILEGED_POLICY_ROLES = frozenset({
+        "service_role", "postgres", "supabase_admin", "supabase_auth_admin",
+        "supabase_storage_admin", "dashboard_user",
+    })
+    # Only Supabase/PostgREST SQL is in scope (not Prisma/Rails/Flyway migrations).
+    SUPABASE_PATH_MARKER = "supabase"
+    SUPABASE_SQL_MARKERS = (
+        r'\bauth\.(?:uid|role|jwt|email)\s*\(',
+        r'\bauth\.users\b',
+        r'\bto\s+(?:anon|authenticated|service_role)\b',
+        r'\bservice_role\b',
+        r'\bsupabase',
+    )
     POLICY_USING_PATTERN = r'USING\s*\(\s*(.*?)\s*\)'
     POLICY_WITH_CHECK_PATTERN = r'WITH\s+CHECK\s*\(\s*(.*?)\s*\)'
     POLICY_FOR_PATTERN = r'FOR\s+(SELECT|INSERT|UPDATE|DELETE|ALL)'
@@ -5047,11 +5118,7 @@ class LSPConfig:
         r'validateToken\s*\(',
         r'verifyIdToken\s*\(',
         r'verifyAccessToken\s*\(',
-        r'getSession\s*\(',
-        r'getUser\s*\(',
-        r'authenticate\s*\(',
         r'getServerSession\s*\(',
-        r'getToken\s*\(',
         # JWT libraries
         r'jwt\.verify\s*\(',
         r'jwtVerify\s*\(',
@@ -5086,10 +5153,39 @@ class LSPConfig:
         r'getAuth\s*\(\s*req\s*\)',
         # Auth0
         r'auth0\.getSession\s*\(',
-        # bcrypt/argon (password verification)
-        r'bcrypt\.compare\s*\(',
-        r'argon2\.verify\s*\(',
+        # bcrypt.compare / argon2.verify are deliberately absent: they check a
+        # login password, which makes a route a login endpoint, not a guarded one.
     ) + SharedPatterns.SIGNATURE_VERIFICATION_PATTERNS
+
+    # Lookups whose name is too generic to prove authorization on their own:
+    # `getUser(id)` can fetch any row, `authenticate()` may only log a user in,
+    # `getToken()` reads a header. They count as a terminal only when the same
+    # code also rejects the caller (AUTH_ENFORCEMENT_PATTERNS or
+    # AUTH_REJECTION_PATTERNS).
+    AUTH_WEAK_TERMINAL_PATTERNS = (
+        r'\bgetSession\s*\(',
+        r'\bgetUser\s*\(',
+        r'\bauthenticate\s*\(',
+        r'\bgetToken\s*\(',
+    )
+
+    # Rejection idioms that the strict enforcement list does not cover but that
+    # confirm a weak terminal is actually used as a gate.
+    AUTH_REJECTION_PATTERNS = (
+        r'status\s*:\s*40[13]\b',
+        r'\bredirect\s*\(',
+        r'\babort\s*\(\s*40[13]',
+        r'\bres\s*\.\s*sendStatus\s*\(\s*40[13]',
+        r'\bUnauthorized\b',
+        r'\bForbidden\b',
+    )
+
+    # Route-declaring decorators, to attribute an auth decorator to the route it
+    # sits on instead of to the whole file. Group 1 of the verb patterns is the
+    # HTTP method; ``ROUTE_DECORATOR_ANY`` covers the method-agnostic forms.
+    ROUTE_DECORATOR_VERB = r'^(?:(?:\w+\.)?(?P<verb>Get|Post|Put|Delete|Patch|Head|Options|All|get|post|put|delete|patch|head|options))$'
+    ROUTE_DECORATOR_MAPPING = r'^(?P<verb>Get|Post|Put|Delete|Patch)Mapping$'
+    ROUTE_DECORATOR_ANY = r'^(?:\w+\.)?route$|^RequestMapping$'
 
     # Patterns that confirm auth enforcement (throws/returns on failure).
     # Generic across frameworks — matches status codes and error types.

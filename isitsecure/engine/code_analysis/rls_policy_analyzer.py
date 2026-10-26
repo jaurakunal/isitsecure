@@ -16,7 +16,7 @@ from typing import Any
 from isitsecure.engine.code_analysis.models import CodeFinding
 from isitsecure.engine.code_analysis.protocols import RepoSnapshot
 from isitsecure.engine.constants import RLSPolicyAnalyzerConfig
-from isitsecure.engine.enums import FindingCategory, SeverityLevel
+from isitsecure.engine.enums import BackendType, FindingCategory, SeverityLevel
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +84,7 @@ class RLSPolicyAnalyzer:
     def _collect_migrations(
         self, repo: RepoSnapshot
     ) -> dict[str, str]:
-        """Collect migration file contents.
+        """Collect Supabase migration file contents (sorted by path = apply order).
 
         Returns:
             Mapping of file path to SQL content.
@@ -100,91 +100,115 @@ class RLSPolicyAnalyzer:
             if mf not in migrations and mf in repo.file_index:
                 migrations[mf] = repo.file_index[mf]
 
-        return migrations
+        supabase_repo = repo.backend == BackendType.SUPABASE
+        return {
+            path: migrations[path]
+            for path in sorted(migrations)
+            if supabase_repo or self._is_supabase_sql(path, migrations[path])
+        }
+
+    @staticmethod
+    def _is_supabase_sql(path: str, content: str) -> bool:
+        """True for SQL under supabase/ or using Supabase-specific constructs."""
+        if RLSPolicyAnalyzerConfig.SUPABASE_PATH_MARKER in path.lower():
+            return True
+        return any(
+            re.search(p, content, re.IGNORECASE)
+            for p in RLSPolicyAnalyzerConfig.SUPABASE_SQL_MARKERS
+        )
 
     # ------------------------------------------------------------------
     # SQL parsing
     # ------------------------------------------------------------------
 
     def _extract_tables(self, migrations: dict[str, str]) -> set[str]:
-        """Extract table names from CREATE TABLE statements."""
-        tables: set[str] = set()
-        for content in migrations.values():
-            for match in re.finditer(
-                RLSPolicyAnalyzerConfig.CREATE_TABLE_PATTERN,
-                content,
-                re.IGNORECASE,
-            ):
-                tables.add(match.group(1))
-        return tables
+        """Tables that exist after replaying all migrations in order."""
+        return self._replay(migrations)[0]
 
     def _extract_rls_enabled(self, migrations: dict[str, str]) -> set[str]:
-        """Extract tables that have RLS enabled."""
-        enabled: set[str] = set()
-        for content in migrations.values():
-            for match in re.finditer(
-                RLSPolicyAnalyzerConfig.ENABLE_RLS_PATTERN,
-                content,
-                re.IGNORECASE,
-            ):
-                enabled.add(match.group(1))
-        return enabled
+        """Tables that have RLS enabled after replaying all migrations."""
+        return self._replay(migrations)[1]
 
     def _extract_policies(
         self, migrations: dict[str, str]
     ) -> dict[str, list[dict[str, Any]]]:
-        """Extract policies per table.
+        """Extract the surviving policies per table.
 
         Returns:
             Mapping of table name to list of policy dicts with keys:
-            name, for_operation, using, with_check.
+            name, for_operation, using, with_check, roles.
         """
+        return self._replay(migrations)[2]
+
+    @staticmethod
+    def _statements(content: str) -> list[str]:
+        """Split SQL into statements with comments removed."""
+        content = re.sub(r"/\*.*?\*/", " ", content, flags=re.DOTALL)
+        content = re.sub(r"--[^\n]*", " ", content)
+        return [stmt.strip() for stmt in content.split(";") if stmt.strip()]
+
+    @staticmethod
+    def _first_group(match: re.Match[str], count: int) -> str:
+        """First non-empty group among the leading ``count`` name alternatives."""
+        return next((g for g in match.groups()[:count] if g), "")
+
+    def _replay(
+        self, migrations: dict[str, str]
+    ) -> tuple[set[str], set[str], dict[str, list[dict[str, Any]]]]:
+        """Apply statements in file order so DISABLE/DROP undo earlier state."""
+        cfg = RLSPolicyAnalyzerConfig
+        tables: set[str] = set()
+        rls_enabled: set[str] = set()
         policies: dict[str, list[dict[str, Any]]] = {}
+        flags = re.IGNORECASE | re.DOTALL
 
         for content in migrations.values():
-            # Split by CREATE POLICY to handle multi-line statements
-            policy_blocks = re.split(
-                r'(?=CREATE\s+POLICY)', content, flags=re.IGNORECASE
-            )
+            for stmt in self._statements(content):
+                if m := re.match(cfg.CREATE_TABLE_PATTERN, stmt, flags):
+                    tables.add(m.group(1))
+                elif m := re.match(cfg.DROP_TABLE_PATTERN, stmt, flags):
+                    for raw in m.group(1).split(","):
+                        name = re.sub(r"(?i)\s+(cascade|restrict)\s*$", "", raw.strip())
+                        name = name.split(".")[-1].strip("\"' ")
+                        tables.discard(name)
+                        rls_enabled.discard(name)
+                        policies.pop(name, None)
+                elif m := re.match(cfg.ENABLE_RLS_PATTERN, stmt, flags):
+                    rls_enabled.add(m.group(1))
+                elif m := re.match(cfg.DISABLE_RLS_PATTERN, stmt, flags):
+                    rls_enabled.discard(m.group(1))
+                elif m := re.match(cfg.DROP_POLICY_PATTERN, stmt, flags):
+                    name, table = self._first_group(m, 3), m.group(4)
+                    policies[table] = [
+                        p for p in policies.get(table, []) if p["name"] != name
+                    ]
+                elif m := re.match(cfg.CREATE_POLICY_PATTERN, stmt, flags):
+                    name, table = self._first_group(m, 3), m.group(4)
+                    policies.setdefault(table, []).append(
+                        self._parse_policy(name, stmt[m.end():])
+                    )
+        return tables, rls_enabled, policies
 
-            for block in policy_blocks:
-                policy_match = re.search(
-                    RLSPolicyAnalyzerConfig.CREATE_POLICY_PATTERN,
-                    block,
-                    re.IGNORECASE,
-                )
-                if not policy_match:
-                    continue
-
-                policy_name = policy_match.group(1)
-                table_name = policy_match.group(2)
-
-                # Extract FOR clause
-                for_match = re.search(
-                    RLSPolicyAnalyzerConfig.POLICY_FOR_PATTERN,
-                    block,
-                    re.IGNORECASE,
-                )
-                for_operation = for_match.group(1).upper() if for_match else "ALL"
-
-                # Extract USING expression (with balanced parens)
-                using_expr = self._extract_clause(block, "USING")
-
-                # Extract WITH CHECK expression (with balanced parens)
-                with_check = self._extract_clause(block, "WITH\\s+CHECK")
-
-                policy_entry: dict[str, Any] = {
-                    "name": policy_name,
-                    "for_operation": for_operation,
-                    "using": using_expr,
-                    "with_check": with_check,
-                }
-
-                if table_name not in policies:
-                    policies[table_name] = []
-                policies[table_name].append(policy_entry)
-
-        return policies
+    def _parse_policy(self, name: str, rest: str) -> dict[str, Any]:
+        """Build a policy dict from the text following ``CREATE POLICY n ON t``."""
+        for_match = re.search(
+            RLSPolicyAnalyzerConfig.POLICY_FOR_PATTERN, rest, re.IGNORECASE
+        )
+        roles_match = re.search(
+            RLSPolicyAnalyzerConfig.POLICY_ROLES_PATTERN, rest, re.IGNORECASE
+        )
+        roles = (
+            [r.strip().strip('"').lower() for r in roles_match.group(1).split(",")]
+            if roles_match
+            else []
+        )
+        return {
+            "name": name,
+            "for_operation": for_match.group(1).upper() if for_match else "ALL",
+            "using": self._extract_clause(rest, "USING"),
+            "with_check": self._extract_clause(rest, "WITH\\s+CHECK"),
+            "roles": roles,
+        }
 
     # ------------------------------------------------------------------
     # Analysis
@@ -259,6 +283,12 @@ class RLSPolicyAnalyzer:
         with_check = policy.get("with_check", "")
         policy_name = policy["name"]
         operation = policy.get("for_operation", "ALL")
+
+        roles = policy.get("roles") or []
+        if roles and all(
+            r in RLSPolicyAnalyzerConfig.PRIVILEGED_POLICY_ROLES for r in roles
+        ):
+            return findings  # only reachable with a server-side key
 
         # Check 3: Overly permissive USING expression
         if using_expr:

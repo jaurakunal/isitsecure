@@ -46,7 +46,14 @@ class InjectionScannerConfig:
         "/__remix/",
     )
 
+    # Paths under a FRAMEWORK_PATH_PREFIXES prefix that hold the application's
+    # own code (Next.js route/page chunks), not the framework's.
+    FIRST_PARTY_FRAMEWORK_PATH_PATTERNS = (
+        r"""/_next/static/chunks/(?:app|pages)/""",
+    )
+
     FRAMEWORK_BUNDLE_PATH_PATTERNS = (
+        r"""/chunk-vendors""",
         r"""/static/js/(?:runtime|vendors|chunk)-""",
         r"""/(?:webpack-runtime|framework|commons)-[0-9a-f]+\.js""",
         r"""/(?:runtime|polyfills|vendor|scripts)\.[0-9a-f]+\.js""",
@@ -67,10 +74,9 @@ class InjectionScannerConfig:
     )
 
     VENDOR_CONTENT_MARKERS = (
-        "__webpack_require__",
-        "__webpack_modules__",
-        "__webpack_exports__",
-        "webpackChunkName",
+        # NOTE: bundler runtime identifiers (__webpack_require__,
+        # __webpack_modules__, ...) are deliberately not markers: every webpack
+        # bundle carries them, including the application's own main bundle.
         "__vite_ssr_import__",
         "__NEXT_DATA__",
         "__next_f",
@@ -83,6 +89,24 @@ class InjectionScannerConfig:
     )
 
     VENDOR_CONTENT_MARKER_THRESHOLD = 2
+
+    # Public suffixes with more than one label (and hosting platforms where each
+    # customer owns a subdomain). The registrable domain is one label more.
+    MULTI_LABEL_PUBLIC_SUFFIXES = frozenset({
+        "co.uk", "org.uk", "ac.uk", "gov.uk", "com.au", "net.au", "org.au",
+        "co.nz", "co.jp", "ne.jp", "or.jp", "co.in", "co.za", "co.kr",
+        "com.br", "com.mx", "com.ar", "com.cn", "com.tw", "com.hk", "com.sg",
+        "com.tr", "com.ua",
+        "vercel.app", "netlify.app", "github.io", "gitlab.io", "pages.dev",
+        "workers.dev", "herokuapp.com", "azurewebsites.net", "web.app",
+        "firebaseapp.com", "onrender.com", "fly.dev", "railway.app",
+        "up.railway.app", "surge.sh", "glitch.me", "repl.co",
+        "cloudfront.net", "amazonaws.com", "s3.amazonaws.com",
+    })
+
+    # Sibling-brand hosts (``example.com`` / ``example-static.com``) share the
+    # leading label; require this many characters to call two names siblings.
+    SIBLING_LABEL_MIN_LENGTH = 4
 
     THIRD_PARTY_SCRIPT_DOMAINS = (
         "connect.facebook.net",
