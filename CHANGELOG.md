@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.32.5](https://github.com/jaurakunal/isitsecure/compare/v0.32.4...v0.32.5) (2026-10-26)
+
+
+### Bug Fixes
+
+* **detect:** second detection batch for auth/access, DAST verdicts, triage and SAST ([#266](https://github.com/jaurakunal/isitsecure/issues/266)) ([13bffe1](https://github.com/jaurakunal/isitsecure/commit/13bffe101462f12f736f0e2470f926cc7dfcd236))
+* stop false positives and revive dead detections in the DAST scanners ([#264](https://github.com/jaurakunal/isitsecure/issues/264)) ([c03b13c](https://github.com/jaurakunal/isitsecure/commit/c03b13c0cdbaeb47a7b20c7d4cfee5e2ae554bb1))
+
 ## [0.32.4](https://github.com/jaurakunal/isitsecure/compare/v0.32.3...v0.32.4) (2026-10-25)
 
 
