@@ -191,8 +191,17 @@ _scans: dict[str, dict] = {}
 # Finished (complete/failed) scans kept for report retrieval; older ones are
 # evicted oldest-first. Running/pending scans are never evicted.
 MAX_RETAINED_SCANS = 50
-# In-memory "fix all" job storage
+# In-memory "fix all" job storage. Bounded: finished jobs beyond the cap are
+# evicted oldest-first; running jobs are limited and never evicted.
 _fix_jobs: dict[str, dict] = {}
+MAX_RETAINED_FIX_JOBS = 50
+MAX_CONCURRENT_FIX_JOBS = 3
+# Strong references to running fix-all tasks (a bare create_task result can be
+# garbage-collected mid-run) -- also what lets us cancel them.
+_fix_tasks: dict[str, "asyncio.Task"] = {}
+# A job whose last SSE watcher disconnected is cancelled after this grace period
+# (long enough for an EventSource auto-reconnect) so abandoned jobs stop spending.
+FIX_DISCONNECT_GRACE_S = 60.0
 
 
 # ---------------------------------------------------------------------------
@@ -467,11 +476,19 @@ async def generate_fix(request: FixRequest):
     from isitsecure.engine.fixes.fix_generator import FixGenerator
     from isitsecure.llm.adapters import create_llm_client
 
+    from isitsecure.server.fix_service import scrub_secrets
+
     llm_client = create_llm_client(request.llm_provider, api_key)
     generator = FixGenerator(llm_client)
 
     finding = DeepFinding.model_validate(finding_data)
-    result = await generator.generate_fix(finding, request.file_content)
+    try:
+        result = await generator.generate_fix(finding, request.file_content)
+    except Exception as exc:  # never echo a provider error that may carry the key
+        msg = scrub_secrets(str(exc), api_key)
+        logger.error("Single-fix generation failed: %s: %s", type(exc).__name__, msg)
+        raise HTTPException(status_code=502, detail=f"Fix generation failed: {msg}")
+    result.error = scrub_secrets(result.error, api_key)
 
     # Plain-language verify status for the UI (#50). A single-finding fix is
     # generated but not applied/re-scanned here, so a successful fix is
@@ -484,7 +501,7 @@ async def generate_fix(request: FixRequest):
         "success": result.success,
         "status": status,
         "diff": result.diff,
-        "explanation": result.explanation,
+        "explanation": scrub_secrets(result.explanation, api_key),
         "error": result.error,
     }
 
@@ -499,6 +516,22 @@ class FixAllRequest(BaseModel):
     max_prs: Optional[int] = None
 
 
+def _evict_fix_jobs() -> None:
+    """Drop the oldest finished fix jobs beyond MAX_RETAINED_FIX_JOBS."""
+    finished = [k for k, v in _fix_jobs.items() if v.get("status") != "running"]
+    for k in finished[:max(0, len(finished) - MAX_RETAINED_FIX_JOBS)]:
+        del _fix_jobs[k]
+
+
+def _cancel_if_orphaned(job_id: str) -> None:
+    """Cancel a running job nobody is watching any more."""
+    job = _fix_jobs.get(job_id)
+    task = _fix_tasks.get(job_id)
+    if job and task and job["status"] == "running" and job.get("watchers", 0) <= 0:
+        logger.info("Fix-all job %s lost its client; cancelling", job_id)
+        task.cancel()
+
+
 @app.post("/api/fix-all")
 async def start_fix_all(request: FixAllRequest):
     """Start a batch fix job for a scan's findings. Returns job_id for SSE."""
@@ -506,15 +539,26 @@ async def start_fix_all(request: FixAllRequest):
     if not scan or not scan.get("report"):
         raise HTTPException(status_code=404, detail="Scan report not found")
 
-    from isitsecure.server.fix_service import (
-        DEFAULT_SEVERITIES,
-        DEFAULT_MAX_PRS,
-        DEFAULT_STRATEGY,
-    )
+    from isitsecure.server.fix_service import validate_fix_options
 
-    job_id = str(uuid.uuid4())[:8]
-    _fix_jobs[job_id] = {"status": "running", "events": [], "result": None}
-    severities = tuple(request.severities) if request.severities else DEFAULT_SEVERITIES
+    try:
+        severities, pr_strategy, max_prs = validate_fix_options(
+            request.severities, request.pr_strategy, request.max_prs
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    # De-dupe: a second click / retry while a job for this scan is running
+    # attaches to it instead of paying for (and racing) a duplicate.
+    for jid, existing in _fix_jobs.items():
+        if existing.get("scan_id") == request.scan_id and existing["status"] == "running":
+            return {"job_id": jid, "deduplicated": True}
+    if sum(1 for j in _fix_jobs.values() if j["status"] == "running") >= MAX_CONCURRENT_FIX_JOBS:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many fix jobs are running; wait for one to finish or cancel it.",
+        )
+
     # Fixes always need an LLM. If the scan ran without one ("none"), default
     # to anthropic and let the server-side key resolution handle it.
     provider = scan.get("llm_provider") or "anthropic"
@@ -522,25 +566,64 @@ async def start_fix_all(request: FixAllRequest):
         provider = "anthropic"
 
     api_key = scan.get("api_key")
+    if not api_key and not load_api_key(provider):
+        discarded = scan.get("key_discarded")
+        raise HTTPException(
+            status_code=409 if discarded else 400,
+            detail=(
+                "The API key sent with this scan was discarded after its first fix-all "
+                "finished (it is never kept longer than needed). Set "
+                f"{provider.upper()}_API_KEY, run 'isitsecure setup', or re-run the scan "
+                "with the key to fix again."
+                if discarded else
+                f"No API key found for {provider}. Set {provider.upper()}_API_KEY "
+                "or run 'isitsecure setup'."
+            ),
+        )
+
+    job_id = str(uuid.uuid4())[:8]
+    _fix_jobs[job_id] = {
+        "status": "running", "events": [], "result": None,
+        "scan_id": request.scan_id, "watchers": 0,
+    }
+    _evict_fix_jobs()
 
     async def _job_then_forget_key():
-        try:
-            await _run_fix_all_job(
-                job_id,
-                scan["report"],
-                provider,
-                severities,
-                github_token=request.github_token,
-                pr_strategy=request.pr_strategy or DEFAULT_STRATEGY,
-                max_prs=request.max_prs or DEFAULT_MAX_PRS,
-                api_key=api_key,
-            )
-        finally:
-            # The fix-all that needed the key has finished; do not keep it.
+        await _run_fix_all_job(
+            job_id,
+            scan["report"],
+            provider,
+            severities,
+            github_token=request.github_token,
+            pr_strategy=pr_strategy,
+            max_prs=max_prs,
+            api_key=api_key,
+        )
+        # Forget the request-supplied key once a fix-all finished with it. A
+        # failed/cancelled job keeps it so a retry doesn't hit a misleading
+        # "No API key" error.
+        job = _fix_jobs.get(job_id)
+        if job and job["status"] not in ("failed", "cancelled") and scan.get("api_key"):
             scan["api_key"] = None
+            scan["key_discarded"] = True
 
-    asyncio.create_task(_job_then_forget_key())
+    task = asyncio.create_task(_job_then_forget_key())
+    _fix_tasks[job_id] = task
+    task.add_done_callback(lambda _t, jid=job_id: _fix_tasks.pop(jid, None))
     return {"job_id": job_id}
+
+
+@app.delete("/api/fix-all/{job_id}")
+async def cancel_fix_all(job_id: str):
+    """Cancel a running fix-all job (a local apply in progress still finishes
+    cleanly and restores the user's branch)."""
+    job = _fix_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Fix job not found")
+    task = _fix_tasks.get(job_id)
+    if job["status"] == "running" and task is not None:
+        task.cancel()
+    return {"job_id": job_id, "status": job["status"]}
 
 
 @app.get("/api/fix-all/{job_id}/stream")
@@ -551,21 +634,35 @@ async def stream_fix_all(job_id: str):
 
     async def event_generator():
         last_idx = 0
-        while True:
+        job = _fix_jobs.get(job_id)
+        if job is not None:
+            job["watchers"] = job.get("watchers", 0) + 1
+        try:
+            while True:
+                job = _fix_jobs.get(job_id)
+                if not job:
+                    break
+                events = job["events"]
+                while last_idx < len(events):
+                    yield f"data: {json.dumps(events[last_idx])}\n\n"
+                    last_idx += 1
+                if job["status"] != "running":
+                    if job["result"] is not None:
+                        yield f"data: {json.dumps({'type': 'done', 'result': job['result']})}\n\n"
+                    else:
+                        yield f"data: {json.dumps({'type': 'error', 'message': job.get('error', 'Fix failed')})}\n\n"
+                    break
+                await asyncio.sleep(0.3)
+        finally:
+            # Client gone (or stream finished): if nobody else is watching and
+            # the job is still running, stop paying for it after a grace period.
             job = _fix_jobs.get(job_id)
-            if not job:
-                break
-            events = job["events"]
-            while last_idx < len(events):
-                yield f"data: {json.dumps(events[last_idx])}\n\n"
-                last_idx += 1
-            if job["status"] in ("complete", "failed"):
-                if job["result"] is not None:
-                    yield f"data: {json.dumps({'type': 'done', 'result': job['result']})}\n\n"
-                else:
-                    yield f"data: {json.dumps({'type': 'error', 'message': job.get('error', 'Fix failed')})}\n\n"
-                break
-            await asyncio.sleep(0.3)
+            if job is not None:
+                job["watchers"] = max(0, job.get("watchers", 1) - 1)
+                if job["watchers"] == 0 and job["status"] == "running":
+                    asyncio.get_running_loop().call_later(
+                        FIX_DISCONNECT_GRACE_S, _cancel_if_orphaned, job_id
+                    )
 
     return StreamingResponse(
         event_generator(),
@@ -586,7 +683,7 @@ async def _run_fix_all_job(
     api_key=None,
 ):
     """Run the batch fix service, streaming progress into the job store."""
-    from isitsecure.server.fix_service import run_fix_all
+    from isitsecure.server.fix_service import run_fix_all, scrub_secrets
 
     async def emit(event: dict) -> None:
         _fix_jobs[job_id]["events"].append(event)
@@ -604,14 +701,16 @@ async def _run_fix_all_job(
         )
         _fix_jobs[job_id]["result"] = result
         _fix_jobs[job_id]["status"] = "complete"
+    except asyncio.CancelledError:
+        _fix_jobs[job_id]["error"] = "Fix job was cancelled."
+        _fix_jobs[job_id]["status"] = "cancelled"
+        raise
     except Exception as e:
-        # Defense-in-depth: the GitHub token must never surface to the client or
-        # the log. pr_flow scrubs its own git/GitHub errors, but any unexpected
-        # exception that bubbles up here gets scrubbed once more before storing.
-        logger.exception("Fix-all job %s failed", job_id)
-        msg = str(e)
-        if github_token and github_token in msg:
-            msg = msg.replace(github_token, "***")
+        # Neither the GitHub token nor the LLM key (request-supplied OR from
+        # server config) may reach the log, the stored error, or the client.
+        # Scrub FIRST, then log only the scrubbed text (no raw traceback).
+        msg = scrub_secrets(str(e), github_token, api_key, load_api_key(provider))
+        logger.error("Fix-all job %s failed: %s: %s", job_id, type(e).__name__, msg)
         _fix_jobs[job_id]["error"] = msg
         _fix_jobs[job_id]["status"] = "failed"
 

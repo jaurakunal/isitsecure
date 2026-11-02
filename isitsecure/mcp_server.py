@@ -13,6 +13,7 @@ clear "install isitsecure[mcp]" message rather than a traceback.
 from __future__ import annotations
 
 import logging
+import os
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
@@ -527,11 +528,20 @@ def _resolve_scan_and_finding(scan_id: str, finding_id: str):
 
 
 def _read_finding_file(finding, repo_path: str | None) -> str:
-    """Read the source file a finding points at, guarding against traversal.
+    """Read the source file a finding points at, via the hardened strict reader.
 
-    Raises ValueError with an actionable message when the path is unknown or the
-    file can't be read.
+    Same rules as the CLI/server fix paths: confined to the scanned repo, never
+    ``.git/``, strict UTF-8 and newlines untouched (a lossy or newline-translating
+    read would make the ``fixed_file`` the host writes corrupt CRLF / non-UTF-8
+    files). Raises ValueError with an actionable, user-facing "skipped" reason
+    when the file cannot be fixed -- never a raw OS error or absolute path.
     """
+    from isitsecure.engine.fixes.fix_generator import (
+        FixGenerator,
+        read_source_file,
+        resolve_fix_target,
+    )
+
     loc = finding.code_location
     rel = loc.file_path if loc else ""
     if not rel:
@@ -541,22 +551,26 @@ def _read_finding_file(finding, repo_path: str | None) -> str:
             "The scanned path is no longer known for this scan_id — re-run scan, "
             "then fix using the new scan_id."
         )
-    root = Path(repo_path).resolve()
-    target = (root / rel).resolve()
-    if target != root and root not in target.parents:
-        raise ValueError(f"Refusing to read a path outside the scanned repo: {rel}")
-    if not target.is_file():
-        raise ValueError(f"Source file not found: {rel}")
-    # Size-guard before reading (shares FixGenerator's threshold so they can't
-    # drift), and never let a raw OS error escape with the absolute path.
-    from isitsecure.engine.fixes.fix_generator import FixGenerator
-
-    if target.stat().st_size > FixGenerator.MAX_FILE_SIZE:
-        raise ValueError(f"Source file too large to fix: {rel}")
     try:
-        return target.read_text(encoding="utf-8", errors="replace")
+        target = resolve_fix_target(repo_path, rel)  # traversal, symlink escape, .git
+    except ValueError as exc:
+        raise ValueError(f"Skipped {rel}: {exc}") from exc
+    try:
+        if not os.path.isfile(target):
+            raise ValueError(f"Source file not found: {rel}")
+        # Size-guard before reading (shares FixGenerator's threshold so they
+        # can't drift).
+        if os.path.getsize(target) > FixGenerator.MAX_FILE_SIZE:
+            raise ValueError(f"Source file too large to fix: {rel}")
     except OSError as exc:
-        raise ValueError(f"Could not read source file: {rel}") from exc
+        raise ValueError(f"Skipped {rel}: could not read source file") from exc
+    text = read_source_file(repo_path, rel)
+    if text is None:
+        raise ValueError(
+            f"Skipped {rel}: not valid UTF-8 or unreadable, so it cannot be fixed "
+            "without risking corrupting it."
+        )
+    return text
 
 
 def _fix_proposal(finding, result) -> FixProposal:
@@ -911,7 +925,13 @@ def build_server():
                 "Nothing is reported as resolved."
             )
         new_scan_id = _cache_report(new_report, repo_path=repo_path)
-        return _verify_result(old_report, new_report, new_scan_id)
+        try:
+            return _verify_result(old_report, new_report, new_scan_id)
+        except Exception as exc:  # malformed/unexpected report data: a clear error, not a traceback
+            raise ToolError(
+                "Could not compare the scans: the report data was malformed "
+                f"({type(exc).__name__}). Run scan again and verify against the new scan_id."
+            )
 
     @server.tool()
     async def export(scan_id: str, format: str = "markdown") -> ExportResult:
