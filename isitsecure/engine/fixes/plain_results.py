@@ -64,7 +64,10 @@ def classify_verification(
       not auto-verifiable, or verification never ran (so we can't claim it).
     """
     v = verification or {}
-    resolved = int(v.get("resolved", 0))
+    # Never claim more resolved than were attempted-and-not-failed, so
+    # resolved + failed can't exceed attempted (collateral resolutions of
+    # findings whose own fix failed are not "fixed by us").
+    resolved = max(0, min(int(v.get("resolved", 0)), attempted - fix_failed))
     # Findings whose fix WAS written but that we can't confirm as resolved:
     # still-present after re-scan, plus those that aren't auto-verifiable.
     fixed_but_unconfirmed = max(0, attempted - fix_failed - resolved)

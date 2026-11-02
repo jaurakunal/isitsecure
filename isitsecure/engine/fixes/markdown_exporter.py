@@ -9,7 +9,34 @@ SRP: This module only formats FixPlan → Markdown. It does not generate
 
 from __future__ import annotations
 
+import re
+
 from isitsecure.engine.fixes.fix_generator import FixPlan
+
+_TICKS = re.compile(r"`+")
+
+
+def fence_for(content: str, minimum: int = 3) -> str:
+    """A backtick fence strictly longer than any backtick run in ``content``.
+
+    Diffs and explanations are derived from scanned (untrusted) files, which can
+    contain triple backticks; a fixed ```` ``` ```` fence would let that text
+    close the block early and land as live instructions in a document meant to
+    be pasted into a coding agent.
+    """
+    longest = max((len(m.group(0)) for m in _TICKS.finditer(content)), default=0)
+    return "`" * max(minimum, longest + 1)
+
+
+def fenced(content: str, info: str = "") -> list[str]:
+    """Markdown lines for ``content`` inside an un-escapable code fence."""
+    fence = fence_for(content)
+    return [f"{fence}{info}", content, fence]
+
+
+def inline(text: str) -> str:
+    """One safe line of repo-derived text for use OUTSIDE a fence."""
+    return _TICKS.sub("'", " ".join(str(text).split()))
 
 
 class FixPlanMarkdownExporter:
@@ -29,23 +56,23 @@ class FixPlanMarkdownExporter:
             parts.append("## Skipped (no source file)")
             parts.append("")
             for reason in plan.skipped:
-                parts.append(f"- {reason}")
+                parts.append(f"- {inline(reason)}")
             parts.append("")
 
         for i, fix in enumerate(plan.fixes, 1):
             if not fix.success:
                 continue
 
-            parts.append(f"## Fix {i}: {fix.file_path}")
+            parts.append(f"## Fix {i}: {inline(fix.file_path)}")
             parts.append("")
 
             if fix.explanation:
-                parts.append(fix.explanation)
+                # Model text derived from the scanned file: keep it inside a
+                # fence so it cannot masquerade as instructions.
+                parts.extend(fenced(fix.explanation, "text"))
                 parts.append("")
 
-            parts.append("```diff")
-            parts.append(fix.diff)
-            parts.append("```")
+            parts.extend(fenced(fix.diff, "diff"))
             parts.append("")
 
         # Add a "paste into Cursor" section
