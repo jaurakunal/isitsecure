@@ -458,8 +458,26 @@ What the local flow does:
 4. Prints a plain-language summary of what was fixed, needs review, or couldn't
    be fixed (pass `--technical` for the git diff / backup-restore details)
 
-Your original files are backed up before anything is written; the summary tells
-you how to review and restore them.
+Your original files are backed up before anything is written (a git ref, or a
+file copy under `~/.isitsecure/backups/` — outside your repo, so it is never
+re-scanned or committed; set `ISITSECURE_BACKUP_DIR` to move it); the summary
+tells you how to review and restore them.
+
+Applying never loses your work:
+
+- Each file is written once, atomically (permissions and line endings kept).
+- A file you edited after it was read is **not** overwritten; it is reported.
+- If a write fails, the files already written in that run are put back, and the
+  command says exactly what was restored. Nothing is described as "fixed"
+  unless its fix is on disk.
+- Counts are per finding, never per file.
+
+**Exit codes** (usable as a CI gate): `0` when every selected finding was fixed
+(or there was nothing to fix, or `--dry-run` found nothing unfixable); `1` when
+any write failed or was refused, any finding could not be fixed, the re-check did
+not run, or a remote run opened no pull requests; `2` for invalid options. An
+unknown `--severity` (valid: `critical,high,medium,low,info`), `--pr-strategy`
+or `--max-prs` is rejected before any paid scan or clone.
 
 ## Security Badge
 
@@ -646,7 +664,7 @@ isitsecure fix [OPTIONS]
   --llm TEXT             LLM provider: anthropic|google [default: anthropic]
   --api-key TEXT         API key for the selected --llm provider (default: that provider's env var / config)
   --dry-run              Show fixes without applying them
-  --severity TEXT        Severities to fix: critical,high,medium [default: critical,high]
+  --severity TEXT        Severities to fix: critical,high,medium,low,info (unknown values are an error) [default: critical,high]
   --technical            Show git/backup details instead of the plain-language summary
   --github-token TEXT    GitHub token for remote-repo pull requests (env GITHUB_TOKEN; never stored)
   --pr-strategy TEXT     Group PRs by: per-category|per-file|per-finding|single [default: per-category]
@@ -689,10 +707,11 @@ The UI provides:
 - **Finding browser** — filter by severity or scanner, plus full-text search, with each finding expandable for evidence, technical detail, and remediation
 - **Plain-language risk summary** — an A–F grade, key risks, and a phased remediation plan
 - **One-click AI fixes** — a "Generate Fix" button on any finding produces a unified diff inline (one finding at a time)
+- **Fix all** — for a scan of a local git repo, generates fixes for the critical/high findings and commits them to a **new `isitsecure/fixes` branch** (`-2`, `-3`… if taken), then switches you back, so your working tree never changes. It needs a clean tree, re-checks that right before creating the branch, and never force-checks-out: if you edited or committed anything while fixes were generating, nothing is written and you get a markdown fix plan instead. Gitignored, untracked and skip-worktree files are never written. A dirty tree, a non-git folder or a remote/URL scan also gives the markdown plan (built from the real file contents; findings whose source isn't on this machine are listed as skipped, not guessed). One apply runs at a time per repo, a second click on the same scan attaches to the running job, and each job has an LLM call budget
 - **Report export** — download JSON, or open the self-contained HTML report in a new tab
 - **Scan history** — recent scans are remembered locally in your browser
 
-The web server resolves your LLM API key the same way the CLI does (`ANTHROPIC_API_KEY`, a `.env` file, or `isitsecure setup`), so scans and fixes work without pasting a key into the browser. You can still enter one in the scan form to override it; "Fix all" reuses the key entered with the original scan.
+The web server resolves your LLM API key the same way the CLI does (`ANTHROPIC_API_KEY`, a `.env` file, or `isitsecure setup`), so scans and fixes work without pasting a key into the browser. You can still enter one in the scan form to override it; "Fix all" reuses the key entered with the original scan; that key is discarded once a fix-all from the scan finishes (a failed or cancelled job keeps it so a retry works), and a later fix-all then answers with a clear "key was discarded" message unless a server-side key is configured. Fix-all jobs live in memory only (the 50 most recent finished ones are kept, at most 3 run at once, `DELETE /api/fix-all/{job_id}` cancels one, and a job whose browser tab is gone is cancelled after a minute); they are lost on restart. API keys and GitHub tokens are scrubbed from logs, stored errors and git output.
 
 A scan that errors or finishes without a report is shown as `failed` with its error (the report and export endpoints return `500` "Scan failed: ...") instead of staying "in progress".
 

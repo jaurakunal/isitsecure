@@ -249,12 +249,38 @@ explanation per finding, designed to paste directly into Cursor or Claude Code
 
 **b) Local apply + verify** (`isitsecure fix --repo <path>`) — git-free:
 `fixes/safety_net.py` backs up the files about to change first (a git-stash-create
-ref when all are tracked, otherwise a file-copy backup; no backup means no write),
-the fixes are written in place (strict UTF-8, newline style preserved, nothing
-under `.git/` or outside the repo), then the code is **re-scanned to verify each
-finding is resolved** (only when no remaining finding matches any of its v2 or legacy fingerprints); if the re-scan cannot run, or the scanner that raised a finding did not (missing optional semgrep, timeout, OSV unreachable), nothing is counted as fixed. `fixes/plain_results.py` classifies the
-outcome (fixed / needs review / couldn't fix) into a plain-language summary
-(`--technical` surfaces the git/backup mechanics).
+ref when all are plain tracked files, otherwise a file-copy backup stored
+**outside the repo** under `~/.isitsecure/backups/<repo>-<hash>/<stamp>`; skip-worktree,
+assume-unchanged, untracked and ignored targets force the copy; no backup means no
+write). `fixes/safe_apply.py` then writes the files (strict UTF-8, newline style
+and BOM preserved, nothing under `.git/` or outside the repo): atomically
+(temp file + `os.replace`, mode kept), refusing any file whose bytes changed since
+it was read, and rolling back every file already written if a later write fails.
+Then the code is **re-scanned to verify each finding is resolved**, only for
+findings whose fix is really on disk and only when no remaining finding matches any
+of its v2 or legacy fingerprints; if the re-scan cannot run, or the scanner that
+raised a finding did not (missing optional semgrep, timeout, OSV unreachable),
+nothing is counted as fixed. `fixes/plain_results.py` classifies the outcome (fixed / needs review /
+couldn't fix, counted per finding and clamped so the three never exceed what was
+attempted) into a plain-language summary (`--technical` surfaces the backup
+mechanics). The CLI exits non-zero when a write failed, a finding could not be
+fixed, or the re-check did not run.
+
+**b2) Web "Fix all"** (`server/fix_service.py`, started from `POST /api/fix-all`) —
+for a scan of a local git repo with a clean tree: fixes are generated, the clean
+tree / HEAD / branch are re-checked under a per-repo lock, and the fixes are
+committed on a new `isitsecure/fixes[-N]` branch via `safe_apply`; the user's
+branch is then restored with a plain `git checkout` (never `--force`; if it is
+refused because files changed, the user stays on the fix branch and is told).
+If the tree changed during generation, files are gitignored/untracked/skip-worktree
+(never written), or the target is a dirty tree, a non-git folder or a remote/URL
+scan, the result is a markdown plan built from the real file contents instead.
+Jobs (`app._fix_jobs`) are in memory only: capped (50 finished retained, 3
+concurrent), de-duplicated per scan, cancellable (`DELETE /api/fix-all/{id}`;
+a job with no SSE watcher for a minute is cancelled), each with an LLM call
+budget, and API keys / GitHub tokens are scrubbed from logs, stored errors and git
+stderr. The MCP `fix` tool shares the generator and the strict source reader but
+never writes (it returns a diff for the host to apply).
 
 **c) Remote clone → per-category PRs** (`isitsecure fix --repo <github-url>`) —
 `fixes/pr_flow.py` clones the repo, groups fixed findings (per-category by
@@ -515,7 +541,7 @@ isitsecure/
 │   ├── scanners/               # 16 DAST scanners (quick) + special scanners
 │   ├── code_analysis/          # 18 SAST scanners + route mappers + LSP + semgrep_rules/
 │   │   └── category_classifier.py  # Maps LLM-review findings to their FindingCategory
-│   ├── fixes/                  # AI fix gen: safety_net, verifier, plain_results, pr_flow
+│   ├── fixes/                  # AI fix gen: safety_net, safe_apply, verifier, plain_results, pr_flow
 │   ├── guided_dast/            # SAST → DAST test generation (6 strategies)
 │   ├── auth/                   # Auth providers (Supabase, Firebase, Browser, Token)
 │   ├── shared/                 # Rate limiter, OOB callbacks, JWT utils

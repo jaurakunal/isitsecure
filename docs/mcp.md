@@ -74,7 +74,7 @@ Claude Desktop), some of which also gate tools behind user approval.
 scan(path, min_severity="medium")                      → report + grade model + themes (code-only; no mode argument)
 explain(scan_id, finding_id)                           → deep dive: plain + technical + walkthrough
 fix(scan_id, finding_id)                               → return a diff + metadata; the HOST LLM applies it
-fix(scan_id, finding_id, apply=true)                   → (optional fallback) apply via our safety-net pipeline
+  (proposed, NOT implemented: an `apply=true` fallback — the tool takes no `apply` argument and never writes files)
 verify(scan_id)                                        → re-scan, report findings cleared + grade movement
 export(scan_id, format="markdown")                     → render html/sarif/json/markdown; the HOST writes it
 scan_url(url, min_severity="medium")                   → start a DAST (live-URL) scan; returns a job_id
@@ -104,8 +104,14 @@ scan_status(job_id)                                    → poll a DAST job; the 
   source file and returns a **proposed patch** — a unified `diff`, the full
   `fixed_file`, and an `explanation` — with `applied: false`. The **host LLM
   applies it** with its own editor; the MCP does not write files (see "Who
-  applies the fix" below). Needs an LLM key. *Not yet built:* the optional
-  `apply=true` safety-net fallback for headless callers.
+  applies the fix" below). Needs an LLM key. The file is read with the same
+  strict reader as the CLI and web fixes: confined to the scanned repo, never
+  `.git/`, strict UTF-8 with CRLF/LF newlines exactly as on disk (so
+  `fixed_file` never rewrites line endings or bakes in replacement characters).
+  A file that can't be read faithfully (non-UTF-8, oversize, outside the repo)
+  is refused with a clear reason instead of being fixed lossily. *Not built (and
+  not on the roadmap for this tool):* the `apply=true` safety-net fallback
+  described below stays a proposal.
 - **`verify`** *(implemented, #71).* `verify(scan_id)` re-scans the same path and
   reports which findings cleared vs. still present, the grade **before → after**,
   and a fresh `scan_id` for the new state so the loop continues. Both the
@@ -184,10 +190,10 @@ success.
 agent, so it defers the write. Same product, opposite right-answer per context —
 recorded here so the divergence is intentional, not an inconsistency.
 
-### `apply=true` — the optional fallback
+### `apply=true` — the optional fallback (proposal only, not implemented)
 
 For headless/non-agent callers, or a user who explicitly wants us to do it,
-`fix(..., apply=true)` writes via our Wave 2 pipeline: **back up the file about to
+`fix(..., apply=true)` *would* write via our Wave 2 pipeline: **back up the file about to
 change (safety net) → write one finding's fix → re-scan to verify**. If the
 re-scan cannot run, the result says so and nothing is reported as resolved. Still one finding at
 a time; never a "fix everything" over MCP.
