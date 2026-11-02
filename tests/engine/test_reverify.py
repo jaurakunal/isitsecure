@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from isitsecure.engine.fixes.verifier import finding_as_rescan_dict
+
 from isitsecure.engine import reverify as R
 from isitsecure.engine.enums import EndpointMethod, FindingCategory, SeverityLevel
 from isitsecure.engine.models import CodeLocation, DeepFinding, FindingSource
@@ -149,9 +151,9 @@ class TestReverifyFindings:
     async def test_sast_fixed_and_still_present(self, monkeypatch):
         present, gone = _sast(file_path="present.py"), _sast(file_path="gone.py")
 
-        async def fake_present(_repo):
-            return {present.fingerprint}  # only 'present' still detected
-        monkeypatch.setattr(R, "_sast_present_fingerprints", fake_present)
+        async def fake_rescan(_repo):
+            return [finding_as_rescan_dict(present)]  # only 'present' still detected
+        monkeypatch.setattr(R, "_sast_rescan", fake_rescan)
 
         verdicts = await R.reverify_findings([present, gone], repo_path="repo")
         by_fp = {v.finding.fingerprint: v.status for v in verdicts}

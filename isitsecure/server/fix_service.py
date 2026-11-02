@@ -438,7 +438,7 @@ async def _apply_locally(
                 from isitsecure.engine.fixes.verifier import verify_findings_resolved
                 fixed_ids = _fixed_ids(plan, findings)
                 fixed_findings = [f for f in findings if f.id in fixed_ids]
-                verification = (await verify_findings_resolved(local_repo, fixed_findings)).to_dict()
+                verification = (await verify_findings_resolved(local_repo, fixed_findings, context=findings)).to_dict()
             except Exception as e:
                 logger.warning("Fix verification skipped: %s", scrub_secrets(str(e)))
         except BaseException as exc:  # noqa: BLE001 - cleaned up, then re-raised
@@ -505,6 +505,15 @@ async def _head_sha_of(repo: str, ref: str) -> str:
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
+class ApplyFinishedBeforeCancel(asyncio.CancelledError):
+    """The job was cancelled while its (shielded) apply was running; the apply
+    finished anyway. ``result`` is its outcome (the fix branch, if one was made)."""
+
+    def __init__(self, result: dict) -> None:
+        super().__init__("fixes were applied before the job was cancelled")
+        self.result = result
+
 
 async def run_fix_all(
     *,
@@ -650,4 +659,16 @@ async def run_fix_all(
     ))
     _apply_tasks.add(task)
     task.add_done_callback(_apply_tasks.discard)
-    return await asyncio.shield(task)
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError as cancel:
+        if task.cancelled():
+            raise
+        # The job was cancelled but the apply (shielded) keeps going and may land
+        # a commit on the fix branch. Wait for it, and hand its outcome to the
+        # caller so the user is told where the fixes are.
+        try:
+            result = await task
+        except BaseException:  # noqa: BLE001 - the apply itself failed: plain cancel
+            raise cancel from None
+        raise ApplyFinishedBeforeCancel(result) from cancel

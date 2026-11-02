@@ -146,6 +146,8 @@ class VerifyResult(TypedDict):
     resolved: list[str]
     still_present_count: int
     still_present: list[str]
+    possibly_moved_count: int
+    possibly_moved: list[str]
     unverifiable_count: int
     summary: str
 
@@ -601,39 +603,34 @@ def _verify_result(old_report, new_report, new_scan_id: str) -> VerifyResult:
     unverifiable findings (held constant, since a code re-scan can't confirm those
     cleared) — so LLM non-determinism can never inflate or deflate the grade.
     """
-    from collections import Counter
-
+    from isitsecure.engine.code_analysis.semgrep_analyzer import SEMGREP_MISSING_REASON
     from isitsecure.engine.fixes.verifier import (
+        classify_against_rescan,
         failed_scanner_names,
         failure_blocks,
+        finding_as_rescan_dict,
         is_verifiable,
-        sig_obj,
     )
     from isitsecure.engine.reporting.plain_english import calculate_grade, launch_verdict
 
-    # Resolved vs still-present, matched as MULTISETS so duplicate signatures
-    # (two of the same bug in one file) are credited correctly: if 2 old findings
-    # share a signature and only 1 remains in the re-scan, that's 1 resolved.
+    # Resolved vs still-present vs possibly-moved, by the ONE classifier the fix
+    # flow and `isitsecure verify` also use (v2 + legacy fingerprints, multiset).
     old_verifiable = [f for f in old_report.findings if is_verifiable(f)]
-    new_sig_counts = Counter(sig_obj(f) for f in new_report.findings)
     # A finding whose scanner failed/timed out/never ran in the re-scan proves
     # nothing by being absent: it is "could not verify", never "resolved".
     failed, unmapped = failed_scanner_names(getattr(new_report, "scanner_errors", []))
-    seen: Counter = Counter()
-    resolved: list[str] = []
-    still: list[str] = []
-    blocked: list = []
-    for f in old_verifiable:
-        if failure_blocks(f.scanner_name, failed, unmapped):
-            blocked.append(f)
-            continue
-        sig = sig_obj(f)
-        seen[sig] += 1
-        if seen[sig] <= new_sig_counts.get(sig, 0):
-            still.append(f.title)
-        else:
-            resolved.append(f.title)
-    unverifiable = len(old_report.findings) - len(old_verifiable) + len(blocked)
+    blocked = [f for f in old_verifiable if failure_blocks(f.scanner_name, failed, unmapped)]
+    blocked_ids = {id(f) for f in blocked}
+    checkable = [f for f in old_verifiable if id(f) not in blocked_ids]
+    still_f, moved_f, gone_f = classify_against_rescan(
+        checkable,
+        [finding_as_rescan_dict(f) for f in new_report.findings],
+        context=old_verifiable,
+    )
+    still = [f.title for f in still_f]
+    resolved = [f.title for f in gone_f]
+    moved = [f.title for f in moved_f]
+    unverifiable = len(old_report.findings) - len(old_verifiable) + len(blocked) + len(moved_f)
 
     # Grade movement = verified change only. Old unverifiable findings are assumed
     # to persist (we can't confirm they cleared), so they never move the grade.
@@ -642,7 +639,14 @@ def _verify_result(old_report, new_report, new_scan_id: str) -> VerifyResult:
         if is_verifiable(f) and not failure_blocks(f.scanner_name, failed, unmapped)
     ] + [
         f for f in old_report.findings
-        if not is_verifiable(f) or f in blocked
+        if not is_verifiable(f) or id(f) in blocked_ids
+    ]
+    # A missing optional semgrep is only an error because verification asked for
+    # it; the original scan was complete without it. The affected findings are
+    # already reported unverifiable above, so it must not also flip the verdict.
+    gaps = [
+        g for g in _coverage_gaps(new_report)
+        if SEMGREP_MISSING_REASON not in g
     ]
     prev = _severity_counts(old_report)
     cur = _count_by_severity(effective)
@@ -650,7 +654,7 @@ def _verify_result(old_report, new_report, new_scan_id: str) -> VerifyResult:
     grade = calculate_grade(cur["critical"], cur["high"], cur["medium"], cur["low"]).grade
     verdict = launch_verdict(
         cur["critical"], cur["high"], cur["medium"],
-        incomplete=bool(_coverage_gaps(new_report)),
+        incomplete=bool(gaps),
     )
 
     if resolved and grade != prev_grade:
@@ -665,6 +669,17 @@ def _verify_result(old_report, new_report, new_scan_id: str) -> VerifyResult:
         )
     else:
         summary = f"No checkable findings resolved yet — grade {grade}."
+    if blocked:
+        summary += (
+            f" {len(blocked)} finding(s) could not be re-checked because their scanner "
+            "did not run in the re-scan (e.g. install isitsecure[taint] for Semgrep); "
+            "they are not counted as resolved."
+        )
+    if moved:
+        summary += (
+            f" {len(moved)} finding(s) may have moved to another file rather than been "
+            "fixed; they are not counted as resolved."
+        )
 
     return {
         "scan_id": new_scan_id,
@@ -679,6 +694,8 @@ def _verify_result(old_report, new_report, new_scan_id: str) -> VerifyResult:
         "resolved": resolved[:20],
         "still_present_count": len(still),
         "still_present": still[:20],
+        "possibly_moved_count": len(moved),
+        "possibly_moved": moved[:20],
         "unverifiable_count": unverifiable,
         "summary": summary,
     }

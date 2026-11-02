@@ -13,7 +13,6 @@ raised the finding no longer raises it, not a formal proof of correctness.
 from __future__ import annotations
 
 import logging
-from collections import Counter
 from dataclasses import dataclass, field
 
 from isitsecure.engine.identity import (
@@ -139,63 +138,94 @@ def _dict_discriminator(d: dict) -> str:
         return ""
 
 
+def finding_as_rescan_dict(f: DeepFinding) -> dict:
+    """A re-scan finding object in the dict shape :func:`classify_against_rescan` reads."""
+    d = f.model_dump(mode="json")
+    d["fingerprint"] = finding_fingerprint(f)
+    return d
+
+
 def classify_against_rescan(
-    originals: list[DeepFinding], rescan: list[dict]
+    originals: list[DeepFinding],
+    rescan: list[dict],
+    *,
+    context: list[DeepFinding] | None = None,
 ) -> tuple[list[DeepFinding], list[DeepFinding], list[DeepFinding]]:
     """Split ``originals`` into ``(still_present, possibly_moved, gone)``.
 
+    The single definition of "is this finding fixed?" shared by the fix flow, the
+    CLI/MCP ``verify`` and per-finding re-verify.
+
     An original is *resolved* only when no remaining finding matches ANY of its
-    known fingerprints (current v2 or legacy). Same-legacy duplicates in one
-    file are matched as a multiset -- the same convention as the MCP ``verify``
-    tool (2 old with one signature, 1 remaining => 1 resolved) -- with v2
-    breaking ties so the instance that is actually still there stays present
-    even if a sibling was fixed.
+    known fingerprints (current v2 or legacy). Each remaining finding can account
+    for ONE original (multiset semantics: 2 old with one signature, 1 remaining =>
+    1 resolved); v2 matches are made first so the instance that is really still
+    there stays present even if a sibling was fixed.
+
+    ``context`` is every original finding of the same report, including ones not
+    being asked about (e.g. findings whose fix was not applied). They take part in
+    the matching -- they are the likelier owners of a remaining finding -- but are
+    not reported.
 
     An original with no match at its own location is ``possibly_moved`` when a
-    remaining finding with the same scanner/category/title and the same
-    (non-empty) flagged line sits in a different file.
+    remaining finding that no other original accounts for, with the same
+    scanner/category/title and the same (non-empty) flagged line, sits in a
+    different file.
     """
-    rem_v2: Counter = Counter()
-    rem_legacy: Counter = Counter()
-    for d in rescan:
-        v2, legacy = rescan_fingerprints(d)
-        rem_v2[v2] += 1
-        rem_legacy[legacy] += 1
+    asked = {id(f) for f in originals}
+    everyone = [f for f in (context or []) if id(f) not in asked]
+    everyone += originals
+    # Findings the caller is not asking about claim remaining entries first.
+    everyone.sort(key=lambda f: id(f) in asked)
 
-    still: list[DeepFinding] = []
-    undecided: list[DeepFinding] = []
-    for f in originals:
-        v2 = finding_fingerprint(f)
-        if rem_v2.get(v2, 0) > 0:
-            rem_v2[v2] -= 1
-            rem_legacy[legacy_fingerprint(f)] -= 1
-            still.append(f)
-        else:
-            undecided.append(f)
-    gone_or_moved: list[DeepFinding] = []
-    for f in undecided:
-        legacy = legacy_fingerprint(f)
-        if rem_legacy.get(legacy, 0) > 0:
-            rem_legacy[legacy] -= 1
-            still.append(f)
-        else:
-            gone_or_moved.append(f)
+    entries = [(rescan_fingerprints(d), d) for d in rescan]
+    free = [True] * len(entries)
+    by_v2: dict[str, list[int]] = {}
+    by_legacy: dict[str, list[int]] = {}
+    for idx, ((v2, legacy), _d) in enumerate(entries):
+        by_v2.setdefault(v2, []).append(idx)
+        by_legacy.setdefault(legacy, []).append(idx)
 
-    moved: list[DeepFinding] = []
-    gone: list[DeepFinding] = []
-    for f in gone_or_moved:
+    def claim(candidates: list[int]) -> bool:
+        for idx in candidates:
+            if free[idx]:
+                free[idx] = False
+                return True
+        return False
+
+    still_ids: set[int] = set()
+    for f in everyone:
+        if claim(by_v2.get(finding_fingerprint(f), [])):
+            still_ids.add(id(f))
+    for f in everyone:
+        if id(f) not in still_ids and claim(by_legacy.get(legacy_fingerprint(f), [])):
+            still_ids.add(id(f))
+
+    moved_ids: set[int] = set()
+    for f in everyone:
+        if id(f) in still_ids:
+            continue
         disc = _discriminator(f)
+        if not disc:
+            continue
         cat = f.category.value if hasattr(f.category, "value") else str(f.category)
         here = f.code_location.file_path if f.code_location else ""
-        relocated = bool(disc) and any(
-            d.get("scanner_name") == f.scanner_name
-            and str(d.get("category")) == cat
-            and d.get("title") == f.title
-            and ((d.get("code_location") or {}).get("file_path") or "") != here
-            and _dict_discriminator(d) == disc
-            for d in rescan
-        )
-        (moved if relocated else gone).append(f)
+        for idx, (_fps, d) in enumerate(entries):
+            if (
+                free[idx]
+                and d.get("scanner_name") == f.scanner_name
+                and str(d.get("category")) == cat
+                and d.get("title") == f.title
+                and ((d.get("code_location") or {}).get("file_path") or "") != here
+                and _dict_discriminator(d) == disc
+            ):
+                free[idx] = False
+                moved_ids.add(id(f))
+                break
+
+    still = [f for f in originals if id(f) in still_ids]
+    moved = [f for f in originals if id(f) in moved_ids]
+    gone = [f for f in originals if id(f) not in still_ids and id(f) not in moved_ids]
     return still, moved, gone
 
 
@@ -245,10 +275,14 @@ async def _rescan_sast_findings(repo_path: str) -> list[dict]:
 async def verify_findings_resolved(
     repo_path: str,
     fixed_findings: list[DeepFinding],
+    *,
+    context: list[DeepFinding] | None = None,
 ) -> VerifyResult:
     """Re-scan `repo_path` and report which fixed findings are gone.
 
     `fixed_findings` are the findings whose files were successfully rewritten.
+    `context` is every finding of the scan (including ones whose fix was not
+    applied): they still count when matching what remains in the re-scan.
     """
     result = VerifyResult()
     verifiable = [f for f in fixed_findings if is_verifiable(f)]
@@ -266,7 +300,7 @@ async def verify_findings_resolved(
         return result
 
     failed, unmapped = failed_scanner_names(getattr(rescan, "scanner_errors", []))
-    still, moved, gone = classify_against_rescan(verifiable, list(rescan))
+    still, moved, gone = classify_against_rescan(verifiable, list(rescan), context=context)
     # Absent because its scanner failed/timed out/never ran: not proof of a fix.
     blocked_f = [f for f in gone if failure_blocks(f.scanner_name, failed, unmapped)]
     blocked = len(blocked_f)

@@ -122,10 +122,13 @@ scan_status(job_id)                                    → poll a DAST job; the 
   (no report), `verify` errors with "Could not verify" instead of reporting anything
   as resolved. A finding whose scanner failed, timed out or did not run in the
   re-scan (for example the optional `isitsecure[taint]` Semgrep is not installed,
-  which `verify` records as a scanner error) is counted `unverifiable`, never
-  resolved, and the result is `incomplete` (`safe_to_launch` false) until it can
-  run. A malformed report gives a "Could not compare the scans" error. The visible
-  reward that closes the loop.
+  or semgrep could not parse a file the fix broke) is counted `unverifiable`, never
+  resolved, and held constant in the grade; a missing optional Semgrep is called
+  out in the `summary` but does not by itself make the result `incomplete`, while
+  any other scanner failure does. A finding whose code now appears in another file
+  is reported under `possibly_moved` (also unverifiable). `verify`, `isitsecure
+  verify` and the `fix` re-check share one classifier. A malformed report gives a
+  "Could not compare the scans" error. The visible reward that closes the loop.
 - **`export`** *(implemented, #88).* `export(scan_id, format)` renders a **cached**
   scan (no re-scan) as `html` | `sarif` | `json` | `markdown` and **returns the
   content** for the host to save — the MCP does not write files (same stance as

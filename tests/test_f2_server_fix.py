@@ -130,7 +130,7 @@ async def test_restore_never_forces_over_user_edits(tmp_path, monkeypatch):
     _llm(monkeypatch)
     user_edit = b"a = GOOD  # user rewrote the fixed line while verification ran\n"
 
-    async def slow_verify(root, findings):
+    async def slow_verify(root, findings, **kw):
         (repo / "a.py").write_bytes(user_edit)  # edit lands on the fix branch checkout
         return verifier.VerifyResult(resolved=1)
 

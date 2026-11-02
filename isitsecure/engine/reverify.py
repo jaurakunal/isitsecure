@@ -28,10 +28,11 @@ from urllib.parse import urlparse
 from isitsecure.engine.fixes.verifier import (
     LLM_SCANNERS,
     RescanFailed,
+    classify_against_rescan,
     failed_scanner_names,
     failure_blocks,
 )
-from isitsecure.engine.identity import finding_fingerprint, matches_any
+from isitsecure.engine.identity import finding_fingerprint
 from isitsecure.engine.models import DeepFinding
 
 logger = logging.getLogger(__name__)
@@ -150,23 +151,11 @@ async def _target_reachable(url: str) -> bool:
         return False
 
 
-class _PresentFingerprints(set):
-    """Fingerprints still raised, plus the re-scan's ``scanner_errors``."""
-
-    scanner_errors: list[str]
-
-
-async def _sast_present_fingerprints(repo_path: str) -> set[str]:
-    """Fingerprints (current v2 AND legacy) still raised by a code-only re-scan.
-
-    Both schemes are included so a finding whose flagged line was merely edited
-    (v2 changed, legacy unchanged) still matches while the bug remains.
-    """
-    from isitsecure.engine.fixes.verifier import _rescan_sast_findings, rescan_fingerprints
-    rescan = await _rescan_sast_findings(repo_path)
-    present = _PresentFingerprints(fp for d in rescan for fp in rescan_fingerprints(d))
-    present.scanner_errors = list(getattr(rescan, "scanner_errors", []))
-    return present
+async def _sast_rescan(repo_path: str):
+    """A code-only re-scan of ``repo_path``: the findings it raises (as dicts)
+    plus its ``scanner_errors``."""
+    from isitsecure.engine.fixes.verifier import _rescan_sast_findings
+    return await _rescan_sast_findings(repo_path)
 
 
 def _dast_scanners_by_name() -> dict:
@@ -223,7 +212,7 @@ async def reverify_findings(
                 )
         else:
             try:
-                present = await _sast_present_fingerprints(repo_path)
+                rescan = await _sast_rescan(repo_path)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("SAST re-verify re-scan failed: %s", exc)
                 status = (VerifyStatus.COULD_NOT_VERIFY if isinstance(exc, RescanFailed)
@@ -231,11 +220,18 @@ async def reverify_findings(
                 for f in sast:
                     verdict_by_id[f.id] = Verdict(f, status, str(exc))
             else:
-                failed, unmapped = failed_scanner_names(getattr(present, "scanner_errors", []))
-                for f in sast:
-                    if matches_any(f, present):
-                        verdict_by_id[f.id] = Verdict(f, VerifyStatus.STILL_PRESENT)
-                    elif failure_blocks(f.scanner_name, failed, unmapped):
+                failed, unmapped = failed_scanner_names(getattr(rescan, "scanner_errors", []))
+                # The one shared classifier (same as `fix` and MCP `verify`).
+                still, moved, gone = classify_against_rescan(sast, list(rescan))
+                for f in still:
+                    verdict_by_id[f.id] = Verdict(f, VerifyStatus.STILL_PRESENT)
+                for f in moved:
+                    verdict_by_id[f.id] = Verdict(
+                        f, VerifyStatus.UNVERIFIABLE,
+                        "the same code now appears in another file: it may have moved, not been fixed",
+                    )
+                for f in gone:
+                    if failure_blocks(f.scanner_name, failed, unmapped):
                         # Its scanner failed/timed out in the re-scan: absence is not a fix.
                         verdict_by_id[f.id] = Verdict(
                             f, VerifyStatus.COULD_NOT_VERIFY,

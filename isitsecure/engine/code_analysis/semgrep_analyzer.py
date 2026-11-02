@@ -51,6 +51,10 @@ _semgrep_required: contextvars.ContextVar[bool] = contextvars.ContextVar(
 )
 
 
+# Recorded when a verification re-scan needs semgrep and it is not installed.
+SEMGREP_MISSING_REASON = "semgrep is not installed (pip install isitsecure[taint])"
+
+
 @contextlib.contextmanager
 def require_semgrep():
     """Within this block, a missing semgrep is recorded as a scanner failure."""
@@ -118,9 +122,7 @@ class SemgrepAnalyzer:
         if not semgrep:
             logger.debug("semgrep not installed — skipping taint analysis (isitsecure[taint])")
             if _semgrep_required.get():
-                record_scanner_failure(
-                    self.scanner_name, "semgrep is not installed (pip install isitsecure[taint])"
-                )
+                record_scanner_failure(self.scanner_name, SEMGREP_MISSING_REASON)
             return []
 
         raw = await self._run_semgrep(semgrep, repo.clone_path, packs)
@@ -226,6 +228,14 @@ class SemgrepAnalyzer:
             if not isinstance(data, dict):
                 record_scanner_failure(self.scanner_name, "semgrep output was not a JSON object")
                 return None
+            if proc.returncode not in (0, 1):
+                # 0 = clean, 1 = findings; anything else is a fatal semgrep error
+                # whose (partial) JSON must not be read as "nothing found".
+                record_scanner_failure(
+                    self.scanner_name, f"semgrep exited with status {proc.returncode}"
+                )
+                return None
+            self._note_unanalysed_files(data)
             return data
         except asyncio.CancelledError:
             # Outer scan timeout/cancel — reap in finally, then propagate.
@@ -243,6 +253,29 @@ class SemgrepAnalyzer:
                     await proc.wait()
                 except BaseException:  # noqa: BLE001, S110 - SIGKILL sent; best-effort reap
                     pass
+
+    def _note_unanalysed_files(self, data: dict) -> None:
+        """Files semgrep could not parse or time out on were NOT analysed.
+
+        During a fix-verification re-scan that matters: a fix that breaks a file's
+        syntax makes semgrep skip it and report nothing, which must not read as
+        "fixed". Ordinary scans only log it (unparseable files are common and the
+        grade must not change for them).
+        """
+        skipped = sorted({
+            str(e.get("path"))
+            for e in data.get("errors") or []
+            if isinstance(e, dict) and e.get("path")
+        })
+        if not skipped:
+            return
+        logger.debug("semgrep_taint: %d file(s) not analysed: %s", len(skipped), skipped[:5])
+        if _semgrep_required.get():
+            shown = ", ".join(skipped[:3]) + (" …" if len(skipped) > 3 else "")
+            record_scanner_failure(
+                self.scanner_name,
+                f"semgrep could not analyse {len(skipped)} file(s) ({shown})",
+            )
 
     def _to_findings(self, raw: dict, repo: RepoSnapshot) -> list[CodeFinding]:
         root = Path(repo.clone_path)

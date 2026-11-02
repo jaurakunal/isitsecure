@@ -701,8 +701,19 @@ async def _run_fix_all_job(
         )
         _fix_jobs[job_id]["result"] = result
         _fix_jobs[job_id]["status"] = "complete"
-    except asyncio.CancelledError:
-        _fix_jobs[job_id]["error"] = "Fix job was cancelled."
+    except asyncio.CancelledError as cancelled:
+        done = getattr(cancelled, "result", None)
+        if done is not None:
+            # Cancelled during the shielded apply, which still completed: keep
+            # its outcome so the user can see (and reuse) the fix branch.
+            _fix_jobs[job_id]["result"] = done
+            branch = done.get("branch")
+            _fix_jobs[job_id]["error"] = (
+                "Fix job was cancelled, but the fixes had already been applied"
+                + (f" on branch {branch}." if branch else ".")
+            )
+        else:
+            _fix_jobs[job_id]["error"] = "Fix job was cancelled."
         _fix_jobs[job_id]["status"] = "cancelled"
         raise
     except Exception as e:

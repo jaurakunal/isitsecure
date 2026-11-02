@@ -279,7 +279,7 @@ Jobs (`app._fix_jobs`) are in memory only: capped (50 finished retained, 3
 concurrent), de-duplicated per scan, cancellable (`DELETE /api/fix-all/{id}`;
 a job with no SSE watcher for a minute is cancelled), each with an LLM call
 budget, and API keys / GitHub tokens are scrubbed from logs, stored errors and git
-stderr. The MCP `fix` tool shares the generator and the strict source reader but
+stderr. If a job is cancelled while its (shielded) apply is running, the apply still finishes and the job keeps its result, so the fix branch is reported rather than stranded. The MCP `fix` tool shares the generator and the strict source reader but
 never writes (it returns a diff for the host to apply).
 
 **c) Remote clone → per-category PRs** (`isitsecure fix --repo <github-url>`) —

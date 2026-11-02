@@ -256,7 +256,7 @@ def fix(
     vr = None
     if fixed_findings:
         console.print("[bold]Re-checking your code...[/bold]")
-        vr = asyncio.run(verify_findings_resolved(repo_path, fixed_findings))
+        vr = asyncio.run(verify_findings_resolved(repo_path, fixed_findings, context=fixable))
 
     # Fold everything into the three plain-language buckets. "couldn't fix" =
     # findings with no fix on disk (failed generation, refused/failed/rolled-back
