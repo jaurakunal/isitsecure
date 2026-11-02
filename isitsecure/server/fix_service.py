@@ -575,6 +575,8 @@ async def run_fix_all(
                 github_token=github_token,
                 strategy=pr_strategy,
                 max_prs=max_prs,
+                # Fix the branch that was scanned (None → the default branch).
+                branch=report.get("repo_branch") or None,
                 emit=emit,
             )
             return result.to_dict()

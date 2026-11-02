@@ -461,6 +461,8 @@ def _run_remote_pr_fix(
             github_token=github_token,
             strategy=pr_strategy,
             max_prs=max_prs,
+            # Fix the branch that was scanned, not whatever the default is now.
+            branch=getattr(report, "repo_branch", None) or None,
             emit=_emit,
         )
 

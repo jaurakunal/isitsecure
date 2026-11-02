@@ -7,9 +7,10 @@ import pytest
 from isitsecure.server import fix_service
 
 
-def _report(repo_url):
+def _report(repo_url, repo_branch=""):
     return {
         "repo_url": repo_url,
+        "repo_branch": repo_branch,
         "findings": [
             {
                 "source": "sast_code",
@@ -46,10 +47,12 @@ async def test_remote_github_routes_to_pr_flow(monkeypatch):
         def __init__(self, generator):
             captured["generator"] = generator
 
-        async def run(self, *, repo_url, findings, github_token, strategy, max_prs, emit):
+        # ``branch`` is new: the flow now fixes the branch the scan ran on.
+        async def run(self, *, repo_url, findings, github_token, strategy, max_prs,
+                      branch=None, emit):
             captured.update(
                 repo_url=repo_url, token=github_token, strategy=strategy, max_prs=max_prs,
-                n=len(findings),
+                n=len(findings), branch=branch,
             )
 
             class R:
@@ -61,13 +64,14 @@ async def test_remote_github_routes_to_pr_flow(monkeypatch):
     monkeypatch.setattr(fix_service, "PRFlow", FakeFlow)
 
     result = await fix_service.run_fix_all(
-        report=_report("https://github.com/octo/app"),
+        report=_report("https://github.com/octo/app", repo_branch="release/1.x"),
         llm_provider="anthropic",
         emit=emit,
         github_token="TESTTOKEN",
         pr_strategy="per-category",
         max_prs=5,
     )
+    assert captured["branch"] == "release/1.x"  # scanned branch flows to the PR flow
     assert result["mode"] == "pull_requests"
     assert captured["repo_url"] == "https://github.com/octo/app"
     assert captured["token"] == "TESTTOKEN"

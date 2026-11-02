@@ -439,8 +439,36 @@ isitsecure fix --repo <github-url> --pr-strategy per-file --max-prs 5
 Each PR groups related fixes (by category, by default), one commit per finding,
 onto a feature branch — never your default branch. `--max-prs` caps the number
 of PRs (default 8); excess low-severity categories are batched into a single PR
-so nothing is silently dropped. The token is used only for the push + PR and is
-never stored or logged (env var `GITHUB_TOKEN` also works).
+so nothing is silently dropped. The token is used only for the clone, push and
+PR; it is never stored or logged, and it is not put in the clone URL, a command
+line or the clone's `.git/config` (it reaches git through the process
+environment, and the clone lives in a `0700` temp directory that is removed
+afterwards, including on Ctrl-C). Env var `GITHUB_TOKEN` also works.
+
+How the remote flow behaves:
+
+- **Branch it fixes**: the branch that was scanned (the report's branch) is
+  cloned and every PR is opened against it. When none is known, the repo's
+  default branch is looked up; a bad token, missing permission, renamed repo or
+  network failure is reported as such rather than silently assuming `main`.
+- **Branch names** are `isitsecure/fix-<slug>[-<hash>]`; per-file and
+  per-finding branches carry a short hash so two paths like `a_b.py` and
+  `a-b.py` can never collide.
+- **Safe retries**: before any LLM call, the remote is checked (`git ls-remote`)
+  for each branch. A branch left by an earlier run is never overwritten (no
+  force-push): if it already has an open PR it is noted, otherwise it is
+  reported as an error so you can open a PR from it or delete it. If a branch
+  is pushed but opening its PR fails, the error names the orphaned branch.
+- **Push failures** show git's real message (hook, protected branch, push
+  protection, token scope); only a genuine non-fast-forward is reported as
+  "branch already exists".
+- **Commits** use an `isitsecure[bot]` identity with hooks and gpg signing
+  disabled; finding titles and paths are flattened to one line, secret-looking
+  values are redacted, and `@mentions`, images, backticks and `#123` references
+  are neutralised in PR text. A fix that fails to commit, makes no change, or
+  targets a symlink is skipped and never leaks into another finding's commit.
+- Each git command has a timeout (120 s; 300 s for the clone) and is killed if
+  it hangs or the run is cancelled.
 
 `--repo` accepts `https://github.com/owner/repo[.git]`, `git@github.com:owner/repo.git`,
 `ssh://git@github.com/owner/repo` or `github.com/owner/repo`. URLs with credentials, a

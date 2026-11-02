@@ -99,7 +99,32 @@ CRLF/LF line endings are not auto-fixed; CRLF files stay CRLF. `--api-key` appli
 provider only; the environment/config key is looked up per provider. The remote flow never pushes to the default branch — fixes land on
 feature branches as pull requests; `--max-prs` caps the count (default 8) and
 excess low-severity categories batch into one PR. The GitHub token is used only
-for the push + PR and is never stored or logged.
+for the clone, push and PR and is never stored or logged; it is passed to git
+through the process environment, never in the clone URL, a command line or
+`.git/config`, and the temp clone is a `0700` directory removed afterwards.
+
+Remote-flow behavior worth knowing:
+
+- PRs target the branch the scan ran on (the report's `repo_branch`); with none
+  recorded, the default branch is looked up and a failure (401/403/404, a
+  renamed repo, a network error) is reported instead of falling back to `main`.
+- Branch names are `isitsecure/fix-<slug>-<hash>` for per-file and per-finding
+  strategies, so paths that slug alike (`a_b.py`, `a-b.py`) get distinct branches.
+- Retries are safe: each planned branch is looked up with `git ls-remote` before
+  any LLM call. A branch from an earlier run is never overwritten (no
+  force-push); with an open PR it is noted as skipped, without one it is an
+  error telling you to open a PR from it or delete it. A branch pushed but whose
+  PR could not be opened is listed in the result's `orphaned_branches`.
+- Only a genuine non-fast-forward rejection is reported as "branch already
+  exists"; any other push rejection (pre-receive hook, protected branch, push
+  protection, token scope) shows git's own message with secrets scrubbed.
+- Commits are authored as `isitsecure[bot]` with hooks and gpg signing disabled.
+  Finding titles/paths in commit messages and PR text are flattened to one
+  line, redacted for secret-looking values, and escaped (`@mentions`, images,
+  backticks, `#123`). A failed commit is rolled back; a fix that changes nothing
+  or targets a symlink is skipped.
+- Every git command has a timeout (120 s, clone 300 s) and is killed, with its
+  child processes, on timeout or cancellation.
 
 ## Configuration
 
