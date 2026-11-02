@@ -128,7 +128,7 @@ class FakeGitHub:
         self.default_branch_calls = 0
         self.opened: list[dict] = []
         self.fail_open = False
-        self.open_pr_url: str | None = None
+        self.open_prs: dict[str, str] = {}  # head branch -> open PR url
         self.on_open = None
 
     async def get_default_branch(self, ref):
@@ -136,7 +136,7 @@ class FakeGitHub:
         return self.default_branch
 
     async def find_open_pr(self, ref, *, head, base):
-        return self.open_pr_url
+        return self.open_prs.get(head)
 
     async def open_pr(self, ref, *, title, body, head, base):
         if self.on_open:
@@ -144,7 +144,9 @@ class FakeGitHub:
         if self.fail_open:
             raise RuntimeError("GitHub PR creation failed (403): Resource not accessible")
         self.opened.append(dict(title=title, body=body, head=head, base=base))
-        return f"https://github.com/octo/app/pull/{len(self.opened)}"
+        url = f"https://github.com/octo/app/pull/{len(self.opened)}"
+        self.open_prs[head] = url
+        return url
 
 
 def make_flow(origin, github=None, generator=None, git=None, clone_dirs=None):
@@ -211,7 +213,7 @@ class TestBranchCollisions:
 # ---------------------------------------------------------------------------
 
 class TestRetry:
-    async def test_open_pr_failure_reports_orphan_and_retry_is_safe(self, origin):
+    async def test_open_pr_failure_reports_orphan_and_rerun_uses_next_free_name(self, origin):
         github = FakeGitHub()
         github.fail_open = True
         flow, _, gen = make_flow(origin, github=github)
@@ -224,22 +226,60 @@ class TestRetry:
         assert r1.to_dict()["orphaned_branches"] == [orphan]
         sha_before = sh("rev-parse", orphan, cwd=origin)
 
-        # Retry, PR creation still failing or not: no LLM spend, no overwrite.
-        gen.calls = 0
+        # Re-run: the stale branch (no open PR) is NEVER reused or overwritten; the
+        # next free name is used with freshly generated content, so it isn't blocked.
         github.fail_open = False
         r2 = await run(flow, [finding("a.py")])
-        assert gen.calls == 0, "must pre-check the remote BEFORE spending LLM calls"
-        assert r2.opened_prs == [] and github.opened == []
-        assert "already exists" in r2.errors[0] and "no open pull request" in r2.errors[0]
+        assert r2.errors == [] and len(r2.opened_prs) == 1
+        assert r2.opened_prs[0].branch == orphan + "-2"
         assert sh("rev-parse", orphan, cwd=origin) == sha_before
+
+    async def test_rerun_after_merged_pr_is_not_blocked(self, origin):
+        flow, github, _ = make_flow(origin)
+        r1 = await run(flow, [finding("a.py")])
+        first = r1.opened_prs[0].branch
+        github.open_prs.clear()  # the PR was merged; GitHub kept the branch
+        other = AppendGenerator(fixed=lambda f, c: c + "# second\n")
+        flow2, _, _ = make_flow(origin, github=github, generator=other)
+        r2 = await run(flow2, [finding("a.py")])
+        assert r2.errors == [] and r2.opened_prs[0].branch == first + "-2"
+        # and a third run is deduped against the still-open -2 PR, with no LLM spend
+        other.calls = 0
+        r3 = await run(flow2, [finding("a.py")])
+        assert other.calls == 0 and r3.errors == [] and r3.opened_prs == []
+        assert any(first + "-2" in s for s in r3.skipped)
+
+    async def test_all_candidate_names_taken_is_a_clear_error(self, origin):
+        flow, github, gen = make_flow(origin)
+        names = ["isitsecure/fix-injection"] + [
+            f"isitsecure/fix-injection-{n}" for n in range(2, pr_flow.MAX_BRANCH_SUFFIX + 1)
+        ]
+        for name in names:
+            sh("branch", name, "main", cwd=origin)
+        result = await run(flow, [finding("a.py")])
+        assert gen.calls == 0 and github.opened == []
+        assert "Delete the stale" in result.errors[0]
+
+    def test_fixes_variant_is_in_the_candidate_list(self):
+        g = group_findings([finding("a.py")])[0]
+        root = f"isitsecure/fix-{g.branch_suffix}"
+        names = pr_flow._candidate_branches(g, root)  # base equals the root name
+        assert names[0] == root + "-fixes" and names[1] == root + "-fixes-2"
+
+    def test_per_finding_branch_is_stable_across_rescans(self):
+        # Two scans give the same finding different random ids.
+        a = group_findings([finding("a.py", "t")], strategy="per-finding")[0]
+        b = group_findings([finding("a.py", "t")], strategy="per-finding")[0]
+        assert a.findings[0].id != b.findings[0].id
+        assert a.branch_suffix == b.branch_suffix
 
     async def test_existing_branch_with_open_pr_is_skipped_not_an_error(self, origin):
         github = FakeGitHub()
         github.fail_open = True
         flow, _, gen = make_flow(origin, github=github)
-        await run(flow, [finding("a.py")])
+        r1 = await run(flow, [finding("a.py")])
         gen.calls = 0
-        github.open_pr_url = "https://github.com/octo/app/pull/9"
+        github.open_prs[r1.orphaned_branches[0]] = "https://github.com/octo/app/pull/9"
         r = await run(flow, [finding("a.py")])
         assert gen.calls == 0 and r.errors == []
         assert any("pull/9" in s for s in r.skipped)
@@ -267,6 +307,12 @@ class TestRetry:
     def test_non_ff_matcher_only_matches_real_non_fast_forward(self):
         assert is_non_fast_forward("! [rejected] HEAD -> x (non-fast-forward)")
         assert is_non_fast_forward("! [rejected] HEAD -> x (fetch first)")
+        assert is_non_fast_forward(" ! [remote rejected] HEAD -> x (stale info)")
+        # Hook output that merely quotes the phrases must NOT match.
+        assert not is_non_fast_forward("remote: error: this is a non-fast-forward in hook msg")
+        assert not is_non_fast_forward(
+            "remote: ! [rejected] HEAD -> x (non-fast-forward)\n"
+            " ! [remote rejected] HEAD -> x (pre-receive hook declined) stale info")
         for msg in (
             "! [remote rejected] HEAD -> x (pre-receive hook declined)",
             "! [remote rejected] HEAD -> x (protected branch hook declined)",
@@ -598,6 +644,230 @@ class TestCommitIdentity:
         who = sh("log", "-1", "--format=%an <%ae> | %cn", result.opened_prs[0].branch, cwd=origin)
         assert who.startswith("isitsecure[bot] <isitsecure-bot@users.noreply.github.com>")
         assert "Dev Person" not in who
+
+
+class TestBranchNameValidation:
+    @pytest.mark.parametrize("name", [
+        "main", "release/1.x", "rel/v1.0+b", "dep/foo@1.2", "feature/é", "a_b-c/d.e",
+    ])
+    def test_legit_names_are_accepted(self, name):
+        assert git_ops.is_valid_branch_name(name)
+
+    @pytest.mark.parametrize("name", [
+        "", "-x", "--upload-pack=evil", "refs/heads/main", "a/.b", "x.lock/y",
+        "a..b", "a b", "HEAD@{1}", "@", "a\x00b", "end/", "a" * 300, "x" + "\n",
+    ])
+    def test_bad_names_are_rejected(self, name):
+        assert not git_ops.is_valid_branch_name(name)
+
+    def test_resolve_scan_branch_falls_back_with_a_warning(self):
+        assert pr_flow.resolve_scan_branch("develop") == ("develop", None)
+        assert pr_flow.resolve_scan_branch("") == (None, None)
+        assert pr_flow.resolve_scan_branch("HEAD") == (None, None)
+        branch, warning = pr_flow.resolve_scan_branch("a/.b")
+        assert branch is None and "default branch" in warning
+
+    async def test_hostile_api_default_branch_is_refused(self, origin):
+        flow, _, gen = make_flow(origin, github=FakeGitHub(default_branch="--upload-pack=x"))
+        result = await run(flow, [finding("a.py")])
+        assert "unusable default branch" in result.errors[0] and gen.calls == 0
+
+    async def test_checkout_of_the_base_branch_uses_a_double_dash(self, origin):
+        calls = []
+
+        class Spy(GitRunner):
+            async def run(self, cwd, *args, **kw):
+                calls.append(args)
+                return await super().run(cwd, *args, **kw)
+
+        flow, _, _ = make_flow(origin, git=Spy(TOKEN, allow_protocol="file"))
+        await run(flow, [finding("a.py")])
+        assert ("checkout", "--force", "main", "--") in calls
+
+
+class TestRemoteBranchesExactMatch:
+    async def test_tail_pattern_matches_are_filtered_out(self, origin, tmp_path):
+        # `ls-remote refs/heads/foo` also lists refs/heads/zzz/refs/heads/foo.
+        sh("branch", "zzz/refs/heads/foo", "main", cwd=origin)
+        clone = tmp_path / "c"
+        sh("clone", "-q", origin, str(clone))
+        git = GitRunner(None, allow_protocol="file")
+        raw = await git.run(str(clone), "ls-remote", "--heads", "origin", "refs/heads/foo")
+        assert "zzz/refs/heads/foo" in raw  # git's own matching is looser
+        assert await git_ops.remote_branches(git, str(clone), ["foo"]) == set()
+        sh("branch", "foo", "main", cwd=origin)
+        assert await git_ops.remote_branches(git, str(clone), ["foo", "nope"]) == {"foo"}
+
+
+class TestUniqueSuffix:
+    def test_hash_is_part_of_the_suffix_without_any_dedupe(self):
+        a = pr_flow._unique_suffix("src/a_b.py", "src/a_b.py")
+        b = pr_flow._unique_suffix("src/a-b.py", "src/a-b.py")
+        assert a != b and a.rsplit("-", 1)[1] == pr_flow._short_hash("src/a_b.py")
+        assert len(pr_flow._short_hash("x")) == 8
+        raw = pr_flow._build_raw_groups(
+            [finding("src/a_b.py"), finding("src/a-b.py")], "per-file")
+        assert len({g.branch_suffix for g in raw}) == 2
+
+
+class TestTokenScrubbing:
+    """Feed git output containing the token in every form through the REAL runner."""
+
+    @pytest.mark.parametrize("form", ["raw", "b64", "header"])
+    async def test_every_token_form_is_scrubbed_from_errors(self, tmp_path, form):
+        import base64
+        b64 = base64.b64encode(f"x-access-token:{TOKEN}".encode()).decode()
+        payload = {"raw": TOKEN, "b64": b64, "header": f"AUTHORIZATION: basic {b64}"}[form]
+        runner = GitRunner(TOKEN)
+        with pytest.raises(GitError) as ei:
+            await runner.run(str(tmp_path), "-c", f"alias.leak=!echo '{payload}' >&2; exit 3", "leak")
+        assert TOKEN not in str(ei.value) and b64 not in str(ei.value)
+        assert "***" in str(ei.value)
+
+    async def test_token_is_scrubbed_from_successful_stdout_too(self, tmp_path):
+        out = await GitRunner(TOKEN).run(
+            str(tmp_path), "-c", f"alias.say=!echo {TOKEN}", "say")
+        assert TOKEN not in out and "***" in out
+
+
+class TestGlobalConfigIsolation:
+    async def test_global_insteadof_cannot_redirect_the_remote(self, tmp_path, monkeypatch):
+        cfg = tmp_path / "evil.gitconfig"
+        cfg.write_text('[url "file:///nonexistent/"]\n\tinsteadOf = https://github.com/\n')
+        url = "https://github.com/octo/app"
+        sanity = subprocess.run(
+            ["git", "ls-remote", "--get-url", url], capture_output=True, text=True,
+            env={**os.environ, "GIT_CONFIG_GLOBAL": str(cfg)},
+        ).stdout.strip()
+        assert sanity != url  # the rewrite is real for plain git ...
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(cfg))
+        got = await GitRunner(TOKEN).run(str(tmp_path), "ls-remote", "--get-url", url)
+        assert got == url  # ... and ignored by GitRunner
+
+    def test_env_isolates_system_and_global_config(self):
+        env = build_git_env(None)
+        assert env["GIT_CONFIG_GLOBAL"] == os.devnull and env["GIT_CONFIG_NOSYSTEM"] == "1"
+        assert env["GIT_AUTHOR_NAME"] == git_ops.BOT_NAME  # identity still applied
+
+    async def test_bot_settings_still_apply_with_isolation(self, tmp_path):
+        runner = GitRunner(None)
+        assert await runner.run(str(tmp_path), "config", "--get", "core.hooksPath") == os.devnull
+        assert await runner.run(str(tmp_path), "config", "--get", "commit.gpgsign") == "false"
+
+
+class TestKillFallbacks:
+    async def test_timeout_without_process_groups_still_kills_and_raises(
+        self, tmp_path, monkeypatch
+    ):
+        # What Windows (and any platform lacking killpg) goes through.
+        monkeypatch.setattr(git_ops, "_process_groups_supported", lambda: False)
+        procs = []
+        real_exec = asyncio.create_subprocess_exec
+
+        async def spy(*args, **kw):
+            assert kw["start_new_session"] is False
+            p = await real_exec(*args, **kw)
+            procs.append(p)
+            return p
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", spy)
+        with pytest.raises(GitTimeoutError):
+            await GitRunner(None, timeout=0.4).run(str(tmp_path), *HANG)
+        assert procs[0].returncode is not None
+
+    def test_missing_killpg_is_not_fatal(self, monkeypatch):
+        killed = []
+
+        class P:
+            pid = 1
+            def kill(self):
+                killed.append(True)
+
+        def boom(*a):
+            raise AttributeError("no killpg on this platform")
+
+        monkeypatch.setattr(os, "killpg", boom)
+        git_ops._kill_tree(P())
+        assert killed == [True]
+
+
+class TestRealDefaultClone:
+    async def test_default_clone_is_token_free_and_keeps_the_allowlist(
+        self, origin, tmp_path, monkeypatch
+    ):
+        # Production allowlist never includes file:/ext:.
+        assert build_git_env(TOKEN)["GIT_ALLOW_PROTOCOL"] == "https:http:ssh:git"
+        # Test-only: map the canonical GitHub URL onto the local bare repo and
+        # allow file for this one clone.
+        monkeypatch.setattr(git_ops, "DEFAULT_ALLOW_PROTOCOL", "https:file")
+        monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+        monkeypatch.setenv("GIT_CONFIG_KEY_0", f"url.{origin}.insteadOf")
+        monkeypatch.setenv("GIT_CONFIG_VALUE_0", "https://github.com/octo/app.git")
+        argvs = []
+        real_exec = asyncio.create_subprocess_exec
+
+        async def spy(*args, **kw):
+            argvs.append(args)
+            return await real_exec(*args, **kw)
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", spy)
+        parent = tmp_path / "w"
+        parent.mkdir(mode=0o700)
+        dest = parent / "repo"
+        dest.mkdir(mode=0o700)
+        await PRFlow._default_clone(REPO_URL, "main", str(dest), TOKEN)
+
+        assert (dest / "a.py").exists()
+        clone_argv = next(a for a in argvs if "clone" in a)
+        assert "https://github.com/octo/app.git" in clone_argv  # canonical, token-free
+        assert all(TOKEN not in " ".join(map(str, a)) for a in argvs)
+        config = (dest / ".git" / "config").read_text()
+        assert TOKEN not in config and "x-access-token" not in config
+        assert "extraheader" not in config.lower()
+        assert "https://github.com/octo/app.git" in config
+        helper = await GitRunner(TOKEN, allow_protocol="file").run(
+            str(dest), "config", "--get-all", "credential.helper")
+        assert helper == ""  # credential helpers are disabled in every git child
+
+    async def test_ssh_style_urls_are_canonicalised_to_https(self, origin, tmp_path, monkeypatch):
+        monkeypatch.setattr(git_ops, "DEFAULT_ALLOW_PROTOCOL", "https:file")
+        monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+        monkeypatch.setenv("GIT_CONFIG_KEY_0", f"url.{origin}.insteadOf")
+        monkeypatch.setenv("GIT_CONFIG_VALUE_0", "https://github.com/octo/app.git")
+        dest = tmp_path / "w2"
+        dest.mkdir(mode=0o700)
+        await PRFlow._default_clone("git@github.com:octo/app.git", "main", str(dest), TOKEN)
+        assert "https://github.com/octo/app.git" in (dest / ".git" / "config").read_text()
+
+
+class TestPrTextHardening:
+    @pytest.mark.parametrize("secret", [
+        "postgres://admin:s3cretpw@db.internal:5432/app",
+        "mongodb+srv://u:secret123@cluster0.example.net/db",
+        "postgres://user:p@ss@host/db",
+        "Authorization: Bearer abcdEFGH12345678tokenvalue",
+        "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        "pwd=hunter2hunter2",
+        "password: swordfish99",
+        "sk_" + "live_51H8abcdefghijkl",
+        "sk_" + "test_4eC39HqLyjWDarjtT1zdp7dc",
+    ])
+    def test_secret_shapes_are_redacted(self, secret):
+        from isitsecure.engine.fixes.pr_text import inline
+        out = inline(f"leaked {secret} here", 300)
+        assert "[REDACTED]" in out
+        for needle in ("s3cretpw", "secret123", "p@ss", "abcdEFGH12345678tokenvalue",
+                       "wJalrXUtnFEMI", "hunter2hunter2", "swordfish99",
+                       "51H8abcdefghijkl", "4eC39HqLyjWDarjtT1zdp7dc"):
+            assert needle not in out
+
+    def test_autolinks_issue_refs_and_bidi_are_neutralised(self):
+        from isitsecure.engine.fixes.pr_text import inline, md_text
+        out = md_text("see https://evil.example/x and www.evil.example and GH-42 and &#64;bob")
+        assert "https://" not in out and "www.evil" not in out
+        assert "GH-42" not in out and "&#64;" not in out
+        assert "\u202e" not in inline("abc\u202edef\u2066ghi\u200f")
+        assert inline("abc\u202edef") == "abcdef"
 
 
 class TestRealCloneFunction:

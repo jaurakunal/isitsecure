@@ -510,7 +510,7 @@ class FixAllRequest(BaseModel):
     scan_id: str
     severities: Optional[list[str]] = None
     # Remote-repo → pull-request flow (GitHub only). The token is used for the
-    # push + PR API and is NEVER persisted or logged.
+    # clone, push and PR API and is NEVER persisted or logged.
     github_token: Optional[str] = None
     pr_strategy: Optional[str] = None
     max_prs: Optional[int] = None

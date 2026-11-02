@@ -96,7 +96,7 @@ line without removing the bug is reported as still present, and a finding whose
 equivalent now appears in another file is reported as *possibly moved*
 (unverifiable), not resolved. Files with mixed
 CRLF/LF line endings are not auto-fixed; CRLF files stay CRLF. `--api-key` applies to the selected `--llm`
-provider only; the environment/config key is looked up per provider. The remote flow never pushes to the default branch — fixes land on
+provider only; the environment/config key is looked up per provider. The remote flow never pushes to the base branch — fixes land on
 feature branches as pull requests; `--max-prs` caps the count (default 8) and
 excess low-severity categories batch into one PR. The GitHub token is used only
 for the clone, push and PR and is never stored or logged; it is passed to git
@@ -108,23 +108,49 @@ Remote-flow behavior worth knowing:
 - PRs target the branch the scan ran on (the report's `repo_branch`); with none
   recorded, the default branch is looked up and a failure (401/403/404, a
   renamed repo, a network error) is reported instead of falling back to `main`.
-- Branch names are `isitsecure/fix-<slug>-<hash>` for per-file and per-finding
-  strategies, so paths that slug alike (`a_b.py`, `a-b.py`) get distinct branches.
-- Retries are safe: each planned branch is looked up with `git ls-remote` before
-  any LLM call. A branch from an earlier run is never overwritten (no
-  force-push); with an open PR it is noted as skipped, without one it is an
-  error telling you to open a PR from it or delete it. A branch pushed but whose
-  PR could not be opened is listed in the result's `orphaned_branches`.
-- Only a genuine non-fast-forward rejection is reported as "branch already
-  exists"; any other push rejection (pre-receive hook, protected branch, push
-  protection, token scope) shows git's own message with secrets scrubbed.
-- Commits are authored as `isitsecure[bot]` with hooks and gpg signing disabled.
-  Finding titles/paths in commit messages and PR text are flattened to one
-  line, redacted for secret-looking values, and escaped (`@mentions`, images,
-  backticks, `#123`). A failed commit is rolled back; a fix that changes nothing
-  or targets a symlink is skipped.
-- Every git command has a timeout (120 s, clone 300 s) and is killed, with its
-  child processes, on timeout or cancellation.
+  An unusable recorded branch name falls back to the default branch with a
+  visible warning.
+- `--repo` may be an ssh/scp URL, but the clone and push always go over https
+  with the token; your ssh keys are not used.
+- **Branch names** are `isitsecure/fix-<slug>`; per-file and per-finding
+  branches add a short stable hash (of the path, or of category + path + line +
+  title) so two paths like `a_b.py` and `a-b.py` never collide and the same
+  finding gets the same name on every re-run. A `-fixes` suffix is added if the
+  name would equal the base branch.
+- **Re-runs are never blocked, and never overwrite**: before any LLM call the
+  remote is checked (`git ls-remote`) for `isitsecure/fix-<slug>`, `-2`, `-3`
+  and so on. If one of them has an OPEN pull request, that group is skipped
+  (noted, no duplicate PR). A name that exists with no open PR (its PR was
+  merged and GitHub kept the branch, or an earlier run pushed it but failed to
+  open the PR) is left untouched and never reused; the next free `-2`, `-3` ...
+  name (up to `-9`) gets the freshly generated fixes. There is no force-push.
+  If a branch is pushed but opening its PR fails, the error and the
+  `orphaned_branches` result field name it. `--dry-run` does not contact the
+  remote beyond the scan, so leftover branches are only detected on a real run.
+- **Push failures** show git's real message (hook, protected branch, push
+  protection, token scope); only git's own non-fast-forward / fetch-first
+  rejection is reported as "branch already exists".
+- **Git isolation**: every git command runs with your global and system git
+  config ignored (`GIT_CONFIG_GLOBAL` = null device, `GIT_CONFIG_NOSYSTEM=1`),
+  so a `url.<x>.insteadOf` rewrite cannot send the clone or push elsewhere (for
+  example over ssh, around the token). Proxies must be set with `HTTPS_PROXY` /
+  `NO_PROXY`, not in `~/.gitconfig`.
+- **Commits** use an `isitsecure[bot]` identity with hooks and gpg signing
+  disabled; finding titles and paths are flattened to one line, secret-looking
+  values (URL credentials, bearer tokens, key/password assignments, common
+  token shapes) are redacted, and `@mentions`, images, links, `#123`/`GH-123`
+  references, backticks and bidi overrides are neutralised in PR text. A fix
+  that fails to commit, makes no change, or targets a symlink is skipped and
+  never leaks into another finding's commit.
+- Each git command has a timeout (120 s; 300 s for the clone) and is killed,
+  with its child processes, if it hangs or the run is cancelled (process group
+  on Linux/macOS, `taskkill /T` on Windows).
+- **Exit status** is `1` if any error was reported or no PR was opened
+  (including a leftover branch with no open PR), else `0`.
+- **Result JSON** (server `fix-all` and the MCP/API): `mode`, `repo`,
+  `base_branch`, `fixed_count`, `skipped[]`, `errors[]`, `orphaned_branches[]`,
+  `summary`, and `pull_requests[]` (`category`, `title`, `branch`, `url`,
+  `finding_count`, `is_low_batch`).
 
 ## Configuration
 

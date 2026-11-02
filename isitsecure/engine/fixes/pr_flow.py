@@ -15,11 +15,13 @@ Design (SRP / DIP / OCP):
                                         commit-per-finding → push → open PR.
 
 SAFETY (see the module tests):
-    * NEVER pushes to the default branch — always a feature branch + PR.
+    * NEVER pushes to the base branch — always a feature branch + PR.
     * NEVER force-pushes. The remote is checked (``ls-remote``) for each
-      planned ``isitsecure/fix-*`` branch BEFORE any LLM spend; a branch that
-      already exists (e.g. an earlier run whose PR failed) is reported — or, if
-      it already has an open PR, noted — and never overwritten or duplicated.
+      planned ``isitsecure/fix-*`` branch BEFORE any LLM spend. A branch that
+      already exists with an OPEN pull request is noted and skipped (no
+      duplicate); one that exists with NO open PR (merged earlier, or orphaned
+      by a failed PR) is never reused or overwritten — the next free
+      ``-2``/``-3``… name is used instead, so a re-run is never blocked.
     * The GitHub token is passed in, never persisted, never logged: it is not in
       the clone URL, argv or ``.git/config`` (see ``git_ops``), and git errors
       are scrubbed of it before surfacing.
@@ -285,6 +287,11 @@ def _slugify(text: str) -> str:
     return slug or "misc"
 
 
+def _finding_identity(f: DeepFinding) -> str:
+    loc = f.code_location
+    return f"{f.category.value}|{loc.file_path}|{loc.line_number}|{f.title}"
+
+
 def _short_hash(text: str) -> str:
     """Stable 8-hex digest, used to keep branch names unique across groups."""
     return hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()[:8]
@@ -400,7 +407,9 @@ def _build_raw_groups(findings: list[DeepFinding], strategy: str) -> list[PRGrou
                 PRGroup(
                     key=f.id,
                     title_label=f"{label}: {f.title}",
-                    branch_suffix=_unique_suffix(label, f.id),
+                    # Stable content identity (NOT f.id, a random uuid per
+                    # scan) so a re-run maps the same finding to the same name.
+                    branch_suffix=_unique_suffix(label, _finding_identity(f)),
                     findings=[f],
                 )
             )
@@ -739,10 +748,37 @@ class PRFlowResult:
         }
 
 
+def resolve_scan_branch(branch: str | None) -> tuple[str | None, str | None]:
+    """Vet the branch a scan ran on: ``(usable_branch_or_None, warning_or_None)``.
+
+    An empty/detached value means "use the default branch" (no warning). A name
+    git would reject falls back to the default branch WITH a warning rather than
+    failing the whole fix job.
+    """
+    if branch in (None, "", "HEAD"):
+        return None, None
+    if is_valid_branch_name(branch):
+        return branch, None
+    return None, (
+        f"Scanned branch {inline(branch, 60)!r} is not a usable branch name; "
+        "falling back to the repository's default branch."
+    )
+
+
+# Free-name search depth: ``x``, ``x-2`` … ``x-9``.
+MAX_BRANCH_SUFFIX = 9
+
+
 def _branch_for(group: PRGroup, base_branch: str) -> str:
     """Feature-branch name for a group; never equal to the base branch."""
     branch = f"isitsecure/fix-{group.branch_suffix}"
     return f"{branch}-fixes" if branch == base_branch else branch
+
+
+def _candidate_branches(group: PRGroup, base_branch: str) -> list[str]:
+    """Names to try in order: the root name, then ``-2`` … ``-9``."""
+    root = _branch_for(group, base_branch)
+    return [root] + [f"{root}-{n}" for n in range(2, MAX_BRANCH_SUFFIX + 1)]
 
 
 def _unfixable_path_reason(clone_dir: str, rel_path: str) -> str | None:
@@ -853,15 +889,18 @@ class PRFlow:
                 return result
 
             groups = group_findings(fixable, strategy=strategy, max_prs=max_prs)
-            existing = await self._existing_branches(git, clone_dir, groups, emit)
+            existing = await self._existing_branches(
+                git, clone_dir, groups, base_branch, emit
+            )
 
+            taken: set[str] = set()
             for group in groups:
-                branch_name = _branch_for(group, base_branch)
-                if branch_name in existing:
-                    await self._report_existing_branch(
-                        group, branch_name, ref, base_branch, github, result
-                    )
+                branch_name = await self._select_branch(
+                    group, base_branch, existing, taken, ref, github, result
+                )
+                if branch_name is None:
                     continue
+                taken.add(branch_name)
                 await self._process_group(
                     group=group,
                     branch=branch_name,
@@ -882,7 +921,12 @@ class PRFlow:
     @staticmethod
     async def _detect_default_branch(github, ref: RepoRef, emit) -> str:
         await PRFlow._maybe_emit(emit, "progress", "Detecting default branch…")
-        return await github.get_default_branch(ref)
+        name = await github.get_default_branch(ref)
+        if not is_valid_branch_name(name):
+            raise RepoAccessError(
+                f"GitHub returned an unusable default branch name for {ref.slug}."
+            )
+        return name
 
     @staticmethod
     def _split_fixable(
@@ -900,10 +944,10 @@ class PRFlow:
         return fixable
 
     async def _existing_branches(
-        self, git, clone_dir: str, groups: list[PRGroup], emit
+        self, git, clone_dir: str, groups: list[PRGroup], base_branch: str, emit
     ) -> set[str]:
-        """Planned branches already on the remote, found BEFORE any LLM spend."""
-        planned = [_branch_for(g, "") for g in groups]
+        """Candidate branches already on the remote, found BEFORE any LLM spend."""
+        planned = [c for g in groups for c in _candidate_branches(g, base_branch)]
         try:
             return await remote_branches(git, clone_dir, planned)
         except GitError as exc:
@@ -916,28 +960,41 @@ class PRFlow:
             return set()
 
     @staticmethod
-    async def _report_existing_branch(
+    async def _select_branch(
         group: PRGroup,
-        branch: str,
-        ref: RepoRef,
         base_branch: str,
+        existing: set[str],
+        taken: set[str],
+        ref: RepoRef,
         github,
         result: PRFlowResult,
-    ) -> None:
-        """A branch from an earlier run exists: never overwrite, never duplicate."""
-        open_url = await github.find_open_pr(ref, head=branch, base=base_branch)
-        if open_url:
-            result.skipped.append(
-                f"{group.title_label} — branch {branch!r} already has an open pull "
-                f"request ({open_url}); nothing new was opened."
-            )
-            return
+    ) -> str | None:
+        """Pick this group's branch, or ``None`` when it must not run.
+
+        Walk ``x``, ``x-2`` … in order. A name that exists remotely with an
+        OPEN pull request means the work is already proposed: skip the group
+        (no duplicate). One that exists without an open PR (merged earlier, or
+        orphaned by a failed PR) is never reused or overwritten: try the next
+        name. The first free name wins.
+        """
+        for candidate in _candidate_branches(group, base_branch):
+            if candidate in taken:
+                continue
+            if candidate not in existing:
+                return candidate
+            open_url = await github.find_open_pr(ref, head=candidate, base=base_branch)
+            if open_url:
+                result.skipped.append(
+                    f"{group.title_label} — branch {candidate!r} already has an open "
+                    f"pull request ({open_url}); nothing new was opened."
+                )
+                return None
         result.errors.append(
-            f"{group.key}: branch {branch!r} already exists on the remote (left by an "
-            "earlier run) with no open pull request. Nothing was changed and no LLM "
-            "calls were spent on it. Open a PR from that branch yourself, or delete "
-            "it, then re-run."
+            f"{group.key}: every branch name up to {MAX_BRANCH_SUFFIX} variants of "
+            f"{_branch_for(group, base_branch)!r} already exists on the remote with no "
+            "open pull request. Delete the stale isitsecure/fix-* branches, then re-run."
         )
+        return None
 
     async def _process_group(
         self,
@@ -965,7 +1022,7 @@ class PRFlow:
 
         # Start from a clean checkout of the base branch for each group.
         try:
-            await git.run(clone_dir, "checkout", "--force", base_branch)
+            await git.run(clone_dir, "checkout", "--force", base_branch, "--")
             await git.run(clone_dir, "checkout", "-B", branch)
         except GitError as e:
             result.errors.append(f"{group.key}: could not create branch — {inline(str(e), 300)}")

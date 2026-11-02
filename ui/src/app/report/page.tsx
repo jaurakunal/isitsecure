@@ -170,7 +170,7 @@ function ReportContent() {
                 {isRemoteRepo && isGithub ? (
                   <>This scan targeted a remote GitHub repo, so isitsecure clones it and opens
                   <strong> pull requests grouped by vulnerability category</strong> (one commit per
-                  fix). It never pushes to your default branch.</>
+                  fix). It never pushes to the base branch.</>
                 ) : isRemoteRepo ? (
                   <>This scan targeted a non-GitHub remote repo &mdash; only GitHub PRs are supported,
                   so you&rsquo;ll get a downloadable fix plan instead.</>
@@ -197,7 +197,7 @@ function ReportContent() {
           {isRemoteRepo && isGithub && fixState === "idle" && (
             <div className="mt-3">
               <label className="block text-xs text-text-muted mb-1">
-                GitHub token (repo scope) &mdash; used once to push branches &amp; open PRs, never stored
+                GitHub token (repo scope) &mdash; used only to clone, push branches &amp; open PRs; never stored
               </label>
               <input
                 type="password"
@@ -316,13 +316,19 @@ function ReportContent() {
                     </ul>
                   )}
                   <p className="text-text-muted">
-                    Review each PR, run your tests, then merge. isitsecure never pushes to your
-                    default branch.
+                    Review each PR, run your tests, then merge. isitsecure never pushes to the
+                    base branch.
                   </p>
                   {fixResult.errors && fixResult.errors.length > 0 && (
                     <ul className="text-medium space-y-0.5">
                       {fixResult.errors.map((e, i) => <li key={i}>• {e}</li>)}
                     </ul>
+                  )}
+                  {fixResult.orphaned_branches && fixResult.orphaned_branches.length > 0 && (
+                    <p className="text-medium">
+                      Pushed without a pull request (open one yourself or delete the branch):{" "}
+                      <code>{fixResult.orphaned_branches.join(", ")}</code>
+                    </p>
                   )}
                 </div>
               )}

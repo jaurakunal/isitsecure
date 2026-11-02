@@ -250,6 +250,8 @@ export interface FixAllResult {
   repo?: string;
   summary?: string;
   errors?: string[];
+  // Branches pushed to the remote whose pull request could not be opened.
+  orphaned_branches?: string[];
   pull_requests?: OpenedPR[];
 }
 
@@ -271,8 +273,8 @@ export interface FixAllOptions {
 /** Start a batch fix job for a scan's findings. Returns a job id for streaming.
  *
  * For a remote GitHub scan, pass a `githubToken` in `opts` to open per-category
- * pull requests. The token is sent once to the local server for the push + PR
- * and is never persisted. */
+ * pull requests. The token is sent once to the local server for the clone, push
+ * and PR and is never persisted. */
 export async function startFixAll(
   scanId: string,
   severities?: string[],

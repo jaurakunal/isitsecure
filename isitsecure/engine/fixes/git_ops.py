@@ -11,8 +11,16 @@ an ``http.<github>.extraheader`` Authorization header for that one process, so
 nothing token-bearing persists in the clone.
 
 The same environment pins a bot commit identity and disables hooks and gpg
-signing, so commits made in the temp clone never depend on (or leak) the
-operator's global git configuration.
+signing, and points ``GIT_CONFIG_GLOBAL`` at the null device with
+``GIT_CONFIG_NOSYSTEM=1``: the operator's global/system git config (identity,
+hooks, gpg, and above all ``url.<x>.insteadOf`` rewrites that could send the
+clone/push over ssh and around the token) is never consulted. Proxy settings
+must therefore come from the standard ``HTTPS_PROXY``/``NO_PROXY`` environment
+variables, not from ``~/.gitconfig``.
+
+POSIX gets a fresh process group per command so a timeout/cancel kills git and
+its children. Windows has no process groups here: ``taskkill /T`` (or a plain
+``kill``) is used instead.
 """
 
 from __future__ import annotations
@@ -23,6 +31,7 @@ import logging
 import os
 import re
 import signal
+import subprocess
 
 logger = logging.getLogger(__name__)
 
@@ -49,20 +58,26 @@ class GitTimeoutError(GitError):
     """A git command exceeded its timeout and was killed."""
 
 
-def is_non_fast_forward(git_error: str) -> bool:
-    """True only when a push was refused because the remote branch has diverged.
+# Git's own status line for a refused ref: `` ! [rejected] HEAD -> x (non-fast-forward)``.
+# Anchored at the line start, so hook output (always prefixed ``remote:``) that
+# merely quotes those words can never match.
+_NFF_STATUS_LINE = re.compile(
+    r"^\s*!\s*\[(?:remote )?rejected\][^\n]*\((?:non-fast-forward|fetch first|stale info)\)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
 
-    Git words that rejection ``(non-fast-forward)`` or ``(fetch first)`` (or
-    ``(stale info)`` for leased pushes). Every other ``[remote rejected]``
-    reason (pre-receive hook, protected branch, push protection, missing token
-    scope, size limits) is a different problem and must surface its real
-    message rather than be mislabelled as "branch already exists".
+
+def is_non_fast_forward(git_error: str) -> bool:
+    """True only when git itself reports the push refused because the branch diverged.
+
+    Matches git's ``! [rejected] ... (non-fast-forward | fetch first | stale
+    info)`` status lines only. Every other rejection (pre-receive hook,
+    protected branch, push protection, missing token scope, size limits), and
+    any hook message that happens to quote those words, is a different problem
+    and must surface its real message rather than be mislabelled as "branch
+    already exists".
     """
-    lowered = git_error.lower()
-    return any(
-        marker in lowered
-        for marker in ("non-fast-forward", "fetch first", "stale info")
-    )
+    return bool(_NFF_STATUS_LINE.search(git_error))
 
 
 def _config_pairs(token: str | None) -> list[tuple[str, str]]:
@@ -81,15 +96,17 @@ def _config_pairs(token: str | None) -> list[tuple[str, str]]:
 def build_git_env(
     token: str | None,
     *,
-    allow_protocol: str = DEFAULT_ALLOW_PROTOCOL,
+    allow_protocol: str | None = None,
     base: dict[str, str] | None = None,
 ) -> dict[str, str]:
     """Environment for a git child process (see module docstring)."""
     env = dict(os.environ if base is None else base)
     env.update(
         {
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_NOSYSTEM": "1",
             "GIT_TERMINAL_PROMPT": "0",
-            "GIT_ALLOW_PROTOCOL": allow_protocol,
+            "GIT_ALLOW_PROTOCOL": allow_protocol or DEFAULT_ALLOW_PROTOCOL,
             "GCM_INTERACTIVE": "never",
             "GIT_ASKPASS": "true",
             "SSH_ASKPASS": "true",
@@ -120,7 +137,7 @@ class GitRunner:
         token: str | None = None,
         *,
         timeout: float | None = None,
-        allow_protocol: str = DEFAULT_ALLOW_PROTOCOL,
+        allow_protocol: str | None = None,
     ) -> None:
         self._token = token
         self._timeout = timeout
@@ -139,9 +156,9 @@ class GitRunner:
         proc = await asyncio.create_subprocess_exec(
             "git", "-C", cwd, *args,
             stdin=asyncio.subprocess.DEVNULL,
-            # Own process group, so a timeout/cancel can kill git AND whatever it
-            # spawned (ssh, credential helper, gpg, hooks) rather than orphan it.
-            start_new_session=True,
+            # Own process group (POSIX), so a timeout/cancel can kill git AND
+            # whatever it spawned (ssh, credential helper, gpg, hooks).
+            start_new_session=_process_groups_supported(),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=build_git_env(self._token, allow_protocol=self._allow_protocol),
@@ -163,21 +180,41 @@ class GitRunner:
         return self._scrub(stdout)
 
 
-async def _kill_and_reap(proc: asyncio.subprocess.Process) -> None:
-    """SIGKILL the child's whole process group, then wait for it to exit."""
-    try:
-        os.killpg(proc.pid, signal.SIGKILL)
-    except OSError:
+def _process_groups_supported() -> bool:
+    return os.name == "posix" and hasattr(os, "killpg") and hasattr(signal, "SIGKILL")
+
+
+def _kill_tree(proc: asyncio.subprocess.Process) -> None:
+    """Kill ``proc`` and, where the platform allows, everything it spawned."""
+    if _process_groups_supported():
         try:
-            proc.kill()
-        except ProcessLookupError:
+            os.killpg(proc.pid, signal.SIGKILL)
             return
+        except (OSError, AttributeError):
+            pass
+    elif os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                capture_output=True, timeout=10, check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            pass
+    try:
+        proc.kill()
+    except (ProcessLookupError, OSError):
+        pass
+
+
+async def _kill_and_reap(proc: asyncio.subprocess.Process) -> None:
+    """Kill the child (tree) and wait for it to exit."""
+    _kill_tree(proc)
 
     async def _reap() -> None:
         try:
             await asyncio.wait_for(proc.wait(), timeout=5)
-        except Exception:  # noqa: BLE001 — best effort
-            pass
+        except Exception:  # noqa: BLE001 — best effort, but never silent
+            logger.debug("git child %s was not reaped within 5s", proc.pid, exc_info=True)
 
     # Shield: the reap must finish even while the caller is being cancelled.
     await asyncio.shield(_reap())
@@ -199,19 +236,32 @@ async def remote_branches(
     return found
 
 
-_SAFE_BRANCH = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_./-]*$")
-
-
 def is_valid_branch_name(name: str) -> bool:
-    """Conservative branch-name check (no option-injection, no odd ref syntax)."""
-    return (
-        bool(name)
-        and len(name.encode()) <= 200
-        and bool(_SAFE_BRANCH.match(name))
-        and ".." not in name
-        and "//" not in name
-        and not name.endswith((".lock", "/", "."))
-    )
+    """True when ``name`` is a safe, git-valid branch name.
+
+    Defers to ``git check-ref-format --branch`` (so ``rel/v1.0+b``,
+    ``dep/foo@1.2`` and ``feature/é`` pass while ``a/.b`` and ``x.lock/y`` do
+    not) and additionally refuses option-like names, ``refs/...`` spellings and
+    reflog syntax.
+    """
+    if (
+        not name
+        or len(name.encode("utf-8", "replace")) > 200
+        or name.startswith(("-", "refs/"))
+        or "@{" in name
+        or name == "@"
+        or "\x00" in name
+    ):
+        return False
+    try:
+        proc = subprocess.run(
+            ["git", "check-ref-format", "--branch", name],
+            capture_output=True, timeout=10, check=False,
+            env=build_git_env(None),
+        )
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0 and proc.stdout.decode("utf-8", "replace").strip() == name
 
 
 async def clone_repo(
@@ -220,7 +270,7 @@ async def clone_repo(
     dest: str,
     token: str | None,
     *,
-    allow_protocol: str = DEFAULT_ALLOW_PROTOCOL,
+    allow_protocol: str | None = None,
 ) -> None:
     """Clone ``repo_url`` (full history) into the existing, empty ``dest`` dir.
 

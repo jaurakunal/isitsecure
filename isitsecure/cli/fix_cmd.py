@@ -377,6 +377,7 @@ def _run_remote_pr_fix(
         parse_github_url,
         group_findings,
         PRFlow,
+        resolve_scan_branch,
     )
 
     # Parse + guard the host up front so we fail clearly before scanning.
@@ -397,7 +398,7 @@ def _run_remote_pr_fix(
         err_console.print(
             "[red]Opening pull requests on a remote repo needs a GitHub token.[/red]\n"
             "[bold]Fix:[/bold] pass [dim]--github-token[/dim] (or set GITHUB_TOKEN). "
-            "It's used only for the push + PR and is never stored or logged."
+            "It's used only for the clone, push and PR, and is never stored or logged."
         )
         raise typer.Exit(1)
 
@@ -453,6 +454,10 @@ def _run_remote_pr_fix(
         if msg:
             console.print(f"  [dim]{msg}[/dim]")
 
+    scan_branch, branch_warning = resolve_scan_branch(getattr(report, "repo_branch", None))
+    if branch_warning:
+        err_console.print(f"[yellow]{escape(branch_warning)}[/yellow]")
+
     async def _go():
         flow = PRFlow(FixGenerator(llm_client))
         return await flow.run(
@@ -462,7 +467,7 @@ def _run_remote_pr_fix(
             strategy=pr_strategy,
             max_prs=max_prs,
             # Fix the branch that was scanned, not whatever the default is now.
-            branch=getattr(report, "repo_branch", None) or None,
+            branch=scan_branch,
             emit=_emit,
         )
 
