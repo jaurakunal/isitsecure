@@ -7,8 +7,14 @@ library sinks, so they apply to any app on a supported stack — not per-app.
 
 Best-effort and self-contained:
 * If the ``semgrep`` binary isn't installed (the optional ``[taint]`` extra), the
-  analyzer no-ops and returns ``[]`` — the LLM layer still runs, as today.
-* A crash/timeout in Semgrep never fails the scan; it logs and returns ``[]``.
+  analyzer no-ops and returns ``[]`` — the LLM layer still runs, as today. A
+  normal scan does NOT treat that as a failure (the extra is optional), but a
+  fix-verification re-scan does (``require_semgrep()``): an absent finding is no
+  evidence of a fix when the scanner that raised it never ran.
+* A crash/timeout/empty output in Semgrep never fails the scan; it logs, records
+  a scanner failure (``semgrep_taint: ...``) so the report is marked incomplete
+  and the verifier says "could not verify", and returns ``[]``.
+* A repo with no language covered by a rule pack is NOT an error.
 
 SRP: this class runs Semgrep and shapes findings. It does not decide severity
 policy (the rules do) or triage (that's the triage service).
@@ -17,6 +23,8 @@ policy (the rules do) or triage (that's the triage service).
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import contextvars
 import json
 import logging
 import os
@@ -29,11 +37,28 @@ from isitsecure.engine.code_analysis.models import CodeFinding
 from isitsecure.engine.code_analysis.protocols import RepoSnapshot
 from isitsecure.engine.code_analysis.shared_utils import iter_repo_files
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
+from isitsecure.engine.shared.scanner_runner import record_scanner_failure
 
 logger = logging.getLogger(__name__)
 
 _RULES_DIR = Path(__file__).parent / "semgrep_rules"
 _SCAN_TIMEOUT_S = 120.0
+
+# Set by the fix-verification re-scan: a missing semgrep binary is then a
+# scanner failure (the optional extra's absence must not read as "fixed").
+_semgrep_required: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "isitsecure_semgrep_required", default=False
+)
+
+
+@contextlib.contextmanager
+def require_semgrep():
+    """Within this block, a missing semgrep is recorded as a scanner failure."""
+    token = _semgrep_required.set(True)
+    try:
+        yield
+    finally:
+        _semgrep_required.reset(token)
 
 
 @dataclass(frozen=True)
@@ -86,17 +111,21 @@ class SemgrepAnalyzer:
         self._rules_dir = rules_dir
 
     async def scan(self, repo: RepoSnapshot) -> list[CodeFinding]:
+        packs = self._select_packs(repo)
+        if not packs:
+            return []  # no rule pack covers this repo's languages (not an error)
         semgrep = self._find_semgrep()
         if not semgrep:
             logger.debug("semgrep not installed — skipping taint analysis (isitsecure[taint])")
+            if _semgrep_required.get():
+                record_scanner_failure(
+                    self.scanner_name, "semgrep is not installed (pip install isitsecure[taint])"
+                )
             return []
-        packs = self._select_packs(repo)
-        if not packs:
-            return []  # no rule pack covers this repo's languages
 
         raw = await self._run_semgrep(semgrep, repo.clone_path, packs)
         if raw is None:
-            return []
+            return []  # _run_semgrep already recorded why
         return self._to_findings(raw, repo)
 
     # -- internals --------------------------------------------------------
@@ -185,17 +214,25 @@ class SemgrepAnalyzer:
                 )
             except TimeoutError:
                 logger.warning("semgrep timed out after %ss — skipping", _SCAN_TIMEOUT_S)
+                record_scanner_failure(
+                    self.scanner_name, f"semgrep timed out after {_SCAN_TIMEOUT_S:.0f}s"
+                )
                 return None
             if not stdout:
                 logger.warning("semgrep produced no output: %s", (stderr or b"").decode()[:200])
+                record_scanner_failure(self.scanner_name, "semgrep produced no output")
                 return None
             data = json.loads(stdout)
-            return data if isinstance(data, dict) else None
+            if not isinstance(data, dict):
+                record_scanner_failure(self.scanner_name, "semgrep output was not a JSON object")
+                return None
+            return data
         except asyncio.CancelledError:
             # Outer scan timeout/cancel — reap in finally, then propagate.
             raise
         except Exception as exc:  # never fail the scan over the taint layer
             logger.warning("semgrep run failed: %s", exc)
+            record_scanner_failure(self.scanner_name, "semgrep crashed or printed invalid output")
             return None
         finally:
             # Guarantee the (heavy) semgrep child is killed and reaped on ANY exit

@@ -31,7 +31,7 @@ from isitsecure.engine.fixes.verifier import (
     failed_scanner_names,
     failure_blocks,
 )
-from isitsecure.engine.identity import finding_fingerprint
+from isitsecure.engine.identity import finding_fingerprint, matches_any
 from isitsecure.engine.models import DeepFinding
 
 logger = logging.getLogger(__name__)
@@ -157,10 +157,14 @@ class _PresentFingerprints(set):
 
 
 async def _sast_present_fingerprints(repo_path: str) -> set[str]:
-    """Fingerprints still raised by a code-only re-scan of ``repo_path``."""
-    from isitsecure.engine.fixes.verifier import _rescan_sast_findings
+    """Fingerprints (current v2 AND legacy) still raised by a code-only re-scan.
+
+    Both schemes are included so a finding whose flagged line was merely edited
+    (v2 changed, legacy unchanged) still matches while the bug remains.
+    """
+    from isitsecure.engine.fixes.verifier import _rescan_sast_findings, rescan_fingerprints
     rescan = await _rescan_sast_findings(repo_path)
-    present = _PresentFingerprints(d["fingerprint"] for d in rescan if d.get("fingerprint"))
+    present = _PresentFingerprints(fp for d in rescan for fp in rescan_fingerprints(d))
     present.scanner_errors = list(getattr(rescan, "scanner_errors", []))
     return present
 
@@ -229,7 +233,7 @@ async def reverify_findings(
             else:
                 failed, unmapped = failed_scanner_names(getattr(present, "scanner_errors", []))
                 for f in sast:
-                    if finding_fingerprint(f) in present:
+                    if matches_any(f, present):
                         verdict_by_id[f.id] = Verdict(f, VerifyStatus.STILL_PRESENT)
                     elif failure_blocks(f.scanner_name, failed, unmapped):
                         # Its scanner failed/timed out in the re-scan: absence is not a fix.

@@ -76,8 +76,20 @@ to a detached HEAD when it started there). Fixes keep each file's newline
 style, trailing newline and UTF-8 BOM; files that are not valid UTF-8, finding paths
 outside the repo, and anything under `.git/` are skipped; a reply that is
 truncated, ambiguous about its code fences, or identical to the input is
-rejected rather than written. A reply under 40% of the original length (for
-files of 400 characters or more) is treated as truncated; files with mixed
+rejected rather than written. A reply under 60% of the original length (for
+files of 400 characters or more) is treated as truncated, a reply that elides
+code with a placeholder (`# ... rest of file unchanged ...`, `// existing code`,
+a bare `...`) is rejected, and for Python and JSON files a reply that no longer
+parses is rejected (other languages have no cheap checker and are not checked).
+A reply cut off by the model's output limit (an unclosed code fence) fails with
+an explicit "too large to rewrite whole" message. Findings chained in one file
+drop their scan-time line numbers once an earlier fix changed the content.
+`FixResult.diff` is a real unified diff that `git apply --check` accepts
+(CRLF files and files without a trailing newline included). The verification
+re-scan matches a finding on any of its fingerprints, so changing the flagged
+line without removing the bug is reported as still present, and a finding whose
+equivalent now appears in another file is reported as *possibly moved*
+(unverifiable), not resolved. Files with mixed
 CRLF/LF line endings are not auto-fixed; CRLF files stay CRLF. `--api-key` applies to the selected `--llm`
 provider only; the environment/config key is looked up per provider. The remote flow never pushes to the default branch — fixes land on
 feature branches as pull requests; `--max-prs` caps the count (default 8) and

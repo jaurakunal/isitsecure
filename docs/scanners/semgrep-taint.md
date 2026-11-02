@@ -48,8 +48,9 @@ pip install -e ".[taint]"   # not part of ".[all]"; install it separately (or `p
 
 It is **best-effort and self-contained**:
 
-- If the `semgrep` binary isn't installed, the analyzer **no-ops and returns nothing** — the LLM layer still runs, exactly as before.
-- A crash or timeout in Semgrep **never fails the scan**; it logs and returns no findings. The subprocess is always killed and reaped (never orphaned), even if the overall scan is cancelled.
+- If the `semgrep` binary isn't installed, the analyzer **no-ops and returns nothing** — the LLM layer still runs, exactly as before. A normal scan does not treat this as a failure (the extra is optional), so the grade is not made provisional. A **fix-verification re-scan** (`isitsecure fix`, `isitsecure verify`) does record `semgrep_taint: semgrep is not installed` as a scanner error, because a finding that is absent only because semgrep never ran is not evidence of a fix: those findings are reported *could not verify*, never *fixed*.
+- A crash, timeout (120 s), or empty/invalid output from Semgrep **never fails the scan**; it logs, returns no findings, and records a `semgrep_taint: ...` entry in `scanner_errors` (so the report is marked incomplete rather than looking clean, and verification says *could not verify*). The subprocess is always killed and reaped (never orphaned), even if the overall scan is cancelled.
+- A repo with no language covered by a rule pack is **not** an error: nothing ran because nothing applied.
 - It only runs when the repo contains JS/TS, Python, Java, Kotlin, or Go files.
 - No network: the rule packs ship with isitsecure; Semgrep runs with `--metrics off`.
 

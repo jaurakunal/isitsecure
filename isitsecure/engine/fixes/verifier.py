@@ -13,8 +13,15 @@ raised the finding no longer raises it, not a formal proof of correctness.
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from dataclasses import dataclass, field
 
+from isitsecure.engine.identity import (
+    _discriminator,
+    compute_fingerprint,
+    finding_fingerprint,
+    legacy_fingerprint,
+)
 from isitsecure.engine.models import DeepFinding
 
 logger = logging.getLogger(__name__)
@@ -73,6 +80,10 @@ class VerifyResult:
     still_present: int = 0
     unverifiable: int = 0
     still_present_titles: list[str] = field(default_factory=list)
+    # Findings whose old location is clean but an equivalent finding (same
+    # scanner/title/flagged code) now appears in ANOTHER file: the code may just
+    # have moved. Counted as unverifiable, never as resolved.
+    possibly_moved_titles: list[str] = field(default_factory=list)
     error: str = ""
     # True when the re-scan itself failed/aborted: the check did not run, so
     # nothing may be claimed as resolved.
@@ -89,6 +100,7 @@ class VerifyResult:
             "unverifiable": self.unverifiable,
             "checked": self.checked,
             "still_present_titles": self.still_present_titles[:10],
+            "possibly_moved_titles": self.possibly_moved_titles[:10],
             "error": self.error,
             "could_not_verify": self.could_not_verify,
         }
@@ -100,9 +112,91 @@ def sig_obj(f: DeepFinding) -> tuple:
     return (f.scanner_name, cat, fp, f.title)
 
 
-def _sig_dict(d: dict) -> tuple:
+def rescan_fingerprints(d: dict) -> tuple[str, str]:
+    """``(v2, legacy)`` fingerprints of a re-scan finding dict.
+
+    The report carries the v2 value as ``fingerprint``; the legacy value
+    (scanner, category, file, title) is recomputed so findings can be matched
+    against originals under either identity scheme.
+    """
     loc = d.get("code_location") or {}
-    return (d.get("scanner_name"), str(d.get("category")), loc.get("file_path", ""), d.get("title"))
+    legacy = compute_fingerprint(
+        scanner_name=d.get("scanner_name") or "",
+        category=d.get("category"),
+        title=d.get("title") or "",
+        file_path=loc.get("file_path") or None,
+        endpoint_url=d.get("endpoint_url"),
+        http_method=d.get("http_method"),
+    )
+    return (d.get("fingerprint") or legacy, legacy)
+
+
+def _dict_discriminator(d: dict) -> str:
+    """The per-instance discriminator (flagged source line) of a finding dict."""
+    try:
+        return _discriminator(DeepFinding.model_validate(d))
+    except Exception:  # noqa: BLE001 - malformed dict: no discriminator
+        return ""
+
+
+def classify_against_rescan(
+    originals: list[DeepFinding], rescan: list[dict]
+) -> tuple[list[DeepFinding], list[DeepFinding], list[DeepFinding]]:
+    """Split ``originals`` into ``(still_present, possibly_moved, gone)``.
+
+    An original is *resolved* only when no remaining finding matches ANY of its
+    known fingerprints (current v2 or legacy). Same-legacy duplicates in one
+    file are matched as a multiset -- the same convention as the MCP ``verify``
+    tool (2 old with one signature, 1 remaining => 1 resolved) -- with v2
+    breaking ties so the instance that is actually still there stays present
+    even if a sibling was fixed.
+
+    An original with no match at its own location is ``possibly_moved`` when a
+    remaining finding with the same scanner/category/title and the same
+    (non-empty) flagged line sits in a different file.
+    """
+    rem_v2: Counter = Counter()
+    rem_legacy: Counter = Counter()
+    for d in rescan:
+        v2, legacy = rescan_fingerprints(d)
+        rem_v2[v2] += 1
+        rem_legacy[legacy] += 1
+
+    still: list[DeepFinding] = []
+    undecided: list[DeepFinding] = []
+    for f in originals:
+        v2 = finding_fingerprint(f)
+        if rem_v2.get(v2, 0) > 0:
+            rem_v2[v2] -= 1
+            rem_legacy[legacy_fingerprint(f)] -= 1
+            still.append(f)
+        else:
+            undecided.append(f)
+    gone_or_moved: list[DeepFinding] = []
+    for f in undecided:
+        legacy = legacy_fingerprint(f)
+        if rem_legacy.get(legacy, 0) > 0:
+            rem_legacy[legacy] -= 1
+            still.append(f)
+        else:
+            gone_or_moved.append(f)
+
+    moved: list[DeepFinding] = []
+    gone: list[DeepFinding] = []
+    for f in gone_or_moved:
+        disc = _discriminator(f)
+        cat = f.category.value if hasattr(f.category, "value") else str(f.category)
+        here = f.code_location.file_path if f.code_location else ""
+        relocated = bool(disc) and any(
+            d.get("scanner_name") == f.scanner_name
+            and str(d.get("category")) == cat
+            and d.get("title") == f.title
+            and ((d.get("code_location") or {}).get("file_path") or "") != here
+            and _dict_discriminator(d) == disc
+            for d in rescan
+        )
+        (moved if relocated else gone).append(f)
+    return still, moved, gone
 
 
 def is_verifiable(f: DeepFinding) -> bool:
@@ -115,6 +209,7 @@ def is_verifiable(f: DeepFinding) -> bool:
 
 async def _rescan_sast_findings(repo_path: str) -> list[dict]:
     """Run a code-only SAST scan (no LLM) over a local repo path."""
+    from isitsecure.engine.code_analysis.semgrep_analyzer import require_semgrep
     from isitsecure.engine.enums import ScanMode
     from isitsecure.engine.factory import (
         create_deep_security_scan_agent,
@@ -129,15 +224,17 @@ async def _rescan_sast_findings(repo_path: str) -> list[dict]:
     )
     report = None
     last_message = ""
-    async for event in agent.scan(
-        repo_url=f"file://{repo_path}",
-        scan_mode=ScanMode.CODE_ONLY,
-    ):
-        data = getattr(event, "data", None)
-        if isinstance(data, dict) and data.get("error"):
-            last_message = str(getattr(event, "message", "") or "")
-        if isinstance(data, dict) and "report" in data:
-            report = data["report"]
+    # A verification re-scan must not read a missing optional semgrep as "fixed".
+    with require_semgrep():
+        async for event in agent.scan(
+            repo_url=f"file://{repo_path}",
+            scan_mode=ScanMode.CODE_ONLY,
+        ):
+            data = getattr(event, "data", None)
+            if isinstance(data, dict) and data.get("error"):
+                last_message = str(getattr(event, "message", "") or "")
+            if isinstance(data, dict) and "report" in data:
+                report = data["report"]
     if report is None:
         # No report means the scan never ran (ingestion failure/abort). An
         # empty list here would read as "every finding is gone".
@@ -168,18 +265,20 @@ async def verify_findings_resolved(
         result.unverifiable += len(verifiable)
         return result
 
-    present = {_sig_dict(d) for d in rescan}
     failed, unmapped = failed_scanner_names(getattr(rescan, "scanner_errors", []))
-    blocked = 0
-    for f in verifiable:
-        if sig_obj(f) in present:
-            result.still_present += 1
-            result.still_present_titles.append(f.title)
-        elif failure_blocks(f.scanner_name, failed, unmapped):
-            # The scanner that raised it did not complete: absence is not proof.
-            blocked += 1
-        else:
-            result.resolved += 1
+    still, moved, gone = classify_against_rescan(verifiable, list(rescan))
+    # Absent because its scanner failed/timed out/never ran: not proof of a fix.
+    blocked_f = [f for f in gone if failure_blocks(f.scanner_name, failed, unmapped)]
+    blocked = len(blocked_f)
+    blocked_ids = {id(f) for f in blocked_f}
+    gone = [f for f in gone if id(f) not in blocked_ids]
+    for f in still:
+        result.still_present += 1
+        result.still_present_titles.append(f.title)
+    for f in moved:
+        result.unverifiable += 1
+        result.possibly_moved_titles.append(f.title)
+    result.resolved += len(gone)
     if blocked:
         result.unverifiable += blocked
         result.error = (

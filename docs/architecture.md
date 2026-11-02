@@ -252,7 +252,7 @@ explanation per finding, designed to paste directly into Cursor or Claude Code
 ref when all are tracked, otherwise a file-copy backup; no backup means no write),
 the fixes are written in place (strict UTF-8, newline style preserved, nothing
 under `.git/` or outside the repo), then the code is **re-scanned to verify each
-finding is resolved**; if the re-scan cannot run, nothing is counted as fixed. `fixes/plain_results.py` classifies the
+finding is resolved** (only when no remaining finding matches any of its v2 or legacy fingerprints); if the re-scan cannot run, or the scanner that raised a finding did not (missing optional semgrep, timeout, OSV unreachable), nothing is counted as fixed. `fixes/plain_results.py` classifies the
 outcome (fixed / needs review / couldn't fix) into a plain-language summary
 (`--technical` surfaces the git/backup mechanics).
 
