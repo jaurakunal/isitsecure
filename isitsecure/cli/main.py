@@ -560,7 +560,14 @@ def verify(
 
     from isitsecure.engine import identity as _identity
 
-    findings = [DeepFinding.model_validate(d) for d in data.get("findings", [])]
+    try:
+        findings = [DeepFinding.model_validate(d) for d in data.get("findings", [])]
+    except Exception as exc:  # noqa: BLE001 - malformed report: clear error, no traceback
+        err_console.print(
+            f"[red]Could not read report {report}: it is not a valid scan report "
+            f"({type(exc).__name__}). Re-run the scan with --output json.[/red]"
+        )
+        raise typer.Exit(2) from exc
     unknown: set[str] = set()
     if fingerprint:
         wanted = set(fingerprint)

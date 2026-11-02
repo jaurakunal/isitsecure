@@ -79,7 +79,7 @@ def test_plain_results_says_check_did_not_run():
 # --- reverify: could-not-verify is distinct and never FIXED -------------------
 
 async def test_reverify_sast_rescan_failure_is_could_not_verify(monkeypatch):
-    monkeypatch.setattr(R, "_sast_present_fingerprints",
+    monkeypatch.setattr(R, "_sast_rescan",
                         AsyncMock(side_effect=verifier.RescanFailed("ingestion failed")))
     (v,) = await R.reverify_findings([_sast()], repo_path="/x")
     assert v.status == R.VerifyStatus.COULD_NOT_VERIFY

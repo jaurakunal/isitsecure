@@ -375,7 +375,7 @@
     </div>
     <div class="callout note">
       <div class="label">apply=true: proposed, not built</div>
-      <p>For headless callers, or a user who explicitly wants the tool to do it, <code>fix(…, apply=true)</code> would write through the same safety-net pipeline the CLI uses: back up the working tree, write one finding's fix, re-scan. Still one finding at a time, never "fix everything" over MCP. This fallback is still a proposal in <code>docs/mcp.md</code>.</p>
+      <p>For headless callers, or a user who explicitly wants the tool to do it, <code>fix(…, apply=true)</code> would write through the same safety-net pipeline the CLI uses: back up the file, write one finding's fix, re-scan. Still one finding at a time, never "fix everything" over MCP. This fallback is a proposal only: the <code>fix</code> tool takes no <code>apply</code> argument today and never writes files. (The MCP <code>fix</code> tool does read the file with the strict reader the CLI uses, so CRLF and non-UTF-8 files are never silently rewritten.)</p>
     </div>
   </div>
 </section>
@@ -512,9 +512,9 @@
           <path class="wire at-2" d="M170 110 C 190 110, 190 70, 208 70" marker-end="url(#arrK)"/>
           <g class="node at-2 lit-2" transform="translate(210 44)"><rect width="150" height="52" rx="8"/><text x="12" y="22">no host LLM</text><text class="lbl" x="12" y="40">nobody else can write</text></g>
           <path class="wire at-2" d="M360 70 H 378" marker-end="url(#arrK)"/>
-          <g class="node at-2 lit-2" transform="translate(380 44)"><rect width="160" height="52" rx="8"/><text x="12" y="22">safety-net backup</text><text class="lbl" x="12" y="40">snapshot the working tree</text></g>
+          <g class="node at-2 lit-2" transform="translate(380 44)"><rect width="160" height="52" rx="8"/><text x="12" y="22">safety-net backup</text><text class="lbl" x="12" y="40">snapshot the files it will change</text></g>
           <path class="wire at-2" d="M540 70 H 558" marker-end="url(#arrK)"/>
-          <g class="node at-2 lit-2" transform="translate(560 44)"><rect width="150" height="52" rx="8"/><text x="12" y="22">write the fix</text><text class="lbl" x="12" y="40">one finding at a time</text></g>
+          <g class="node at-2 lit-2" transform="translate(560 44)"><rect width="150" height="52" rx="8"/><text x="12" y="22">write the fix</text><text class="lbl" x="12" y="40">one write per file</text></g>
           <path class="wire at-2" d="M710 70 H 728" marker-end="url(#arrK)"/>
           <g class="node at-2 lit-2" transform="translate(730 44)"><rect width="210" height="52" rx="8" class="soft-safe"/><text x="12" y="22">re-scan to verify</text><text class="lbl" x="12" y="40">fixed / needs review / couldn't fix</text></g>
         </g>
@@ -534,7 +534,7 @@
     </figure>
     <div class="scene-steps">
       <p class="step"><span class="n">1</span>Both paths start from the same <code>FixGenerator</code>: the finding plus its full source file go to the LLM, and a fixed file and unified diff come back.</p>
-      <p class="step"><span class="n">2</span><b>The CLI has no host LLM, so it must apply the fix itself.</b> It snapshots the working tree as a safety net, writes one finding's fix, then re-scans to confirm the finding is gone.</p>
+      <p class="step"><span class="n">2</span><b>The CLI has no host LLM, so it must apply the fix itself.</b> It snapshots the files it will change as a safety net (outside the repo for a file copy), chains the fixes for each file into a single atomic write (rolled back if a later write fails, and never over a file you edited meanwhile), then re-scans to confirm the findings are gone.</p>
       <p class="step"><span class="n">3</span><b>The MCP always has a capable agent, so it defers the write.</b> It returns the diff with <code>applied: false</code>, the host applies it in your review flow, and <code>verify</code> closes the loop with the same re-scan proof.</p>
     </div>
   </div>
@@ -550,7 +550,7 @@
         <tr><td><code>scan</code></td><td><code>path</code>, <code>min_severity="medium"</code></td><td>scan_id, grade, launch verdict, counts, path_to_next_grade, themes, trimmed findings</td><td>nobody (code-only SAST, read only)</td></tr>
         <tr><td><code>explain</code></td><td><code>scan_id</code>, <code>finding_id</code></td><td>the finding's own description, technical detail, evidence, snippet; business impact; remediation; walkthrough</td><td>nobody</td></tr>
         <tr><td><code>fix</code></td><td><code>scan_id</code>, <code>finding_id</code></td><td>unified diff, fixed_file, explanation, <code>applied: false</code></td><td><b>the host LLM</b></td></tr>
-        <tr><td><code>verify</code></td><td><code>scan_id</code></td><td>resolved / still present / unverifiable, grade before → after, fresh scan_id</td><td>nobody (re-scan only)</td></tr>
+        <tr><td><code>verify</code></td><td><code>scan_id</code></td><td>resolved / still present / unverifiable (a scanner that failed or did not run, or code that moved to another file, never counts as resolved), grade before → after, fresh scan_id</td><td>nobody (re-scan only)</td></tr>
         <tr><td><code>export</code></td><td><code>scan_id</code>, <code>format="markdown"</code></td><td>content as html, sarif, json or markdown, suggested filename</td><td><b>the host LLM</b></td></tr>
         <tr><td><code>scan_url</code></td><td><code>url</code>, <code>min_severity="medium"</code></td><td>job_id, status "running"</td><td>nobody</td></tr>
         <tr><td><code>scan_status</code></td><td><code>job_id</code></td><td>status running | done | error, progress 0–1, result once done</td><td>nobody</td></tr>

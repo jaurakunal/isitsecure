@@ -17,6 +17,7 @@ import re
 from dataclasses import dataclass, field
 from difflib import unified_diff
 
+from isitsecure.engine.fixes.parse_check import introduced_syntax_problem
 from isitsecure.engine.fixes.prompts import FixPrompts
 from isitsecure.engine.models import DeepFinding
 from isitsecure.llm.protocol import LLMClientProtocol
@@ -72,6 +73,66 @@ class FileFixPlan:
     @property
     def fixed_count(self) -> int:
         return sum(1 for r in self.results if r.success)
+
+
+# A reply that elides code instead of writing it out ("# ... rest of file
+# unchanged ...") would be written over the user's file and, because the
+# re-scan cannot flag code that no longer exists, then "verified" as fixed.
+_ELISION_RES = tuple(
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        # a bare "..." / "......" / ellipsis char, optionally behind a comment leader
+        r"^\s*(?:#|//|/\*|\*|--|<!--|;|%)?\s*(?:\.{3,}|…)\s*(?:\*/|-->)?\s*$",
+        # a comment/line announcing elided content: "... rest of file", "... unchanged"
+        r"^\s*(?:#|//|/\*|\*|--|<!--|;|%)?\s*(?:\.{3,}|…)\s*"
+        r"(?:\(?\s*)(?:rest|remaining|remainder|existing|previous|unchanged|other|same|more)\b",
+        r"^\s*(?:#|//|/\*|\*|--|<!--|;|%)\s*.*\b(?:rest|remainder)\s+of\s+"
+        r"(?:the\s+)?(?:file|code|function|class|module|handler|implementation)\b",
+        r"^\s*(?:#|//|/\*|\*|--|<!--|;|%)\s*.*(?:\.{3}|…).*\b(?:unchanged|existing|"
+        r"same\s+as\s+(?:before|above|original)|omitted|elided|truncated)\b",
+        r"^\s*(?:#|//|/\*|\*|--|<!--|;|%)\s*(?:the\s+)?(?:rest|remaining|existing|previous)\b"
+        r".{0,40}\b(?:unchanged|omitted|elided|same|remains?)\b",
+    )
+)
+# Whole-reply shrink floor: a security fix rarely deletes 40%+ of a file.
+_MIN_LENGTH_RATIO = 0.6
+_MIN_LENGTH_CHECK_CHARS = 400
+
+
+def find_elision(original: str, fixed: str) -> str | None:
+    """Return the first placeholder line in ``fixed`` that is not in ``original``.
+
+    Lines already present in the original (a real ``...`` or a comment that
+    genuinely says "rest of the file") are not placeholders.
+    """
+    existing = {line.strip() for line in original.splitlines()}
+    for line in fixed.splitlines():
+        stripped = line.strip()
+        if stripped and stripped not in existing and any(r.match(line) for r in _ELISION_RES):
+            return stripped[:80]
+    return None
+
+
+def syntax_error(file_path: str, original: str, fixed: str) -> str | None:
+    """A syntax error introduced by ``fixed``, or None.
+
+    Cheap, dependency-free checks only (see :mod:`parse_check`); languages
+    without one are skipped. If the original itself does not pass, nothing is
+    claimed.
+    """
+    return introduced_syntax_problem(file_path, original, fixed)
+
+
+def _split_keepends(text: str) -> list[str]:
+    r"""Split on LF only, keeping terminators (``str.splitlines`` also splits on
+    VT, FF, U+2028 and friends, which git does not treat as line breaks)."""
+    if not text:
+        return []
+    parts = text.split("\n")
+    lines = [p + "\n" for p in parts[:-1]]
+    if parts[-1]:
+        lines.append(parts[-1])
+    return lines
 
 
 class FixGenerator:
@@ -235,7 +296,10 @@ class FixGenerator:
                     current = content
                     changed = False
                     for finding in group:
-                        res = await self.generate_fix(finding, current)
+                        res = await self.generate_fix(
+                            self._without_stale_lines(finding) if changed else finding,
+                            current,
+                        )
                         plan.results.append(res)
                         if res.success and res.fixed_code:
                             current = res.fixed_code
@@ -251,6 +315,22 @@ class FixGenerator:
 
         await asyncio.gather(*[_fix_file(p, g) for p, g in by_file.items()])
         return plan
+
+    @staticmethod
+    def _without_stale_lines(finding: DeepFinding) -> DeepFinding:
+        """Copy of ``finding`` with line numbers dropped.
+
+        Once an earlier fix in the same file changed the content, the scan's
+        line numbers no longer point at the right code; the prompt then names
+        only the file instead of misdirecting the model.
+        """
+        loc = finding.code_location
+        if loc is None:
+            return finding
+        updates = {"line_number": None}
+        if hasattr(loc, "line_end"):
+            updates["line_end"] = None
+        return finding.model_copy(update={"code_location": loc.model_copy(update=updates)})
 
     def _parse_response(
         self,
@@ -273,6 +353,17 @@ class FixGenerator:
         original_lf = original_content.replace("\r\n", "\n")
 
         raw, ambiguous = self._extract_raw_block(response)
+        if not raw and self._is_cut_off(response):
+            return FixResult(
+                finding_id=finding.id, file_path=file_path, success=False,
+                original_code=original_content, explanation=explanation,
+                error=(
+                    "The model's reply was cut off at its output limit before the file "
+                    f"was complete ({len(original_content)} chars is too large to rewrite "
+                    "whole in one reply); not applying. Fix this one by hand or split "
+                    "the file."
+                ),
+            )
         if ambiguous:
             # Several blocks, or fences inside the file. Only trust the
             # outermost reading when the original file itself has fences.
@@ -302,17 +393,41 @@ class FixGenerator:
 
         # Truncation guard: a reply far shorter than the file is almost
         # certainly cut off (or a stub), never a real fix.
-        if len(original_lf) >= 400 and len(fixed_lf) < 0.4 * len(original_lf):
+        if (len(original_lf) >= _MIN_LENGTH_CHECK_CHARS
+                and len(fixed_lf) < _MIN_LENGTH_RATIO * len(original_lf)):
             return FixResult(
                 finding_id=finding.id, file_path=file_path, success=False,
                 original_code=original_content, explanation=explanation,
                 error="LLM reply looks truncated (much shorter than the file); not applying",
             )
 
+        placeholder = find_elision(original_lf, fixed_lf)
+        if placeholder:
+            return FixResult(
+                finding_id=finding.id, file_path=file_path, success=False,
+                original_code=original_content, explanation=explanation,
+                error=(
+                    f"LLM reply elides code with a placeholder ({placeholder!r}); "
+                    "not applying a partial file"
+                ),
+            )
+
+        broken = syntax_error(file_path, original_lf, fixed_lf)
+        if broken:
+            return FixResult(
+                finding_id=finding.id, file_path=file_path, success=False,
+                original_code=original_content, explanation=explanation,
+                error=f"LLM reply is not valid syntax for this file ({broken}); not applying",
+            )
+
         fixed_code = fixed_lf.replace("\n", "\r\n") if crlf else fixed_lf
 
-        # Diff on LF-normalised text so an identical answer is "no change".
-        diff = self._generate_diff(file_path, original_lf, fixed_lf)
+        # "No change" is judged on LF-normalised text; the diff itself is built
+        # from the real bytes (CRLF included) so `git apply` accepts it.
+        diff = (
+            self._generate_diff(file_path, original_content, fixed_code)
+            if original_lf != fixed_lf else ""
+        )
 
         if not diff:
             return FixResult(
@@ -334,6 +449,14 @@ class FixGenerator:
             diff=diff,
             explanation=explanation,
         )
+
+    @staticmethod
+    def _is_cut_off(response: str) -> bool:
+        """True when the reply opened a code fence that never closed -- the
+        signature of hitting the output-token limit mid-file."""
+        fence_re = re.compile(r"^[ \t]*```([\w+#.-]*)[ \t]*\r?\n?$")
+        fences = [l for l in response.splitlines() if fence_re.match(l)]
+        return bool(fences) and not any(not fence_re.match(l).group(1) for l in fences[1:])
 
     @staticmethod
     def _extract_code_block(response: str) -> str:
@@ -417,22 +540,27 @@ class FixGenerator:
 
     @staticmethod
     def _generate_diff(file_path: str, original: str, fixed: str) -> str:
-        """Generate a unified diff between original and fixed code."""
-        original_lines = original.splitlines(keepends=True)
-        fixed_lines = fixed.splitlines(keepends=True)
+        """Unified diff between original and fixed code, accepted by ``git apply``.
 
+        Lines keep their own terminators (CRLF files stay CRLF), header and hunk
+        lines end in LF, and a last line without a newline gets git's
+        ``\\ No newline at end of file`` marker.
+        """
         diff_lines = list(unified_diff(
-            original_lines,
-            fixed_lines,
+            _split_keepends(original),
+            _split_keepends(fixed),
             fromfile=f"a/{file_path}",
             tofile=f"b/{file_path}",
-            lineterm="",
+            lineterm="\n",
         ))
-
         if not diff_lines:
             return ""
-
-        return "\n".join(diff_lines)
+        out: list[str] = []
+        for line in diff_lines:
+            out.append(line)
+            if not line.endswith("\n"):
+                out.append("\n\\ No newline at end of file\n")
+        return "".join(out)
 
 
 # ---------------------------------------------------------------------------
@@ -493,17 +621,13 @@ def read_source_file(repo_path: str, rel_path: str) -> str | None:
 
 
 def write_source_file(repo_path: str, rel_path: str, content: str) -> None:
-    """Write fixed content back as UTF-8 with its newlines exactly as given."""
+    """Write fixed content back as UTF-8 with its newlines exactly as given.
+
+    Atomic (temp file + rename, permission bits kept), so a crash mid-write never
+    leaves a truncated source file.
+    """
+    # Imported here: safe_apply imports resolve_fix_target from this module.
+    from isitsecure.engine.fixes.safe_apply import atomic_write_bytes, encode_for_write
+
     target = resolve_fix_target(repo_path, rel_path)
-    data = content.encode("utf-8")
-    # The model's reply rarely carries a UTF-8 BOM; keep the file's own.
-    if not data.startswith(_BOM):
-        try:
-            with open(target, "rb") as fh:
-                had_bom = fh.read(3) == _BOM
-        except OSError:
-            had_bom = False
-        if had_bom:
-            data = _BOM + data
-    with open(target, "wb") as fh:
-        fh.write(data)
+    atomic_write_bytes(target, encode_for_write(target, content))

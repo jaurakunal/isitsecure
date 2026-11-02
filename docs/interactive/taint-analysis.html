@@ -419,7 +419,7 @@ const id = searchParams.get("id");
   <h2>Graceful degradation and known limits</h2>
   <div class="callout note">
     <div class="label">Best-effort and self-contained</div>
-    <p>The analyzer needs the <code>semgrep</code> binary from the optional extra (<code>pip install -e ".[taint]"</code>, or an isolated <code>pipx install semgrep</code>; only the binary on PATH matters). Without it the layer <b>no-ops and returns nothing</b>, and the LLM reviewer runs exactly as before. A Semgrep crash or timeout <b>never fails the scan</b>: it logs and returns no findings, and the subprocess is always killed and reaped even if the scan is cancelled. It runs only when the repo holds files a pack covers, ships its own rules, and makes <b>no network calls</b> (<code>--metrics off</code>).</p>
+    <p>The analyzer needs the <code>semgrep</code> binary from the optional extra (<code>pip install -e ".[taint]"</code>, or an isolated <code>pipx install semgrep</code>; only the binary on PATH matters). Without it the layer <b>no-ops and returns nothing</b>, and the LLM reviewer runs exactly as before. A Semgrep crash, timeout or unreadable output <b>never fails the scan</b>: it returns no findings and records a <code>semgrep_taint</code> entry in <code>scanner_errors</code>, so the report is marked incomplete rather than silently clean (a <i>missing</i> binary is only recorded during a fix-verification re-scan, so ordinary scans are unchanged). The subprocess is always killed and reaped even if the scan is cancelled. It runs only when the repo holds files a pack covers, ships its own rules, and makes <b>no network calls</b> (<code>--metrics off</code>).</p>
   </div>
   <div class="table-wrap">
     <table>

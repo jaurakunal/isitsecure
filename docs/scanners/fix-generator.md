@@ -64,20 +64,37 @@ isitsecure fix --repo <github-url> --pr-strategy per-file --max-prs 5
 ```
 
 The local apply flow backs up the files it is about to overwrite first (a git
-backup ref when every target is tracked; a file-copy backup when any target is
-untracked or ignored; it stops without changing anything if no backup could be
-made), then re-scans to verify findings are resolved and prints how many were
+backup ref when every target is a plain tracked file; otherwise a file-copy backup
+kept outside the repo under `~/.isitsecure/backups/<repo>-<hash>/<stamp>`, or
+`$ISITSECURE_BACKUP_DIR`; it stops without changing anything if no backup could be
+made), writes each file once and atomically (a file you edited since it was read is
+left alone, and earlier writes are rolled back if a later one fails), then re-scans to verify findings are resolved and prints how many were
 fixed / need review / couldn't be fixed. If the re-scan itself cannot run (for
 example the repository cannot be read), nothing is counted as confirmed fixed
 and the output says the re-check did not run. If a re-scan scanner fails or
 times out, findings from that scanner are reported as could-not-verify, never as
-resolved. The server Fix All flow follows the same file rules (and returns you
-to a detached HEAD when it started there). Fixes keep each file's newline
+resolved. The `fix` command exits non-zero on any failed write, unfixed finding or
+skipped re-check (see the README for the codes). The server Fix All flow follows
+the same file rules but works on a clean git tree, commits to a new
+`isitsecure/fixes[-N]` branch and restores your branch without `--force` (see
+`docs/architecture.md`, section b2, for the caps, cancel and plan fallback). Fixes keep each file's newline
 style, trailing newline and UTF-8 BOM; files that are not valid UTF-8, finding paths
 outside the repo, and anything under `.git/` are skipped; a reply that is
 truncated, ambiguous about its code fences, or identical to the input is
-rejected rather than written. A reply under 40% of the original length (for
-files of 400 characters or more) is treated as truncated; files with mixed
+rejected rather than written. The same bracket/string-balance check (JS/TS, Java, Kotlin, Go; Python and JSON are parsed) rejects a reply that is cut off or garbled when the original was fine, and the verification step uses it again on the written file. A reply under 60% of the original length (for
+files of 400 characters or more) is treated as truncated, a reply that elides
+code with a placeholder (`# ... rest of file unchanged ...`, `// existing code`,
+a bare `...`) is rejected, and for Python and JSON files a reply that no longer
+parses is rejected (other languages have no cheap checker and are not checked).
+A reply cut off by the model's output limit (an unclosed code fence) fails with
+an explicit "too large to rewrite whole" message. Findings chained in one file
+drop their scan-time line numbers once an earlier fix changed the content.
+`FixResult.diff` is a real unified diff that `git apply --check` accepts
+(CRLF files and files without a trailing newline included). The verification
+re-scan matches a finding on any of its fingerprints, so changing the flagged
+line without removing the bug is reported as still present, and a finding whose
+equivalent now appears in another file is reported as *possibly moved*
+(unverifiable), not resolved. Files with mixed
 CRLF/LF line endings are not auto-fixed; CRLF files stay CRLF. `--api-key` applies to the selected `--llm`
 provider only; the environment/config key is looked up per provider. The remote flow never pushes to the default branch — fixes land on
 feature branches as pull requests; `--max-prs` caps the count (default 8) and

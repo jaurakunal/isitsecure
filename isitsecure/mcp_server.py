@@ -13,6 +13,7 @@ clear "install isitsecure[mcp]" message rather than a traceback.
 from __future__ import annotations
 
 import logging
+import os
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
@@ -145,6 +146,8 @@ class VerifyResult(TypedDict):
     resolved: list[str]
     still_present_count: int
     still_present: list[str]
+    possibly_moved_count: int
+    possibly_moved: list[str]
     unverifiable_count: int
     summary: str
 
@@ -527,11 +530,20 @@ def _resolve_scan_and_finding(scan_id: str, finding_id: str):
 
 
 def _read_finding_file(finding, repo_path: str | None) -> str:
-    """Read the source file a finding points at, guarding against traversal.
+    """Read the source file a finding points at, via the hardened strict reader.
 
-    Raises ValueError with an actionable message when the path is unknown or the
-    file can't be read.
+    Same rules as the CLI/server fix paths: confined to the scanned repo, never
+    ``.git/``, strict UTF-8 and newlines untouched (a lossy or newline-translating
+    read would make the ``fixed_file`` the host writes corrupt CRLF / non-UTF-8
+    files). Raises ValueError with an actionable, user-facing "skipped" reason
+    when the file cannot be fixed -- never a raw OS error or absolute path.
     """
+    from isitsecure.engine.fixes.fix_generator import (
+        FixGenerator,
+        read_source_file,
+        resolve_fix_target,
+    )
+
     loc = finding.code_location
     rel = loc.file_path if loc else ""
     if not rel:
@@ -541,22 +553,26 @@ def _read_finding_file(finding, repo_path: str | None) -> str:
             "The scanned path is no longer known for this scan_id — re-run scan, "
             "then fix using the new scan_id."
         )
-    root = Path(repo_path).resolve()
-    target = (root / rel).resolve()
-    if target != root and root not in target.parents:
-        raise ValueError(f"Refusing to read a path outside the scanned repo: {rel}")
-    if not target.is_file():
-        raise ValueError(f"Source file not found: {rel}")
-    # Size-guard before reading (shares FixGenerator's threshold so they can't
-    # drift), and never let a raw OS error escape with the absolute path.
-    from isitsecure.engine.fixes.fix_generator import FixGenerator
-
-    if target.stat().st_size > FixGenerator.MAX_FILE_SIZE:
-        raise ValueError(f"Source file too large to fix: {rel}")
     try:
-        return target.read_text(encoding="utf-8", errors="replace")
+        target = resolve_fix_target(repo_path, rel)  # traversal, symlink escape, .git
+    except ValueError as exc:
+        raise ValueError(f"Skipped {rel}: {exc}") from exc
+    try:
+        if not os.path.isfile(target):
+            raise ValueError(f"Source file not found: {rel}")
+        # Size-guard before reading (shares FixGenerator's threshold so they
+        # can't drift).
+        if os.path.getsize(target) > FixGenerator.MAX_FILE_SIZE:
+            raise ValueError(f"Source file too large to fix: {rel}")
     except OSError as exc:
-        raise ValueError(f"Could not read source file: {rel}") from exc
+        raise ValueError(f"Skipped {rel}: could not read source file") from exc
+    text = read_source_file(repo_path, rel)
+    if text is None:
+        raise ValueError(
+            f"Skipped {rel}: not valid UTF-8 or unreadable, so it cannot be fixed "
+            "without risking corrupting it."
+        )
+    return text
 
 
 def _fix_proposal(finding, result) -> FixProposal:
@@ -578,7 +594,9 @@ def _fix_proposal(finding, result) -> FixProposal:
     }
 
 
-def _verify_result(old_report, new_report, new_scan_id: str) -> VerifyResult:
+def _verify_result(
+    old_report, new_report, new_scan_id: str, repo_path: str | None = None
+) -> VerifyResult:
     """Compare an original scan to a re-scan: what cleared + grade movement.
 
     Only rule-based SAST findings are verifiable (LLM/DAST findings aren't
@@ -587,32 +605,62 @@ def _verify_result(old_report, new_report, new_scan_id: str) -> VerifyResult:
     unverifiable findings (held constant, since a code re-scan can't confirm those
     cleared) — so LLM non-determinism can never inflate or deflate the grade.
     """
-    from collections import Counter
-
-    from isitsecure.engine.fixes.verifier import is_verifiable, sig_obj
+    from isitsecure.engine.code_analysis.semgrep_analyzer import SEMGREP_MISSING_REASON
+    from isitsecure.engine.fixes.parse_check import unparseable_files
+    from isitsecure.engine.fixes.verifier import (
+        classify_against_rescan,
+        failed_scanner_names,
+        failure_blocks,
+        finding_as_rescan_dict,
+        is_verifiable,
+    )
     from isitsecure.engine.reporting.plain_english import calculate_grade, launch_verdict
 
-    # Resolved vs still-present, matched as MULTISETS so duplicate signatures
-    # (two of the same bug in one file) are credited correctly: if 2 old findings
-    # share a signature and only 1 remains in the re-scan, that's 1 resolved.
+    # Resolved vs still-present vs possibly-moved, by the ONE classifier the fix
+    # flow and `isitsecure verify` also use (v2 + legacy fingerprints, multiset).
     old_verifiable = [f for f in old_report.findings if is_verifiable(f)]
-    new_sig_counts = Counter(sig_obj(f) for f in new_report.findings)
-    seen: Counter = Counter()
-    resolved: list[str] = []
-    still: list[str] = []
-    for f in old_verifiable:
-        sig = sig_obj(f)
-        seen[sig] += 1
-        if seen[sig] <= new_sig_counts.get(sig, 0):
-            still.append(f.title)
-        else:
-            resolved.append(f.title)
-    unverifiable = len(old_report.findings) - len(old_verifiable)
+    # A finding whose scanner failed/timed out/never ran in the re-scan proves
+    # nothing by being absent: it is "could not verify", never "resolved".
+    failed, unmapped = failed_scanner_names(getattr(new_report, "scanner_errors", []))
+    blocked = [f for f in old_verifiable if failure_blocks(f.scanner_name, failed, unmapped)]
+    blocked_ids = {id(f) for f in blocked}
+    checkable = [f for f in old_verifiable if id(f) not in blocked_ids]
+    still_f, moved_f, gone_f = classify_against_rescan(
+        checkable,
+        [finding_as_rescan_dict(f) for f in new_report.findings],
+        context=old_verifiable,
+    )
+    # A finding vanishing from a file that no longer parses is not a fix: the
+    # scanners skip such files silently.
+    broken = unparseable_files(
+        repo_path, [f.code_location.file_path for f in gone_f if f.code_location]
+    ) if repo_path else {}
+    broken_f = [f for f in gone_f if f.code_location and f.code_location.file_path in broken]
+    gone_f = [f for f in gone_f if f not in broken_f]
+    blocked_ids |= {id(f) for f in broken_f}  # held constant in the grade like blocked ones
+    still = [f.title for f in still_f]
+    resolved = [f.title for f in gone_f]
+    moved = [f.title for f in moved_f]
+    unverifiable = (
+        len(old_report.findings) - len(old_verifiable)
+        + len(blocked) + len(moved_f) + len(broken_f)
+    )
 
     # Grade movement = verified change only. Old unverifiable findings are assumed
     # to persist (we can't confirm they cleared), so they never move the grade.
-    effective = [f for f in new_report.findings if is_verifiable(f)] + [
-        f for f in old_report.findings if not is_verifiable(f)
+    effective = [
+        f for f in new_report.findings
+        if is_verifiable(f) and not failure_blocks(f.scanner_name, failed, unmapped)
+    ] + [
+        f for f in old_report.findings
+        if not is_verifiable(f) or id(f) in blocked_ids
+    ]
+    # A missing optional semgrep is only an error because verification asked for
+    # it; the original scan was complete without it. The affected findings are
+    # already reported unverifiable above, so it must not also flip the verdict.
+    gaps = [
+        g for g in _coverage_gaps(new_report)
+        if SEMGREP_MISSING_REASON not in g
     ]
     prev = _severity_counts(old_report)
     cur = _count_by_severity(effective)
@@ -620,7 +668,7 @@ def _verify_result(old_report, new_report, new_scan_id: str) -> VerifyResult:
     grade = calculate_grade(cur["critical"], cur["high"], cur["medium"], cur["low"]).grade
     verdict = launch_verdict(
         cur["critical"], cur["high"], cur["medium"],
-        incomplete=bool(_coverage_gaps(new_report)),
+        incomplete=bool(gaps),
     )
 
     if resolved and grade != prev_grade:
@@ -635,6 +683,23 @@ def _verify_result(old_report, new_report, new_scan_id: str) -> VerifyResult:
         )
     else:
         summary = f"No checkable findings resolved yet — grade {grade}."
+    if blocked:
+        summary += (
+            f" {len(blocked)} finding(s) could not be re-checked because their scanner "
+            "did not run in the re-scan (e.g. install isitsecure[taint] for Semgrep); "
+            "they are not counted as resolved."
+        )
+    if broken_f:
+        summary += (
+            f" {len(broken_f)} finding(s) disappeared because "
+            + ", ".join(sorted(broken)[:3])
+            + " no longer parses, which is not a fix; they are not counted as resolved."
+        )
+    if moved:
+        summary += (
+            f" {len(moved)} finding(s) may have moved to another file rather than been "
+            "fixed; they are not counted as resolved."
+        )
 
     return {
         "scan_id": new_scan_id,
@@ -649,6 +714,8 @@ def _verify_result(old_report, new_report, new_scan_id: str) -> VerifyResult:
         "resolved": resolved[:20],
         "still_present_count": len(still),
         "still_present": still[:20],
+        "possibly_moved_count": len(moved),
+        "possibly_moved": moved[:20],
         "unverifiable_count": unverifiable,
         "summary": summary,
     }
@@ -886,6 +953,7 @@ def build_server():
         still present, the grade before → after, and a fresh `scan_id` for the new
         state so you can keep fixing.
         """
+        from isitsecure.engine.code_analysis.semgrep_analyzer import require_semgrep
         from isitsecure.engine.enums import ScanMode
         from mcp.server.fastmcp.exceptions import ToolError
 
@@ -903,7 +971,9 @@ def build_server():
                 f"The scanned path no longer exists ({repo_path}) — run scan again."
             )
 
-        new_report = await _run_scan_silent(Path(repo_path), ScanMode.CODE_ONLY)
+        # A verification re-scan must not read a missing optional semgrep as "fixed".
+        with require_semgrep():
+            new_report = await _run_scan_silent(Path(repo_path), ScanMode.CODE_ONLY)
         if new_report is None:
             raise ToolError(
                 "Could not verify: the re-scan did not run to completion "
@@ -911,7 +981,13 @@ def build_server():
                 "Nothing is reported as resolved."
             )
         new_scan_id = _cache_report(new_report, repo_path=repo_path)
-        return _verify_result(old_report, new_report, new_scan_id)
+        try:
+            return _verify_result(old_report, new_report, new_scan_id, repo_path)
+        except Exception as exc:  # malformed/unexpected report data: a clear error, not a traceback
+            raise ToolError(
+                "Could not compare the scans: the report data was malformed "
+                f"({type(exc).__name__}). Run scan again and verify against the new scan_id."
+            )
 
     @server.tool()
     async def export(scan_id: str, format: str = "markdown") -> ExportResult:

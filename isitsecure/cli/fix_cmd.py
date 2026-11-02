@@ -7,6 +7,7 @@ import logging
 from typing import Optional
 
 import typer
+from rich.markup import escape
 from rich.panel import Panel
 
 from isitsecure.cli._app import app
@@ -14,6 +15,44 @@ from isitsecure.cli._io import console, err_console
 from isitsecure.cli.config import _load_api_key
 from isitsecure.cli.render import _print_report_table
 from isitsecure.cli.run import _run_scan
+
+
+def _parse_severities(severity: str) -> set[str]:
+    """Parse ``--severity``; a typo must error, not read as "nothing to fix"."""
+    from isitsecure.engine.enums import SeverityLevel
+
+    valid = [s.value for s in SeverityLevel]
+    parts = {s.strip().lower() for s in severity.split(",") if s.strip()}
+    bad = sorted(parts - set(valid))
+    if not parts or bad:
+        raise typer.BadParameter(
+            f"unknown severity {', '.join(bad) or repr(severity)}; "
+            f"use a comma-separated list of: {', '.join(valid)}",
+            param_hint="--severity",
+        )
+    return parts
+
+
+def _validate_pr_options(pr_strategy: str, max_prs: int) -> None:
+    """Reject bad PR options BEFORE any paid scan or clone happens."""
+    from isitsecure.engine.fixes.pr_flow import VALID_STRATEGIES
+
+    if pr_strategy not in VALID_STRATEGIES:
+        raise typer.BadParameter(
+            f"unknown strategy {pr_strategy!r}; use one of: {', '.join(VALID_STRATEGIES)}",
+            param_hint="--pr-strategy",
+        )
+    if max_prs < 1:
+        raise typer.BadParameter("must be at least 1", param_hint="--max-prs")
+
+
+def _select_fixable(report, target_severities: set[str]) -> list:
+    return [
+        f for f in report.findings
+        if f.code_location and f.code_location.file_path
+        and (f.severity.value if hasattr(f.severity, "value") else str(f.severity)).lower()
+        in target_severities
+    ]
 
 @app.command()
 def fix(
@@ -24,7 +63,7 @@ def fix(
         help="API key for the selected --llm provider (default: that provider's env var / config)",
     ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show fixes without applying them"),
-    severity: str = typer.Option("critical,high", "--severity", help="Severities to fix: critical,high,medium"),
+    severity: str = typer.Option("critical,high", "--severity", help="Severities to fix, comma-separated: critical,high,medium,low,info"),
     technical: bool = typer.Option(
         False, "--technical",
         help="Show the git details (backup ref, diff/test commands) instead of the plain-language summary",
@@ -45,6 +84,10 @@ def fix(
         logging.basicConfig(level=logging.DEBUG)
     else:
         logging.basicConfig(level=logging.WARNING)
+
+    # Validate every option up front -- before the paid scan or any clone.
+    target_severities = _parse_severities(severity)
+    _validate_pr_options(pr_strategy, max_prs)
 
     # Resolve API key for the SELECTED provider only (never reuse another
     # provider's key from the environment).
@@ -110,12 +153,7 @@ def fix(
     _print_report_table(report)
 
     # Step 2: Generate fixes
-    target_severities = {s.strip().lower() for s in severity.split(",")}
-    fixable = [
-        f for f in report.findings
-        if f.code_location and f.code_location.file_path
-        and (f.severity.value if hasattr(f.severity, "value") else str(f.severity)) in target_severities
-    ]
+    fixable = _select_fixable(report, target_severities)
 
     if not fixable:
         console.print("\n[green]No fixable findings at the selected severity levels.[/green]")
@@ -126,7 +164,7 @@ def fix(
     # Read file contents
     # (confined to the repo, never .git/, strict UTF-8, newlines untouched;
     # anything else is skipped as unfixable)
-    from isitsecure.engine.fixes.fix_generator import read_source_file, write_source_file
+    from isitsecure.engine.fixes.fix_generator import read_source_file
 
     file_contents: dict[str, str] = {}
     for finding in fixable:
@@ -138,12 +176,17 @@ def fix(
 
     fix_plan = asyncio.run(_run_fix_generation(llm_client, fixable, file_contents))
 
+    # Findings whose fix was generated, vs. everything we were asked to fix.
+    fixed_ids = {r.finding_id for r in fix_plan.results if r.success}
+    unfixable_n = len({f.id for f in fixable} - fixed_ids)
+
+    if fix_plan.skipped:
+        for reason in fix_plan.skipped:
+            console.print(f"  [dim]Skipped: {escape(reason)}[/dim]")
+
     if not fix_plan.files:
         console.print("\n[yellow]No fixes could be generated.[/yellow]")
-        if fix_plan.skipped:
-            for reason in fix_plan.skipped:
-                console.print(f"  [dim]Skipped: {reason}[/dim]")
-        raise typer.Exit(0)
+        raise typer.Exit(1)
 
     # Step 3: Apply fixes — one final version per file. Multiple findings in
     # the same file are chained into a single rewrite (no clobbering).
@@ -157,17 +200,22 @@ def fix(
             f"findings across {n_files} file(s)..."
         )
         for path, fixed_content in fix_plan.files.items():
-            console.print(f"\n  [bold]{path}[/bold]")
+            console.print(f"\n  [bold]{escape(path)}[/bold]")
             original = file_contents.get(path, "")
             diff = "\n".join(unified_diff(
                 original.splitlines(), fixed_content.splitlines(),
                 fromfile=f"a/{path}", tofile=f"b/{path}", lineterm="",
             ))
-            console.print(f"  [dim]{diff[:800]}[/dim]")
+            console.print(f"  [dim]{escape(diff[:800])}[/dim]")
         console.print(
             f"\n[dim]Run without --dry-run to apply these fixes: "
-            f"isitsecure fix --repo {repo}[/dim]"
+            f"isitsecure fix --repo {escape(repo)}[/dim]"
         )
+        if unfixable_n:
+            console.print(
+                f"[yellow]{unfixable_n} finding(s) could not be fixed automatically.[/yellow]"
+            )
+            raise typer.Exit(1)
         raise typer.Exit(0)
 
     # --- Apply for real: take a safety net first, then write files in place. ---
@@ -176,6 +224,7 @@ def fix(
         f"findings across {n_files} file(s)..."
     )
 
+    from isitsecure.engine.fixes.safe_apply import apply_file_fixes
     from isitsecure.engine.fixes.safety_net import create_safety_net
 
     net = create_safety_net(repo_path, list(fix_plan.files.keys()))
@@ -183,62 +232,70 @@ def fix(
         err_console.print(
             "[red]I couldn't make a safe backup of your original files, so I "
             "haven't changed anything.[/red]"
-            + (f"\n[dim]Not backed up: {', '.join(net.failed[:5])}[/dim]" if net.failed else "")
+            + (f"\n[dim]Not backed up: {escape(', '.join(net.failed[:5]))}[/dim]" if net.failed else "")
         )
         raise typer.Exit(1)
 
-    applied = 0
-    failed = 0
-    for path, fixed_content in fix_plan.files.items():
-        try:
-            write_source_file(repo_path, path, fixed_content)
-            applied += 1
-        except Exception as e:
-            console.print(f"  [red]Couldn't update {path}: {e}[/red]")
-            failed += 1
+    # Atomic writes; a file edited since it was read is refused; if a later
+    # write fails the earlier ones are put back (nothing is left half-fixed).
+    outcome = apply_file_fixes(repo_path, fix_plan.files, file_contents)
+    write_problems = _report_apply_outcome(outcome, net)
 
-    # Re-scan the fixed code to confirm the findings are actually gone.
-    from isitsecure.engine.fixes.verifier import verify_findings_resolved
+    written = set(outcome.written)
+    applied_ids = {
+        r.finding_id for r in fix_plan.results
+        if r.success and r.file_path in written
+    }
+    fixed_findings = [f for f in fixable if f.id in applied_ids]
+
+    # Re-scan the fixed code to confirm the findings are actually gone. Only
+    # findings whose fix really is on disk are checked (and counted).
     from isitsecure.engine.fixes import plain_results
+    from isitsecure.engine.fixes.verifier import verify_findings_resolved
 
-    fixed_findings = [
-        f for f in fixable
-        if f.code_location and f.code_location.file_path in fix_plan.files
-    ]
-    console.print("[bold]Re-checking your code...[/bold]")
-    vr = asyncio.run(verify_findings_resolved(repo_path, fixed_findings))
+    vr = None
+    if fixed_findings:
+        console.print("[bold]Re-checking your code...[/bold]")
+        vr = asyncio.run(verify_findings_resolved(repo_path, fixed_findings, context=fixable))
 
     # Fold everything into the three plain-language buckets. "couldn't fix" =
-    # findings we tried but produced no fix for (failed generation + write
-    # failures).
-    fix_failed = (len(fixable) - fix_plan.fixed_count) + failed
+    # findings with no fix on disk (failed generation, refused/failed/rolled-back
+    # write). Counted per FINDING, never per file.
     counts = plain_results.classify_verification(
         attempted=len(fixable),
-        fix_failed=fix_failed,
-        verification=vr.to_dict(),
+        fix_failed=len(fixable) - len(fixed_findings),
+        verification=vr.to_dict() if vr else None,
     )
 
     console.print()
     console.print(Panel(
-        f"[bold]{plain_results.summarize(counts)}[/bold]",
+        f"[bold]{escape(plain_results.summarize(counts))}[/bold]",
         title="Done",
         border_style="green" if counts.needs_review == 0 and counts.couldnt_fix == 0 else "yellow",
     ))
-    if vr.could_not_verify:
+    if vr is not None and vr.could_not_verify:
         console.print(
-            f"[yellow]The re-check did not run: {vr.error or 'unknown error'}[/yellow]"
+            f"[yellow]The re-check did not run: {escape(vr.error or 'unknown error')}[/yellow]"
         )
 
     hint = plain_results.next_step_hint(counts, saved_hint=net.restore_hint)
     if hint:
-        console.print(f"\n[dim]{hint}[/dim]")
+        console.print(f"\n[dim]{escape(hint)}[/dim]")
 
-    if counts.needs_review and vr.still_present_titles:
+    if vr is not None and vr.unparseable_files:
+        console.print("\n[bold red]These files no longer parse after the fix:[/bold red]")
+        for path, why in vr.unparseable_files.items():
+            console.print(f"  [red]•[/red] {escape(path)} [dim]({escape(why[:100])})[/dim]")
+        console.print("[dim]Their findings are not counted as fixed. Restore from the backup above.[/dim]")
+    look = [*vr.still_present_titles, *vr.possibly_moved_titles] if vr is not None else []
+    if look and counts.needs_review:
         console.print("\n[bold]Worth a look:[/bold]")
         for t in vr.still_present_titles:
-            console.print(f"  [yellow]•[/yellow] {t}")
+            console.print(f"  [yellow]•[/yellow] {escape(t)}")
+        for t in vr.possibly_moved_titles:
+            console.print(f"  [yellow]•[/yellow] {escape(t)} [dim](may have moved to another file)[/dim]")
 
-    # --- Power-user / technical view: the git mechanics, on request. ---
+    # --- Power-user / technical view: the backup mechanics, on request. ---
     if technical:
         console.print("\n[bold]Technical details:[/bold]")
         if net.kind == "git":
@@ -248,8 +305,8 @@ def fix(
             )
         elif net.kind == "copy":
             console.print(
-                f"  Backup copy: [dim]{net.location}[/dim] "
-                f"[dim](restore original: cp -a {net.location}/. .)[/dim]"
+                f"  Backup copy: [dim]{escape(net.location)}[/dim] "
+                f"[dim](restore original: cp -a {escape(net.location)}/. .)[/dim]"
             )
         console.print("  1. Review changes: [dim]git diff[/dim]")
         console.print("  2. Run your tests")
@@ -257,6 +314,43 @@ def fix(
             "  3. Add isitsecure to CI so it can't regress "
             "([dim]see examples/github-action.yml[/dim])"
         )
+
+    # Exit status tells the truth: non-zero when any write failed or was
+    # refused, any finding could not be fixed, or the re-check did not run.
+    recheck_failed = vr is not None and vr.could_not_verify
+    if write_problems or counts.couldnt_fix or recheck_failed:
+        raise typer.Exit(1)
+
+
+def _report_apply_outcome(outcome, net) -> bool:
+    """Say exactly what was written / undone / refused. Returns True on any problem."""
+    for path in outcome.stale:
+        console.print(
+            f"  [red]Skipped {escape(path)}:[/red] it changed on disk after the scan, "
+            "so I did not overwrite it."
+        )
+    for path, err in outcome.failed.items():
+        console.print(f"  [red]Couldn't update {escape(path)}: {escape(err)}[/red]")
+    if outcome.rolled_back:
+        console.print(
+            "  [yellow]A write failed, so I put these files back exactly as they were: "
+            f"{escape(', '.join(outcome.rolled_back))}[/yellow]"
+        )
+    if outcome.rollback_failed:
+        console.print(
+            "  [red]These files could NOT be put back automatically and still contain "
+            "the fix: [/red]"
+            + escape(", ".join(outcome.rollback_failed))
+        )
+        if net.kind == "copy":
+            console.print(
+                f"  [red]Restore them from your backup:[/red] cp -a {escape(net.location)}/. ."
+            )
+        elif net.kind == "git":
+            console.print(
+                f"  [red]Restore them from your backup:[/red] git checkout {net.location} -- <file>"
+            )
+    return not outcome.ok
 
 
 async def _run_fix_generation(llm_client, findings, file_contents):
@@ -333,12 +427,7 @@ def _run_remote_pr_fix(
     )
     _print_report_table(report)
 
-    target_severities = {s.strip().lower() for s in severity.split(",")}
-    fixable = [
-        f for f in report.findings
-        if f.code_location and f.code_location.file_path
-        and (f.severity.value if hasattr(f.severity, "value") else str(f.severity)) in target_severities
-    ]
+    fixable = _select_fixable(report, _parse_severities(severity))
     if not fixable:
         console.print("\n[green]No fixable findings at the selected severity levels.[/green]")
         raise typer.Exit(0)
@@ -378,7 +467,7 @@ def _run_remote_pr_fix(
     try:
         result = asyncio.run(_go())
     except ValueError as exc:
-        err_console.print(f"[red]{exc}[/red]")
+        err_console.print(f"[red]{escape(str(exc))}[/red]")
         raise typer.Exit(1)
 
     # Report
@@ -386,10 +475,10 @@ def _run_remote_pr_fix(
     if result.opened_prs:
         console.print("[bold green]Pull requests opened:[/bold green]")
         for pr in result.opened_prs:
-            console.print(f"  • {pr.title}")
-            console.print(f"    [cyan]{pr.url}[/cyan]")
+            console.print(f"  • {escape(pr.title)}")
+            console.print(f"    [cyan]{escape(pr.url)}[/cyan]")
     console.print(Panel(
-        f"[bold]{result.summary}[/bold]\n"
+        f"[bold]{escape(str(result.summary))}[/bold]\n"
         f"{result.fixed_count} finding(s) fixed  |  "
         f"{len(result.skipped)} skipped  |  {len(result.errors)} error(s)",
         title="Remote Fix Summary",
@@ -397,7 +486,11 @@ def _run_remote_pr_fix(
     ))
     if result.errors:
         for e in result.errors:
-            console.print(f"  [yellow]• {e}[/yellow]")
+            console.print(f"  [yellow]• {escape(str(e))}[/yellow]")
     if result.skipped and logging.getLogger().isEnabledFor(logging.DEBUG):
         for s in result.skipped:
-            console.print(f"  [dim]Skipped: {s}[/dim]")
+            console.print(f"  [dim]Skipped: {escape(str(s))}[/dim]")
+
+    # Exit status tells the truth: no pull request opened, or any error, is a failure.
+    if not result.opened_prs or result.errors:
+        raise typer.Exit(1)
