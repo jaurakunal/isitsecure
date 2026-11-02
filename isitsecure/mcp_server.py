@@ -594,7 +594,9 @@ def _fix_proposal(finding, result) -> FixProposal:
     }
 
 
-def _verify_result(old_report, new_report, new_scan_id: str) -> VerifyResult:
+def _verify_result(
+    old_report, new_report, new_scan_id: str, repo_path: str | None = None
+) -> VerifyResult:
     """Compare an original scan to a re-scan: what cleared + grade movement.
 
     Only rule-based SAST findings are verifiable (LLM/DAST findings aren't
@@ -604,6 +606,7 @@ def _verify_result(old_report, new_report, new_scan_id: str) -> VerifyResult:
     cleared) — so LLM non-determinism can never inflate or deflate the grade.
     """
     from isitsecure.engine.code_analysis.semgrep_analyzer import SEMGREP_MISSING_REASON
+    from isitsecure.engine.fixes.parse_check import unparseable_files
     from isitsecure.engine.fixes.verifier import (
         classify_against_rescan,
         failed_scanner_names,
@@ -627,10 +630,21 @@ def _verify_result(old_report, new_report, new_scan_id: str) -> VerifyResult:
         [finding_as_rescan_dict(f) for f in new_report.findings],
         context=old_verifiable,
     )
+    # A finding vanishing from a file that no longer parses is not a fix: the
+    # scanners skip such files silently.
+    broken = unparseable_files(
+        repo_path, [f.code_location.file_path for f in gone_f if f.code_location]
+    ) if repo_path else {}
+    broken_f = [f for f in gone_f if f.code_location and f.code_location.file_path in broken]
+    gone_f = [f for f in gone_f if f not in broken_f]
+    blocked_ids |= {id(f) for f in broken_f}  # held constant in the grade like blocked ones
     still = [f.title for f in still_f]
     resolved = [f.title for f in gone_f]
     moved = [f.title for f in moved_f]
-    unverifiable = len(old_report.findings) - len(old_verifiable) + len(blocked) + len(moved_f)
+    unverifiable = (
+        len(old_report.findings) - len(old_verifiable)
+        + len(blocked) + len(moved_f) + len(broken_f)
+    )
 
     # Grade movement = verified change only. Old unverifiable findings are assumed
     # to persist (we can't confirm they cleared), so they never move the grade.
@@ -674,6 +688,12 @@ def _verify_result(old_report, new_report, new_scan_id: str) -> VerifyResult:
             f" {len(blocked)} finding(s) could not be re-checked because their scanner "
             "did not run in the re-scan (e.g. install isitsecure[taint] for Semgrep); "
             "they are not counted as resolved."
+        )
+    if broken_f:
+        summary += (
+            f" {len(broken_f)} finding(s) disappeared because "
+            + ", ".join(sorted(broken)[:3])
+            + " no longer parses, which is not a fix; they are not counted as resolved."
         )
     if moved:
         summary += (
@@ -962,7 +982,7 @@ def build_server():
             )
         new_scan_id = _cache_report(new_report, repo_path=repo_path)
         try:
-            return _verify_result(old_report, new_report, new_scan_id)
+            return _verify_result(old_report, new_report, new_scan_id, repo_path)
         except Exception as exc:  # malformed/unexpected report data: a clear error, not a traceback
             raise ToolError(
                 "Could not compare the scans: the report data was malformed "

@@ -11,14 +11,13 @@ DIP: Depends on LLMClientProtocol, not any concrete LLM implementation.
 
 from __future__ import annotations
 
-import ast
-import json
 import logging
 import os
 import re
 from dataclasses import dataclass, field
 from difflib import unified_diff
 
+from isitsecure.engine.fixes.parse_check import introduced_syntax_problem
 from isitsecure.engine.fixes.prompts import FixPrompts
 from isitsecure.engine.models import DeepFinding
 from isitsecure.llm.protocol import LLMClientProtocol
@@ -117,30 +116,11 @@ def find_elision(original: str, fixed: str) -> str | None:
 def syntax_error(file_path: str, original: str, fixed: str) -> str | None:
     """A syntax error introduced by ``fixed``, or None.
 
-    Cheap, dependency-free checkers only (Python via ``ast``, JSON via
-    ``json``); every other language is skipped. If the original itself does not
-    parse, nothing is claimed.
+    Cheap, dependency-free checks only (see :mod:`parse_check`); languages
+    without one are skipped. If the original itself does not pass, nothing is
+    claimed.
     """
-    ext = os.path.splitext(file_path)[1].lower()
-    if ext in (".py", ".pyi"):
-        def check(text: str) -> str | None:
-            try:
-                ast.parse(text)
-            except (SyntaxError, ValueError) as exc:
-                return str(exc)
-            return None
-    elif ext == ".json":
-        def check(text: str) -> str | None:
-            try:
-                json.loads(text)
-            except ValueError as exc:
-                return str(exc)
-            return None
-    else:
-        return None
-    if check(original) is not None:
-        return None
-    return check(fixed)
+    return introduced_syntax_problem(file_path, original, fixed)
 
 
 def _split_keepends(text: str) -> list[str]:

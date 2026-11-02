@@ -81,7 +81,7 @@ the same file rules but works on a clean git tree, commits to a new
 style, trailing newline and UTF-8 BOM; files that are not valid UTF-8, finding paths
 outside the repo, and anything under `.git/` are skipped; a reply that is
 truncated, ambiguous about its code fences, or identical to the input is
-rejected rather than written. A reply under 60% of the original length (for
+rejected rather than written. The same bracket/string-balance check (JS/TS, Java, Kotlin, Go; Python and JSON are parsed) rejects a reply that is cut off or garbled when the original was fine, and the verification step uses it again on the written file. A reply under 60% of the original length (for
 files of 400 characters or more) is treated as truncated, a reply that elides
 code with a placeholder (`# ... rest of file unchanged ...`, `// existing code`,
 a bare `...`) is rejected, and for Python and JSON files a reply that no longer

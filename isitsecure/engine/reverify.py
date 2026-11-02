@@ -32,6 +32,7 @@ from isitsecure.engine.fixes.verifier import (
     failed_scanner_names,
     failure_blocks,
 )
+from isitsecure.engine.fixes.parse_check import unparseable_files
 from isitsecure.engine.identity import finding_fingerprint
 from isitsecure.engine.models import DeepFinding
 
@@ -230,8 +231,19 @@ async def reverify_findings(
                         f, VerifyStatus.UNVERIFIABLE,
                         "the same code now appears in another file: it may have moved, not been fixed",
                     )
+                broken = unparseable_files(
+                    repo_path, [f.code_location.file_path for f in gone if f.code_location]
+                )
                 for f in gone:
-                    if failure_blocks(f.scanner_name, failed, unmapped):
+                    path = f.code_location.file_path if f.code_location else ""
+                    if path in broken:
+                        # The scanners skip a file that no longer parses silently.
+                        verdict_by_id[f.id] = Verdict(
+                            f, VerifyStatus.COULD_NOT_VERIFY,
+                            f"{path} no longer parses ({broken[path]}): the finding is gone "
+                            "because the file is broken, not necessarily fixed",
+                        )
+                    elif failure_blocks(f.scanner_name, failed, unmapped):
                         # Its scanner failed/timed out in the re-scan: absence is not a fix.
                         verdict_by_id[f.id] = Verdict(
                             f, VerifyStatus.COULD_NOT_VERIFY,

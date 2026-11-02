@@ -217,3 +217,46 @@ async def test_cancel_during_apply_still_reports_the_fix_branch(tmp_path, monkey
     assert "isitsecure/fixes" in job["error"]
     assert git(repo, "rev-parse", "--verify", "isitsecure/fixes")  # the branch is real
     assert git(repo, "rev-parse", "--abbrev-ref", "HEAD") == "main"  # user restored
+
+
+# --------------------------------------------------------------------------
+# A file that no longer parses: scanners skip it silently, so it must not read as fixed
+# --------------------------------------------------------------------------
+
+def _broken_repo(tmp_path):
+    (tmp_path / "a.ts").write_text("function f() { if (x) { run(q);\n")  # truncated reply
+    return str(tmp_path)
+
+
+async def test_verifier_does_not_resolve_findings_of_an_unparseable_file(tmp_path, monkeypatch):
+    repo = _broken_repo(tmp_path)
+    monkeypatch.setattr(verifier, "_rescan_sast_findings",
+                        AsyncMock(return_value=verifier.RescanFindings([], [])))  # scanners see nothing
+    res = await verifier.verify_findings_resolved(repo, [_f("a.ts", _snip("run(q)"))])
+    assert res.resolved == 0 and res.unverifiable == 1
+    assert "a.ts" in res.unparseable_files
+    assert res.to_dict()["unparseable_files"]["a.ts"]
+
+
+async def test_verifier_still_resolves_findings_of_a_parseable_file(tmp_path, monkeypatch):
+    (tmp_path / "a.ts").write_text("function f() { run(safe); }\n")
+    monkeypatch.setattr(verifier, "_rescan_sast_findings",
+                        AsyncMock(return_value=verifier.RescanFindings([], [])))
+    res = await verifier.verify_findings_resolved(str(tmp_path), [_f("a.ts", _snip("run(q)"))])
+    assert res.resolved == 1 and res.unparseable_files == {}
+
+
+async def test_reverify_does_not_call_an_unparseable_file_fixed(tmp_path, monkeypatch):
+    repo = _broken_repo(tmp_path)
+    monkeypatch.setattr(R, "_sast_rescan", AsyncMock(return_value=verifier.RescanFindings([], [])))
+    (v,) = await R.reverify_findings([_f("a.ts", _snip("run(q)"))], repo_path=repo)
+    assert v.status == R.VerifyStatus.COULD_NOT_VERIFY and "no longer parses" in v.detail
+
+
+def test_mcp_verify_does_not_resolve_findings_of_an_unparseable_file(tmp_path):
+    repo = _broken_repo(tmp_path)
+    old = DeepScanReport(findings=[_f("a.ts", _snip("run(q)"))])
+    r = mcp_server._verify_result(old, DeepScanReport(findings=[]), "sid", repo)
+    assert r["resolved_count"] == 0 and r["unverifiable_count"] == 1
+    assert "no longer parses" in r["summary"]
+    assert r["counts"]["high"] == 1  # held constant in the grade

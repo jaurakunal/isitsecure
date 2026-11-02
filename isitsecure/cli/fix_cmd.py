@@ -282,6 +282,11 @@ def fix(
     if hint:
         console.print(f"\n[dim]{escape(hint)}[/dim]")
 
+    if vr is not None and vr.unparseable_files:
+        console.print("\n[bold red]These files no longer parse after the fix:[/bold red]")
+        for path, why in vr.unparseable_files.items():
+            console.print(f"  [red]•[/red] {escape(path)} [dim]({escape(why[:100])})[/dim]")
+        console.print("[dim]Their findings are not counted as fixed. Restore from the backup above.[/dim]")
     look = [*vr.still_present_titles, *vr.possibly_moved_titles] if vr is not None else []
     if look and counts.needs_review:
         console.print("\n[bold]Worth a look:[/bold]")

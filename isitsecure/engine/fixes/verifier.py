@@ -21,6 +21,7 @@ from isitsecure.engine.identity import (
     finding_fingerprint,
     legacy_fingerprint,
 )
+from isitsecure.engine.fixes.parse_check import unparseable_files
 from isitsecure.engine.models import DeepFinding
 
 logger = logging.getLogger(__name__)
@@ -83,6 +84,9 @@ class VerifyResult:
     # scanner/title/flagged code) now appears in ANOTHER file: the code may just
     # have moved. Counted as unverifiable, never as resolved.
     possibly_moved_titles: list[str] = field(default_factory=list)
+    # Files that no longer parse after the fix: the scanners (tree-sitter) skip
+    # them silently, so their findings vanish without being fixed.
+    unparseable_files: dict[str, str] = field(default_factory=dict)
     error: str = ""
     # True when the re-scan itself failed/aborted: the check did not run, so
     # nothing may be claimed as resolved.
@@ -100,6 +104,7 @@ class VerifyResult:
             "checked": self.checked,
             "still_present_titles": self.still_present_titles[:10],
             "possibly_moved_titles": self.possibly_moved_titles[:10],
+            "unparseable_files": dict(list(self.unparseable_files.items())[:10]),
             "error": self.error,
             "could_not_verify": self.could_not_verify,
         }
@@ -306,6 +311,19 @@ async def verify_findings_resolved(
     blocked = len(blocked_f)
     blocked_ids = {id(f) for f in blocked_f}
     gone = [f for f in gone if id(f) not in blocked_ids]
+    # A finding vanishing from a file that no longer parses is not a fix.
+    broken = unparseable_files(
+        repo_path, [f.code_location.file_path for f in gone if f.code_location]
+    )
+    if broken:
+        result.unparseable_files = broken
+        kept = []
+        for f in gone:
+            if f.code_location and f.code_location.file_path in broken:
+                result.unverifiable += 1
+            else:
+                kept.append(f)
+        gone = kept
     for f in still:
         result.still_present += 1
         result.still_present_titles.append(f.title)
