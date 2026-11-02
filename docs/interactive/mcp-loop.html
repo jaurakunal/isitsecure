@@ -512,7 +512,7 @@
           <path class="wire at-2" d="M170 110 C 190 110, 190 70, 208 70" marker-end="url(#arrK)"/>
           <g class="node at-2 lit-2" transform="translate(210 44)"><rect width="150" height="52" rx="8"/><text x="12" y="22">no host LLM</text><text class="lbl" x="12" y="40">nobody else can write</text></g>
           <path class="wire at-2" d="M360 70 H 378" marker-end="url(#arrK)"/>
-          <g class="node at-2 lit-2" transform="translate(380 44)"><rect width="160" height="52" rx="8"/><text x="12" y="22">safety-net backup</text><text class="lbl" x="12" y="40">snapshot the working tree</text></g>
+          <g class="node at-2 lit-2" transform="translate(380 44)"><rect width="160" height="52" rx="8"/><text x="12" y="22">safety-net backup</text><text class="lbl" x="12" y="40">snapshot the files it will change</text></g>
           <path class="wire at-2" d="M540 70 H 558" marker-end="url(#arrK)"/>
           <g class="node at-2 lit-2" transform="translate(560 44)"><rect width="150" height="52" rx="8"/><text x="12" y="22">write the fix</text><text class="lbl" x="12" y="40">one write per file</text></g>
           <path class="wire at-2" d="M710 70 H 728" marker-end="url(#arrK)"/>
@@ -550,7 +550,7 @@
         <tr><td><code>scan</code></td><td><code>path</code>, <code>min_severity="medium"</code></td><td>scan_id, grade, launch verdict, counts, path_to_next_grade, themes, trimmed findings</td><td>nobody (code-only SAST, read only)</td></tr>
         <tr><td><code>explain</code></td><td><code>scan_id</code>, <code>finding_id</code></td><td>the finding's own description, technical detail, evidence, snippet; business impact; remediation; walkthrough</td><td>nobody</td></tr>
         <tr><td><code>fix</code></td><td><code>scan_id</code>, <code>finding_id</code></td><td>unified diff, fixed_file, explanation, <code>applied: false</code></td><td><b>the host LLM</b></td></tr>
-        <tr><td><code>verify</code></td><td><code>scan_id</code></td><td>resolved / still present / unverifiable, grade before → after, fresh scan_id</td><td>nobody (re-scan only)</td></tr>
+        <tr><td><code>verify</code></td><td><code>scan_id</code></td><td>resolved / still present / unverifiable (a scanner that failed or did not run never counts as resolved), grade before → after, fresh scan_id</td><td>nobody (re-scan only)</td></tr>
         <tr><td><code>export</code></td><td><code>scan_id</code>, <code>format="markdown"</code></td><td>content as html, sarif, json or markdown, suggested filename</td><td><b>the host LLM</b></td></tr>
         <tr><td><code>scan_url</code></td><td><code>url</code>, <code>min_severity="medium"</code></td><td>job_id, status "running"</td><td>nobody</td></tr>
         <tr><td><code>scan_status</code></td><td><code>job_id</code></td><td>status running | done | error, progress 0–1, result once done</td><td>nobody</td></tr>

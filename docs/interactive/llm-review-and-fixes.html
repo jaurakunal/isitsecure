@@ -431,20 +431,20 @@ const task = await db.query(
         <text class="lane-lbl t-accent" x="20" y="128">b · isitsecure fix --repo ./my-app   (local, git-free)</text>
         <g class="node at-3 lit-3" transform="translate(20 138)"><rect width="200" height="46" rx="8"/><text class="ttl" x="12" y="20">Safety-net backup</text><text class="lbl" x="12" y="37">git stash ref or file copy</text></g>
         <path class="wire at-4 accent" d="M220 161 H 248" marker-end="url(#arrV)"/>
-        <g class="node at-4 lit-4" transform="translate(250 138)"><rect width="180" height="46" rx="8"/><text class="ttl" x="12" y="20">Write fixes</text><text class="lbl" x="12" y="37">in place, one per finding</text></g>
+        <g class="node at-4 lit-4" transform="translate(250 138)"><rect width="180" height="46" rx="8"/><text class="ttl" x="12" y="20">Write fixes</text><text class="lbl" x="12" y="37">one write per file</text></g>
         <path class="wire at-5 accent" d="M430 161 H 458" marker-end="url(#arrV)"/>
         <g class="node at-5 lit-5" transform="translate(460 138)"><rect width="160" height="46" rx="8"/><text class="ttl" x="12" y="20">Re-scan</text><text class="lbl" x="12" y="37">is each finding gone?</text></g>
         <path class="wire at-5 accent" d="M620 161 H 648" marker-end="url(#arrV)"/>
         <g class="node at-5 lit-5" transform="translate(650 138)"><rect width="290" height="46" rx="8" class="soft-safe"/><text class="ttl" x="12" y="20">Plain-language summary</text><text class="lbl" x="12" y="37">fixed · needs review · couldn't fix</text></g>
 
         <text class="lane-lbl t-accent" x="20" y="226">c · isitsecure fix --repo https://github.com/you/your-app --github-token $GITHUB_TOKEN</text>
-        <g class="node at-6 lit-6" transform="translate(20 236)"><rect width="150" height="56" rx="8"/><text class="ttl" x="12" y="22">Clone</text><text class="lbl" x="12" y="40">then generate fixes</text></g>
-        <path class="wire at-7 accent" d="M170 264 H 198" marker-end="url(#arrV)"/>
-        <g class="node at-7 lit-7" transform="translate(200 236)"><rect width="230" height="56" rx="8"/><text class="ttl" x="12" y="22">Group per category</text><text class="lbl" x="12" y="40">one commit per finding</text></g>
-        <path class="wire at-7 accent" d="M430 264 H 458" marker-end="url(#arrV)"/>
-        <g class="node at-7 lit-7" transform="translate(460 236)"><rect width="220" height="56" rx="8"/><text class="ttl" x="12" y="22">One PR per group</text><text class="lbl" x="12" y="40">feature branch, never default</text></g>
-        <path class="wire at-8 accent" d="M680 264 H 708" marker-end="url(#arrV)"/>
-        <g class="node at-8 lit-8" transform="translate(710 236)"><rect width="230" height="56" rx="8" class="soft-accent"/><text class="ttl" x="12" y="22">--max-prs 8 (default)</text><text class="lbl" x="12" y="40">excess low-severity → one batch PR</text></g>
+        <g class="node at-7 lit-7" transform="translate(20 236)"><rect width="150" height="56" rx="8"/><text class="ttl" x="12" y="22">Clone</text><text class="lbl" x="12" y="40">then generate fixes</text></g>
+        <path class="wire at-8 accent" d="M170 264 H 198" marker-end="url(#arrV)"/>
+        <g class="node at-8 lit-8" transform="translate(200 236)"><rect width="230" height="56" rx="8"/><text class="ttl" x="12" y="22">Group per category</text><text class="lbl" x="12" y="40">one commit per finding</text></g>
+        <path class="wire at-8 accent" d="M430 264 H 458" marker-end="url(#arrV)"/>
+        <g class="node at-8 lit-8" transform="translate(460 236)"><rect width="220" height="56" rx="8"/><text class="ttl" x="12" y="22">One PR per group</text><text class="lbl" x="12" y="40">feature branch, never default</text></g>
+        <path class="wire at-9 accent" d="M680 264 H 708" marker-end="url(#arrV)"/>
+        <g class="node at-9 lit-9" transform="translate(710 236)"><rect width="230" height="56" rx="8" class="soft-accent"/><text class="ttl" x="12" y="22">--max-prs 8 (default)</text><text class="lbl" x="12" y="40">excess low-severity → one batch PR</text></g>
       </svg>
     </figure>
     <div class="scene-steps">

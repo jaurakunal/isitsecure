@@ -63,7 +63,7 @@ def fix(
         help="API key for the selected --llm provider (default: that provider's env var / config)",
     ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show fixes without applying them"),
-    severity: str = typer.Option("critical,high", "--severity", help="Severities to fix: critical,high,medium"),
+    severity: str = typer.Option("critical,high", "--severity", help="Severities to fix, comma-separated: critical,high,medium,low,info"),
     technical: bool = typer.Option(
         False, "--technical",
         help="Show the git details (backup ref, diff/test commands) instead of the plain-language summary",

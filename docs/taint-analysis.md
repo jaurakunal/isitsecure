@@ -138,7 +138,12 @@ would break `pip install isitsecure[all]`. Since the analyzer only shells out to
 the `semgrep` **binary**, it's found via PATH or the venv, so an isolated install
 (`pipx install semgrep`, brew, or a separate venv) works just as well. The rule
 packs live under `isitsecure/engine/code_analysis/semgrep_rules/`. Degrade
-gracefully if the binary is missing (fall back to LLM-only, like today).
+gracefully if the binary is missing (fall back to LLM-only, like today). A Semgrep
+crash, timeout or unreadable output is recorded in `scanner_errors`
+(`semgrep_taint: ...`), so the report is marked incomplete instead of looking
+clean; a *missing* binary is recorded only during a fix-verification re-scan
+(`fix`, `verify`, MCP `verify`), where an absent finding would otherwise read as
+"fixed".
 
 ## Precision — the eternal SAST battle
 
