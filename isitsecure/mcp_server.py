@@ -603,7 +603,12 @@ def _verify_result(old_report, new_report, new_scan_id: str) -> VerifyResult:
     """
     from collections import Counter
 
-    from isitsecure.engine.fixes.verifier import is_verifiable, sig_obj
+    from isitsecure.engine.fixes.verifier import (
+        failed_scanner_names,
+        failure_blocks,
+        is_verifiable,
+        sig_obj,
+    )
     from isitsecure.engine.reporting.plain_english import calculate_grade, launch_verdict
 
     # Resolved vs still-present, matched as MULTISETS so duplicate signatures
@@ -611,22 +616,33 @@ def _verify_result(old_report, new_report, new_scan_id: str) -> VerifyResult:
     # share a signature and only 1 remains in the re-scan, that's 1 resolved.
     old_verifiable = [f for f in old_report.findings if is_verifiable(f)]
     new_sig_counts = Counter(sig_obj(f) for f in new_report.findings)
+    # A finding whose scanner failed/timed out/never ran in the re-scan proves
+    # nothing by being absent: it is "could not verify", never "resolved".
+    failed, unmapped = failed_scanner_names(getattr(new_report, "scanner_errors", []))
     seen: Counter = Counter()
     resolved: list[str] = []
     still: list[str] = []
+    blocked: list = []
     for f in old_verifiable:
+        if failure_blocks(f.scanner_name, failed, unmapped):
+            blocked.append(f)
+            continue
         sig = sig_obj(f)
         seen[sig] += 1
         if seen[sig] <= new_sig_counts.get(sig, 0):
             still.append(f.title)
         else:
             resolved.append(f.title)
-    unverifiable = len(old_report.findings) - len(old_verifiable)
+    unverifiable = len(old_report.findings) - len(old_verifiable) + len(blocked)
 
     # Grade movement = verified change only. Old unverifiable findings are assumed
     # to persist (we can't confirm they cleared), so they never move the grade.
-    effective = [f for f in new_report.findings if is_verifiable(f)] + [
-        f for f in old_report.findings if not is_verifiable(f)
+    effective = [
+        f for f in new_report.findings
+        if is_verifiable(f) and not failure_blocks(f.scanner_name, failed, unmapped)
+    ] + [
+        f for f in old_report.findings
+        if not is_verifiable(f) or f in blocked
     ]
     prev = _severity_counts(old_report)
     cur = _count_by_severity(effective)
@@ -900,6 +916,7 @@ def build_server():
         still present, the grade before → after, and a fresh `scan_id` for the new
         state so you can keep fixing.
         """
+        from isitsecure.engine.code_analysis.semgrep_analyzer import require_semgrep
         from isitsecure.engine.enums import ScanMode
         from mcp.server.fastmcp.exceptions import ToolError
 
@@ -917,7 +934,9 @@ def build_server():
                 f"The scanned path no longer exists ({repo_path}) — run scan again."
             )
 
-        new_report = await _run_scan_silent(Path(repo_path), ScanMode.CODE_ONLY)
+        # A verification re-scan must not read a missing optional semgrep as "fixed".
+        with require_semgrep():
+            new_report = await _run_scan_silent(Path(repo_path), ScanMode.CODE_ONLY)
         if new_report is None:
             raise ToolError(
                 "Could not verify: the re-scan did not run to completion "

@@ -641,17 +641,13 @@ def read_source_file(repo_path: str, rel_path: str) -> str | None:
 
 
 def write_source_file(repo_path: str, rel_path: str, content: str) -> None:
-    """Write fixed content back as UTF-8 with its newlines exactly as given."""
+    """Write fixed content back as UTF-8 with its newlines exactly as given.
+
+    Atomic (temp file + rename, permission bits kept), so a crash mid-write never
+    leaves a truncated source file.
+    """
+    # Imported here: safe_apply imports resolve_fix_target from this module.
+    from isitsecure.engine.fixes.safe_apply import atomic_write_bytes, encode_for_write
+
     target = resolve_fix_target(repo_path, rel_path)
-    data = content.encode("utf-8")
-    # The model's reply rarely carries a UTF-8 BOM; keep the file's own.
-    if not data.startswith(_BOM):
-        try:
-            with open(target, "rb") as fh:
-                had_bom = fh.read(3) == _BOM
-        except OSError:
-            had_bom = False
-        if had_bom:
-            data = _BOM + data
-    with open(target, "wb") as fh:
-        fh.write(data)
+    atomic_write_bytes(target, encode_for_write(target, content))

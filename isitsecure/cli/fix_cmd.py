@@ -282,10 +282,13 @@ def fix(
     if hint:
         console.print(f"\n[dim]{escape(hint)}[/dim]")
 
-    if vr is not None and counts.needs_review and vr.still_present_titles:
+    look = [*vr.still_present_titles, *vr.possibly_moved_titles] if vr is not None else []
+    if look and counts.needs_review:
         console.print("\n[bold]Worth a look:[/bold]")
         for t in vr.still_present_titles:
             console.print(f"  [yellow]•[/yellow] {escape(t)}")
+        for t in vr.possibly_moved_titles:
+            console.print(f"  [yellow]•[/yellow] {escape(t)} [dim](may have moved to another file)[/dim]")
 
     # --- Power-user / technical view: the backup mechanics, on request. ---
     if technical:
