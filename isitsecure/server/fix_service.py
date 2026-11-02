@@ -440,7 +440,7 @@ async def _apply_locally(
                 fixed_findings = [f for f in findings if f.id in fixed_ids]
                 verification = (await verify_findings_resolved(local_repo, fixed_findings, context=findings)).to_dict()
             except Exception as e:
-                logger.warning("Fix verification skipped: %s", scrub_secrets(str(e)))
+                logger.warning("Fix verification skipped: %s", type(e).__name__)
         except BaseException as exc:  # noqa: BLE001 - cleaned up, then re-raised
             failure = exc if isinstance(exc, Exception) else None
             if outcome is not None and outcome.written:

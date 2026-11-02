@@ -486,7 +486,7 @@ async def generate_fix(request: FixRequest):
         result = await generator.generate_fix(finding, request.file_content)
     except Exception as exc:  # never echo a provider error that may carry the key
         msg = scrub_secrets(str(exc), api_key)
-        logger.error("Single-fix generation failed: %s: %s", type(exc).__name__, msg)
+        logger.error("Single-fix generation failed: %s", type(exc).__name__)
         raise HTTPException(status_code=502, detail=f"Fix generation failed: {msg}")
     result.error = scrub_secrets(result.error, api_key)
 
@@ -719,9 +719,9 @@ async def _run_fix_all_job(
     except Exception as e:
         # Neither the GitHub token nor the LLM key (request-supplied OR from
         # server config) may reach the log, the stored error, or the client.
-        # Scrub FIRST, then log only the scrubbed text (no raw traceback).
+        # Scrub FIRST; the log gets only the exception type (no message, no traceback).
         msg = scrub_secrets(str(e), github_token, api_key, load_api_key(provider))
-        logger.error("Fix-all job %s failed: %s: %s", job_id, type(e).__name__, msg)
+        logger.error("Fix-all job %s failed: %s", job_id, type(e).__name__)
         _fix_jobs[job_id]["error"] = msg
         _fix_jobs[job_id]["status"] = "failed"
 
