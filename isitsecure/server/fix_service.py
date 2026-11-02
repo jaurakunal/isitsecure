@@ -49,6 +49,7 @@ from isitsecure.engine.fixes.pr_flow import (
     PRFlow,
     is_remote_url,
     parse_github_url,
+    resolve_scan_branch,
 )
 from isitsecure.engine.models import DeepFinding
 
@@ -569,12 +570,17 @@ async def run_fix_all(
                     "fixed_count": 0, "skipped": []}
         if ref.is_github:
             flow = PRFlow(generator)
+            scan_branch, branch_warning = resolve_scan_branch(report.get("repo_branch"))
+            if branch_warning:
+                await emit({"type": "progress", "message": branch_warning})
             result = await flow.run(
                 repo_url=repo_target,
                 findings=findings,
                 github_token=github_token,
                 strategy=pr_strategy,
                 max_prs=max_prs,
+                # Fix the branch that was scanned (None → the default branch).
+                branch=scan_branch,
                 emit=emit,
             )
             return result.to_dict()

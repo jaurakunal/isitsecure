@@ -15,17 +15,25 @@ Design (SRP / DIP / OCP):
                                         commit-per-finding → push → open PR.
 
 SAFETY (see the module tests):
-    * NEVER pushes to the default branch — always a feature branch + PR.
-    * NEVER force-pushes: a pre-existing ``isitsecure/fix-*`` branch on the
-      remote is reported, not clobbered.
-    * The GitHub token is passed in, never persisted, never logged (git remote
-      errors are scrubbed of the token before surfacing).
-    * The temp clone is removed on success AND on error.
+    * NEVER pushes to the base branch — always a feature branch + PR.
+    * NEVER force-pushes. The remote is checked (``ls-remote``) for each
+      planned ``isitsecure/fix-*`` branch BEFORE any LLM spend. A branch that
+      already exists with an OPEN pull request is noted and skipped (no
+      duplicate); one that exists with NO open PR (merged earlier, or orphaned
+      by a failed PR) is never reused or overwritten — the next free
+      ``-2``/``-3``… name is used instead, so a re-run is never blocked.
+    * The GitHub token is passed in, never persisted, never logged: it is not in
+      the clone URL, argv or ``.git/config`` (see ``git_ops``), and git errors
+      are scrubbed of it before surfacing.
+    * The clone lives in a 0700 directory and is removed on success, on error
+      and on cancellation.
+    * Untrusted finding text is flattened/redacted/escaped (``pr_text``).
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 import re
@@ -44,6 +52,15 @@ from isitsecure.engine.fixes.fix_generator import (
     resolve_fix_target,
     write_source_file,
 )
+from isitsecure.engine.fixes.git_ops import (  # noqa: F401 — re-exported API
+    GitError,
+    GitRunner,
+    clone_repo,
+    is_non_fast_forward,
+    is_valid_branch_name,
+    remote_branches,
+)
+from isitsecure.engine.fixes.pr_text import inline, md_code, md_text
 from isitsecure.engine.models import DeepFinding
 
 if TYPE_CHECKING:
@@ -262,9 +279,40 @@ class PRGroup:
         )
 
 
+_MAX_SLUG_LEN = 48
+
+
 def _slugify(text: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
     return slug or "misc"
+
+
+def _finding_identity(f: DeepFinding) -> str:
+    loc = f.code_location
+    return f"{f.category.value}|{loc.file_path}|{loc.line_number}|{f.title}"
+
+
+def _short_hash(text: str) -> str:
+    """Stable 8-hex digest, used to keep branch names unique across groups."""
+    return hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()[:8]
+
+
+def _unique_suffix(label: str, identity: str) -> str:
+    """Bounded ``<slug>-<hash>``: ``a_b.py`` and ``a-b.py`` slug alike but hash apart."""
+    slug = _slugify(label)[:_MAX_SLUG_LEN].strip("-") or "misc"
+    return f"{slug}-{_short_hash(identity)}"
+
+
+def _dedupe_branch_suffixes(groups: list[PRGroup]) -> None:
+    """Last line of defence: no two groups in one run may share a branch."""
+    seen: set[str] = set()
+    for g in groups:
+        suffix, n = g.branch_suffix, 2
+        while suffix in seen:
+            suffix = f"{g.branch_suffix}-{n}"
+            n += 1
+        g.branch_suffix = suffix
+        seen.add(suffix)
 
 
 def _category_label(category: FindingCategory | str) -> str:
@@ -334,10 +382,9 @@ def group_findings(
         )
     )
 
-    if len(raw_groups) <= max_prs:
-        return raw_groups
-
-    return _apply_cap(raw_groups, max_prs)
+    groups = raw_groups if len(raw_groups) <= max_prs else _apply_cap(raw_groups, max_prs)
+    _dedupe_branch_suffixes(groups)
+    return groups
 
 
 def _build_raw_groups(findings: list[DeepFinding], strategy: str) -> list[PRGroup]:
@@ -360,7 +407,9 @@ def _build_raw_groups(findings: list[DeepFinding], strategy: str) -> list[PRGrou
                 PRGroup(
                     key=f.id,
                     title_label=f"{label}: {f.title}",
-                    branch_suffix=f"{_slugify(label)}-{f.id[:8]}",
+                    # Stable content identity (NOT f.id, a random uuid per
+                    # scan) so a re-run maps the same finding to the same name.
+                    branch_suffix=_unique_suffix(label, _finding_identity(f)),
                     findings=[f],
                 )
             )
@@ -376,7 +425,7 @@ def _build_raw_groups(findings: list[DeepFinding], strategy: str) -> list[PRGrou
                 PRGroup(
                     key=path,
                     title_label=os.path.basename(path) or path,
-                    branch_suffix=_slugify(path),
+                    branch_suffix=_unique_suffix(path, path),
                     findings=_sort_findings(group),
                 )
             )
@@ -466,7 +515,8 @@ def _commit_message(finding: DeepFinding) -> str:
     scope = _slugify(label).replace("-", "")
     path = finding.code_location.file_path if finding.code_location else "code"
     fname = os.path.basename(path) or path
-    return f"fix({scope}): {finding.title} in {fname}"
+    # Untrusted text: one bounded line, secrets redacted.
+    return inline(f"fix({scope}): {inline(finding.title, 70)} in {inline(fname, 40)}", 120)
 
 
 def pr_title(group: PRGroup) -> str:
@@ -476,7 +526,7 @@ def pr_title(group: PRGroup) -> str:
         return f"isitsecure: low-severity cleanup ({n} {plural})"
     if group.is_low_batch:  # batch that overflowed the cap with priority issues
         return f"isitsecure: batched security fixes ({n} {plural})"
-    return f"isitsecure: fix {group.title_label} ({n} {plural})"
+    return inline(f"isitsecure: fix {group.title_label} ({n} {plural})", 150)
 
 
 def pr_body(group: PRGroup) -> str:
@@ -496,7 +546,7 @@ def pr_body(group: PRGroup) -> str:
         )
     else:
         lines.append(
-            f"Automated fixes for **{group.title_label}** findings "
+            f"Automated fixes for **{md_text(group.title_label)}** findings "
             "generated by isitsecure."
         )
     lines.append("")
@@ -509,7 +559,7 @@ def pr_body(group: PRGroup) -> str:
         if f.code_location and f.code_location.line_number:
             loc = f"{path}:{f.code_location.line_number}"
         sev = f.severity.value if isinstance(f.severity, SeverityLevel) else str(f.severity)
-        lines.append(f"- [ ] **[{sev}]** {f.title} — `{loc}`")
+        lines.append(f"- [ ] **[{sev}]** {md_text(f.title)} — `{md_code(loc)}`")
     lines.append("")
     lines.append("---")
     lines.append(
@@ -523,57 +573,6 @@ def pr_body(group: PRGroup) -> str:
 # Side-effect boundaries (injected → mocked in tests)
 # ---------------------------------------------------------------------------
 
-class GitError(RuntimeError):
-    """A git command failed. The message is already token-scrubbed."""
-
-
-def _is_non_fast_forward(git_error: str) -> bool:
-    """True when a push was rejected because the remote branch already exists.
-
-    Detects git's rejection wording so we can report "branch already exists"
-    instead of the raw error (and never fall back to a clobbering force-push).
-    """
-    lowered = git_error.lower()
-    return (
-        "non-fast-forward" in lowered
-        or "fetch first" in lowered
-        or "failed to push some refs" in lowered
-        or "rejected" in lowered
-    )
-
-
-class GitRunner:
-    """Runs git commands in a working tree. Token is scrubbed from any output."""
-
-    def __init__(self, token: str | None = None) -> None:
-        self._token = token
-
-    def _scrub(self, text: str) -> str:
-        if self._token and self._token in text:
-            text = text.replace(self._token, "***")
-        return text
-
-    async def run(self, cwd: str, *args: str) -> str:
-        # "--" is caller's responsibility; we never interpolate the token here.
-        env = {
-            **os.environ,
-            "GIT_TERMINAL_PROMPT": "0",
-            "GIT_ALLOW_PROTOCOL": "https:http:ssh:git",
-        }
-        proc = await asyncio.create_subprocess_exec(
-            "git", "-C", cwd, *args,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env,
-        )
-        out, err = await proc.communicate()
-        stdout = out.decode(errors="replace").strip()
-        stderr = err.decode(errors="replace").strip()
-        if proc.returncode != 0:
-            raise GitError(self._scrub(stderr or stdout or "git failed"))
-        return self._scrub(stdout)
-
-
 class GitHubClient:
     """Thin GitHub REST client for opening pull requests.
 
@@ -584,14 +583,51 @@ class GitHubClient:
         self._token = token
         self._api_base = api_base.rstrip("/")
 
-    async def get_default_branch(self, ref: RepoRef) -> str | None:
+    async def get_default_branch(self, ref: RepoRef) -> str:
+        """The repo's default branch, or raise :class:`RepoAccessError`.
+
+        Never guesses: a bad token, missing permission, renamed repo or network
+        failure is reported as such rather than silently becoming ``main``.
+        """
         import httpx
 
         url = f"{self._api_base}/repos/{ref.owner}/{ref.repo}"
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(url, headers=self._headers())
-            if resp.status_code == 200:
-                return resp.json().get("default_branch")
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.get(url, headers=self._headers())
+        except httpx.HTTPError as exc:
+            raise RepoAccessError(
+                f"Could not reach GitHub to look up {ref.slug} "
+                f"({type(exc).__name__}); check your network and retry."
+            ) from None
+        if resp.status_code == 200:
+            try:
+                branch = resp.json().get("default_branch")
+            except ValueError:
+                branch = None
+            if isinstance(branch, str) and branch:
+                return branch
+            raise RepoAccessError(
+                f"GitHub returned no default branch for {ref.slug}."
+            )
+        raise RepoAccessError(_describe_repo_status(ref, resp))
+
+    async def find_open_pr(self, ref: RepoRef, *, head: str, base: str) -> str | None:
+        """html_url of an open PR from ``head`` into ``base``, if one exists.
+
+        Best effort (``None`` on any failure): only used to word a message.
+        """
+        import httpx
+
+        url = f"{self._api_base}/repos/{ref.owner}/{ref.repo}/pulls"
+        params = {"head": f"{ref.owner}:{head}", "base": base, "state": "open"}
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.get(url, headers=self._headers(), params=params)
+            if resp.status_code == 200 and resp.json():
+                return resp.json()[0].get("html_url") or None
+        except (httpx.HTTPError, ValueError, AttributeError, KeyError, IndexError):
+            logger.debug("open-PR lookup failed", exc_info=True)
         return None
 
     async def open_pr(
@@ -622,6 +658,35 @@ class GitHubClient:
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
         }
+
+
+class RepoAccessError(RuntimeError):
+    """The target repo could not be looked up (auth, permission, rename, network)."""
+
+
+def _describe_repo_status(ref: RepoRef, resp: "httpx.Response") -> str:
+    status = resp.status_code
+    if status == 401:
+        return (
+            f"GitHub rejected the token (401) while looking up {ref.slug}: it is "
+            "invalid, expired or revoked."
+        )
+    if status == 403:
+        return (
+            f"GitHub denied access to {ref.slug} (403): the token lacks "
+            "permission, SSO authorization is missing, or the API rate limit was hit."
+        )
+    if status == 404:
+        return (
+            f"{ref.slug} was not found (404): it does not exist, or the token "
+            "cannot see it (private repos need the 'repo' scope)."
+        )
+    if status in (301, 302, 307, 308):
+        return (
+            f"{ref.slug} has moved or been renamed ({status}, now "
+            f"{resp.headers.get('location', 'a new location')}); use its current URL."
+        )
+    return f"Unexpected GitHub response ({status}) looking up {ref.slug}."
 
 
 def _safe_github_error(resp: "httpx.Response") -> str:
@@ -655,6 +720,8 @@ class PRFlowResult:
     fixed_count: int = 0
     skipped: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    # Branches pushed to the remote whose PR could not be opened.
+    orphaned_branches: list[str] = field(default_factory=list)
     summary: str = ""
 
     def to_dict(self) -> dict:
@@ -665,6 +732,7 @@ class PRFlowResult:
             "fixed_count": self.fixed_count,
             "skipped": self.skipped,
             "errors": self.errors,
+            "orphaned_branches": self.orphaned_branches,
             "summary": self.summary,
             "pull_requests": [
                 {
@@ -678,6 +746,58 @@ class PRFlowResult:
                 for p in self.opened_prs
             ],
         }
+
+
+def resolve_scan_branch(branch: str | None) -> tuple[str | None, str | None]:
+    """Vet the branch a scan ran on: ``(usable_branch_or_None, warning_or_None)``.
+
+    An empty/detached value means "use the default branch" (no warning). A name
+    git would reject falls back to the default branch WITH a warning rather than
+    failing the whole fix job.
+    """
+    if branch in (None, "", "HEAD"):
+        return None, None
+    if is_valid_branch_name(branch):
+        return branch, None
+    return None, (
+        f"Scanned branch {inline(branch, 60)!r} is not a usable branch name; "
+        "falling back to the repository's default branch."
+    )
+
+
+# Free-name search depth: ``x``, ``x-2`` … ``x-9``.
+MAX_BRANCH_SUFFIX = 9
+
+
+def _branch_for(group: PRGroup, base_branch: str) -> str:
+    """Feature-branch name for a group; never equal to the base branch."""
+    branch = f"isitsecure/fix-{group.branch_suffix}"
+    return f"{branch}-fixes" if branch == base_branch else branch
+
+
+def _candidate_branches(group: PRGroup, base_branch: str) -> list[str]:
+    """Names to try in order: the root name, then ``-2`` … ``-9``."""
+    root = _branch_for(group, base_branch)
+    return [root] + [f"{root}-{n}" for n in range(2, MAX_BRANCH_SUFFIX + 1)]
+
+
+def _unfixable_path_reason(clone_dir: str, rel_path: str) -> str | None:
+    """Why ``rel_path`` can't be safely rewritten in the clone, or ``None``."""
+    shown = inline(rel_path, 120)
+    try:
+        full_path = resolve_fix_target(clone_dir, rel_path)
+    except ValueError:
+        return "path escapes repo, skipped"
+    # resolve_fix_target follows symlinks, so inspect the raw components: a
+    # symlinked file/dir would be written through but never staged by git.
+    probe = clone_dir
+    for part in rel_path.replace("\\", "/").split("/"):
+        probe = os.path.join(probe, part)
+        if os.path.islink(probe):
+            return f"{shown} is (or is under) a symlink, skipped"
+    if not os.path.isfile(full_path):
+        return f"{shown} not found in repo"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -716,12 +836,18 @@ class PRFlow:
         github_token: str,
         strategy: str = DEFAULT_STRATEGY,
         max_prs: int = DEFAULT_MAX_PRS,
+        branch: str | None = None,
         emit=None,
     ) -> PRFlowResult:
         """Execute the full remote fix → PR flow.
 
-        Raises ``ValueError`` for a non-GitHub host (caller should fall back to
-        the fix-plan behavior). The temp clone is always cleaned up.
+        ``branch`` is the branch the scan ran on; fixes are cloned from and
+        proposed against it. ``None`` means the repo's default branch, which is
+        looked up (a lookup failure is reported, never guessed around).
+
+        Raises ``ValueError`` for a non-GitHub host or an invalid ``branch``
+        (caller should fall back to the fix-plan behavior). The temp clone is
+        always cleaned up, including on cancellation.
         """
         repo_url = normalize_repo_scheme(repo_url)
         ref = parse_github_url(repo_url)
@@ -731,41 +857,53 @@ class PRFlow:
             )
         if not github_token:
             raise ValueError("A GitHub token is required to open pull requests.")
+        if branch in ("", "HEAD"):  # unknown / detached: use the default branch
+            branch = None
+        if branch is not None and not is_valid_branch_name(branch):
+            raise ValueError(f"Invalid branch name: {inline(branch, 80)!r}")
 
         result = PRFlowResult(repo=ref.slug)
         github = self._github_factory(github_token)
         git = self._git_factory(github_token)
 
-        clone_dir = tempfile.mkdtemp(prefix="isitsecure_prfix_")
         try:
-            await self._maybe_emit(emit, "progress", "Detecting default branch…")
-            base_branch = await github.get_default_branch(ref) or "main"
-            result.base_branch = base_branch
+            base_branch = branch or await self._detect_default_branch(github, ref, emit)
+        except RepoAccessError as exc:
+            result.errors.append(str(exc))
+            result.summary = "No pull requests were opened: could not look up the repository."
+            return result
+        result.base_branch = base_branch
 
-            await self._maybe_emit(emit, "progress", f"Cloning {ref.slug}…")
+        # 0700 parent + 0700 clone dir: no window where the checkout is readable
+        # by other local users, and no rmtree/recreate gap.
+        work_dir = tempfile.mkdtemp(prefix="isitsecure_prfix_")
+        clone_dir = os.path.join(work_dir, "repo")
+        try:
+            os.mkdir(clone_dir, 0o700)
+            await self._maybe_emit(emit, "progress", f"Cloning {ref.slug}@{base_branch}…")
             await self._clone_fn(repo_url, base_branch, clone_dir, github_token)
 
-            # Only SAST findings with a code location are fixable here.
-            fixable = [
-                f for f in findings if f.code_location and f.code_location.file_path
-            ]
-            for f in findings:
-                if not (f.code_location and f.code_location.file_path):
-                    result.skipped.append(
-                        f"{f.title} — no code location (DAST-only, no code fix)"
-                    )
-
+            fixable = self._split_fixable(findings, result)
             if not fixable:
                 result.summary = "No fixable SAST findings with a code location."
                 return result
 
-            groups = group_findings(
-                fixable, strategy=strategy, max_prs=max_prs
+            groups = group_findings(fixable, strategy=strategy, max_prs=max_prs)
+            existing = await self._existing_branches(
+                git, clone_dir, groups, base_branch, emit
             )
 
+            taken: set[str] = set()
             for group in groups:
+                branch_name = await self._select_branch(
+                    group, base_branch, existing, taken, ref, github, result
+                )
+                if branch_name is None:
+                    continue
+                taken.add(branch_name)
                 await self._process_group(
                     group=group,
+                    branch=branch_name,
                     ref=ref,
                     base_branch=base_branch,
                     clone_dir=clone_dir,
@@ -778,12 +916,91 @@ class PRFlow:
             result.summary = self._build_summary(result, groups)
             return result
         finally:
-            shutil.rmtree(clone_dir, ignore_errors=True)
+            shutil.rmtree(work_dir, ignore_errors=True)
+
+    @staticmethod
+    async def _detect_default_branch(github, ref: RepoRef, emit) -> str:
+        await PRFlow._maybe_emit(emit, "progress", "Detecting default branch…")
+        name = await github.get_default_branch(ref)
+        if not is_valid_branch_name(name):
+            raise RepoAccessError(
+                f"GitHub returned an unusable default branch name for {ref.slug}."
+            )
+        return name
+
+    @staticmethod
+    def _split_fixable(
+        findings: list[DeepFinding], result: PRFlowResult
+    ) -> list[DeepFinding]:
+        """Keep SAST findings with a code location; report the rest as skipped."""
+        fixable: list[DeepFinding] = []
+        for f in findings:
+            if f.code_location and f.code_location.file_path:
+                fixable.append(f)
+            else:
+                result.skipped.append(
+                    f"{inline(f.title, 80)} — no code location (DAST-only, no code fix)"
+                )
+        return fixable
+
+    async def _existing_branches(
+        self, git, clone_dir: str, groups: list[PRGroup], base_branch: str, emit
+    ) -> set[str]:
+        """Candidate branches already on the remote, found BEFORE any LLM spend."""
+        planned = [c for g in groups for c in _candidate_branches(g, base_branch)]
+        try:
+            return await remote_branches(git, clone_dir, planned)
+        except GitError as exc:
+            # Best effort: a failed lookup must not block the run. The push is
+            # still non-force, so an existing branch is rejected, never clobbered.
+            logger.warning("ls-remote pre-check failed: %s", inline(str(exc), 200))
+            await self._maybe_emit(
+                emit, "progress", "Could not pre-check existing branches; continuing."
+            )
+            return set()
+
+    @staticmethod
+    async def _select_branch(
+        group: PRGroup,
+        base_branch: str,
+        existing: set[str],
+        taken: set[str],
+        ref: RepoRef,
+        github,
+        result: PRFlowResult,
+    ) -> str | None:
+        """Pick this group's branch, or ``None`` when it must not run.
+
+        Walk ``x``, ``x-2`` … in order. A name that exists remotely with an
+        OPEN pull request means the work is already proposed: skip the group
+        (no duplicate). One that exists without an open PR (merged earlier, or
+        orphaned by a failed PR) is never reused or overwritten: try the next
+        name. The first free name wins.
+        """
+        for candidate in _candidate_branches(group, base_branch):
+            if candidate in taken:
+                continue
+            if candidate not in existing:
+                return candidate
+            open_url = await github.find_open_pr(ref, head=candidate, base=base_branch)
+            if open_url:
+                result.skipped.append(
+                    f"{group.title_label} — branch {candidate!r} already has an open "
+                    f"pull request ({open_url}); nothing new was opened."
+                )
+                return None
+        result.errors.append(
+            f"{group.key}: every branch name up to {MAX_BRANCH_SUFFIX} variants of "
+            f"{_branch_for(group, base_branch)!r} already exists on the remote with no "
+            "open pull request. Delete the stale isitsecure/fix-* branches, then re-run."
+        )
+        return None
 
     async def _process_group(
         self,
         *,
         group: PRGroup,
+        branch: str,
         ref: RepoRef,
         base_branch: str,
         clone_dir: str,
@@ -792,34 +1009,30 @@ class PRFlow:
         result: PRFlowResult,
         emit,
     ) -> None:
-        branch = f"isitsecure/fix-{group.branch_suffix}"
         await self._maybe_emit(
             emit, "progress", f"Preparing {branch} ({len(group.findings)} finding(s))…"
         )
 
         # SAFETY: refuse to ever target the default branch.
         if branch == base_branch:
-            branch = f"{branch}-fixes"
-        if branch == base_branch:
             result.errors.append(
                 f"Refusing to build a fix branch equal to default branch {base_branch}."
             )
             return
 
-        # Start from a clean checkout of the default branch for each group.
+        # Start from a clean checkout of the base branch for each group.
         try:
-            await git.run(clone_dir, "checkout", "--force", base_branch)
+            await git.run(clone_dir, "checkout", "--force", base_branch, "--")
             await git.run(clone_dir, "checkout", "-B", branch)
         except GitError as e:
-            result.errors.append(f"{group.key}: could not create branch — {e}")
+            result.errors.append(f"{group.key}: could not create branch — {inline(str(e), 300)}")
             return
 
         committed = 0
         for finding in group.findings:
-            ok = await self._apply_and_commit(
+            if await self._apply_and_commit(
                 finding=finding, clone_dir=clone_dir, git=git, result=result
-            )
-            if ok:
+            ):
                 committed += 1
 
         if committed == 0:
@@ -828,45 +1041,68 @@ class PRFlow:
             )
             return
 
-        # SAFETY: push the FEATURE branch only, never base_branch.
-        # We do NOT force-push: a non-force push of a *new* branch succeeds, but
-        # if an ``isitsecure/fix-*`` branch already exists on the remote (e.g. a
-        # prior run with work the user hasn't merged) git rejects the push rather
-        # than silently clobbering it. We surface that clearly instead of forcing.
+        if not await self._push(git, clone_dir, branch, group, result):
+            return
+        await self._open_pr(
+            group=group, branch=branch, committed=committed, ref=ref,
+            base_branch=base_branch, github=github, result=result, emit=emit,
+        )
+
+    @staticmethod
+    async def _push(
+        git: GitRunner, clone_dir: str, branch: str, group: PRGroup,
+        result: PRFlowResult,
+    ) -> bool:
+        """Push the FEATURE branch (never the base, never forced)."""
         try:
-            await git.run(
-                clone_dir, "push", "origin",
-                f"HEAD:refs/heads/{branch}",
-            )
+            await git.run(clone_dir, "push", "origin", f"HEAD:refs/heads/{branch}")
         except GitError as e:
             msg = str(e)
-            if _is_non_fast_forward(msg):
+            if is_non_fast_forward(msg):
                 result.errors.append(
                     f"{group.key}: branch {branch!r} already exists on the remote "
                     "with different commits — refusing to overwrite it. Delete or "
                     "merge that branch, then re-run."
                 )
             else:
-                result.errors.append(f"{group.key}: git push failed — {e}")
-            return
+                result.errors.append(
+                    f"{group.key}: git push of {branch!r} failed — {inline(msg, 600)}"
+                )
+            return False
+        return True
 
+    async def _open_pr(
+        self,
+        *,
+        group: PRGroup,
+        branch: str,
+        committed: int,
+        ref: RepoRef,
+        base_branch: str,
+        github: GitHubClient,
+        result: PRFlowResult,
+        emit,
+    ) -> None:
+        title = pr_title(group)
         try:
             url = await github.open_pr(
-                ref,
-                title=pr_title(group),
-                body=pr_body(group),
-                head=branch,
-                base=base_branch,
+                ref, title=title, body=pr_body(group), head=branch, base=base_branch,
             )
         except Exception as e:  # noqa: BLE001 — surface API error, keep going.
-            result.errors.append(f"{group.key}: opening PR failed — {e}")
+            result.orphaned_branches.append(branch)
+            result.errors.append(
+                f"{group.key}: opening the PR failed — {inline(str(e), 300)}. The branch "
+                f"{branch!r} WAS pushed to the remote and is orphaned: open a PR from it "
+                f"into {base_branch!r} yourself, or delete it before re-running (a re-run "
+                "refuses to overwrite it)."
+            )
             return
 
         result.fixed_count += committed
         result.opened_prs.append(
             OpenedPR(
                 category=group.key,
-                title=pr_title(group),
+                title=title,
                 branch=branch,
                 url=url,
                 finding_count=committed,
@@ -883,16 +1119,16 @@ class PRFlow:
         git: GitRunner,
         result: PRFlowResult,
     ) -> bool:
-        """Generate a fix for one finding, write it, and commit it atomically."""
+        """Generate a fix for one finding, write it, and commit it atomically.
+
+        Any failure leaves the working tree and index at HEAD, so one finding's
+        half-applied edit can never be swept into the next finding's commit.
+        """
         rel_path = finding.code_location.file_path
-        # Guard against path traversal / .git metadata from a malicious finding.
-        try:
-            full_path = resolve_fix_target(clone_dir, rel_path)
-        except ValueError:
-            result.skipped.append(f"{finding.title} — path escapes repo, skipped")
-            return False
-        if not os.path.isfile(full_path):
-            result.skipped.append(f"{finding.title} — {rel_path} not found in repo")
+        label = inline(finding.title, 80)
+        problem = _unfixable_path_reason(clone_dir, rel_path)
+        if problem:
+            result.skipped.append(f"{label} — {problem}")
             return False
 
         # Strict UTF-8, newlines untouched: a lossy decode would corrupt the
@@ -900,26 +1136,39 @@ class PRFlow:
         content = read_source_file(clone_dir, rel_path)
         if content is None:
             result.skipped.append(
-                f"{finding.title} — {rel_path} is not valid UTF-8 text, skipped"
+                f"{label} — {inline(rel_path, 120)} is not valid UTF-8 text, skipped"
             )
             return False
 
         fix: FixResult = await self._generator.generate_fix(finding, content)
         if not (fix.success and fix.fixed_code):
             result.skipped.append(
-                f"{finding.title} — no fix generated"
-                + (f" ({fix.error})" if fix.error else "")
+                f"{label} — no fix generated"
+                + (f" ({inline(fix.error, 120)})" if fix.error else "")
             )
             return False
 
         try:
             write_source_file(clone_dir, rel_path, fix.fixed_code)
+            if read_source_file(clone_dir, rel_path) == content:
+                await self._discard_changes(git, clone_dir)
+                result.skipped.append(f"{label} — fix made no change to the file, skipped")
+                return False
             await git.run(clone_dir, "add", "--", rel_path)
             await git.run(clone_dir, "commit", "-m", _commit_message(finding))
         except (OSError, GitError) as e:
-            result.errors.append(f"{finding.title} — commit failed: {e}")
+            await self._discard_changes(git, clone_dir)
+            result.errors.append(f"{label} — commit failed: {inline(str(e), 300)}")
             return False
         return True
+
+    @staticmethod
+    async def _discard_changes(git: GitRunner, clone_dir: str) -> None:
+        """Reset index + working tree to HEAD (the last good commit)."""
+        try:
+            await git.run(clone_dir, "reset", "--hard", "-q", "HEAD")
+        except GitError:
+            logger.warning("could not reset the temp clone after a failed commit")
 
     @staticmethod
     def _build_summary(result: PRFlowResult, groups: list[PRGroup]) -> str:
@@ -942,32 +1191,17 @@ class PRFlow:
             ]
         return " ".join(parts) + "."
 
-    # -- default clone (reuses RepoIngestionService's hardened clone) --------
+    # -- default clone (token-free URL; auth rides on the git env) -----------
 
     @staticmethod
     async def _default_clone(
         repo_url: str, branch: str, clone_dir: str, github_token: str | None
     ) -> None:
-        from isitsecure.engine.code_analysis.repo_ingestion import (
-            RepoIngestionService,
-        )
-
-        # We need full history (not --depth 1) so we can push a branch and the
-        # remote 'origin' with the token baked in for the push.
-        service = RepoIngestionService(framework_detector=None)  # type: ignore[arg-type]
-        # Clone into a scratch dir, then move into clone_dir (mkdtemp made it).
-        shutil.rmtree(clone_dir, ignore_errors=True)
-        await service._clone_repo(  # noqa: SLF001 — intentional reuse.
-            repo_url, branch, clone_dir, github_token, full_history=True
-        )
-        # Ensure 'origin' carries the token so the later push authenticates.
-        repo_url = normalize_repo_scheme(repo_url)
-        if github_token and repo_url.startswith("https://"):
-            authed = repo_url.replace(
-                "https://", f"https://x-access-token:{github_token}@"
-            )
-            runner = GitRunner(github_token)
-            await runner.run(clone_dir, "remote", "set-url", "origin", authed)
+        ref = parse_github_url(normalize_repo_scheme(repo_url))
+        # Canonical https URL: the token only authenticates https, and nothing
+        # token-bearing is written into the clone's config.
+        url = f"https://github.com/{ref.owner}/{ref.repo}.git"
+        await clone_repo(url, branch, clone_dir, github_token)
 
     @staticmethod
     async def _maybe_emit(emit, type_: str, message: str) -> None:

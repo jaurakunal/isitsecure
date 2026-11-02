@@ -285,9 +285,24 @@ never writes (it returns a diff for the host to apply).
 **c) Remote clone → per-category PRs** (`isitsecure fix --repo <github-url>`) —
 `fixes/pr_flow.py` clones the repo, groups fixed findings (per-category by
 default; also per-file / per-finding / single), and opens one pull request per
-group — one commit per finding, onto a feature branch, never the default branch.
+group — one commit per finding, onto a feature branch, never the base branch.
 `--max-prs` caps the count; excess low-severity categories batch into one PR.
-Grouping relies on findings carrying their true `FindingCategory`, which for
+The clone is of the scanned branch (`DeepScanReport.repo_branch`, else the
+looked-up default branch; a lookup failure is an error, never a guess). Git runs
+through `fixes/git_ops.py` (`GitRunner`): per-command timeout, own process group
+killed on timeout/cancel, no prompts, bot commit identity, hooks and gpg signing
+off, and the token supplied only via `GIT_CONFIG_*` environment variables as an
+`http.<github>.extraheader` (never in a URL, argv or `.git/config`); the clone
+sits in a `0700` directory removed in `finally`. Per-file/per-finding branch names carry a stable content hash so groups
+cannot collide; `git ls-remote` runs before any LLM call, a name with an open PR
+is skipped, and a name that exists without one (merged, or orphaned by a failed
+PR) is never reused or overwritten: the next free `-2`...`-9` name is used, so a
+re-run is never blocked. There is never a force-push, and a pushed branch whose
+PR could not be opened is returned in `orphaned_branches`. Every git child
+ignores the operator's global/system git config (`GIT_CONFIG_GLOBAL`/
+`GIT_CONFIG_NOSYSTEM`), and timeouts kill the whole process tree (process group
+on POSIX, `taskkill /T` on Windows). Untrusted finding text is
+flattened, redacted and markdown-escaped by `fixes/pr_text.py`. Grouping relies on findings carrying their true `FindingCategory`, which for
 LLM-review findings is assigned by `code_analysis/category_classifier.py`.
 
 ### Language-Specific Route Mapping
@@ -541,7 +556,7 @@ isitsecure/
 │   ├── scanners/               # 16 DAST scanners (quick) + special scanners
 │   ├── code_analysis/          # 18 SAST scanners + route mappers + LSP + semgrep_rules/
 │   │   └── category_classifier.py  # Maps LLM-review findings to their FindingCategory
-│   ├── fixes/                  # AI fix gen: safety_net, safe_apply, verifier, plain_results, pr_flow
+│   ├── fixes/                  # AI fix gen: safety_net, safe_apply, verifier, plain_results, pr_flow, git_ops, pr_text
 │   ├── guided_dast/            # SAST → DAST test generation (6 strategies)
 │   ├── auth/                   # Auth providers (Supabase, Firebase, Browser, Token)
 │   ├── shared/                 # Rate limiter, OOB callbacks, JWT utils
