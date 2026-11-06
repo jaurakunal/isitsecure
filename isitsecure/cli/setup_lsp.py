@@ -28,6 +28,45 @@ from isitsecure.cli.config import (
     write_secret_file,
 )
 
+def _toml_value(v) -> str:
+    """Render a scalar / list of scalars as a TOML value (json.dumps strings are valid TOML)."""
+    import json
+
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, list):
+        return "[" + ", ".join(_toml_value(i) for i in v) + "]"
+    if isinstance(v, (int, float)):
+        return repr(v)
+    return json.dumps(str(v))
+
+
+def _dump_toml(data: dict, prefix: str = "") -> str:
+    """Minimal TOML writer (scalars, lists of scalars, nested tables) — enough to round-trip
+    config.toml without adding a dependency."""
+    lines = [f"{k} = {_toml_value(v)}" for k, v in data.items() if not isinstance(v, dict)]
+    out = "\n".join(lines) + "\n" if lines else ""
+    for k, v in data.items():
+        if isinstance(v, dict):
+            name = f"{prefix}{k}"
+            out += f"\n[{name}]\n" + _dump_toml(v, f"{name}.")
+    return out
+
+
+def _config_with_api_key(key: str) -> str:
+    """config.toml text with ``[llm] anthropic_api_key`` set, preserving every other existing
+    key/table (e.g. anthropic_workspace_id). An unreadable existing file is replaced."""
+    import tomllib
+
+    try:
+        with open(CONFIG_FILE, "rb") as f:
+            data = tomllib.load(f)
+    except (OSError, tomllib.TOMLDecodeError):
+        data = {}
+    data.setdefault("llm", {})["anthropic_api_key"] = key
+    return _dump_toml(data).lstrip("\n")
+
+
 def _print_status_report() -> None:
     """`setup --check`: report what's configured without changing anything."""
     import shutil
@@ -240,11 +279,8 @@ def setup(
     if key:
         import os
         _ensure_config_dir()
-        # Escape for a TOML basic string so a stray quote/backslash in the key
-        # can't corrupt the file.
-        safe_key = key.replace("\\", "\\\\").replace('"', '\\"')
         # The file holds a secret — created owner-only (0600), never loose.
-        write_secret_file(CONFIG_FILE, f'[llm]\nanthropic_api_key = "{safe_key}"\n')
+        write_secret_file(CONFIG_FILE, _config_with_api_key(key))
         try:
             os.chmod(CONFIG_DIR, 0o700)
         except OSError:

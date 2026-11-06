@@ -7,6 +7,20 @@ Uses Python's Protocol for structural subtyping (duck typing with type hints).
 from typing import Protocol, runtime_checkable
 
 
+class LLMRefusalError(RuntimeError):
+    """The provider's safety classifier declined the request (and no fallback answered).
+
+    ``category`` is the provider's refusal category (e.g. ``"cyber"``) when it reports one.
+    """
+
+    def __init__(self, model: str, category: str | None = None) -> None:
+        self.model = model
+        self.category = category
+        super().__init__(
+            f"{model} declined the request (stop_reason=refusal, category={category or 'unknown'})"
+        )
+
+
 @runtime_checkable
 class LLMClientProtocol(Protocol):
     """Protocol defining the interface for LLM clients.

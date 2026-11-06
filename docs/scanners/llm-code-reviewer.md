@@ -99,6 +99,9 @@ Requires an LLM API key:
 # Set via environment
 export ANTHROPIC_API_KEY=sk-ant-...
 
+# Optional: ANTHROPIC_WORKSPACE_ID / ANTHROPIC_FALLBACK_MODEL (see README "API Keys").
+# A cyber-safeguard refusal is retried once on the fallback model.
+
 # Or use Google
 export GOOGLE_API_KEY=...
 isitsecure scan --llm google ...
