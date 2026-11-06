@@ -26,6 +26,14 @@ MODEL_ROLES = {
     },
 }
 
+# Client-side fallback for Anthropic's real-time cyber safeguard. A classifier refusal arrives as
+# an HTTP 200 with ``stop_reason="refusal"`` and EMPTY content (benign security work can trip it),
+# which otherwise surfaces upstream as "did not return a JSON object". On a refusal we re-issue
+# the same request once on this model. Override with ANTHROPIC_FALLBACK_MODEL.
+CYBER_REFUSAL_FALLBACK_MODEL = "claude-sonnet-5"
+
+WORKSPACE_ID_HEADER = "anthropic-workspace-id"
+
 
 def create_llm_client(
     provider: str,
@@ -49,7 +57,14 @@ def create_llm_client(
     model = MODEL_ROLES[provider][role]
 
     if provider == "anthropic":
-        return AnthropicAdapter(api_key=api_key, model=model)
+        from isitsecure.config import load_fallback_model, load_workspace_id
+
+        return AnthropicAdapter(
+            api_key=api_key,
+            model=model,
+            fallback_model=load_fallback_model() or CYBER_REFUSAL_FALLBACK_MODEL,
+            workspace_id=load_workspace_id(),
+        )
     else:  # google
         return GoogleAdapter(api_key=api_key, model=model)
 
@@ -57,15 +72,30 @@ def create_llm_client(
 class AnthropicAdapter:
     """Adapter for Anthropic's Claude API. Implements LLMClientProtocol."""
 
-    def __init__(self, api_key: str, model: str = "claude-opus-4-7") -> None:
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "claude-opus-4-7",
+        fallback_model: str | None = None,
+        workspace_id: str | None = None,
+    ) -> None:
         try:
             import anthropic
         except ImportError:
             raise ImportError(
                 "anthropic package required. Install with: pip install isitsecure[llm]"
             )
-        self._client = anthropic.AsyncAnthropic(api_key=api_key)
+        # Identity-linked keys reject requests without the workspace header; omit it when unset
+        # so the client is constructed exactly as before.
+        if workspace_id:
+            self._client = anthropic.AsyncAnthropic(
+                api_key=api_key, default_headers={WORKSPACE_ID_HEADER: workspace_id}
+            )
+        else:
+            self._client = anthropic.AsyncAnthropic(api_key=api_key)
         self._model = model
+        # Model to retry on after a cyber-safeguard refusal; None (or == primary) disables it.
+        self._fallback_model = fallback_model if fallback_model != model else None
         # Read by the orchestrator's _collect_token_usage() for cost reporting.
         self._model_name = model
         self.token_usage = {"input_tokens": 0, "output_tokens": 0, "llm_calls": 0}
@@ -90,19 +120,38 @@ class AnthropicAdapter:
         except Exception as exc:
             logger.debug("Failed to record token usage: %s", exc)
 
+    @staticmethod
+    def _is_refusal(response) -> bool:
+        """A classifier refusal: 200 with ``stop_reason="refusal"`` (content is empty).
+        Keyed on ``stop_reason`` only — the explanation text is documented as unstable."""
+        return getattr(response, "stop_reason", None) == "refusal"
+
+    async def _create_with_fallback(self, **kwargs):
+        """Create a message on the primary model; on a refusal, re-issue the identical request
+        once on the fallback model (if configured). Both attempts are metered."""
+        response = await self._client.messages.create(model=self._model, **kwargs)
+        self._record_usage(response)
+        if self._fallback_model and self._is_refusal(response):
+            logger.warning(
+                "Anthropic safeguard refused the request on %s; retrying on fallback model %s",
+                self._model,
+                self._fallback_model,
+            )
+            response = await self._client.messages.create(model=self._fallback_model, **kwargs)
+            self._record_usage(response)
+        return response
+
     async def generate(
         self,
         prompt: str,
         max_tokens: int = 4096,
         temperature: float = 0.7,
     ) -> str:
-        response = await self._client.messages.create(
-            model=self._model,
+        response = await self._create_with_fallback(
             max_tokens=max_tokens,
             temperature=temperature,
             messages=[{"role": "user", "content": prompt}],
         )
-        self._record_usage(response)
         return response.content[0].text
 
     async def generate_with_system(
@@ -111,13 +160,11 @@ class AnthropicAdapter:
         user_prompt: str,
         max_tokens: int = 4096,
     ) -> str:
-        response = await self._client.messages.create(
-            model=self._model,
+        response = await self._create_with_fallback(
             max_tokens=max_tokens,
             system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}],
         )
-        self._record_usage(response)
         return response.content[0].text
 
 

@@ -23,15 +23,8 @@ _ENV_KEYS = {
 }
 
 
-def load_api_key(provider: str) -> str | None:
-    """Resolve an LLM API key from env var, local .env file, or config.toml.
-
-    Returns None if no key is found for the given provider.
-    """
-    env_key = _ENV_KEYS.get(provider, "")
-    if not env_key:
-        return None
-
+def _resolve_setting(env_key: str, toml_key: str) -> str | None:
+    """Resolve one setting: env var, then local ``.env``, then ``[llm]`` in config.toml."""
     # 1. Environment variable
     val = os.environ.get(env_key)
     if val:
@@ -52,8 +45,36 @@ def load_api_key(provider: str) -> str | None:
 
             with open(CONFIG_FILE, "rb") as f:
                 config = tomllib.load(f)
-            return config.get("llm", {}).get(f"{provider}_api_key")
+            return config.get("llm", {}).get(toml_key)
         except Exception as exc:
-            logger.debug("Could not read API key from %s: %s", CONFIG_FILE, exc)
+            logger.debug("Could not read %s from %s: %s", toml_key, CONFIG_FILE, exc)
 
     return None
+
+
+def load_api_key(provider: str) -> str | None:
+    """Resolve an LLM API key from env var, local .env file, or config.toml.
+
+    Returns None if no key is found for the given provider.
+    """
+    env_key = _ENV_KEYS.get(provider, "")
+    if not env_key:
+        return None
+    return _resolve_setting(env_key, f"{provider}_api_key")
+
+
+def load_workspace_id() -> str | None:
+    """Resolve the Anthropic workspace id sent as the ``anthropic-workspace-id`` header.
+
+    Resolved like the API key: ``ANTHROPIC_WORKSPACE_ID`` env var, local ``.env``, or
+    config.toml (``[llm] anthropic_workspace_id``). Identity-linked keys (e.g. Cyber
+    Verification Program enrollees, org-wide "All workspaces" keys) get a 400 without it.
+    Returns None when unset.
+    """
+    return _resolve_setting("ANTHROPIC_WORKSPACE_ID", "anthropic_workspace_id")
+
+
+def load_fallback_model() -> str | None:
+    """Resolve an override for the refusal-fallback model (``ANTHROPIC_FALLBACK_MODEL``,
+    ``.env``, or ``[llm] anthropic_fallback_model``). None means use the built-in default."""
+    return _resolve_setting("ANTHROPIC_FALLBACK_MODEL", "anthropic_fallback_model")

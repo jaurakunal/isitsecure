@@ -610,6 +610,13 @@ echo "ANTHROPIC_API_KEY=sk-ant-..." > .env
 isitsecure setup
 ```
 
+Optional Anthropic settings (same resolution order: env var, `.env`, then `[llm]` in `config.toml`):
+
+| Variable | `config.toml` key | Purpose |
+|----------|-------------------|---------|
+| `ANTHROPIC_WORKSPACE_ID` | `anthropic_workspace_id` | Sent as the `anthropic-workspace-id` header. Required by identity-linked keys (e.g. Cyber Verification Program, org-wide "All workspaces" keys); omitted when unset. |
+| `ANTHROPIC_FALLBACK_MODEL` | `anthropic_fallback_model` | Model used for a single retry when Anthropic's cyber safeguard refuses a request (an HTTP 200 with empty content). Defaults to `claude-sonnet-5`; a log warning is emitted when the retry happens. |
+
 `isitsecure setup` stores the key in `~/.isitsecure/config.toml`, created with owner-only (`0600`) permissions inside a `0700` directory.
 
 ### OOB Callbacks (Blind Vulnerability Detection)
