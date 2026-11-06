@@ -390,8 +390,10 @@ def _enrich_report(raw_report: dict) -> dict:
                 # #49 — numbered step-by-step walkthrough for the top-4 fixes.
                 walk = plain_english.walkthrough_for(category)
                 merged["walkthrough"] = walk.as_dict() if walk else None
-            except Exception:
-                logger.exception("Failed to enrich finding %s", f.get("id"))
+            except Exception as exc:
+                # Exception type only: the finding is already redacted, but CodeQL
+                # cannot see that and flags anything derived from report data.
+                logger.error("Failed to enrich a finding: %s", type(exc).__name__)
             merged_findings.append(merged)
         enriched["findings"] = merged_findings
 
