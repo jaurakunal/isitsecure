@@ -17,10 +17,13 @@ set, reporting:
 Usage:
   python benchmarks/score.py juiceshop path/to/scan_findings.json
   # writes <findings>.scorecard.json and prints the scorecard + gap list
+  python benchmarks/score.py juiceshop findings.json --previous old.scorecard.json
+  # also prints per-class recall deltas vs a previous scorecard
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import pathlib
 import sys
@@ -142,16 +145,56 @@ def print_report(app: str, r: dict) -> None:
             print(f"  - [{g['vuln_class']}] {g['name']}{ep}")
 
 
-def main() -> int:
-    if len(sys.argv) != 3 or sys.argv[1] not in APPS:
-        print(f"usage: python benchmarks/score.py <{'|'.join(APPS)}> <findings.json>")
+def class_deltas(current: dict, previous: dict) -> list[dict]:
+    """Per-class recall change between two scorecards (pure).
+
+    Compares ``by_class`` found-counts; a class present in only one scorecard
+    counts as 0 found in the other. Rows are sorted regressions first, so the
+    classes that got worse are the first thing a reader sees.
+    """
+    cur, prev = current.get("by_class", {}), previous.get("by_class", {})
+    rows = []
+    for cls in sorted(set(cur) | set(prev)):
+        c = cur.get(cls, {"found": 0, "total": 0})
+        p = prev.get(cls, {"found": 0, "total": 0})
+        rows.append({"vuln_class": cls,
+                     "found": c["found"], "total": c["total"],
+                     "prev_found": p["found"], "prev_total": p["total"],
+                     "delta": c["found"] - p["found"]})
+    return sorted(rows, key=lambda r: (r["delta"], r["vuln_class"]))
+
+
+def print_deltas(rows: list[dict]) -> None:
+    changed = [r for r in rows if r["delta"]]
+    print("\nPer-class recall vs previous scorecard "
+          f"({len(changed)} of {len(rows)} classes changed):")
+    for r in rows:
+        if not r["delta"]:
+            continue
+        tag = "REGRESSED" if r["delta"] < 0 else "improved"
+        print(f"  {r['vuln_class']:16} {r['prev_found']}/{r['prev_total']} -> "
+              f"{r['found']}/{r['total']}  ({r['delta']:+d})  {tag}")
+    if not changed:
+        print("  no per-class change")
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description="Score a scan against per-app ground truth.")
+    ap.add_argument("app", choices=sorted(APPS))
+    ap.add_argument("findings", help="scan report JSON (or a bare findings list)")
+    ap.add_argument("--previous", help="earlier <findings>.scorecard.json to report "
+                                       "per-class recall deltas against")
+    try:
+        args = ap.parse_args(argv)
+    except SystemExit:
         return 2
-    app, findings_path = sys.argv[1], sys.argv[2]
-    data = json.loads(pathlib.Path(findings_path).read_text())
+    data = json.loads(pathlib.Path(args.findings).read_text())
     findings = data.get("findings", data) if isinstance(data, dict) else data
-    result = score(findings, APPS[app]())
-    print_report(app, result)
-    out = pathlib.Path(findings_path).with_suffix(".scorecard.json")
+    result = score(findings, APPS[args.app]())
+    print_report(args.app, result)
+    if args.previous:
+        print_deltas(class_deltas(result, json.loads(pathlib.Path(args.previous).read_text())))
+    out = pathlib.Path(args.findings).with_suffix(".scorecard.json")
     out.write_text(json.dumps(result, indent=2))
     print(f"\nwrote {out}")
     return 0
