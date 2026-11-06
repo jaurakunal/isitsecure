@@ -150,6 +150,9 @@ clean; a *missing* binary is recorded only during a fix-verification re-scan
 - **False positives** erode trust fastest (this is a vibe-coder tool). Bias rules
   toward high-confidence sinks; recognise the common sanitizers per library so a
   parameterized query doesn't get flagged.
+  SQL sinks are scoped to the query-*string* argument (`focus-metavariable`), so a
+  tainted value passed only as a bound parameter (`db.query("… = ?", [id])`) is
+  not flagged. The `sast_injection` benchmark's `safe/` fixtures gate this.
 - **Categorisation** must map cleanly onto our `FindingCategory` values
   (injection_risk, etc.) and reuse the #64 classifier where sensible.
 - **Double-labels** (spike showed one) — dedup/verify should collapse a location
