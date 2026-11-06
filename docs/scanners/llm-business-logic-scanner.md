@@ -10,8 +10,9 @@ Reads the business-logic source files (routers, services, payment and webhook co
 
 Between executing the steps and calling the judge, a deterministic gate (`evidence_gap` in `engine/shared/verdict.py`) checks that the replies can support a verdict at all:
 
-- **Inconclusive** (the judge is not called): no step got a response (timeout, connection error, status 0), or every reply was a server error, a missing endpoint, an HTML page, or a request rejected by validation (HTTP 400, 415, 422). The plan is recorded in `skipped_steps` with the reason and reaches `DeepScanReport.scanner_errors`, so a scan that could not test a plan never reads as a clean pass. Individual steps with no response are also listed.
-- **Not proven** (the judge is not called): every usable reply was a denial (401, 403) or a `{"success": false}` / `{"error": ...}` style failure. This is a real "not vulnerable", so nothing is recorded.
+- **Inconclusive** (the judge is not called): no step got a response (timeout, connection error, status 0), or every reply was a missing endpoint, an HTML page, or a request rejected by validation (HTTP 400, 415, 422). The plan is recorded once in `skipped_steps` with the reason and reaches `DeepScanReport.scanner_errors`, so a scan that could not test a plan never reads as a clean pass. When only some steps got no response, the plan is still judged and those steps are listed.
+- **Server errors reach the judge**: a 5xx is not filtered, because an unhandled error on hostile input can itself be the finding.
+- **Not proven** (the judge is not called): every usable reply was a denial (401, 403) or a `{"success": false}` / pure `{"error": ...}` style failure. An `errors` array next to real data (a GraphQL partial response) is not a failure. This is a real "not vulnerable", so nothing is recorded.
 - Otherwise the judge decides, as before. An empty 2xx is still evidence: an unauthorized DELETE or PATCH legitimately returns no body.
 
 A transport failure is therefore never treated as "safe", and never fed to the judge as if it were an application answer.

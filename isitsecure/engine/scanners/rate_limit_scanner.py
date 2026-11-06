@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from typing import NamedTuple
 from urllib.parse import urlparse
 
@@ -39,6 +38,13 @@ DESC_RATE_LIMIT_INCONCLUSIVE = (
 )
 CONFIDENCE_INCONCLUSIVE = 0.50
 
+# One flaky 502 in 150 must not hide an unprotected login endpoint, but a run
+# that is mostly error pages says nothing. Unusable replies (transport errors,
+# 5xx, missing endpoint, HTML shell) are tolerated up to this fraction of the
+# planned requests, and never this many in a row.
+MAX_UNUSABLE_FRACTION = 0.05
+MAX_CONSECUTIVE_UNUSABLE = 5
+
 
 class ThresholdProbe(NamedTuple):
     """Outcome of the sequential pass: how many requests were processed and the verdict.
@@ -50,6 +56,15 @@ class ThresholdProbe(NamedTuple):
     processed: int
     verdict: Verdict
     limited: bool = False
+
+
+def _has_retry_after(response: object) -> bool:
+    """True when the response carries a non-empty Retry-After header."""
+    try:
+        value = response.headers.get("retry-after")  # type: ignore[attr-defined]
+    except Exception:
+        return False
+    return isinstance(value, str) and bool(value.strip())
 
 
 def _reply_of(response: object, method: str) -> Reply:
@@ -186,7 +201,7 @@ class RateLimitScanner(AuthAwareScanner):
             elif probe.verdict.vulnerable:
                 # Every request was processed and none was limited
                 findings.append(
-                    self._build_no_rate_limit_finding(endpoint)
+                    self._build_no_rate_limit_finding(endpoint, probe.processed)
                 )
             else:
                 # Could not tell (dropped connection, error pages, no endpoint):
@@ -232,47 +247,73 @@ class RateLimitScanner(AuthAwareScanner):
         many processed responses arrive before the first 429 response. A
         response only counts as processed when it says something about the
         endpoint (not status 0, a 5xx, a missing endpoint or an HTML page).
+        400/401/403/422 DO count as processed: a limiter normally runs before
+        validation and credential checks, and this scanner sends empty bodies,
+        so a login endpoint rejecting every request is still reachable by an
+        attacker at full speed.
+
+        Isolated unusable replies are tolerated (see ``MAX_UNUSABLE_FRACTION``
+        and ``MAX_CONSECUTIVE_UNUSABLE``). A 5xx carrying ``Retry-After`` may
+        come from a limiter or WAF, so it ends the run as INCONCLUSIVE.
 
         Returns:
             ``ThresholdProbe``. A 429 sets ``limited`` and ``processed`` is
-            the threshold. Reaching MAX_SEQUENTIAL_REQUESTS with every
-            request processed and no 429 is PROVEN (no rate limiting). Any
-            dropped connection or unusable reply is INCONCLUSIVE.
+            the threshold. Reaching MAX_SEQUENTIAL_REQUESTS with the unusable
+            replies within tolerance and no 429 is PROVEN (no rate limiting).
+            Too many unusable replies, or a possible limiter signal, is
+            INCONCLUSIVE.
         """
         processed = 0
+        unusable = 0
+        consecutive = 0
+        planned = RateLimitConfig.MAX_SEQUENTIAL_REQUESTS
         method = endpoint.method.value
 
-        for _ in range(RateLimitConfig.MAX_SEQUENTIAL_REQUESTS):
+        for sent in range(1, planned + 1):
+            reason: str | None
             try:
                 response = await client.request(method=method, url=endpoint.url)
             except Exception as exc:
-                return ThresholdProbe(
-                    processed,
-                    Verdict.inconclusive(
-                        f"connection dropped after {processed} responses "
-                        f"({type(exc).__name__})"
-                    ),
-                )
+                reason = f"connection error ({type(exc).__name__})"
+            else:
+                if response.status_code == self.HTTP_STATUS_TOO_MANY_REQUESTS:
+                    return ThresholdProbe(
+                        processed, Verdict.not_proven("rate limit observed"), True
+                    )
+                if _has_retry_after(response) and response.status_code >= 500:
+                    return ThresholdProbe(
+                        processed,
+                        Verdict.inconclusive(
+                            f"HTTP {response.status_code} with Retry-After on "
+                            f"request {sent}: possibly a limiter or WAF"
+                        ),
+                    )
+                reason = unreachable_reason(_reply_of(response, method))
 
-            if response.status_code == self.HTTP_STATUS_TOO_MANY_REQUESTS:
-                return ThresholdProbe(
-                    processed, Verdict.not_proven("rate limit observed"), True
-                )
-            reason = unreachable_reason(_reply_of(response, method))
-            if reason:
-                return ThresholdProbe(
-                    processed,
-                    Verdict.inconclusive(
-                        f"request {processed + 1} gave {reason}"
-                    ),
-                )
-            processed += 1
+            if reason is None:
+                processed += 1
+                consecutive = 0
+            else:
+                unusable += 1
+                consecutive += 1
+                if (
+                    consecutive >= MAX_CONSECUTIVE_UNUSABLE
+                    or unusable > MAX_UNUSABLE_FRACTION * planned
+                ):
+                    return ThresholdProbe(
+                        processed,
+                        Verdict.inconclusive(
+                            f"{unusable} of {sent} requests were unusable "
+                            f"({consecutive} in a row); last: {reason}"
+                        ),
+                    )
             await asyncio.sleep(RateLimitConfig.MIN_DELAY_BETWEEN_REQUESTS)
 
         return ThresholdProbe(
             processed,
             Verdict.proven(
-                f"{processed}/{processed} requests processed, no 429"
+                f"{processed}/{planned} requests processed, no 429"
+                f" ({unusable} unusable)"
             ),
         )
 
@@ -457,9 +498,12 @@ class RateLimitScanner(AuthAwareScanner):
     # ------------------------------------------------------------------
 
     def _build_no_rate_limit_finding(
-        self, endpoint: DiscoveredEndpoint
+        self, endpoint: DiscoveredEndpoint, processed: int | None = None
     ) -> DeepFinding:
         """Build a finding for an endpoint with no rate limiting detected."""
+        total = RateLimitConfig.MAX_SEQUENTIAL_REQUESTS
+        if processed is None:
+            processed = total
         return DeepFinding(
             source=FindingSource.DAST_URL,
             category=FindingCategory.AUTH_WEAKNESS,
@@ -476,8 +520,7 @@ class RateLimitScanner(AuthAwareScanner):
                 f"No 429 (Too Many Requests) response received"
             ),
             evidence=(
-                f"{RateLimitConfig.MAX_SEQUENTIAL_REQUESTS}/"
-                f"{RateLimitConfig.MAX_SEQUENTIAL_REQUESTS} "
+                f"{processed}/{total} "
                 f"requests succeeded without 429 on {endpoint.url}"
             ),
             confidence=RateLimitConfig.CONFIDENCE_NO_RATE_LIMIT,

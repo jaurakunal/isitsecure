@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 
 import pytest
 
@@ -11,6 +12,7 @@ from isitsecure.engine.shared.verdict import (
     Reply,
     Verdict,
     absolutize,
+    body_signals_failure,
     evidence_gap,
     judge_difference,
     unreachable_reason,
@@ -177,3 +179,101 @@ class TestEvidenceGap:
 
     def test_real_answer_leaves_no_gap(self):
         assert evidence_gap([Reply(0, "x"), Reply(200, '{"id": 1}')]) is None
+
+
+# --- Review fixes 2, 3, 5, 6 ---
+
+
+class TestBodySignalsFailure:
+    def test_graphql_partial_data_is_not_failure(self):
+        assert not body_signals_failure('{"data": {"u": {"id": 1}}, "errors": [{"m": "x"}]}')
+
+    def test_pure_errors_is_failure(self):
+        assert body_signals_failure('{"errors": [{"message": "nope"}]}')
+
+    def test_data_null_with_errors_is_failure(self):
+        assert body_signals_failure('{"data": null, "errors": [{"message": "nope"}]}')
+
+    def test_explicit_success_false_wins_over_data(self):
+        assert body_signals_failure('{"success": false, "data": {"id": 1}}')
+
+    def test_non_json_and_lists_are_not_failure(self):
+        assert not body_signals_failure("plain") and not body_signals_failure("[1]")
+
+
+def test_evidence_gap_5xx_is_not_a_gap():
+    assert evidence_gap([Reply(500, '{"error": "boom"}', "POST")]) is None
+
+
+def test_evidence_gap_graphql_partial_is_not_a_gap():
+    body = '{"data": {"users": [{"id": 1}]}, "errors": [{"message": "x"}]}'
+    assert evidence_gap([Reply(200, body, "POST")]) is None
+
+
+class TestProbeStripping:
+    def test_short_probe_not_stripped(self):
+        v = judge_difference(Reply(200, "12"), Reply(200, "21"), probe_input="1")
+        assert v.vulnerable
+
+    def test_json_escaped_reflection_is_not_proof(self):
+        probe = 'a"b\\c<x>'
+        v = judge_difference(
+            Reply(200, '{"echo": ' + json.dumps(probe) + "}", "POST"),
+            Reply(200, '{"echo": ""}', "POST"),
+            probe_input=probe,
+        )
+        assert v.conclusive and not v.vulnerable
+
+    def test_url_encoded_reflection_is_not_proof(self):
+        v = judge_difference(
+            Reply(200, '{"q": "a%20b%27%20OR%201"}', "POST"),
+            Reply(200, '{"q": ""}', "POST"),
+            probe_input="a b' OR 1",
+        )
+        assert not v.vulnerable
+
+    def test_boundary_aware_does_not_eat_inside_words(self):
+        v = judge_difference(
+            Reply(200, '{"v": "xxPROBEyy"}', "POST"),
+            Reply(200, '{"v": "xxyy"}', "POST"),
+            probe_input="PROBE",
+        )
+        assert v.vulnerable
+
+
+class TestCanonicalComparison:
+    def test_key_order_and_whitespace_insensitive(self):
+        v = judge_difference(
+            Reply(200, '{"a": 1, "b": 2}', "POST"),
+            Reply(200, '{\n "b":2,\n "a":1 }', "POST"),
+        )
+        assert v.conclusive and not v.vulnerable
+
+    def test_distinct_json_values_still_proven(self):
+        v = judge_difference(Reply(200, '{"a": 1}', "POST"), Reply(200, '{"a": 2}', "POST"))
+        assert v.vulnerable
+
+    def test_huge_bodies_are_bounded_but_length_differences_count(self):
+        big = "x" * 1_000_000
+        same = judge_difference(Reply(200, big, "POST"), Reply(200, big, "POST"))
+        assert not same.vulnerable
+        longer = judge_difference(Reply(200, big + "y", "POST"), Reply(200, big, "POST"))
+        assert longer.vulnerable
+
+
+class TestAbsolutizeOrigin:
+    def test_protocol_relative_cannot_switch_host(self):
+        assert absolutize("//evil.example/x", "https://x.com") is None
+
+    def test_cross_origin_absolute_refused_with_base(self):
+        assert absolutize("https://evil.example/x", "https://x.com") is None
+
+    def test_port_mismatch_refused(self):
+        assert absolutize("http://x.com:8080/a", "http://x.com:80") is None
+
+    def test_default_port_equivalent(self):
+        assert absolutize("https://x.com:443/a", "https://x.com/") == "https://x.com:443/a"
+
+    def test_ipv6_same_origin_ok_and_different_refused(self):
+        assert absolutize("/a", "http://[::1]:9000/") == "http://[::1]:9000/a"
+        assert absolutize("http://[::2]:9000/a", "http://[::1]:9000/") is None

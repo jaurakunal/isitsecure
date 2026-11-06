@@ -98,3 +98,43 @@ async def test_real_answer_still_reaches_judge_and_reports():
     findings, _, llm = await _run(lambda *a, **k: _resp(200, '{"title":"hacked"}'))
     assert len(findings) == 1
     assert llm.generate_with_system.await_count == 2
+
+
+# --- Review fixes 2-4 ---
+
+
+@pytest.mark.asyncio
+async def test_graphql_partial_data_with_errors_reaches_judge():
+    body = '{"data": {"users": [{"email": "a@b.c"}]}, "errors": [{"message": "x"}]}'
+    findings, _, llm = await _run(lambda *a, **k: _resp(200, body))
+    assert len(findings) == 1
+    assert llm.generate_with_system.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_pure_errors_array_is_still_a_denial():
+    findings, _, llm = await _run(
+        lambda *a, **k: _resp(200, '{"errors": [{"message": "Not authorized"}]}')
+    )
+    assert findings == []
+    assert llm.generate_with_system.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_all_5xx_replies_reach_the_judge():
+    """An unhandled server error on hostile input can itself be the finding."""
+    findings, scanner, llm = await _run(
+        lambda *a, **k: _resp(500, '{"error": "Internal Server Error"}')
+    )
+    assert llm.generate_with_system.await_count == 2
+    assert len(findings) == 1
+    assert scanner.skipped_steps == []
+
+
+@pytest.mark.asyncio
+async def test_all_steps_failing_is_recorded_once():
+    async def boom(*a, **k):
+        raise httpx.ConnectError("refused")
+
+    _, scanner, _ = await _run(boom)
+    assert len(scanner.skipped_steps) == 1

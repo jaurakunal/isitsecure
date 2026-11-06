@@ -17,7 +17,6 @@ is tracked automatically for cost reporting.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import re
@@ -321,12 +320,9 @@ class LLMBusinessLogicScanner:
             return None
 
         # Deterministic gate before the judge: transport failures, error pages
-        # and validation rejections are "could not tell", never evidence.
-        for sr in step_results:
-            if sr["actual_status"] <= 0:
-                self._record_skip(
-                    str(plan_title), f"step {sr['step']} got no response",
-                )
+        # and validation rejections are "could not tell", never evidence. A 5xx
+        # is NOT filtered here: an unhandled error on hostile input can itself
+        # be the finding, so it always reaches the judge.
         gap = evidence_gap([
             Reply(
                 sr["actual_status"], sr["actual_body_preview"], str(sr["method"])
@@ -337,6 +333,12 @@ class LLMBusinessLogicScanner:
             if not gap.conclusive:
                 self._record_skip(str(plan_title), f"inconclusive: {gap.evidence}")
             return None
+        # Partial failure: the plan is judged, but say which steps got nothing.
+        for sr in step_results:
+            if sr["actual_status"] <= 0:
+                self._record_skip(
+                    str(plan_title), f"step {sr['step']} got no response",
+                )
 
         # Ask LLM to analyze the results
         return await self._analyze_results(plan, step_results)
@@ -519,7 +521,7 @@ class LLMBusinessLogicScanner:
         text = response.strip()
         if text.startswith("```"):
             lines = text.split("\n")
-            lines = [l for l in lines if not l.strip().startswith("```")]
+            lines = [ln for ln in lines if not ln.strip().startswith("```")]
             text = "\n".join(lines)
 
         try:
