@@ -1625,6 +1625,7 @@ class DeepSecurityScanAgent:
                 "bola_forge",
                 self._bola_forge_scanner.scan(
                     crawl_result.intercepted_requests, session_a, session_b,
+                    target_url=target_url,
                 ),
                 ScannerTimeouts.DEFAULT_SECONDS,
             )

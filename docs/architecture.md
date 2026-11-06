@@ -421,7 +421,10 @@ the check that finds an exposed `.env`.
 collection, PUT to an item — because a path in a JS bundle carries no method,
 so everything is otherwise discovered as a GET and scanners filtering on
 POST/PUT find nothing to do. Stored XSS, mass assignment and CSRF all live
-behind that filter.
+behind that filter. With a login it also unlocks forged-ownership BOLA
+([bola-forge-scanner](scanners/bola-forge-scanner.md)): captured creates are replayed
+with the body owner id forged, which adds two uncleaned `isitsecure-probe` records per tested
+endpoint (up to 5).
 
 It is off by default: it makes a scan write to whatever it is pointed at.
 DELETE is derived and deliberately never emitted — a scanner that destroys a
@@ -429,7 +432,7 @@ record to prove it could is not worth the finding.
 
 Measured on Juice Shop, url-only: **22/45 → 28/45**, gaining CSRF, mass
 assignment, three XSS challenges (1/7 to 4/7) and one IDOR, losing nothing. The scan takes
-about 72 minutes against 27, since the inventory doubles.
+about 72 minutes against 27, since the inventory doubles. (That measurement is url-only and predates the BOLA Forge scanner, which needs a login and adds up to ten more writes.)
 
 That number was not always what it looked like. The first measurement read
 neutral — six gained, six lost — and the six "lost" were `exposed_data` and
