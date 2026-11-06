@@ -30,6 +30,12 @@ from isitsecure.engine.models import (
     InterceptedRequest,
 )
 from isitsecure.engine.shared.progress import emit
+from isitsecure.engine.shared.request_contract import (
+    MAX_RETRIES_PER_PROBE,
+    ContractLedger,
+    contract_blocked_finding,
+    probe_with_repair,
+)
 from isitsecure.engine.shared.rate_limited_client import (
     RateLimitedClient,
 )
@@ -50,6 +56,11 @@ class BodyParamFuzzer:
         for p in BodyParamFuzzerConfig.ERROR_INDICATORS
     ]
 
+    def __init__(self) -> None:
+        # What each endpoint's validation layer has disclosed this scan; shared by every probe
+        # so a contract learned once repairs (or skips) the rest.
+        self._ledger = ContractLedger()
+
     async def scan(
         self,
         intercepted_requests: list[InterceptedRequest],
@@ -62,6 +73,7 @@ class BodyParamFuzzer:
             session: Auth session for replaying requests.
         """
         findings: list[DeepFinding] = []
+        self._ledger = ContractLedger()
 
         mutations = [
             r for r in intercepted_requests
@@ -96,6 +108,14 @@ class BodyParamFuzzer:
 
                 for param in params:
                     original_value = body[param]
+
+                    # The server pins this field to a closed set: any payload dies in request
+                    # validation, so skip the probes and report the field as not tested.
+                    if param in self._ledger.pinned(req.method, req.url):
+                        self._ledger.record_probe(
+                            req.method, req.url, param, blocked=True,
+                        )
+                        continue
 
                     # SQLi fuzzing
                     for payload in BodyParamFuzzerConfig.SQLI_PAYLOADS:
@@ -141,6 +161,17 @@ class BodyParamFuzzer:
                         accepted_noted = True
                     findings.append(f)
 
+        # A rejected request is not a safe one: say which fields were never tested.
+        findings.extend(
+            contract_blocked_finding(
+                entry,
+                scanner_name=self.scanner_name,
+                category=FindingCategory.INJECTION_RISK,
+                source=FindingSource.DAST_AUTHENTICATED,
+            )
+            for entry in self._ledger.blocked()
+        )
+
         logger.info(
             "BodyParamFuzzer: %d findings from %d mutations",
             len(findings), len(mutations),
@@ -163,11 +194,22 @@ class BodyParamFuzzer:
         method = original_req.method.upper()
 
         try:
-            resp = await client.request(
-                method, original_req.url,
-                headers=headers,
-                content=json.dumps(fuzzed_body, default=str),
+            probe = await probe_with_repair(
+                self._sender(client, method, original_req.url, headers),
+                self._ledger, method, original_req.url, fuzzed_body,
+                param=param,
+                # A type-confusion rejection is the behaviour under test, not a coverage gap.
+                max_retries=0 if fuzz_type == "type" else MAX_RETRIES_PER_PROBE,
+                track=fuzz_type != "type",
+                # This scanner already replays the captured write (WRITE_METHODS); repairing
+                # its siblings sends no request a plain probe would not.
+                repair_writes=True,
             )
+            resp, fuzzed_body = probe.response, probe.fields
+            # Rejected by request validation: the payload never reached the application, so
+            # the response (which may merely echo the payload) says nothing about the sink.
+            if probe.blocked:
+                return None
             path = urlparse(original_req.url).path
 
             if fuzz_type == "sqli":
@@ -219,11 +261,11 @@ class BodyParamFuzzer:
                 if resp.status_code < 400:
                     # Read-back: a CLEAN follow-up request must now carry the
                     # marker, otherwise this is just an ignored unknown key.
-                    follow = await client.request(
-                        method, original_req.url,
-                        headers=headers,
-                        content=json.dumps(body, default=str),
-                    )
+                    follow = (await probe_with_repair(
+                        self._sender(client, method, original_req.url, headers),
+                        self._ledger, method, original_req.url, body,
+                        max_retries=0, track=False, repair_writes=True,
+                    )).response
                     marker = BodyParamFuzzerConfig.PROTOTYPE_POLLUTION_MARKER
                     if marker in follow.text:
                         return self._make_finding(
@@ -274,6 +316,20 @@ class BodyParamFuzzer:
                 )
             )
         return None
+
+    @staticmethod
+    def _sender(
+        client: RateLimitedClient, method: str, url: str, headers: dict[str, str],
+    ):
+        """The ``send`` callback ``probe_with_repair`` drives: the content type follows the
+        encoding the endpoint turned out to demand."""
+        async def send(content: str, content_type: str):
+            return await client.request(
+                method, url,
+                headers={**headers, "Content-Type": content_type},
+                content=content,
+            )
+        return send
 
     def _has_sql_error(self, response_text: str) -> bool:
         """Check if response contains SQL error indicators."""

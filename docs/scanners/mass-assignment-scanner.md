@@ -14,9 +14,11 @@ The injected field is searched for **anywhere in the response body**, not just a
 
 The value still has to match: finding `role` nested somewhere proves nothing if it came back as `customer`. The search goes up to 8 levels deep, and a string `"true"` does not match a boolean `true`. The scanner does not read the record back afterwards to confirm it was stored; reflection in the reply is the only evidence.
 
-### What it does not do yet
+### Strict APIs: request contracts
 
-The probe sends the escalation field **on its own**, with no valid base payload. An endpoint that validates its required fields rejects that request outright, so the escalation never gets evaluated. This is the reason Juice Shop's `feedbackChallenge` (a `POST /api/Feedbacks` that also demands a captcha) is out of reach while `registerAdminChallenge` (a `POST /api/Users` that accepts a bare body) is not.
+The probe sends the escalation field on its own, so an endpoint that validates its required fields answers 400/422 before the handler runs. The scanner reads that rejection (FastAPI/Pydantic, DRF, Rails, Laravel, Zod, Spring, ASP.NET, Joi and similar; see `engine/shared/request_contract.py`), learns which sibling fields the endpoint requires, and re-sends the probe with them filled in (at most 2 retries per probe and 6 per endpoint; once learned, later probes are repaired up front at no extra cost). A 415 switches the body to form encoding. A rejection that names no field the request failed to satisfy (for example "bad request") is treated as the application's answer and is not retried.
+
+If a field is still rejected after repair (for example the server pins `role` to a closed set that excludes `admin`), the probe never reached the handler. The scanner then adds one Info finding, "Injection probes blocked by request validation (not tested)", naming the fields and the learned contract, instead of returning nothing. It is a coverage note, not a vulnerability, and an absent finding on such a field is not evidence of safety. Contracts that need a value the scanner cannot guess (a captcha, a signature) remain out of reach; Juice Shop's `feedbackChallenge` is one.
 
 ## Why It Matters
 

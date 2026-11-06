@@ -25,6 +25,12 @@ from isitsecure.engine.models import (
 )
 from isitsecure.engine.shared.auth_aware import AuthAwareScanner
 from isitsecure.engine.shared.rate_limited_client import RateLimitedClient
+from isitsecure.engine.shared.request_contract import (
+    ContractLedger,
+    ProbeResult,
+    contract_blocked_finding,
+    probe_with_repair,
+)
 from isitsecure.engine.shared.time_budget import TimeBudget
 
 logger = logging.getLogger(__name__)
@@ -40,6 +46,12 @@ class MassAssignmentScanner(AuthAwareScanner):
     CONTENT_TYPE_JSON = "application/json"
     HTTP_STATUS_OK_LOWER = 200
     HTTP_STATUS_OK_UPPER = 300
+
+    def __init__(self) -> None:
+        super().__init__()
+        # What each endpoint's validation layer has disclosed this scan; the single-field
+        # probes are repaired with the siblings it demands so they reach the handler.
+        self._ledger = ContractLedger()
 
     @property
     def scanner_name(self) -> str:
@@ -66,6 +78,7 @@ class MassAssignmentScanner(AuthAwareScanner):
             List of unified findings from this scanner.
         """
         findings: list[DeepFinding] = []
+        self._ledger = ContractLedger()
 
         state_changing_endpoints = self._filter_state_changing(endpoints)
         if not state_changing_endpoints:
@@ -92,6 +105,17 @@ class MassAssignmentScanner(AuthAwareScanner):
                     break
                 ep_findings = await self._test_endpoint(client, endpoint)
                 findings.extend(ep_findings)
+
+        # A rejected request is not a safe one: say which fields were never tested.
+        findings.extend(
+            contract_blocked_finding(
+                entry,
+                scanner_name=self.scanner_name,
+                category=FindingCategory.PRIVILEGE_ESCALATION,
+                source=FindingSource.DAST_URL,
+            )
+            for entry in self._ledger.blocked()
+        )
 
         logger.info("MassAssignmentScanner: %d findings", len(findings))
         return findings
@@ -199,18 +223,12 @@ class MassAssignmentScanner(AuthAwareScanner):
         pre-existing admin row in a collection is not mistaken for proof.
         """
         marker = f"{MassAssignmentConfig.ECHO_CONTROL_VALUE}-{field_name}"
-        body = json.dumps(
-            {field_name: field_value, MassAssignmentConfig.ECHO_CONTROL_FIELD: marker}
-        )
-        headers = {
-            "Content-Type": self.CONTENT_TYPE_JSON,
-            "Prefer": MassAssignmentConfig.PREFER_RETURN_REPRESENTATION,
-        }
         try:
-            response = await client.request(
-                method=endpoint.method.value, url=endpoint.url,
-                content=body, headers=headers,
-            )
+            response = (await self._send(
+                client, endpoint,
+                {field_name: field_value, MassAssignmentConfig.ECHO_CONTROL_FIELD: marker},
+                keep=field_name,
+            )).response
             if not (
                 self.HTTP_STATUS_OK_LOWER
                 <= response.status_code
@@ -275,22 +293,15 @@ class MassAssignmentScanner(AuthAwareScanner):
         Returns True when it does (a pure echo), False when it does not, and
         None when the control could not be sent.
         """
-        body = json.dumps(
-            {
-                MassAssignmentConfig.ECHO_CONTROL_FIELD:
-                    MassAssignmentConfig.ECHO_CONTROL_VALUE
-            }
-        )
         try:
-            response = await client.request(
-                method=endpoint.method.value,
-                url=endpoint.url,
-                content=body,
-                headers={
-                    "Content-Type": self.CONTENT_TYPE_JSON,
-                    "Prefer": MassAssignmentConfig.PREFER_RETURN_REPRESENTATION,
+            response = (await self._send(
+                client, endpoint,
+                {
+                    MassAssignmentConfig.ECHO_CONTROL_FIELD:
+                        MassAssignmentConfig.ECHO_CONTROL_VALUE
                 },
-            )
+                keep=MassAssignmentConfig.ECHO_CONTROL_FIELD,
+            )).response
         except Exception as exc:
             logger.debug(
                 MassAssignmentConfig.ERROR_MASS_ASSIGNMENT_FAILED.format(
@@ -318,20 +329,17 @@ class MassAssignmentScanner(AuthAwareScanner):
         field_value: Any,
     ) -> DeepFinding | None:
         """Test if a single extra field is accepted by the endpoint."""
-        body = json.dumps({field_name: field_value})
-
         try:
-            headers: dict[str, str] = {
-                "Content-Type": self.CONTENT_TYPE_JSON,
-                "Prefer": MassAssignmentConfig.PREFER_RETURN_REPRESENTATION,
-            }
-
-            response = await client.request(
-                method=endpoint.method.value,
-                url=endpoint.url,
-                content=body,
-                headers=headers,
+            probe = await self._send(
+                client, endpoint, {field_name: field_value},
+                param=field_name, keep=field_name,
             )
+            # Rejected by request validation even after repair: the field never reached the
+            # handler, so this says nothing about mass assignment (reported as not tested).
+            if probe.blocked:
+                return None
+            response = probe.response
+            body = json.dumps(probe.fields, default=str)
 
             if not (
                 self.HTTP_STATUS_OK_LOWER
@@ -386,6 +394,38 @@ class MassAssignmentScanner(AuthAwareScanner):
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    async def _send(
+        self,
+        client: RateLimitedClient,
+        endpoint: DiscoveredEndpoint,
+        fields: dict[str, Any],
+        *,
+        keep: str,
+        param: str | None = None,
+    ) -> ProbeResult:
+        """Send ``fields`` to the endpoint, repairing sibling fields the server demands.
+
+        ``param`` names the escalation field under test; only those probes count toward
+        the "contract-blocked" report (controls and read-back writes pass ``None``).
+        """
+
+        async def send(content: str, content_type: str) -> httpx.Response:
+            return await client.request(
+                method=endpoint.method.value,
+                url=endpoint.url,
+                content=content,
+                headers={
+                    "Content-Type": content_type,
+                    "Prefer": MassAssignmentConfig.PREFER_RETURN_REPRESENTATION,
+                },
+            )
+
+        return await probe_with_repair(
+            send, self._ledger, endpoint.method.value, endpoint.url, fields,
+            # Mass assignment already sends writes by design; repair adds no new kind.
+            param=param, keep=keep, repair_writes=True,
+        )
 
     @staticmethod
     def _field_in_response(
