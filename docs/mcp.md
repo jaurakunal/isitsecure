@@ -96,7 +96,9 @@ scan_status(job_id)                                    → poll a DAST job; the 
   generated text (description, technical detail, evidence, the vulnerable
   snippet) so it's specific to that finding, not the category blurb the scan list
   carries; plus business impact, stack-tailored remediation, and a step-by-step
-  walkthrough. (Its per-finding accuracy relies on correct categorization —
+  walkthrough. The finding text and snippet are **redacted** (shared evidence
+  redactor, #282; best-effort regex masking, not a DLP guarantee), as are `scan`
+  titles and every `export` format. (Its per-finding accuracy relies on correct categorization —
   #64 added the `BUSINESS_LOGIC` category and tightened the classifier so
   payment/idempotency/race findings and error-disclosure land in the right
   bucket instead of the `auth`/`injection` catch-alls.)
@@ -104,7 +106,11 @@ scan_status(job_id)                                    → poll a DAST job; the 
   `fix(scan_id, finding_id)` reads the finding's source file and returns a **fix
   brief** — the finding (title, severity, description, guidance, line), the full
   `file_content`, the common `fix_patterns` and `guidelines` — with
-  `applied: false`. The MCP makes **no LLM call**, so it needs **no API key**: the
+  `applied: false`. The brief's finding text (title, description, guidance) is
+  redacted like `explain`, but **`file_content` is intentionally unredacted**: it
+  is the user's own local source and the host must receive it exactly to edit the
+  file. A fix the host writes may therefore echo secret-shaped strings from that
+  source. The MCP makes **no LLM call**, so it needs **no API key**: the
   **host LLM writes the patch and applies it** with its own editor (see "Who
   applies the fix" below), then `verify` confirms. The CLI and web UI keep using
   `FixGenerator`. The file is read with the same strict reader as the CLI and web
@@ -136,7 +142,9 @@ scan_status(job_id)                                    → poll a DAST job; the 
   scan (no re-scan) as `html` | `sarif` | `json` | `markdown` and **returns the
   content** for the host to save — the MCP does not write files (same stance as
   `fix`). Reuses the engine's HTML/SARIF renderers; SARIF feeds GitHub code
-  scanning. Rendering from the cache is why this lives in the MCP and not only the
+  scanning. Every format is redacted first (shared evidence redactor, #282), so
+  an export never carries raw emails, SSNs, tokens or credential values from
+  finding evidence. Rendering from the cache is why this lives in the MCP and not only the
   stateless CLI.
 - **`scan_url` / `scan_status`** *(implemented, #60).* DAST (live-URL) scanning
   takes minutes, so it uses a **job handle** rather than one long blocking call:

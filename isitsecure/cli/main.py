@@ -28,6 +28,7 @@ from isitsecure.cli.render import (
     _generate_badge_svg,
     _generate_fixes,
     _generate_html_report,
+    _report_json,
     _generate_sarif_report,
     _print_report_table,
 )
@@ -451,7 +452,7 @@ def scan(
 
     # Output results
     if output == "json":
-        result_json = report.model_dump_json(indent=2)
+        result_json = _report_json(report)
         if output_file:
             Path(output_file).write_text(result_json)
             err_console.print(f"[green]Report written to {output_file}[/green]")
@@ -492,7 +493,7 @@ def scan(
     elif output == "table":
         _print_report_table(report)
         if output_file:
-            Path(output_file).write_text(report.model_dump_json(indent=2))
+            Path(output_file).write_text(_report_json(report))
             console.print(f"\n[green]Full report written to {output_file}[/green]")
         # Always leave the user a browseable HTML report they can open.
         try:

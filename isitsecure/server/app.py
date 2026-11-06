@@ -287,7 +287,7 @@ async def stream_scan(scan_id: str):
 
             if scan["status"] in ("complete", "failed"):
                 if scan["report"]:
-                    yield f"data: {json.dumps({'type': 'report', 'data': scan['report']})}\n\n"
+                    yield f"data: {json.dumps({'type': 'report', 'data': _redact_report_dict(scan['report'])})}\n\n"
                 yield f"data: {json.dumps({'type': 'done'})}\n\n"
                 break
 
@@ -298,6 +298,25 @@ async def stream_scan(scan_id: str):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+def _redact_report_dict(raw_report: dict) -> dict:
+    """The report with evidence redacted (#282), for every outbound path. FAILS CLOSED:
+    a report that does not validate as a ``DeepScanReport`` is scrubbed value by value
+    (``scrub_value``), never returned raw. The stored report stays raw (fixes and
+    verification need it); only what leaves the server is redacted."""
+    from isitsecure.engine.models import DeepScanReport
+    from isitsecure.engine.shared.redaction import redact_report, scrub_value
+
+    try:
+        return redact_report(DeepScanReport.model_validate(raw_report)).model_dump(mode="json")
+    except Exception:
+        logger.exception("Report did not validate; scrubbing it value by value")
+        try:
+            return scrub_value(raw_report)
+        except Exception:
+            logger.exception("Report scrub failed; withholding the report")
+            return {"findings": [], "error": "report withheld: it could not be redacted"}
 
 
 def _enrich_report(raw_report: dict) -> dict:
@@ -314,8 +333,10 @@ def _enrich_report(raw_report: dict) -> dict:
       ``business_impact`` and ``glossary``.
 
     The enrichment is rule-based and LLM-free, so it works for every scan
-    (including ``--llm none``). Any failure falls back to the raw report so
-    the endpoint never 500s on a report that would otherwise render fine.
+    (including ``--llm none``). Any failure falls back to the report it was given
+    so the endpoint never 500s on a report that would otherwise render fine.
+    Callers pass an already-redacted report (``_redact_report_dict``), so that
+    fallback cannot leak raw evidence.
     """
     from isitsecure.engine.models import DeepScanReport
     from isitsecure.engine.reporting.report_generator import ReportGenerator
@@ -412,7 +433,7 @@ async def get_report(scan_id: str):
     if not scan:
         raise HTTPException(status_code=404, detail="Scan not found")
     _raise_unless_ready(scan)
-    return _enrich_report(scan["report"])
+    return _enrich_report(_redact_report_dict(scan["report"]))
 
 
 @app.get("/api/scan/{scan_id}/report.html")
@@ -427,7 +448,14 @@ async def get_report_html(scan_id: str):
     from isitsecure.engine.reporting.report_generator import ReportGenerator
     from isitsecure.engine.reporting.html_renderer import HTMLReportRenderer
 
-    report_model = DeepScanReport.model_validate(scan["report"])
+    from isitsecure.engine.shared.redaction import redact_report
+
+    try:
+        report_model = redact_report(DeepScanReport.model_validate(scan["report"]))
+    except Exception:
+        # Fail closed: a report that does not validate is never rendered from raw data.
+        logger.exception("Report did not validate; not rendering HTML")
+        raise HTTPException(status_code=500, detail="Report could not be rendered")
     generator = ReportGenerator()
     renderer = HTMLReportRenderer()
     report_data = generator.generate(report_model)

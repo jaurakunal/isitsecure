@@ -74,3 +74,7 @@ const tasks = await db.select().from(tasks).where(eq(tasks.status, userInput))
 const ALLOWED_STATUSES = ["pending", "in_progress", "done"]
 if (!ALLOWED_STATUSES.includes(userInput)) throw new Error("Invalid status")
 ```
+
+## Evidence pair
+
+Error-based SQLi and NoSQL findings carry `evidence_pair`: a redacted excerpt of the baseline (benign control) request/response next to the one that proved the injection, with status, body length and a one-line note, so a triager can see why the finding is real. The pair is redacted when built (`engine/shared/evidence_pair.py`); exports redact the rest of the finding evidence as well (see `docs/architecture.md`, shared redactor).
