@@ -45,10 +45,29 @@ class TestFingerprint:
         assert st.finding_fingerprint(_f(title="SQL  Injection")) == \
             st.finding_fingerprint(_f(title="sql injection"))
 
-    def test_sast_uses_file_and_line(self):
-        f = {"scanner_name": "semgrep_taint", "title": "t",
-             "code_location": {"file_path": "a.py", "line_number": 3}}
-        assert st.finding_fingerprint(f).endswith("a.py:3")
+    def test_sast_ignores_line_number(self):
+        def f(line, snippet="cur.execute(q)"):
+            return {"scanner_name": "semgrep_taint", "title": "t",
+                    "code_location": {"file_path": "a.py", "line_number": line,
+                                      "code_snippet": snippet}}
+        assert st.finding_fingerprint(f(3)) == st.finding_fingerprint(f(40))
+        assert "a.py#" in st.finding_fingerprint(f(3))
+        # Different code in the same file stays distinct; whitespace doesn't matter.
+        assert st.finding_fingerprint(f(3)) != st.finding_fingerprint(f(3, "other()"))
+        assert st.finding_fingerprint(f(3, "a  =  b")) == st.finding_fingerprint(f(9, "a = b"))
+
+    def test_sast_without_snippet_is_file_only(self):
+        f = {"scanner_name": "s", "title": "t",
+             "code_location": {"file_path": "a.py", "line_number": 9}}
+        assert st.finding_fingerprint(f).endswith("|a.py")
+
+    def test_volatile_title_text_normalised(self):
+        a = st.finding_fingerprint(_f(title="SQL injection in 'q' param, 3 payloads, id 4f1c2a9b"))
+        b = st.finding_fingerprint(_f(title="SQL injection in 'search' param, 12 payloads, id 99"))
+        assert a != "" and a.split("|")[2].startswith("sql injection in '?' param")
+        assert st.finding_fingerprint(_f(title="SQL injection in 'q' param, 3 payloads")) == \
+            st.finding_fingerprint(_f(title="SQL injection in 'search' param, 12 payloads"))
+        del b
 
 
 class TestStability:
@@ -126,9 +145,14 @@ class TestEvaluateRepeat:
 
     def test_errored_runs_excluded_and_all_errored_is_2(self):
         err = {"name": "t", "error": "boom"}
-        code, text, _ = rb.evaluate_repeat("t", [_result([_f()]), err], None)
-        assert code == 0 and "1 of 2 run(s) errored" in text
+        code, text, rep = rb.evaluate_repeat("t", [_result([_f()])] * 2 + [err], None)
+        assert code == 2 and "1 of 3 run(s) errored" in text and rep.stable
         assert rb.evaluate_repeat("t", [err, err], None)[0] == 2
+
+    def test_single_good_run_is_not_stability(self):
+        err = {"name": "t", "error": "boom"}
+        code, _, rep = rb.evaluate_repeat("t", [_result([_f()]), err, err], None)
+        assert code == 2 and rep is None
 
     def test_ground_truth_recall_counts(self):
         r = {"scorecard": {"recall": {"found": 7, "in_scope": 45}}}
@@ -164,6 +188,49 @@ class TestReportStability:
         assert rb.report_stability(runs, p, write=False) == 0
         regressed = {"t": [_result([]), _result([])]}
         assert rb.report_stability(regressed, p, write=False) == 1
+
+
+class TestBaselineWriteGuard:
+    def test_errored_run_blocks_baseline_write(self, tmp_path):
+        p = tmp_path / "b.json"
+        runs = {"t": [_result([_f()]), _result([_f()]), {"name": "t", "error": "x"}]}
+        assert rb.report_stability(runs, str(p), write=True) == 2
+        assert st.load_baseline(p)["targets"] == {}
+
+    def test_single_ok_run_blocks_baseline_write(self, tmp_path):
+        p = tmp_path / "b.json"
+        runs = {"t": [_result([_f()]), {"name": "t", "error": "x"}]}
+        assert rb.report_stability(runs, str(p), write=True) == 2
+        assert not p.exists()
+
+
+class TestMustDetectAcrossRuns:
+    def _r(self, missed):
+        return {"scorecard": {"regression_failures": [{}] * missed}}
+
+    def test_counts_every_ok_run_not_just_first(self):
+        runs = {"t": [self._r(0), self._r(1), self._r(2)]}
+        assert rb.count_must_detect_regressions(runs) == 3
+
+    def test_errored_runs_ignored(self):
+        assert rb.count_must_detect_regressions({"t": [self._r(0), {"error": "x"}]}) == 0
+
+
+class TestFinalExitCode:
+    def test_all_clear(self):
+        assert rb.final_exit_code(0, 0, 0, 0) == 0
+
+    def test_prints_every_failure_not_just_first(self, capsys):
+        # a stability failure must not hide the SAST / Go-SAST failures.
+        assert rb.final_exit_code(1, 0, 1, 1) == 1
+        out = capsys.readouterr().out
+        assert "stability" in out and "SAST injection" in out and "Go SAST" in out
+
+    def test_unverifiable_beats_regression(self):
+        assert rb.final_exit_code(2, 3, 1, 0) == 2
+
+    def test_sast_alone_still_fails(self):
+        assert rb.final_exit_code(0, 0, 1, 0) == 1
 
 
 class TestMainFlags:
@@ -206,6 +273,11 @@ class TestClassDeltas:
         prev.write_text(json.dumps(_sc(sqli=(5, 5))))
         assert score.main(["juiceshop", str(findings), "--previous", str(prev)]) == 0
         assert "REGRESSED" in capsys.readouterr().out
+
+    def test_help_exits_zero(self):
+        with pytest.raises(SystemExit) as e:
+            score.main(["-h"])
+        assert e.value.code == 0
 
     def test_cli_bad_app_exit_2(self, tmp_path):
         assert score.main(["nope", "x.json"]) == 2

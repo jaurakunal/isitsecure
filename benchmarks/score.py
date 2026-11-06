@@ -186,7 +186,9 @@ def main(argv: list[str] | None = None) -> int:
                                        "per-class recall deltas against")
     try:
         args = ap.parse_args(argv)
-    except SystemExit:
+    except SystemExit as e:
+        if e.code == 0:   # -h/--help: argparse already printed; exit normally
+            raise
         return 2
     data = json.loads(pathlib.Path(args.findings).read_text())
     findings = data.get("findings", data) if isinstance(data, dict) else data

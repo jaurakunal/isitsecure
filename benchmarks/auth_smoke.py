@@ -45,7 +45,7 @@ PORT = int(os.environ.get("AUTH_SMOKE_PORT", "3000"))
 URL = os.environ.get("AUTH_SMOKE_URL", f"http://localhost:{PORT}")
 READY_TIMEOUT = 300
 EMAIL = "smoke@isitsecure.test"
-PASSWORD = "Passw0rd!23"
+PASSWORD = "Passw0rd!23"  # noqa: S105 — throwaway local test account
 
 
 @dataclass
@@ -63,7 +63,7 @@ def exit_code(results: list[CheckResult]) -> int:
 
 
 def _run(cmd: list[str], timeout: int = 120) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)  # noqa: S603
 
 
 def _wait_ready(url: str, timeout: int) -> bool:
@@ -73,7 +73,7 @@ def _wait_ready(url: str, timeout: int) -> bool:
             with urllib.request.urlopen(url, timeout=5) as r:  # noqa: S310 — local health check
                 if r.status == 200:
                     return True
-        except Exception:  # noqa: BLE001 — not-up-yet is expected while polling
+        except Exception:  # noqa: BLE001,S110 — not-up-yet is expected while polling
             pass
         time.sleep(3)
     return False
@@ -165,7 +165,8 @@ def print_results(results: list[CheckResult]) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--no-up", action="store_true", help="target an already-running app at AUTH_SMOKE_URL")
+    ap.add_argument("--no-up", action="store_true",
+                    help="target an already-running app at AUTH_SMOKE_URL")
     ap.add_argument("--keep", action="store_true", help="do not tear the container down")
     args = ap.parse_args()
 

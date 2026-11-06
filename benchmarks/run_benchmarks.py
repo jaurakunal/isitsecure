@@ -516,13 +516,15 @@ def evaluate_repeat(name: str, results: list[dict],
 
     Returns (exit_code, printable report, StabilityReport). Exit codes: 0 ok
     (or no baseline to gate on), 1 the stable set regressed vs the baseline,
-    2 no run produced a report so nothing could be verified.
-    Errored runs are excluded from the stable set (and called out).
+    2 not verifiable: fewer than 2 runs produced a report, or any run errored
+    (the stable set is then computed over the good runs only, and called out).
     """
     ok = [r for r in results if not r.get("error")]
     errored = len(results) - len(ok)
-    if not ok:
-        return 2, f"STABILITY — {name}: all {len(results)} run(s) errored", None
+    if len(ok) < 2:
+        # One good run has no "found in every run" meaning; don't pretend.
+        return 2, (f"STABILITY — {name}: only {len(ok)} of {len(results)} run(s) "
+                   f"produced a report; need >= 2 to assess stability"), None
     report = stability.compute_stability([result_to_run(r) for r in ok])
     cmp = None
     entry = (baseline or {}).get("targets", {}).get(name)
@@ -538,7 +540,35 @@ def evaluate_repeat(name: str, results: list[dict],
             if r["delta"]:
                 text += (f"\n  class {r['vuln_class']}: {r['prev_found']}/"
                          f"{r['prev_total']} -> {r['found']}/{r['total']} ({r['delta']:+d})")
-    return (1 if cmp is not None and cmp.regressed else 0), text, report
+    code = 1 if cmp is not None and cmp.regressed else 0
+    return (2 if errored else code), text, report
+
+
+def count_must_detect_regressions(all_runs: dict[str, list[dict]]) -> int:
+    """MUST_DETECT misses summed over EVERY ok run (any run missing one fails)."""
+    return sum(len(r.get("scorecard", {}).get("regression_failures", []))
+               for runs in all_runs.values() for r in runs if not r.get("error"))
+
+
+def final_exit_code(stability_rc: int, regressions: int, sast_rc: int,
+                    go_sast_rc: int) -> int:
+    """Combine every gate into one exit code, printing every failure.
+
+    Nothing is short-circuited, so a stability failure can't hide a SAST one.
+    Precedence: 2 (something couldn't be verified / bad run) beats 1 (a
+    detection regression); otherwise 0.
+    """
+    if stability_rc:
+        print("\n✗ stability check failed (see STABILITY above).")
+    if regressions:
+        print(f"\n✗ {regressions} regression failure(s) — a finding the scanner "
+              f"reliably catches was dropped by the full scan. See ⚠ REGRESSION above.")
+    if sast_rc:
+        print("\n✗ SAST injection benchmark failed (recall < 100% or FP > 0).")
+    if go_sast_rc:
+        print("\n✗ Go SAST benchmark failed (class recall < 100%).")
+    codes = [stability_rc, 1 if regressions else 0, sast_rc, go_sast_rc]
+    return 2 if 2 in codes else (1 if any(codes) else 0)
 
 
 def print_scorecard(results: list[dict]) -> None:
@@ -660,7 +690,7 @@ def report_stability(all_runs: dict[str, list[dict]], baseline_path: str | None,
     for name, runs in all_runs.items():
         code, text, report = evaluate_repeat(name, runs, None if write else baseline)
         print(text)
-        if write and report is not None:
+        if write and report is not None and code == 0:
             ok = [r for r in runs if not r.get("error")]
             by_class = (ok[0].get("scorecard") or {}).get("by_class")
             stability.save_baseline(baseline_path, baseline, name,
@@ -725,25 +755,10 @@ def main() -> int:
         stability_rc = report_stability(all_runs, args.baseline, args.write_baseline)
     # Fail the run if any must-detect finding was dropped — a full-scan-path
     # regression (issue #1), distinct from a coverage gap.
-    regressions = sum(
-        len(r.get("scorecard", {}).get("regression_failures", []))
-        for r in results
-    )
+    regressions = count_must_detect_regressions(all_runs)
     sast_rc = run_sast_injection() if want_sast else 0
     go_sast_rc = run_go_sast() if want_go_sast else 0
-    if stability_rc:
-        return stability_rc
-    if regressions:
-        print(f"\n✗ {regressions} regression failure(s) — a finding the scanner "
-              f"reliably catches was dropped by the full scan. See ⚠ REGRESSION above.")
-        return 1
-    if sast_rc:
-        print("\n✗ SAST injection benchmark failed (recall < 100% or FP > 0).")
-        return 1
-    if go_sast_rc:
-        print("\n✗ Go SAST benchmark failed (class recall < 100%).")
-        return 1
-    return 0
+    return final_exit_code(stability_rc, regressions, sast_rc, go_sast_rc)
 
 
 if __name__ == "__main__":

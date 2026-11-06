@@ -114,8 +114,9 @@ python benchmarks/run_benchmarks.py juiceshop --repeat 3 --baseline b.json     #
 ```
 
 A finding's **fingerprint** is `scanner | category | normalised title | location`
-(endpoint *path* with host, query string and id segments removed; or `file:line`
-for SAST), so volatile evidence text and resource ids don't cause false churn.
+(endpoint *path* with host, query string and id segments removed; or the file plus a
+short hash of the code snippet for SAST, with no line number), so line shifts,
+resource ids and volatile title text (numbers, quoted values) don't cause false churn.
 
 The **baseline** (`--baseline PATH`, optional) is a JSON file
 `{"version": 1, "targets": {"<name>": {"stable": [...], "recall": {...},
@@ -127,9 +128,17 @@ per-class deltas vs the baseline are printed too. Errored runs are excluded; if
 every run errored there is nothing to verify and the exit code is 2. Without
 `--repeat` (default 1) behaviour is unchanged, and `--baseline` requires
 `--repeat 2+`. `sast-injection` / `go-sast` are deterministic and run once.
-Baselines are per-environment (target version, scan flags): record one on the
-pinned target you gate against and keep it outside the repo or commit it per
-target. Note the harness scans with `--llm none`, so "cost" here is wall-clock;
+Baselines are **not committed to the repo**: they depend on target version and
+scan flags. Create one with `--repeat 3 --baseline ~/bench/juiceshop.json
+--write-baseline` on the pinned target, keep it somewhere stable (CI cache or
+artifact store), and pass the same path on later runs. Writing needs at least
+2 good runs and no errored runs. Per-class deltas are informational and never
+affect the exit code.
+
+Exit codes of `run_benchmarks.py` combine every gate (stability, MUST_DETECT
+regressions counted over *every* good run, SAST, Go SAST) and print every
+failure; precedence is 2 (something could not be verified: fewer than 2 good
+runs or any run errored under `--repeat`) over 1 (a detection regression) over 0. Note the harness scans with `--llm none`, so "cost" here is wall-clock;
 there is no token spend to compare.
 
 ## Auth smoke (`auth_smoke.py`)
@@ -149,6 +158,11 @@ verifies each captured token is live via `GET /rest/user/whoami` (a dead token o
 HTML shell is a failure). No LLM or API key. Exit **0** pass, **1** a check
 failed, **2** infra error (Docker, app never ready, Playwright not installed).
 This repo has no self-signup/provisioning path, so only login is covered.
+
+It uses container name `auth_smoke_juice` and host port 3000, so it clashes with
+a standing local Juice Shop on :3000 (you get exit 2, never a wrong result);
+stop that one or set `AUTH_SMOKE_PORT`. It has **not been run live yet** — its
+logic is unit-tested with fake providers only.
 
 ## SAST injection benchmark (`sast-injection`)
 

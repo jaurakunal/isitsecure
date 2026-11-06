@@ -18,6 +18,7 @@ Baseline file (JSON, optional — ``--baseline PATH``)::
 
 from __future__ import annotations
 
+import hashlib
 import json
 import pathlib
 import re
@@ -43,20 +44,40 @@ def _normalise_path(url: str) -> str:
                     for seg in path.split("/"))
 
 
+_QUOTED = re.compile(r"""(['"`]).*?\1""")
+_NUMBER = re.compile(r"\b(?:[0-9a-f]{8}-[0-9a-f-]{27}|[0-9a-f]{24}|\d+)\b")
+
+
+def _normalise_title(title: str) -> str:
+    """Lower-case a title and mask volatile parts (quoted values, ids, numbers)."""
+    t = _QUOTED.sub("'?'", str(title or "").lower())
+    t = _NUMBER.sub("#", t)
+    return " ".join(t.split())
+
+
+def _snippet_hash(snippet: str) -> str:
+    norm = " ".join(str(snippet or "").split())
+    return hashlib.sha1(norm.encode()).hexdigest()[:8] if norm else ""  # noqa: S324 — not security
+
+
 def finding_fingerprint(finding: dict) -> str:
     """Stable identity of a finding across runs.
 
     scanner + category + normalised title + location, where location is the
-    endpoint path (DAST) or ``file:line`` (SAST). Volatile detail (host,
-    query string, resource ids, evidence text) is excluded on purpose.
+    endpoint path (DAST) or ``file[#snippet-hash]`` (SAST). Line numbers are
+    excluded so an unrelated edit above a finding doesn't read as LOST; the
+    snippet hash tells apart several findings in one file when available.
+    Volatile detail (host, query string, resource ids, numbers, quoted values)
+    is excluded on purpose.
     """
     loc = ""
     if finding.get("endpoint_url"):
         loc = _normalise_path(str(finding["endpoint_url"]))
     elif isinstance(finding.get("code_location"), dict):
         cl = finding["code_location"]
-        loc = f"{cl.get('file_path', '')}:{cl.get('line_number', '')}"
-    title = " ".join(str(finding.get("title") or "").lower().split())
+        h = _snippet_hash(cl.get("code_snippet", ""))
+        loc = f"{cl.get('file_path', '')}" + (f"#{h}" if h else "")
+    title = _normalise_title(finding.get("title"))
     return "|".join((str(finding.get("scanner_name") or ""),
                      str(finding.get("category") or ""), title, loc))
 
@@ -121,7 +142,8 @@ class BaselineComparison:
 
 
 def compare_to_baseline(report: StabilityReport,
-                        baseline_stable: set[str] | frozenset[str] | list[str]) -> BaselineComparison:
+                        baseline_stable: set[str] | frozenset[str] | list[str],
+                        ) -> BaselineComparison:
     """The regression bar: every baseline-stable fingerprint must stay stable."""
     base = set(baseline_stable)
     missing = sorted(base - report.stable)
