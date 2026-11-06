@@ -18,6 +18,7 @@ from isitsecure.engine.models import (
     FindingSource,
 )
 from isitsecure.engine.scanners.jwt_scanner import JWTScanner
+from isitsecure.engine.shared.rate_limited_client import TargetUnresponsiveError
 from isitsecure.engine.scanners.protocols import DASTScannerProtocol
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
 
@@ -504,6 +505,59 @@ class TestInvalidSignatureAndUnauthControls:
             t.split(".")[0] == real.split(".")[0] and t != real and t.count(".") == 2
             for t in server.requests
         )
+
+    @pytest.mark.asyncio
+    async def test_suppressed_controls_skip_forgery_tests(self) -> None:
+        """Controls not sent (target unresponsive) while a probe would land on a
+        forged request: no finding, rather than a Critical with no control."""
+        real = _make_jwt()
+
+        def handler(tok: str):
+            hdr = tok.split(".")[0]
+            try:
+                alg = json.loads(base64.urlsafe_b64decode(hdr + "=" * (-len(hdr) % 4))).get("alg")
+            except Exception:
+                alg = None
+            if tok == real or alg == "none":
+                return 200, "ok"
+            raise TargetUnresponsiveError("suppressed")
+
+        findings = await _run(_FakeServer(handler), real)
+        assert not [f for f in findings if f.severity == SeverityLevel.CRITICAL]
+
+    @pytest.mark.asyncio
+    async def test_optional_auth_personalised_body_still_reported(self) -> None:
+        """Optional-auth route (Juice Shop /rest/user/whoami shape): anonymous,
+        garbage and bad-signature callers get 200 {"user":{}}; the real token
+        gets the personalised body. alg=none accepted -> same personalised body."""
+        real = _make_jwt()
+
+        def handler(tok: str):
+            hdr = tok.split(".")[0]
+            try:
+                alg = json.loads(base64.urlsafe_b64decode(hdr + "=" * (-len(hdr) % 4))).get("alg")
+            except Exception:
+                alg = None
+            if tok == real or alg == "none":
+                return 200, '{"user": {"id": 1, "email": "a@b.c"}}'
+            return 200, '{"user": {}}'
+
+        findings = await _run(_FakeServer(handler), real)
+        assert [f for f in findings if f.title == JWTAttackConfig.TITLE_ALG_NONE]
+
+    @pytest.mark.asyncio
+    async def test_optional_auth_route_not_accepting_alg_none_not_reported(self) -> None:
+        """Same whoami shape, but the server looks tokens up (never accepts
+        alg=none): forged gets the anonymous body -> no finding."""
+        real = _make_jwt()
+
+        def handler(tok: str):
+            if tok == real:
+                return 200, '{"user": {"id": 1, "email": "a@b.c"}}'
+            return 200, '{"user": {}}'
+
+        findings = await _run(_FakeServer(handler), real)
+        assert not [f for f in findings if f.severity == SeverityLevel.CRITICAL]
 
     def test_bad_signature_token_keeps_header_and_payload(self) -> None:
         real = _make_jwt()

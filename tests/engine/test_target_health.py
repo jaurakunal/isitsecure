@@ -96,6 +96,20 @@ class TestRateLimitedClientHook:
         assert not health.is_unresponsive(URL)
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "exc", [httpx.ReadError("r"), httpx.RemoteProtocolError("p"), httpx.ReadTimeout("t")]
+    )
+    async def test_any_transport_error_counts(self, exc) -> None:
+        health = TargetHealth()
+        with respx.mock:
+            respx.get(URL).mock(side_effect=exc)
+            async with RateLimitedClient(1, 0, 1, "ua", health=health) as c:
+                for _ in range(UNRESPONSIVE_STREAK):
+                    with pytest.raises(type(exc)):
+                        await c.get(URL)
+        assert health.is_unresponsive(URL)
+
+    @pytest.mark.asyncio
     async def test_no_health_is_unchanged_behaviour(self) -> None:
         with respx.mock:
             respx.get(URL).mock(side_effect=httpx.ConnectTimeout("t"))

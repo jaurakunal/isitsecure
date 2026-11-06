@@ -32,7 +32,10 @@ from isitsecure.engine.shared.jwt_utils import (
     decode_jwt_payload as _shared_decode_jwt_payload,
 )
 from isitsecure.engine.shared.progress import emit
-from isitsecure.engine.shared.rate_limited_client import RateLimitedClient
+from isitsecure.engine.shared.rate_limited_client import (
+    RateLimitedClient,
+    TargetUnresponsiveError,
+)
 from isitsecure.engine.shared.target_health import TargetHealth
 from isitsecure.engine.models import (
     DeepFinding,
@@ -51,6 +54,10 @@ class JWTScanner:
     Takes an AuthSession (which has an access_token JWT) and a test
     endpoint URL. Manipulates JWTs using base64 + json + hmac
     (no PyJWT dependency).
+
+    Not safe for concurrent ``scan()`` calls on one instance: the control
+    cache and target-health tracker are per-scan instance state. Use one
+    instance per scan.
     """
 
     HTTP_STATUS_OK_LOWER = 200
@@ -287,8 +294,16 @@ class JWTScanner:
                 cached[key] = await client.get(
                     test_url, headers={"Authorization": auth} if auth else {}
                 )
+            except TargetUnresponsiveError:
+                # Controls missing because we stopped sending (not a one-off
+                # failure): a forgery verdict without them is unsound.
+                cached["suppressed"] = True
             except Exception as exc:  # noqa: BLE001 - degrade, don't abort
                 logger.debug("JWT %s request failed: %s", key, exc)
+        if cached.get("suppressed"):
+            raise TargetUnresponsiveError(
+                "controls not sent: target unresponsive; skipping forgery test"
+            )
         controls = [cached[k] for k in ("control", "badsig", "unauth") if k in cached]
         return controls, cached.get("baseline")
 
@@ -449,6 +464,7 @@ class JWTScanner:
         test_url: str,
     ) -> DeepFinding | None:
         """Try signing JWT with common weak secrets and test acceptance."""
+        tried = 0  # candidates actually sent
         try:
             async with self._new_client() as client:
                 control, baseline = await self._fetch_controls(
@@ -460,6 +476,7 @@ class JWTScanner:
                         test_url,
                         headers={"Authorization": f"Bearer {forged_token}"},
                     )
+                    tried += 1
 
                     if self._forgery_accepted(response, control, baseline):
                         secret_display = secret if secret else "<empty string>"
@@ -489,6 +506,13 @@ class JWTScanner:
                             endpoint_url=test_url,
                             http_method="GET",
                         )
+        except TargetUnresponsiveError:
+            logger.warning(
+                "JWT weak-secret test stopped: target unresponsive, %d of %d "
+                "candidate(s) not tried",
+                len(JWTAttackConfig.COMMON_WEAK_SECRETS) - tried,
+                len(JWTAttackConfig.COMMON_WEAK_SECRETS),
+            )
         except Exception as exc:
             logger.debug(
                 JWTAttackConfig.ERROR_JWT_SCAN_FAILED.format(error=str(exc))

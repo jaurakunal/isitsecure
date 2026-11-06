@@ -87,7 +87,7 @@ class RateLimitedClient:
                 )
             try:
                 response = await self._client.request(method, url, **kwargs)
-            except (httpx.TimeoutException, httpx.ConnectError):
+            except httpx.TransportError:
                 if health is not None and health.note_failure(url):
                     logger.warning(
                         "Target %s stopped answering; suppressing further requests",
