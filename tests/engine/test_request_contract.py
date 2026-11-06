@@ -13,6 +13,7 @@ from isitsecure.engine.shared.request_contract import (
     CONTENT_TYPE_FORM,
     CONTENT_TYPE_JSON,
     MAX_RETRIES_PER_ENDPOINT,
+    PROBE_MARKER,
     TITLE_CONTRACT_BLOCKED,
     ContractLedger,
     FieldRule,
@@ -125,6 +126,39 @@ class TestParsersPerFramework:
         assert parse_validation('{"detail": "nope"}') == []
 
 
+class TestPinTightening:
+    """A misparsed message must never pin (and so silently skip) a real injectable field."""
+
+    def test_drf_invalid_choice_quotes_the_sent_value_not_the_allowed_set(self):
+        rules = _rules({"role": ['"admin" is not a valid choice.']})
+        assert not rules["role"].pinned and rules["role"].kind == "invalid"
+
+    def test_zod_expected_type_is_not_a_literal(self):
+        rules = _rules({"issues": [{"code": "invalid_type", "path": ["name"],
+                                    "message": "Expected string, received number",
+                                    "expected": "string", "received": "number"}]})
+        assert not rules["name"].pinned
+
+    def test_type_wording_does_not_pin(self):
+        for msg in ("Input should be a valid string", "should be string",
+                    "unsupported value", "Expected a number"):
+            rules = _rules({"errors": {"f": [msg]}})
+            assert not rules["f"].pinned, msg
+
+    def test_explicit_listing_still_pins(self):
+        assert _rules({"errors": {"f": ["must be one of: a, b"]}})["f"].pinned
+        assert _rules({"errors": {"f": ["Input should be 'a' or 'b'"]}})["f"].pinned
+
+    def test_invalid_regex_rule_is_ignored(self):
+        rules = _rules({"detail": [{"loc": ["body", "f"],
+                                    "msg": "String should match pattern '([unclosed'",
+                                    "type": "string_pattern_mismatch"}]})
+        assert rules["f"].kind == "invalid" and not rules["f"].pinned
+        contract = RequestContract("POST", "/x")
+        contract.note([rules["f"]])
+        assert contract.actionable({"f": "anything"}) == []
+
+
 class TestRepair:
     def test_fills_required_and_pins_without_touching_keep(self):
         contract = RequestContract("POST", "/x")
@@ -134,7 +168,7 @@ class TestRepair:
         out = contract.repair({"target": "' OR 1=1--", "kind": "bogus"}, keep="target")
         assert out["target"] == "' OR 1=1--"          # the payload field is never repaired
         assert out["kind"] == "user"
-        assert out["name"] == "probe"
+        assert out["name"] == PROBE_MARKER
 
     def test_filler_and_never_removes(self):
         contract = RequestContract("POST", "/x")
@@ -229,6 +263,11 @@ def _resp(status: int, body) -> SimpleNamespace:
                            text=body if isinstance(body, str) else json.dumps(body))
 
 
+def _probe(*args, **kwargs):
+    """The scanners' policy: they already send writes, so repair is on."""
+    return probe_with_repair(*args, repair_writes=True, **kwargs)
+
+
 class TestProbeWithRepair:
     @pytest.mark.asyncio
     async def test_rejected_then_repaired_reaches_sink(self):
@@ -243,13 +282,13 @@ class TestProbeWithRepair:
             return _resp(200, {"ok": True})
 
         ledger = ContractLedger()
-        result = await probe_with_repair(send, ledger, "POST", URL, {"q": "' OR 1=1--"},
+        result = await _probe(send, ledger, "POST", URL, {"q": "' OR 1=1--"},
                                          param="q")
         assert not result.blocked and result.requests == 2
-        assert sent[-1] == {"q": "' OR 1=1--", "name": "probe"}
+        assert sent[-1] == {"q": "' OR 1=1--", "name": PROBE_MARKER}
         assert result.fields == sent[-1]
         # The next probe is repaired up front: one request, no second rejection.
-        again = await probe_with_repair(send, ledger, "POST", URL, {"q": "<script>"}, param="q")
+        again = await _probe(send, ledger, "POST", URL, {"q": "<script>"}, param="q")
         assert again.requests == 1 and not again.blocked
         assert ledger.blocked() == []
 
@@ -265,7 +304,7 @@ class TestProbeWithRepair:
                                            "type": "string_pattern_mismatch"}]})
 
         ledger = ContractLedger()
-        result = await probe_with_repair(send, ledger, "POST", URL, {"q": "' OR 1=1--"},
+        result = await _probe(send, ledger, "POST", URL, {"q": "' OR 1=1--"},
                                          param="q")
         assert result.blocked
         assert calls <= 2   # nothing to repair outside the payload field: no pointless retries
@@ -281,7 +320,7 @@ class TestProbeWithRepair:
             # Names a brand-new required field on every response: an endless contract.
             return _resp(422, {"errors": {f"f{calls}": ["is required"]}})
 
-        result = await probe_with_repair(send, ContractLedger(), "POST", URL, {"q": 1},
+        result = await _probe(send, ContractLedger(), "POST", URL, {"q": 1},
                                          param="q", max_retries=2)
         assert result.blocked and calls == 3
 
@@ -293,7 +332,7 @@ class TestProbeWithRepair:
             types.append(ctype)
             return _resp(415, "") if ctype == CONTENT_TYPE_JSON else _resp(200, "ok")
 
-        result = await probe_with_repair(send, ContractLedger(), "POST", URL, {"q": "x"},
+        result = await _probe(send, ContractLedger(), "POST", URL, {"q": "x"},
                                          param="q")
         assert types == [CONTENT_TYPE_JSON, CONTENT_TYPE_FORM] and not result.blocked
 
@@ -303,8 +342,39 @@ class TestProbeWithRepair:
             return _resp(400, {"message": "invalid username or password"})
 
         ledger = ContractLedger()
-        result = await probe_with_repair(send, ledger, "POST", URL, {"u": "a"}, param="u")
+        result = await _probe(send, ledger, "POST", URL, {"u": "a"}, param="u")
         assert not result.blocked and result.requests == 1 and ledger.blocked() == []
+
+    @pytest.mark.asyncio
+    async def test_write_not_repaired_when_policy_forbids(self):
+        """repair_writes is opt-in: a POST is sent once as given, never retried with invented
+        filler values (that would persist junk rows), but the contract is still learned and the
+        probe still reported as blocked."""
+        sent: list[dict] = []
+
+        async def send(content, ctype):
+            sent.append(json.loads(content))
+            return _resp(422, {"errors": {"name": ["is required"]}})
+
+        ledger = ContractLedger()
+        result = await probe_with_repair(send, ledger, "POST", URL, {"q": "x"}, param="q")
+        assert sent == [{"q": "x"}] and result.blocked
+        assert "name" in ledger.get("POST", URL).rules
+        # A second probe is not repaired up front from the learned contract either.
+        await probe_with_repair(send, ledger, "POST", URL, {"q": "y"}, param="q")
+        assert sent[-1] == {"q": "y"}
+        assert [b.params for b in ledger.blocked()] == [["q"]]
+
+    @pytest.mark.asyncio
+    async def test_safe_method_is_repaired_without_opt_in(self):
+        async def send(content, ctype):
+            data = json.loads(content)
+            return _resp(200, {}) if "name" in data else _resp(
+                422, {"errors": {"name": ["is required"]}})
+
+        result = await probe_with_repair(send, ContractLedger(), "GET", URL, {"q": "x"},
+                                         param="q")
+        assert not result.blocked and result.fields["name"] == PROBE_MARKER
 
     @pytest.mark.asyncio
     async def test_untracked_probe_does_not_enter_blocked_report(self):
@@ -312,7 +382,7 @@ class TestProbeWithRepair:
             return _resp(422, {"errors": {"z": ["is required"]}})
 
         ledger = ContractLedger()
-        await probe_with_repair(send, ledger, "POST", URL, {"q": 1}, param="q", max_retries=0,
+        await _probe(send, ledger, "POST", URL, {"q": 1}, param="q", max_retries=0,
                                 track=False)
         assert ledger.blocked() == []
 

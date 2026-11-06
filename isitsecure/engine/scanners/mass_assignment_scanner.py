@@ -48,6 +48,7 @@ class MassAssignmentScanner(AuthAwareScanner):
     HTTP_STATUS_OK_UPPER = 300
 
     def __init__(self) -> None:
+        super().__init__()
         # What each endpoint's validation layer has disclosed this scan; the single-field
         # probes are repaired with the siblings it demands so they reach the handler.
         self._ledger = ContractLedger()
@@ -422,7 +423,8 @@ class MassAssignmentScanner(AuthAwareScanner):
 
         return await probe_with_repair(
             send, self._ledger, endpoint.method.value, endpoint.url, fields,
-            param=param, keep=keep,
+            # Mass assignment already sends writes by design; repair adds no new kind.
+            param=param, keep=keep, repair_writes=True,
         )
 
     @staticmethod

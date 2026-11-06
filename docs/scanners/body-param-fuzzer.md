@@ -4,7 +4,7 @@
 
 ## What It Does
 
-Fuzzes JSON body parameters from intercepted authenticated requests (up to 20 successful POST/PUT/PATCH captures, up to 10 keys each; at most 123 requests per captured write) with:
+Fuzzes JSON body parameters from intercepted authenticated requests (up to 20 successful POST/PUT/PATCH captures, up to 10 keys each; at most 123 first-attempt probes per captured write, plus up to 6 repair retries per endpoint) with:
 
 - **SQL injection** — injects three payloads (for example `' OR '1'='1' --`; the stacked-statement probe is the harmless syntax breaker `1'; SELECT--`, never a destructive statement) and checks the reply against database-specific error patterns (`SQL syntax`, `SQLSTATE`, `ORA-nnnnn`, `syntax error at or near`, ...) that are not already present in the recorded response (Critical). Generic crash strings no longer count; a payload that turns a successful request into a 5xx without a database error is reported as a Medium "Possible SQL injection" (confidence 0.50)
 - **XSS reflection** — injects two canary HTML payloads and checks if they are reflected verbatim (High)

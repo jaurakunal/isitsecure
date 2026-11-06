@@ -14,7 +14,11 @@ from isitsecure.engine.enums import AuthProvider, EndpointMethod, SeverityLevel
 from isitsecure.engine.models import DiscoveredEndpoint, InterceptedRequest
 from isitsecure.engine.scanners.body_param_fuzzer import BodyParamFuzzer
 from isitsecure.engine.scanners.mass_assignment_scanner import MassAssignmentScanner
-from isitsecure.engine.shared.request_contract import TITLE_CONTRACT_BLOCKED
+from isitsecure.engine.shared.request_contract import (
+    MAX_RETRIES_PER_ENDPOINT,
+    PROBE_MARKER,
+    TITLE_CONTRACT_BLOCKED,
+)
 
 URL = "https://example.com/api/notes"
 
@@ -120,9 +124,25 @@ class TestBodyParamFuzzerContracts:
             return _resp(422, {"errors": {f"f{calls}": ["is required"]}})
 
         await _fuzz(handler)
-        # 1 field x (3 sqli + 2 xss + 7 type + 4 proto) = at most 16 probes; retries add at
-        # most the per-endpoint budget on top.
-        assert calls <= 16 + 6
+        # 1 field x (3 sqli + 2 xss + 7 type + 3 proto) = 15 first attempts, plus exactly the
+        # per-endpoint retry budget (6), however many new fields the server keeps demanding.
+        assert calls == 15 + MAX_RETRIES_PER_ENDPOINT
+
+    @pytest.mark.asyncio
+    async def test_misparsed_pin_does_not_skip_a_real_field(self):
+        """DRF's "is not a valid choice" quotes the value we sent; it must not pin the field and
+        silently drop every probe for it."""
+        calls = 0
+
+        async def handler(method, url, **kw):
+            nonlocal calls
+            calls += 1
+            return _resp(400, {"role": [f'"{json.loads(kw["content"])["role"]}" is not a '
+                                        "valid choice."]})
+
+        findings = await _fuzz(handler, '{"role": "user"}')
+        assert calls == 15          # every probe sent once, none skipped, none retried
+        assert not _blocked(findings)
 
     @pytest.mark.asyncio
     async def test_415_switches_to_form_encoding(self):
@@ -173,6 +193,8 @@ class TestMassAssignmentContracts:
         assert any('"role"' in (f.request_payload or "") and '"email"' in f.request_payload
                    for f in hits)
         assert not _blocked(findings)
+        # The invented value is recognisable, so junk rows a repaired write leaves are findable.
+        assert all(f'"email": "{PROBE_MARKER}"' in (f.request_payload or "") for f in hits)
 
     @pytest.mark.asyncio
     async def test_unsatisfiable_contract_is_blocked_not_clean(self):
@@ -207,3 +229,24 @@ class TestMassAssignmentContracts:
 def MassAssignmentScanner_fields():
     from isitsecure.engine.constants import MassAssignmentConfig
     return MassAssignmentConfig.ESCALATION_FIELDS
+
+
+def test_blocked_note_appears_in_html_report():
+    """The INFO coverage note is only useful if a reader can see it."""
+    from isitsecure.engine.enums import FindingCategory
+    from isitsecure.engine.models import DeepScanReport, FindingSource
+    from isitsecure.engine.reporting.html_renderer import HTMLReportRenderer
+    from isitsecure.engine.reporting.report_generator import ReportGenerator
+    from isitsecure.engine.shared.request_contract import (
+        ContractLedger,
+        contract_blocked_finding,
+    )
+
+    ledger = ContractLedger()
+    ledger.record_probe("POST", URL, "text", blocked=True)
+    finding = contract_blocked_finding(
+        ledger.blocked()[0], scanner_name="body_param_fuzzer",
+        category=FindingCategory.INJECTION_RISK, source=FindingSource.DAST_AUTHENTICATED)
+    report = DeepScanReport(target_url="https://example.com", findings=[finding])
+    html = HTMLReportRenderer().render(ReportGenerator().generate(report))
+    assert "blocked by request validation" in html

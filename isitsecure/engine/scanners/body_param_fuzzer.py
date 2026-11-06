@@ -201,6 +201,9 @@ class BodyParamFuzzer:
                 # A type-confusion rejection is the behaviour under test, not a coverage gap.
                 max_retries=0 if fuzz_type == "type" else MAX_RETRIES_PER_PROBE,
                 track=fuzz_type != "type",
+                # This scanner already replays the captured write (WRITE_METHODS); repairing
+                # its siblings sends no request a plain probe would not.
+                repair_writes=True,
             )
             resp, fuzzed_body = probe.response, probe.fields
             # Rejected by request validation: the payload never reached the application, so
@@ -261,7 +264,7 @@ class BodyParamFuzzer:
                     follow = (await probe_with_repair(
                         self._sender(client, method, original_req.url, headers),
                         self._ledger, method, original_req.url, body,
-                        max_retries=0, track=False,
+                        max_retries=0, track=False, repair_writes=True,
                     )).response
                     marker = BodyParamFuzzerConfig.PROTOTYPE_POLLUTION_MARKER
                     if marker in follow.text:

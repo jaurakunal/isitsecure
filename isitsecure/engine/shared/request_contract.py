@@ -81,7 +81,12 @@ _OAUTH_GRANT_TYPES = ("password", "client_credentials", "authorization_code", "r
 _NOT_FIELD_KEYS = frozenset({"message", "error", "errors", "status", "code", "title", "type",
                              "msg", "detail", "details", "issues", "validation", "path",
                              "timestamp", "trace", "data", "non_field_errors"})
-_FILLER_CANDIDATES = ("1", "probe", "probe@example.com", "2024-01-01", "true", "a", "0")
+# Marks every value the engine invents so rows a repaired write leaves behind are identifiable.
+PROBE_MARKER = "isitsecure-probe"
+_FILLER_CANDIDATES = (PROBE_MARKER, "1", f"{PROBE_MARKER}@example.com", "2024-01-01", "true",
+                      "a", "0")
+# Methods that cannot change server state: only these may be repaired and retried freely.
+SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 # -- message classifiers (a field's message → the rule it implies) -----------------------------
 _RX_REQUIRED = re.compile(
@@ -90,7 +95,7 @@ _RX_REQUIRED = re.compile(
     re.IGNORECASE)
 _RX_QUOTED_VALUES = re.compile(r"""['"`]([^'"`]{1,64})['"`]""")
 _RX_VALUE_LIST = re.compile(
-    r"(?:should be|must be one of|must be in|permitted|allowed values?|expected|valid (?:choices|"
+    r"(?:should be|must be one of|must be in|permitted|allowed values?|valid (?:choices|"
     r"options|values)|one of|is not one of)\s*[:\-]?\s*(.+)", re.IGNORECASE)
 _RX_PATTERN = re.compile(
     r"""(?:match(?:es)? (?:the )?(?:pattern|regex|regexp|format)|does not match regex|"""
@@ -98,7 +103,7 @@ _RX_PATTERN = re.compile(
     re.IGNORECASE)
 _RX_ENUMISH = re.compile(
     r"is not a valid (?:choice|enumeration member|option)|invalid enum|invalid_enum|"
-    r"not included in the list|is not one of|unsupported", re.IGNORECASE)
+    r"not included in the list|is not one of", re.IGNORECASE)
 
 
 @dataclass
@@ -212,7 +217,7 @@ class RequestContract:
                 continue
             value = rule.preferred()
             if value is None and rule.kind == "required":
-                value = filler(rule.name) if filler else "probe"
+                value = filler(rule.name) if filler else PROBE_MARKER
             if value is not None:
                 out[rule.name] = value
         return out
@@ -377,6 +382,7 @@ async def probe_with_repair(
     param: str | None = None, keep: str | None = None,
     filler: Callable[[str], Any] | None = None,
     max_retries: int = MAX_RETRIES_PER_PROBE, track: bool = True,
+    repair_writes: bool = False,
 ) -> ProbeResult:
     """Send one probe; if the server answers with an actionable validation rejection, learn the
     contract, repair the sibling fields (``keep`` is left untouched: it carries the payload) or
@@ -386,11 +392,17 @@ async def probe_with_repair(
     ``blocked`` is True when the final response is still a rejection: the payload never reached
     the sink. With ``track`` the outcome is recorded against ``param`` for the blocked report;
     pass ``track=False`` for probes where a rejection is the expected, tested behaviour (type
-    confusion) rather than a coverage gap."""
+    confusion) rather than a coverage gap.
+
+    Repair invents field values, so for a state-changing method it is opt-in
+    (``repair_writes``): a scanner whose own policy already sends writes passes True; otherwise
+    the probe is sent once as given, never retried with invented values, and a rejection is
+    still learned and reported as blocked. Invented free-text values carry ``PROBE_MARKER``."""
     keep = keep if keep is not None else param
+    may_repair = repair_writes or method.upper() in SAFE_METHODS
     contract = ledger.get(method, url)
     encoding = contract.encoding if contract else ""
-    if contract:
+    if contract and may_repair:
         fields = contract.repair(fields, filler, keep=keep)
     requests = 0
     while True:
@@ -403,7 +415,7 @@ async def probe_with_repair(
             blocked = False
             break
         blocked = True
-        if requests > max_retries:
+        if requests > max_retries or not may_repair:
             break
         repaired = contract.repair(fields, filler, keep=keep)
         new_encoding = contract.encoding or encoding
@@ -592,20 +604,22 @@ def _classify(name: str, msg: str, type_: str, item: dict | None = None) -> Fiel
     if ("missing" in low_type or low_type in ("required", "value_error.missing")
             or (low_type == "invalid_type" and "undefined" in msg.lower()) or phrase_required):
         return FieldRule(name, "required", (), msg)
-    if isinstance(expected, str) and ("literal" in low_type or "expected" in msg.lower()):
+    if isinstance(expected, str) and "literal" in low_type:
         return FieldRule(name, "literal", (expected,), msg)
     if isinstance(options, list) and options:
         return FieldRule(name, "enum", tuple(str(o) for o in options), msg)
     if "pattern" in low_type or "regex" in low_type or _RX_PATTERN.search(msg):
         m = _RX_PATTERN.search(msg)
         pattern = (m.group("p") if m else "").strip()
-        if pattern:
+        if pattern and _valid_regex(pattern):
             literal = _literal_from_pattern(pattern)
             return FieldRule(name, "pattern", (pattern, literal) if literal else (pattern,), msg)
         return FieldRule(name, "invalid", (), msg)
-    if "literal" in low_type or "enum" in low_type or _RX_ENUMISH.search(msg) \
-            or _RX_VALUE_LIST.search(msg):
-        values = _values_from(msg)
+    # A closed set is pinned only from an explicit listing ("one of 'a', 'b'", "should be 'a'")
+    # or a framework literal/enum code. "'x' is not a valid choice" quotes the value WE sent,
+    # not the allowed set, and "expected string" names a type: neither pins the field.
+    if "literal" in low_type or "enum" in low_type or _RX_VALUE_LIST.search(msg):
+        values = _values_from(msg, allow_bare=bool(_RX_EXPLICIT_SET.search(msg)))
         if len(values) == 1 and ("literal" in low_type or "should be" in msg.lower()):
             return FieldRule(name, "literal", values, msg)
         if values:
@@ -614,16 +628,28 @@ def _classify(name: str, msg: str, type_: str, item: dict | None = None) -> Fiel
     return FieldRule(name, "invalid", (), msg)
 
 
-def _values_from(text: str) -> tuple[str, ...]:
+_RX_EXPLICIT_SET = re.compile(
+    r"one of|valid (?:choices|options|values)|allowed|permitted", re.IGNORECASE)
+
+
+def _valid_regex(pattern: str) -> bool:
+    try:
+        re.compile(pattern)
+    except re.error:
+        return False
+    return True
+
+
+def _values_from(text: str, allow_bare: bool = True) -> tuple[str, ...]:
     """The quoted values a message lists (``'a', 'b' or 'c'``); unquoted comma lists as a
-    fallback when every item is a bare token."""
+    fallback when every item is a bare token and the message names an explicit set."""
     m = _RX_VALUE_LIST.search(text)
     tail = m.group(1) if m else text
     quoted = tuple(dict.fromkeys(_RX_QUOTED_VALUES.findall(tail)))
     if quoted:
         return quoted
     bare = [t.strip().rstrip(".;:") for t in re.split(r",|\bor\b|\|", tail) if t.strip()]
-    if bare and all(re.fullmatch(r"[\w.\-]{1,40}", t) for t in bare):
+    if allow_bare and bare and all(re.fullmatch(r"[\w.\-]{1,40}", t) for t in bare):
         return tuple(dict.fromkeys(bare))
     return ()
 
