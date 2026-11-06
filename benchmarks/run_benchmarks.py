@@ -33,6 +33,8 @@ import time
 import urllib.request
 from dataclasses import dataclass, field
 
+import stability
+
 
 @dataclass
 class Expectation:
@@ -357,6 +359,8 @@ def wait_ready(url: str, timeout: int) -> bool:
 # false positive, which is exactly the distinction you re-run a 30-minute
 # scan to make. Keep the report and it is answerable without the re-run.
 REPORT_DIR: str | None = None
+# Suffix for kept reports under --repeat, so run N doesn't overwrite run N-1.
+REPORT_TAG: str = ""
 
 
 def scan(target: Target) -> list[dict] | None:
@@ -395,7 +399,7 @@ def scan(target: Target) -> list[dict] | None:
         return data.get("findings", [])
     finally:
         if REPORT_DIR:
-            kept = os.path.join(REPORT_DIR, f"{target.name}.json")
+            kept = os.path.join(REPORT_DIR, f"{target.name}{REPORT_TAG}.json")
             try:
                 os.replace(out, kept)
                 print(f"    report kept at {kept}")
@@ -451,17 +455,120 @@ def run_target(target: Target, keep: bool) -> dict:
             print("    seeding (pre-scan)...")
             _run(target.pre_scan, timeout=120)
         print(f"    app ready — scanning ({target.scan_mode})...")
+        t0 = time.time()
         findings = scan(target)
         if findings is None:
             return {"name": target.name, "error": "scan failed / no readable report"}
         if target.ground_truth:
-            return score_ground_truth(target, findings)
-        result = score(findings, target)
-        result["name"] = target.name
+            result = score_ground_truth(target, findings)
+        else:
+            result = score(findings, target)
+            result["name"] = target.name
+        # Extra keys feed --repeat's stability analysis; the scorecard ignores them.
+        result["fingerprints"] = sorted(stability.fingerprint_set(findings))
+        result["duration_s"] = time.time() - t0
         return result
     finally:
         if not keep:
             _run(target.down_cmd or ["true"])
+
+
+def recall_counts(result: dict) -> tuple[int, int]:
+    """(found, total) recall for either result shape (ground-truth or coarse)."""
+    if result.get("scorecard"):
+        rec = result["scorecard"]["recall"]
+        return rec["found"], rec["in_scope"]
+    hits = result.get("recall") or []
+    return sum(1 for _, ok in hits if ok), len(hits)
+
+
+def result_to_run(result: dict) -> stability.RunRecord:
+    found, total = recall_counts(result)
+    return stability.RunRecord(
+        fingerprints=frozenset(result.get("fingerprints", [])),
+        found=found, total=total, duration_s=result.get("duration_s", 0.0))
+
+
+def run_repeated(target: Target, repeat: int, keep: bool,
+                 runner=None) -> list[dict]:
+    """Run one target ``repeat`` times, each on a fresh bring-up.
+
+    ``repeat == 1`` is exactly the old single run (no report-name suffix).
+    ``runner`` is injectable so the loop is testable without Docker.
+    """
+    global REPORT_TAG
+    runner = runner or run_target
+    results = []
+    try:
+        for i in range(1, repeat + 1):
+            REPORT_TAG = f".run{i}" if repeat > 1 else ""
+            if repeat > 1:
+                print(f"\n--- {target.name}: run {i}/{repeat} ---")
+            results.append(runner(target, keep))
+    finally:
+        REPORT_TAG = ""
+    return results
+
+
+def evaluate_repeat(name: str, results: list[dict],
+                    baseline: dict | None) -> tuple[int, str, stability.StabilityReport | None]:
+    """Stability verdict for one target's repeated runs (pure).
+
+    Returns (exit_code, printable report, StabilityReport). Exit codes: 0 ok
+    (or no baseline to gate on), 1 the stable set regressed vs the baseline,
+    2 not verifiable: fewer than 2 runs produced a report, or any run errored
+    (the stable set is then computed over the good runs only, and called out).
+    """
+    ok = [r for r in results if not r.get("error")]
+    errored = len(results) - len(ok)
+    if len(ok) < 2:
+        # One good run has no "found in every run" meaning; don't pretend.
+        return 2, (f"STABILITY — {name}: only {len(ok)} of {len(results)} run(s) "
+                   f"produced a report; need >= 2 to assess stability"), None
+    report = stability.compute_stability([result_to_run(r) for r in ok])
+    cmp = None
+    entry = (baseline or {}).get("targets", {}).get(name)
+    if entry is not None:
+        cmp = stability.compare_to_baseline(report, entry.get("stable", []))
+    text = stability.format_report(name, report, cmp)
+    if errored:
+        text += f"\n  {errored} of {len(results)} run(s) errored and were excluded"
+    sc = ok[0].get("scorecard")
+    if entry is not None and entry.get("by_class") and sc:
+        from score import class_deltas
+        for r in class_deltas(sc, {"by_class": entry["by_class"]}):
+            if r["delta"]:
+                text += (f"\n  class {r['vuln_class']}: {r['prev_found']}/"
+                         f"{r['prev_total']} -> {r['found']}/{r['total']} ({r['delta']:+d})")
+    code = 1 if cmp is not None and cmp.regressed else 0
+    return (2 if errored else code), text, report
+
+
+def count_must_detect_regressions(all_runs: dict[str, list[dict]]) -> int:
+    """MUST_DETECT misses summed over EVERY ok run (any run missing one fails)."""
+    return sum(len(r.get("scorecard", {}).get("regression_failures", []))
+               for runs in all_runs.values() for r in runs if not r.get("error"))
+
+
+def final_exit_code(stability_rc: int, regressions: int, sast_rc: int,
+                    go_sast_rc: int) -> int:
+    """Combine every gate into one exit code, printing every failure.
+
+    Nothing is short-circuited, so a stability failure can't hide a SAST one.
+    Precedence: 2 (something couldn't be verified / bad run) beats 1 (a
+    detection regression); otherwise 0.
+    """
+    if stability_rc:
+        print("\n✗ stability check failed (see STABILITY above).")
+    if regressions:
+        print(f"\n✗ {regressions} regression failure(s) — a finding the scanner "
+              f"reliably catches was dropped by the full scan. See ⚠ REGRESSION above.")
+    if sast_rc:
+        print("\n✗ SAST injection benchmark failed (recall < 100% or FP > 0).")
+    if go_sast_rc:
+        print("\n✗ Go SAST benchmark failed (class recall < 100%).")
+    codes = [stability_rc, 1 if regressions else 0, sast_rc, go_sast_rc]
+    return 2 if 2 in codes else (1 if any(codes) else 0)
 
 
 def print_scorecard(results: list[dict]) -> None:
@@ -574,6 +681,29 @@ def run_go_sast() -> int:
     return 0 if gs.passed(r) else 1
 
 
+def report_stability(all_runs: dict[str, list[dict]], baseline_path: str | None,
+                     write: bool) -> int:
+    """Print per-target stability; gate on / record the baseline. Returns exit code."""
+    baseline = stability.load_baseline(baseline_path) if baseline_path else None
+    rc = 0
+    print("\n" + "=" * 64)
+    for name, runs in all_runs.items():
+        code, text, report = evaluate_repeat(name, runs, None if write else baseline)
+        print(text)
+        if write and report is not None and code == 0:
+            ok = [r for r in runs if not r.get("error")]
+            by_class = (ok[0].get("scorecard") or {}).get("by_class")
+            stability.save_baseline(baseline_path, baseline, name,
+                                    stability.baseline_entry(report, by_class))
+            print(f"  baseline for {name} written to {baseline_path}")
+        rc = max(rc, code)
+    if rc == 1:
+        print("\n✗ stable finding set regressed vs baseline (LOST/FLAKY above).")
+    elif rc == 2:
+        print("\n✗ no usable run for at least one target — nothing to verify.")
+    return rc
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("targets", nargs="*", help="target names (default: vampi + sast-injection)")
@@ -581,7 +711,26 @@ def main() -> int:
     ap.add_argument("--all", action="store_true", help="include heavy compose targets")
     ap.add_argument("--report-dir", help="keep each target's raw JSON report here "
                                          "(so unmatched findings can be triaged)")
+    ap.add_argument("--repeat", type=int, default=1, metavar="N",
+                    help="run each Docker target N times and report the stable "
+                         "(found-in-every-run) vs flaky finding sets (default 1 = "
+                         "single run, unchanged)")
+    ap.add_argument("--baseline", metavar="PATH",
+                    help="with --repeat: JSON baseline of stable fingerprints; exit 1 "
+                         "if any baseline-stable finding is no longer stable")
+    ap.add_argument("--write-baseline", action="store_true",
+                    help="with --repeat and --baseline: record this run's stable set "
+                         "as the new baseline instead of gating on it")
     args = ap.parse_args()
+    if args.repeat < 1:
+        print("--repeat must be >= 1")
+        return 2
+    if (args.baseline or args.write_baseline) and args.repeat < 2:
+        print("--baseline/--write-baseline need --repeat N (N >= 2)")
+        return 2
+    if args.write_baseline and not args.baseline:
+        print("--write-baseline needs --baseline PATH")
+        return 2
 
     global REPORT_DIR
     if args.report_dir:
@@ -598,27 +747,18 @@ def main() -> int:
         return 2
     selected = [by_name[n] for n in docker_names]
 
-    results = [run_target(t, args.keep) for t in selected]
+    all_runs = {t.name: run_repeated(t, args.repeat, args.keep) for t in selected}
+    results = [runs[0] for runs in all_runs.values()]
     print_scorecard(results)
+    stability_rc = 0
+    if args.repeat > 1:
+        stability_rc = report_stability(all_runs, args.baseline, args.write_baseline)
     # Fail the run if any must-detect finding was dropped — a full-scan-path
     # regression (issue #1), distinct from a coverage gap.
-    regressions = sum(
-        len(r.get("scorecard", {}).get("regression_failures", []))
-        for r in results
-    )
+    regressions = count_must_detect_regressions(all_runs)
     sast_rc = run_sast_injection() if want_sast else 0
     go_sast_rc = run_go_sast() if want_go_sast else 0
-    if regressions:
-        print(f"\n✗ {regressions} regression failure(s) — a finding the scanner "
-              f"reliably catches was dropped by the full scan. See ⚠ REGRESSION above.")
-        return 1
-    if sast_rc:
-        print("\n✗ SAST injection benchmark failed (recall < 100% or FP > 0).")
-        return 1
-    if go_sast_rc:
-        print("\n✗ Go SAST benchmark failed (class recall < 100%).")
-        return 1
-    return 0
+    return final_exit_code(stability_rc, regressions, sast_rc, go_sast_rc)
 
 
 if __name__ == "__main__":

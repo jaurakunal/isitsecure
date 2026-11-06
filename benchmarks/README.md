@@ -81,6 +81,89 @@ seeded from `/api/Challenges`): recall over the **45 DAST-detectable** challenge
 endpoint. `run_benchmarks.py juiceshop` runs this end to end; you can also score a
 saved scan by hand with `python benchmarks/score.py juiceshop findings.json`.
 
+**Per-class recall deltas.** A single recall number hides a class getting worse
+while another improves. Score against an earlier scorecard (the
+`<findings>.scorecard.json` that `score.py` writes) to see exactly which classes
+moved, regressions first:
+
+```bash
+python benchmarks/score.py juiceshop new.json --previous old.scorecard.json
+#   sqli   3/3 -> 1/3  (-2)  REGRESSED
+#   xss    2/4 -> 4/4  (+2)  improved
+```
+
+Recall is counted over *distinct* matching findings per class (class-level items
+are capped by distinct endpoints), not raw request counts. The delta is
+informational and does not change the exit code; the `MUST_DETECT` gate above
+and the stability bar below are what fail a run.
+
+## Repeat runs and the stable-finding regression bar
+
+One run hides variance (probe ordering, timing, any LLM-assisted step). With
+`--repeat N` each Docker target is run N times, each on a fresh bring-up, and the
+harness reports:
+
+- **stable** findings — the same fingerprint in *every* run (safe to gate on);
+- **flaky** findings — in some runs only (reported, never gated);
+- per-run recall and wall-clock, and the recall spread across runs.
+
+```bash
+python benchmarks/run_benchmarks.py juiceshop --repeat 3                       # report only
+python benchmarks/run_benchmarks.py juiceshop --repeat 3 --baseline b.json --write-baseline  # record
+python benchmarks/run_benchmarks.py juiceshop --repeat 3 --baseline b.json     # gate; exit 1 on regression
+```
+
+A finding's **fingerprint** is `scanner | category | normalised title | location`
+(endpoint *path* with host, query string and id segments removed; or the file plus a
+short hash of the code snippet for SAST, with no line number), so line shifts,
+resource ids and volatile title text (numbers, quoted values) don't cause false churn.
+
+The **baseline** (`--baseline PATH`, optional) is a JSON file
+`{"version": 1, "targets": {"<name>": {"stable": [...], "recall": {...},
+"by_class": {...}}}}` holding the stable set recorded with `--write-baseline`.
+Gating fails (exit 1) if any baseline-stable fingerprint is no longer stable —
+either gone entirely (`LOST`) or only present in some runs (`FLAKY`); newly
+stable findings are reported, not penalised. For ground-truth targets the
+per-class deltas vs the baseline are printed too. Errored runs are excluded; if
+every run errored there is nothing to verify and the exit code is 2. Without
+`--repeat` (default 1) behaviour is unchanged, and `--baseline` requires
+`--repeat 2+`. `sast-injection` / `go-sast` are deterministic and run once.
+Baselines are **not committed to the repo**: they depend on target version and
+scan flags. Create one with `--repeat 3 --baseline ~/bench/juiceshop.json
+--write-baseline` on the pinned target, keep it somewhere stable (CI cache or
+artifact store), and pass the same path on later runs. Writing needs at least
+2 good runs and no errored runs. Per-class deltas are informational and never
+affect the exit code.
+
+Exit codes of `run_benchmarks.py` combine every gate (stability, MUST_DETECT
+regressions counted over *every* good run, SAST, Go SAST) and print every
+failure; precedence is 2 (something could not be verified: fewer than 2 good
+runs or any run errored under `--repeat`) over 1 (a detection regression) over 0. Note the harness scans with `--llm none`, so "cost" here is wall-clock;
+there is no token spend to compare.
+
+## Auth smoke (`auth_smoke.py`)
+
+A 1-2 minute guard for the login layer, to run after any change to auth or
+crawl code instead of waiting for the long authenticated benchmark:
+
+```bash
+python benchmarks/auth_smoke.py                  # brings up its own pinned Juice Shop
+python benchmarks/auth_smoke.py --keep           # leave it running
+AUTH_SMOKE_URL=http://localhost:3000 python benchmarks/auth_smoke.py --no-up
+```
+
+It drives the public `RestLoginAuthProvider` and `BrowserAuthProvider`
+(Playwright, real Angular form) against a freshly registered account and
+verifies each captured token is live via `GET /rest/user/whoami` (a dead token or
+HTML shell is a failure). No LLM or API key. Exit **0** pass, **1** a check
+failed, **2** infra error (Docker, app never ready, Playwright not installed).
+This repo has no self-signup/provisioning path, so only login is covered.
+
+It uses container name `auth_smoke_juice` and host port 3000, so it clashes with
+a standing local Juice Shop on :3000 (you get exit 2, never a wrong result);
+stop that one or set `AUTH_SMOKE_PORT`. It has **not been run live yet** — its
+logic is unit-tested with fake providers only.
+
 ## SAST injection benchmark (`sast-injection`)
 
 The deterministic Semgrep taint layer (#4) has its own **code-only** scorecard,
