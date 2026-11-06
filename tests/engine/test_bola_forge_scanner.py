@@ -26,7 +26,10 @@ from isitsecure.engine.scanners.bola_forge_scanner import (
     BolaForgeScanner,
     ForgeStatus,
     _find_identity_fields,
+    _mark_free_text,
     identity_claims,
+    is_dangerous_create,
+    origin_of,
 )
 
 BASE = "https://shop.example.com"
@@ -39,9 +42,9 @@ def _jwt(claims: dict) -> str:
     return f"{seg({'alg': 'none'})}.{seg(claims)}.sig"
 
 
-def _session(user_id: str) -> AuthSession:
+def _session(user_id: str, **claims) -> AuthSession:
     return AuthSession(
-        user_id=user_id, access_token=_jwt({"sub": user_id, "iat": 5}),
+        user_id=user_id, access_token=_jwt({"sub": user_id, "iat": 5, **claims}),
         provider=AuthProvider.TOKEN,
     )
 
@@ -63,12 +66,14 @@ class FakeApp:
         self.readable, self.reject_foreign = readable, reject_foreign
         self.records = [dict(r) for r in preexisting]
         self.calls: list[tuple[str, str]] = []
+        self.requests: list[tuple[str, str, dict]] = []     # method, full url, headers
 
     async def __call__(self, method, url, **kw):
         self.calls.append((method, urlparse(url).path))
+        self.requests.append((method, url, kw["headers"]))
         token = kw["headers"]["Authorization"].removeprefix("Bearer ")
         user = self.tokens[token]
-        if urlparse(url).path != "/api/feedbacks":
+        if not urlparse(url).path.startswith("/api/"):
             return httpx.Response(404, text="{}")
         if method == "POST":
             body = json.loads(kw["content"])
@@ -85,15 +90,26 @@ class FakeApp:
         return httpx.Response(200, json={"status": "success", "data": rows})
 
 
-async def _scan(app: FakeApp, session_a, session_b=None, *, probe_writes=True, captured=None):
+def _get(url: str) -> InterceptedRequest:
+    return InterceptedRequest(url=url, method="GET", response_status=200)
+
+
+async def _scan(app: FakeApp, session_a, session_b=None, *, probe_writes=True, captured=None,
+                seed=True, target_url=BASE):
+    """Run the scanner; like a real crawl, capture a GET per create and own one record."""
     scanner = BolaForgeScanner(probe_writes=probe_writes)
     with patch("isitsecure.engine.scanners.bola_forge_scanner.RateLimitedClient") as mock_client:
         client = AsyncMock()
         client.request = app
         mock_client.return_value.__aenter__ = AsyncMock(return_value=client)
         mock_client.return_value.__aexit__ = AsyncMock(return_value=False)
-        owner = session_a.user_id
-        findings = await scanner.scan(captured or [_captured(owner)], session_a, session_b)
+        owner = session_a.user_id if session_a else ""
+        reqs = list(captured or [_captured(owner)])
+        if seed and session_a:       # the worst case: an old record shaped like what we post
+            first = json.loads(next(r.request_body for r in reqs if r.method == "POST"))
+            app.records.append({**first, "id": 0, "UserId": owner, "message": "seed"})
+        reqs += [_get(r.url) for r in reqs if r.method == "POST"]
+        findings = await scanner.scan(reqs, session_a, session_b, target_url=target_url)
     return scanner, findings
 
 
@@ -175,9 +191,20 @@ async def test_server_rejecting_foreign_owner_is_not_reported():
 @pytest.mark.asyncio
 async def test_no_read_endpoint_is_inconclusive_not_a_finding():
     sa, sb, tokens = _pair()
-    scanner, findings = await _scan(FakeApp(tokens, trust_body=True, readable=False), sa, sb)
+    app = FakeApp(tokens, trust_body=True, readable=False)
+    scanner, findings = await _scan(app, sa, sb)
     assert findings == []
     assert scanner.outcomes[COLLECTION].status is ForgeStatus.INCONCLUSIVE
+    assert not [c for c in app.calls if c[0] == "POST"]       # known BEFORE any write
+
+
+@pytest.mark.asyncio
+async def test_read_endpoint_without_a_record_of_ours_means_zero_writes():
+    sa, sb, tokens = _pair()
+    app = FakeApp(tokens, trust_body=True)
+    scanner, findings = await _scan(app, sa, sb, seed=False)
+    assert findings == [] and not [c for c in app.calls if c[0] == "POST"]
+    assert "no verified read endpoint" in scanner.outcomes[COLLECTION].reason
 
 
 @pytest.mark.asyncio
@@ -251,9 +278,10 @@ async def test_only_creates_and_reads_bounded_and_marked():
     )
     await _scan(app, sa, sb, captured=[put, _captured(sa.user_id)])
     assert {m for m, _ in app.calls} == {"POST", "GET"}          # no PUT/PATCH/DELETE
-    assert len(app.calls) <= BolaForgeConfig.MAX_READ_URLS + 5
-    assert all(BolaForgeConfig.MARKER_PREFIX in r["message"] for r in app.records)
-    assert len(app.records) == 2                                   # control + treatment only
+    assert len(app.calls) <= BolaForgeConfig.MAX_READ_URLS + 6
+    probes = [r for r in app.records if r["id"] != 0]               # id 0 is our seed record
+    assert all(BolaForgeConfig.MARKER_PREFIX in r["message"] for r in probes)
+    assert len(probes) == 2                                         # control + treatment only
 
 
 @pytest.mark.asyncio
@@ -300,4 +328,161 @@ async def test_agent_runs_scanner_in_authenticated_phase():
         sa, sb, [], None, None, None, [], crawl_result=crawl,
     )
     assert "bola_forge" in names
-    stub.scan.assert_awaited_once_with(crawl.intercepted_requests, sa, sb)
+    stub.scan.assert_awaited_once_with(crawl.intercepted_requests, sa, sb, target_url=None)
+
+
+# ---------------------------------------------------------------- review hardening
+
+def _post(path: str, body: dict, host: str = BASE) -> InterceptedRequest:
+    return InterceptedRequest(
+        url=f"{host}{path}", method="POST", response_status=201,
+        request_body=json.dumps(body),
+    )
+
+
+def _posts(app: FakeApp) -> list[str]:
+    return [url for method, url, _ in app.requests if method == "POST"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", [
+    "/api/checkout", "/api/Orders", "/api/send-email", "/api/users/password/reset",
+    "/api/sendEmail", "/api/payments", "/api/invite_user", "/rest/user/login",
+])
+async def test_dangerous_paths_are_never_requested(path):
+    sa, sb, tokens = _pair()
+    app = FakeApp(tokens, trust_body=True)
+    _, findings = await _scan(
+        app, sa, sb, captured=[_post(path, {"UserId": sa.user_id, "message": "hi there"})],
+    )
+    assert findings == [] and app.requests == []
+
+
+def test_benign_paths_are_not_mistaken_for_dangerous():
+    body = {"UserId": "u", "message": "m"}
+    assert not is_dangerous_create(f"{BASE}/api/feedbacks", body)
+    assert not is_dangerous_create(f"{BASE}/api/borders/reviews", body)   # token, not substring
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("extra", [
+    {"cardNumber": "4242"}, {"cvv": "123"}, {"iban": "DE00"},
+    {"amount": 5, "currency": "EUR"},
+])
+async def test_payment_looking_bodies_are_never_replayed(extra):
+    sa, sb, tokens = _pair()
+    app = FakeApp(tokens, trust_body=True)
+    body = {"UserId": sa.user_id, "message": "hi there", **extra}
+    _, findings = await _scan(app, sa, sb, captured=[_post("/api/feedbacks", body)])
+    assert findings == [] and app.requests == []
+
+
+@pytest.mark.asyncio
+async def test_cross_origin_captures_are_never_sent_and_credentials_stay_home():
+    sa, sb, tokens = _pair()
+    app = FakeApp(tokens, trust_body=True)
+    evil = "https://analytics.thirdparty.example"
+    body = {"UserId": sa.user_id, "message": "hi there", "rating": 5}
+    captured = [_post("/api/feedbacks", body, evil), _get(f"{evil}/api/feedbacks"),
+                _post("/api/feedbacks", body)]
+    _, findings = await _scan(app, sa, sb, captured=captured)
+    assert len(findings) == 1                                   # the on-origin one still works
+    assert app.requests
+    assert all(url.startswith(BASE) for _, url, _ in app.requests)
+    assert all(not url.startswith(evil) for _, url, _ in app.requests)
+
+
+@pytest.mark.asyncio
+async def test_only_cross_origin_captures_send_nothing_and_unknown_target_sends_nothing():
+    sa, sb, tokens = _pair()
+    body = {"UserId": sa.user_id, "message": "hi there"}
+    app = FakeApp(tokens, trust_body=True)
+    foreign = [_post("/api/feedbacks", body, "http://other.example:8080")]
+    await _scan(app, sa, sb, captured=foreign)
+    assert app.requests == []
+    app2 = FakeApp(tokens, trust_body=True)
+    await _scan(app2, sa, sb, target_url=None)                   # origin unknown: fail closed
+    assert app2.requests == []
+
+
+def test_origin_normalises_default_ports_and_rejects_junk():
+    assert origin_of("https://a.example/x") == origin_of("HTTPS://A.example:443/y")
+    assert origin_of("https://a.example") != origin_of("http://a.example")
+    assert origin_of("not a url") is None and origin_of("ftp://a.example/") is None
+
+
+@pytest.mark.asyncio
+async def test_rating_equal_to_user_id_is_not_taken_for_the_owner_field():
+    """{"rating": 1, "UserId": 1}: two keys share the short id, so the owner field is unclear."""
+    sa, sb, tokens = _pair("1", "2")
+    app = FakeApp(tokens, trust_body=True, scoped=False)
+    body = {"UserId": 1, "rating": 1, "message": "hi there"}
+    scanner, findings = await _scan(app, sa, sb, captured=[_post("/api/feedbacks", body)])
+    assert findings == [] and app.requests == []
+    assert scanner.outcomes[COLLECTION].status is ForgeStatus.INCONCLUSIVE
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("claims,body", [
+    ({"role": "user"}, {"role": "user", "message": "hi there"}),
+    ({"iss": "https://auth.example.com/"}, {"iss": "https://auth.example.com/", "message": "x y"}),
+    ({"accountId": 1}, {"quantity": 1, "message": "hi there"}),       # small non-session claim
+    ({}, {"quantity": 1, "message": "hi there"}),                      # user id is not 1
+])
+async def test_coincidental_claim_values_cause_no_write(claims, body):
+    sa = _session("user-0001-abcdef", **claims)
+    sb = _session("user-0002-abcdef", **{k: (2 if v == 1 else v) for k, v in claims.items()})
+    app = FakeApp({sa.access_token: sa.user_id, sb.access_token: sb.user_id}, trust_body=True)
+    _, findings = await _scan(app, sa, sb, captured=[_post("/api/feedbacks", body)])
+    assert findings == [] and not _posts(app)
+
+
+@pytest.mark.asyncio
+async def test_non_session_claim_equal_in_both_sessions_is_inconclusive_not_synthetic():
+    shared = "tenant-abcdef123"
+    sa = _session("user-0001-abcdef", tenant=shared)
+    sb = _session("user-0002-abcdef", tenant=shared)
+    app = FakeApp({sa.access_token: sa.user_id, sb.access_token: sb.user_id}, trust_body=True)
+    body = {"tenant": shared, "message": "hi there"}
+    scanner, findings = await _scan(app, sa, sb, captured=[_post("/api/feedbacks", body)])
+    assert findings == [] and not _posts(app)
+    assert scanner.outcomes[COLLECTION].status is ForgeStatus.INCONCLUSIVE
+
+
+def test_marker_never_lands_in_a_secret_or_url_field():
+    ids = {"UserId"}
+    body = {"UserId": "u", "password": "correct horse battery",
+            "avatar_url": "https://x.example/a b", "apiKey": "a b c", "message": "hi there"}
+    marked = _mark_free_text(body, ids, "MARK")
+    assert marked["message"].endswith("MARK")
+    assert all("MARK" not in str(v) for k, v in marked.items() if k != "message")
+
+
+def test_free_text_prefers_prose_over_a_longer_single_token():
+    marked = _mark_free_text({"slug": "abcdefghijklmn", "note": "a b"}, set(), "MARK")
+    assert marked["note"].endswith("MARK") and marked["slug"] == "abcdefghijklmn"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", [
+    {"UserId": "x", "password": "correct horse battery"},
+    {"UserId": "x", "avatar": "https://img.example/a.png"},
+    {"UserId": "x", "token": "abcdefghijklmnopqrstuvwxyz0123"},
+])
+async def test_no_safe_free_text_field_means_zero_writes(body):
+    sa, sb, tokens = _pair()
+    app = FakeApp(tokens, trust_body=True)
+    body = {**body, "UserId": sa.user_id}
+    scanner, findings = await _scan(app, sa, sb, captured=[_post("/api/feedbacks", body)])
+    assert findings == [] and not _posts(app)
+    assert scanner.outcomes[COLLECTION].status is ForgeStatus.INCONCLUSIVE
+
+
+@pytest.mark.asyncio
+async def test_missing_session_is_skipped_cleanly():
+    app = FakeApp({})
+    scanner = BolaForgeScanner(probe_writes=True)
+    assert await scanner.scan([_captured("u")], None, None, target_url=BASE) == []
+    assert identity_claims(None) == {}
+    _, findings = await _scan(app, None)
+    assert findings == [] and app.requests == []

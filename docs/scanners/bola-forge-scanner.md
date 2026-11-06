@@ -10,13 +10,18 @@ It runs only when **both** are true: the scan is authenticated (it replays creat
 
 For each captured, successful JSON `POST` (one per path, at most 5 endpoints):
 
-1. **Find our identity field by value.** The key whose value equals one of our own ids (session user id, email, and every JWT claim value, excluding `exp`/`iat`/`nbf`/`auth_time`). No field-name vocabulary: `UserId`, `owner`, `zzz` are all found the same way.
-2. **Control.** Replay the body unchanged, with a unique `isitsecure-probe-ctl-<hex>` marker appended to the longest free-text field. Re-read the collection and require the marker record to come back **attributed to us** in that field. If no read endpoint shows our records, the result is INCONCLUSIVE and the forged write is never sent.
-3. **Treatment.** Resend with the identity field forged and an `isitsecure-probe-frg-<hex>` marker. Re-read the collection (as us and, with two accounts, as the victim) and require the marked record to carry the **forged owner**.
+0. **Scope and safety filters (no request is sent for a skipped endpoint).**
+   - *Origin:* only the scan target's origin (scheme, host, port) is ever contacted. Captured requests to other hosts (analytics, payment SDKs) are ignored, and our credentials are never attached to any other origin. If the target is unknown the scanner does nothing.
+   - *Dangerous paths:* a path with any of these tokens (whole segment or a token inside a hyphen/underscore/camelCase segment) is never replayed: checkout, pay, payment(s), charge, purchase, refund, send, email, mail, sms, notify, notification(s), invite, subscribe, webhook(s), transfer, withdraw, delete, remove, reset, password, login, logout, signin, signup, register, token, otp, verify, auth, oauth, session, 2fa, mfa, **order, orders**. `order(s)` is skipped on purpose: it is a plain resource in some apps and a purchase in others, and a wrong guess spends money. The cost is that a genuine forged-owner bug on an orders endpoint is not tested by this scanner.
+   - *Payment-looking bodies:* a body with a key such as card, cvv, cvc, iban, expiry, routing, swift, or both amount and currency is never replayed.
+1. **Find our identity field by value.** The key whose value equals one of our own ids. Matching the session user id or email is "strong" and may be a short number (`UserId: 7`). Any other JWT claim value only counts if it is distinctive (an opaque id of 8+ chars, a 9+ digit number, or an email). Claims such as `sub`, `iss`, `aud`, `role`, `scope`, `exp`, `iat`, `nbf`, `jti`, `typ`, `alg` are never used (so `{"role": "user"}` or `{"iss": ...}` coincidences are ignored). If several body keys share one short id (`{"rating": 1, "UserId": 1}`) the owner field is unclear and the endpoint is skipped. No field-name vocabulary otherwise: `UserId`, `owner`, `zzz` are all found the same way.
+2. **Verified read endpoint, before any write.** A GET of the same collection (captured GETs on the same path, then the path itself) must already return 200 JSON containing a record of ours with the identity field set to our id. If none does, the result is INCONCLUSIVE and **nothing is written**.
+3. **Control.** Replay the body unchanged, with a unique `isitsecure-probe-ctl-<hex>` marker appended to a safe free-text field (never a password, token, key, URL or email-like value; a field that already holds prose with a space is preferred; no safe field means INCONCLUSIVE and zero writes). Re-read and require the marker record to come back **attributed to us** in the identity field.
+4. **Treatment.** Resend with the identity field forged and an `isitsecure-probe-frg-<hex>` marker. Re-read the collection (as us and, with two accounts, as the victim) and require the marked record to carry the **forged owner**.
 
 The write response is never used as proof. A response that echoes the forged owner while the stored record keeps the real one (reflection) is not reported, and a pre-existing victim record cannot match because it has no marker.
 
-Read endpoints tried (at most 3): captured `GET`s on the same path, the write URL itself, the `Location` header, and `/<id>` from the create response. A scan sends at most 8 requests per endpoint, with no loops or retries.
+Read endpoints tried (at most 3): captured `GET`s on the same path and the path itself, all on the target origin. A scan sends at most 9 requests per endpoint (3 verification reads, 2 writes, 4 re-reads), with no loops or retries. Because a record of ours must already be visible, an app whose crawl never showed a listing of our own records is reported as not tested rather than guessed at.
 
 ## Modes: what each can and cannot prove
 
@@ -36,7 +41,9 @@ Anything unclear (no identity field, no free-text field for the marker, no usabl
 
 ## Side Effects
 
-This scanner mutates data. Each tested endpoint gets two new records (control and forged), both containing `isitsecure-probe` in a text field so they can be found and deleted. Nothing is updated or deleted, and with two accounts a forged record appears under the second test account, never a third party. Use it only on an app you own or are authorized to test.
+This scanner mutates data. Each tested endpoint (up to 5) gets **two new records** (control and forged), both containing `isitsecure-probe` in a text field. **They are not cleaned up: delete them manually** after the scan. Nothing is updated or deleted by the scanner.
+
+In two-identity mode the forged record is created **under the second configured test account** (`--auth-email-b`), which is an operator-provided account by design; it never targets a third party. In one-identity mode the owner is a synthetic id that belongs to nobody. Use it only on an app you own or are authorized to test.
 
 ## What Vulnerable Code Looks Like
 
