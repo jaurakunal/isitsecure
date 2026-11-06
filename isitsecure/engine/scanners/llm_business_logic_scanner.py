@@ -39,6 +39,7 @@ from isitsecure.engine.models import (
     FindingSource,
 )
 from isitsecure.engine.shared.time_budget import TimeBudget
+from isitsecure.engine.shared.verdict import Reply, evidence_gap
 
 logger = logging.getLogger(__name__)
 
@@ -317,6 +318,24 @@ class LLMBusinessLogicScanner:
                 })
 
         if not step_results:
+            return None
+
+        # Deterministic gate before the judge: transport failures, error pages
+        # and validation rejections are "could not tell", never evidence.
+        for sr in step_results:
+            if sr["actual_status"] <= 0:
+                self._record_skip(
+                    str(plan_title), f"step {sr['step']} got no response",
+                )
+        gap = evidence_gap([
+            Reply(
+                sr["actual_status"], sr["actual_body_preview"], str(sr["method"])
+            )
+            for sr in step_results
+        ])
+        if gap is not None:
+            if not gap.conclusive:
+                self._record_skip(str(plan_title), f"inconclusive: {gap.evidence}")
             return None
 
         # Ask LLM to analyze the results

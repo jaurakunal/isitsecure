@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from typing import NamedTuple
 from urllib.parse import urlparse
 
 import httpx
@@ -26,8 +27,40 @@ from isitsecure.engine.models import (
 from isitsecure.engine.shared.auth_aware import AuthAwareScanner
 from isitsecure.engine.shared.progress import emit
 from isitsecure.engine.shared.time_budget import TimeBudget
+from isitsecure.engine.shared.verdict import Reply, Verdict, absolutize, unreachable_reason
 
 logger = logging.getLogger(__name__)
+
+TITLE_RATE_LIMIT_INCONCLUSIVE = "Rate limiting could not be assessed"
+DESC_RATE_LIMIT_INCONCLUSIVE = (
+    "Rate limiting on {url} could not be assessed: {reason}. This is a coverage "
+    "statement, not a finding: the endpoint was neither shown to be limited nor "
+    "shown to be unlimited."
+)
+CONFIDENCE_INCONCLUSIVE = 0.50
+
+
+class ThresholdProbe(NamedTuple):
+    """Outcome of the sequential pass: how many requests were processed and the verdict.
+
+    ``verdict.vulnerable`` means every request was processed and none was
+    limited; a 429 is NOT_PROVEN; anything that stopped the run is INCONCLUSIVE.
+    """
+
+    processed: int
+    verdict: Verdict
+    limited: bool = False
+
+
+def _reply_of(response: object, method: str) -> Reply:
+    """The status/body an oracle reasons about, tolerant of partial response stubs."""
+    status = getattr(response, "status_code", 0)
+    body = getattr(response, "text", "")
+    return Reply(
+        status if isinstance(status, int) else 0,
+        body if isinstance(body, str) else "",
+        method,
+    )
 
 
 class RateLimitScanner(AuthAwareScanner):
@@ -133,36 +166,44 @@ class RateLimitScanner(AuthAwareScanner):
 
         emit(f"rate-limit: sending burst to {urlparse(endpoint.url).path}")
 
+        if absolutize(endpoint.url) is None:
+            # Nothing was sent, so nothing can be said about the endpoint.
+            return [
+                self._build_inconclusive_finding(
+                    endpoint, "the URL is relative, so no request could be sent"
+                )
+            ]
+
         try:
             # Phase 1: Measure threshold with sequential requests
-            threshold, dropped = await self._measure_threshold(client, endpoint)
+            probe = await self._measure_threshold(client, endpoint)
 
-            if dropped:
-                # The connection was cut mid-run: a throttle (reset/WAF) or a
-                # flaky server, never proof that nothing limits requests.
-                # Report the observed cut-off as informational only.
-                if threshold:
-                    findings.append(
-                        self._build_threshold_finding(endpoint, threshold)
-                    )
-            elif threshold is None:
-                # No 429 received even at max requests -- no rate limiting
+            if probe.limited:
+                # Rate limiting exists; report the measured threshold
+                findings.append(
+                    self._build_threshold_finding(endpoint, probe.processed)
+                )
+            elif probe.verdict.vulnerable:
+                # Every request was processed and none was limited
                 findings.append(
                     self._build_no_rate_limit_finding(endpoint)
                 )
             else:
-                # Rate limiting exists; report the measured threshold
+                # Could not tell (dropped connection, error pages, no endpoint):
+                # a throttle, WAF or flaky server is never proof that nothing
+                # limits requests. Surface the observed cut-off as informational.
                 findings.append(
-                    self._build_threshold_finding(endpoint, threshold)
+                    self._build_inconclusive_finding(
+                        endpoint, probe.verdict.evidence, probe.processed
+                    )
                 )
 
             # Phase 2: Test burst sizes to check behavior under load. Skipped
             # when the sequential pass already reported a threshold (same
             # title and locus, would only duplicate it).
-            if not findings:
-                burst_findings = await self._test_burst_sizes(client, endpoint)
-                findings.extend(burst_findings)
-            elif findings[0].title == RateLimitConfig.TITLE_NO_RATE_LIMIT:
+            if probe.verdict.vulnerable or (
+                not probe.verdict.conclusive and probe.processed == 0
+            ):
                 burst_findings = await self._test_burst_sizes(client, endpoint)
                 findings.extend(burst_findings)
 
@@ -184,42 +225,56 @@ class RateLimitScanner(AuthAwareScanner):
         self,
         client: httpx.AsyncClient,
         endpoint: DiscoveredEndpoint,
-    ) -> tuple[int | None, bool]:
+    ) -> ThresholdProbe:
         """Send sequential requests to measure when 429 first appears.
 
         Sends requests one at a time with minimal delay, counting how
-        many real responses arrive before the first 429 response.
+        many processed responses arrive before the first 429 response. A
+        response only counts as processed when it says something about the
+        endpoint (not status 0, a 5xx, a missing endpoint or an HTML page).
 
         Returns:
-            ``(threshold, dropped)``. ``threshold`` is the number of
-            responses before 429, or None if no 429 was received within
-            MAX_SEQUENTIAL_REQUESTS. When the connection was dropped before
-            either outcome, ``dropped`` is True and ``threshold`` is the
-            number of responses actually received.
+            ``ThresholdProbe``. A 429 sets ``limited`` and ``processed`` is
+            the threshold. Reaching MAX_SEQUENTIAL_REQUESTS with every
+            request processed and no 429 is PROVEN (no rate limiting). Any
+            dropped connection or unusable reply is INCONCLUSIVE.
         """
-        successful_count = 0
+        processed = 0
+        method = endpoint.method.value
 
         for _ in range(RateLimitConfig.MAX_SEQUENTIAL_REQUESTS):
             try:
-                response = await client.request(
-                    method=endpoint.method.value,
-                    url=endpoint.url,
+                response = await client.request(method=method, url=endpoint.url)
+            except Exception as exc:
+                return ThresholdProbe(
+                    processed,
+                    Verdict.inconclusive(
+                        f"connection dropped after {processed} responses "
+                        f"({type(exc).__name__})"
+                    ),
                 )
 
-                if response.status_code == self.HTTP_STATUS_TOO_MANY_REQUESTS:
-                    return successful_count, False
-
-                if isinstance(response, httpx.Response):
-                    successful_count += 1
-
-            except Exception:
-                # Dropped connection: inconclusive, not "no rate limiting"
-                return successful_count, True
-
+            if response.status_code == self.HTTP_STATUS_TOO_MANY_REQUESTS:
+                return ThresholdProbe(
+                    processed, Verdict.not_proven("rate limit observed"), True
+                )
+            reason = unreachable_reason(_reply_of(response, method))
+            if reason:
+                return ThresholdProbe(
+                    processed,
+                    Verdict.inconclusive(
+                        f"request {processed + 1} gave {reason}"
+                    ),
+                )
+            processed += 1
             await asyncio.sleep(RateLimitConfig.MIN_DELAY_BETWEEN_REQUESTS)
 
-        # Never got a 429
-        return None, False
+        return ThresholdProbe(
+            processed,
+            Verdict.proven(
+                f"{processed}/{processed} requests processed, no 429"
+            ),
+        )
 
     async def _test_burst_sizes(
         self,
@@ -254,6 +309,8 @@ class RateLimitScanner(AuthAwareScanner):
                 successful_count = sum(
                     1 for resp in responses if isinstance(resp, httpx.Response)
                     and resp.status_code != self.HTTP_STATUS_TOO_MANY_REQUESTS
+                    and unreachable_reason(_reply_of(resp, endpoint.method.value))
+                    is None
                 )
 
                 if received_429 and successful_count > 0:
@@ -359,6 +416,9 @@ class RateLimitScanner(AuthAwareScanner):
             )
             if response.status_code == self.HTTP_STATUS_TOO_MANY_REQUESTS:
                 second_batch_blocked = True
+            elif unreachable_reason(_reply_of(response, endpoint.method.value)):
+                # An error page is not a request that got through the limiter.
+                return None
         except Exception:
             return None
 
@@ -421,6 +481,33 @@ class RateLimitScanner(AuthAwareScanner):
                 f"requests succeeded without 429 on {endpoint.url}"
             ),
             confidence=RateLimitConfig.CONFIDENCE_NO_RATE_LIMIT,
+            scanner_name=self.scanner_name,
+            endpoint_url=endpoint.url,
+            http_method=endpoint.method.value,
+        )
+
+    def _build_inconclusive_finding(
+        self,
+        endpoint: DiscoveredEndpoint,
+        reason: str,
+        processed: int = 0,
+    ) -> DeepFinding:
+        """Build an informational "could not test" finding (not a vulnerability)."""
+        return DeepFinding(
+            source=FindingSource.DAST_URL,
+            category=FindingCategory.AUTH_WEAKNESS,
+            severity=SeverityLevel.INFO,
+            title=TITLE_RATE_LIMIT_INCONCLUSIVE,
+            description=DESC_RATE_LIMIT_INCONCLUSIVE.format(
+                url=endpoint.url, reason=reason
+            ),
+            technical_detail=(
+                f"{processed} usable responses received from "
+                f"{endpoint.method.value} {endpoint.url} before the run stopped.\n"
+                f"{reason}"
+            ),
+            evidence=f"Inconclusive on {endpoint.url}: {reason}",
+            confidence=CONFIDENCE_INCONCLUSIVE,
             scanner_name=self.scanner_name,
             endpoint_url=endpoint.url,
             http_method=endpoint.method.value,

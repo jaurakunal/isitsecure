@@ -12,6 +12,8 @@ Sends rapid bursts of requests to auth-sensitive endpoints (URLs containing `/lo
 
 If the endpoint accepts all 150 sequential requests without returning 429, it has no rate limiting.
 
+**Conclusive vs. inconclusive (#276):** a request only counts as processed when its reply says something about the endpoint. Status 0 (no response), a 5xx, a 404/405/410, or (for GET) an HTML page / SPA shell does not. If any request in the run is not processed, or the URL is relative (it cannot be sent, so nothing is tested), the endpoint gets an Info finding "Rate limiting could not be assessed" with the reason, never the High "No rate limiting" finding and never silence. 400, 401, 403 and 422 replies still count as processed, since a limiter normally runs before validation and credential checks. In the burst test only processed replies count toward the measured threshold, and in the Authorization-header test an error page for the second identity is not read as a bypass. Verdict rules live in `engine/shared/verdict.py`.
+
 **Authenticated scans (#119):** on an authenticated deep scan the scanner carries the captured session so behind-login critical endpoints are reachable and the burst tests measure the authenticated user's rate limit. The Authorization-header test is the one exception — it strips the session and uses two synthetic identities, since that test must vary who is making the request.
 
 ## Why It Matters
