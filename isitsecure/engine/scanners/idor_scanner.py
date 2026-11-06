@@ -1486,9 +1486,11 @@ class IDORScanner:
         extra_headers: dict[str, str] | None = None,
     ) -> IDORProbeResult:
         """Make an authenticated request and return a probe result."""
-        headers: dict[str, str] = {
-            "Authorization": f"Bearer {session.access_token}",
-        }
+        # Cookie-only sessions have no token: use the session's own headers (cookies).
+        headers: dict[str, str] = (
+            {"Authorization": f"Bearer {session.access_token}"}
+            if session.access_token else dict(session.headers)
+        )
         if anon_key:
             headers["apikey"] = anon_key
         if extra_headers:

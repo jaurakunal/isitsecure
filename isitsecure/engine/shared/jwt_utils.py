@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import re
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,9 @@ def decode_jwt_header(token: str) -> dict[str, Any] | None:
         return None
 
 
+_B64URL_SEGMENT = re.compile(r"[A-Za-z0-9_-]+={0,2}")
+
+
 def looks_like_jwt(value: Any) -> bool:
     """Whether ``value`` is a JWT by SHAPE: three dot-separated base64url segments whose
     header and payload both decode to non-empty JSON objects, regardless of storage key.
@@ -75,6 +79,10 @@ def looks_like_jwt(value: Any) -> bool:
     hostnames or other dotted values.
     """
     if not isinstance(value, str) or value.count(".") != JWT_PARTS_COUNT - 1:
+        return False
+    # b64decode silently drops invalid characters, so check the alphabet explicitly (otherwise
+    # escaped/serialized junk can "decode" to a JSON-looking header and payload).
+    if not all(_B64URL_SEGMENT.fullmatch(seg) for seg in value.split(".")):
         return False
     header = decode_jwt_header(value)
     payload = decode_jwt_payload(value)

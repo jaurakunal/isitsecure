@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 
 from isitsecure.engine.constants import BrowserLoginConfig, SharedPatterns
-from isitsecure.engine.shared.jwt_utils import looks_like_jwt
+from isitsecure.engine.shared.jwt_utils import decode_jwt_payload, looks_like_jwt
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +102,10 @@ class BrowserCaptureConfig:
     CREDENTIAL_INPUT_SELECTOR = "input[type='password']"
     # Bound on recursion when hunting a JWT in a serialized blob (a hostile value can't spin).
     MAX_JWT_SEARCH_DEPTH = 8
+    # Storage values larger than this are not parsed as JSON (hostile/huge blob guard).
+    MAX_BLOB_CHARS = 1_000_000
+    # Overall wall-clock budget (seconds) for login-page discovery across all its navigations.
+    LOGIN_DISCOVERY_BUDGET_S = 20.0
     # Generic key-name fragments so a blob holding access + refresh + id tokens yields access first.
     ACCESS_KEY_HINTS = ("access",)
     NON_ACCESS_HINTS = ("refresh", "id_token", "idtoken")
@@ -235,27 +240,37 @@ class BrowserLoginHelper:
         parsed = urlparse(start_url)
         origin = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme else start_url
 
+        deadline = time.monotonic() + BrowserCaptureConfig.LOGIN_DISCOVERY_BUDGET_S
+
+        def _remaining_ms() -> int:
+            return max(int((deadline - time.monotonic()) * 1000), 0)
+
         async def _nav(url: str) -> bool:
+            # Every wait is capped by what is left of the overall budget.
             try:
                 await page.goto(  # type: ignore[union-attr]
-                    url, timeout=BrowserLoginConfig.NAVIGATION_TIMEOUT_MS,
+                    url, timeout=min(BrowserLoginConfig.NAVIGATION_TIMEOUT_MS, _remaining_ms()),
                     wait_until="domcontentloaded")
                 await page.wait_for_load_state(  # type: ignore[union-attr]
-                    "networkidle", timeout=BrowserLoginConfig.NETWORK_IDLE_TIMEOUT_MS)
+                    "networkidle",
+                    timeout=min(BrowserLoginConfig.NETWORK_IDLE_TIMEOUT_MS, _remaining_ms()))
             except Exception as exc:  # noqa: BLE001
                 logger.debug("login discovery nav to %s failed: %s", url, exc)
             try:
                 await page.wait_for_selector(  # type: ignore[union-attr]
                     BrowserCaptureConfig.CREDENTIAL_INPUT_SELECTOR,
-                    timeout=BrowserLoginConfig.LOGIN_WAIT_TIMEOUT_MS)
+                    timeout=min(BrowserLoginConfig.LOGIN_WAIT_TIMEOUT_MS, _remaining_ms()))
             except Exception:  # noqa: BLE001,S110 — absence is the expected non-match path
                 pass
             return await BrowserLoginHelper.has_login_fields(page)
 
         href = await BrowserLoginHelper._find_login_link(page)
-        if href and await _nav(urljoin(origin, href)):
+        if href and _remaining_ms() > 0 and await _nav(urljoin(origin, href)):
             return True
         for route in BrowserCaptureConfig.LOGIN_ROUTES:
+            if _remaining_ms() <= 0:
+                logger.debug("login discovery: time budget exhausted")
+                break
             if await _nav(f"{origin}{route}"):
                 return True
         # Nothing matched: return to the page we were given so the caller's own fill/detect logic
@@ -273,11 +288,12 @@ class BrowserLoginHelper:
     # ------------------------------------------------------------------
 
     @staticmethod
-    async def extract_token(page: object) -> str | None:
+    async def extract_token(page: object, shape_scan: bool = True) -> str | None:
         """Extract auth token from localStorage or sessionStorage.
 
         Checks well-known key names first, then scans all keys for
-        Supabase-style composite storage entries.
+        Supabase-style composite storage entries, then (``shape_scan``) any storage
+        value by JWT shape. ``shape_scan=False`` is the original key-based behaviour only.
 
         Returns:
             The extracted token string, or None if no token was found.
@@ -319,14 +335,28 @@ class BrowserLoginHelper:
             # Shape-based fallback: the token may sit under a non-standard key. Scan every
             # localStorage/sessionStorage value for a JWT-shaped string, or one nested in a
             # (possibly double-serialized) JSON blob such as Redux-persist.
-            for store in ("localStorage", "sessionStorage"):
-                values = await page.evaluate(  # type: ignore[union-attr]
-                    f"() => Object.values({store})"
-                )
-                for raw in (values or []):
-                    found = find_jwt_deep(str(raw))
-                    if found:
-                        return found
+            # Only identity-bearing JWTs are accepted (an anon/analytics key is not a session),
+            # id/refresh-named keys are skipped, and the best-ranked candidate wins.
+            if shape_scan:
+                best: tuple[int, str] | None = None
+                for store in ("localStorage", "sessionStorage"):
+                    entries = await page.evaluate(  # type: ignore[union-attr]
+                        f"() => Object.entries({store})"
+                    )
+                    for entry in (entries or []):
+                        try:
+                            key, raw = entry
+                        except (TypeError, ValueError):
+                            continue
+                        if any(h in str(key).lower()
+                               for h in BrowserCaptureConfig.NON_ACCESS_HINTS):
+                            continue
+                        found = find_jwt_deep(str(raw))
+                        rank = jwt_identity_rank(found) if found else -1
+                        if rank >= 1 and (best is None or rank > best[0]):
+                            best = (rank, found)
+                if best:
+                    return best[1]
 
         except Exception as exc:
             logger.debug("Token extraction failed: %s", exc)
@@ -342,22 +372,28 @@ class BrowserLoginHelper:
         ``{"authorization": "Bearer <jwt>", "apikey": "<key>"}``. Best-effort; never raises.
         """
         captured: dict[str, str] = {}
+        best_rank = [-1]
 
         def _on_request(request: object) -> None:
             try:
                 headers = request.headers or {}          # Playwright lowercases header names
             except Exception:  # noqa: BLE001 — a header read must never break the login flow
                 return
-            if "authorization" not in captured:
-                auth = str(headers.get(SharedPatterns.HEADER_AUTHORIZATION.lower(), ""))
-                if auth.startswith(SharedPatterns.BEARER_PREFIX) and looks_like_jwt(
-                    auth[len(SharedPatterns.BEARER_PREFIX):]
-                ):
-                    captured["authorization"] = auth
-            if "apikey" not in captured:
-                apikey = str(headers.get(SharedPatterns.HEADER_APIKEY, ""))
-                if apikey:
-                    captured["apikey"] = apikey
+            apikey = str(headers.get(SharedPatterns.HEADER_APIKEY, ""))
+            if apikey and "apikey" not in captured:
+                captured["apikey"] = apikey
+            auth = str(headers.get(SharedPatterns.HEADER_AUTHORIZATION.lower(), ""))
+            if not auth.startswith(SharedPatterns.BEARER_PREFIX):
+                return
+            tok = auth[len(SharedPatterns.BEARER_PREFIX):]
+            # Pre-login requests (e.g. Supabase) carry the anon key as Bearer: skip a Bearer equal
+            # to the apikey or an anon-role JWT, and let the LATEST best-ranked identity JWT win.
+            if not looks_like_jwt(tok) or tok == apikey or tok == captured.get("apikey"):
+                return
+            rank = jwt_identity_rank(tok)
+            if rank >= 0 and rank >= best_rank[0]:
+                best_rank[0] = rank
+                captured["authorization"] = auth
 
         try:
             page.on("request", _on_request)  # type: ignore[union-attr]
@@ -406,6 +442,20 @@ def extract_token_from_json(raw: str) -> str | None:
     return None
 
 
+def jwt_identity_rank(token: str) -> int:
+    """How strongly a JWT looks like a USER session: 2 = has ``sub``, 1 = has ``exp`` only,
+    0 = neither, -1 = not decodable or an ``anon``-role key (a public client key, not a session).
+    """
+    payload = decode_jwt_payload(token)
+    if not isinstance(payload, dict):
+        return -1
+    if str(payload.get("role", "")).lower() == "anon":
+        return -1
+    if payload.get("sub"):
+        return 2
+    return 1 if "exp" in payload else 0
+
+
 def find_jwt_deep(node: object, _depth: int = 0) -> str | None:
     """Recursively find the first JWT-shaped string in a (possibly nested) JSON blob.
 
@@ -419,9 +469,11 @@ def find_jwt_deep(node: object, _depth: int = 0) -> str | None:
         cleaned = _clean_token(node)
         if looks_like_jwt(cleaned):
             return cleaned
+        if len(node) > BrowserCaptureConfig.MAX_BLOB_CHARS:
+            return None
         try:
             parsed = json.loads(node)
-        except (json.JSONDecodeError, ValueError):
+        except (json.JSONDecodeError, ValueError, RecursionError):
             return None
         if parsed == node:                    # a bare JSON string that re-parses to itself
             return None
