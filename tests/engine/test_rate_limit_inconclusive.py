@@ -165,3 +165,81 @@ async def test_burst_counts_only_processed_responses():
     client.request = req
     # 9 responses were server errors, so none counts as "succeeded before 429".
     assert await scanner._test_burst_sizes(client, EP) == []
+
+
+
+# --- Tolerance for transient unusable replies (review fix 1) ---
+
+
+def _flaky(bad_at, bad_status=502):
+    """Handler answering 200 except on the given 1-based request numbers."""
+    calls = {"n": 0}
+
+    async def handler(*a, **k):
+        calls["n"] += 1
+        return _resp(bad_status) if calls["n"] in bad_at else _resp(200)
+
+    return handler
+
+
+def _high(findings):
+    return [f for f in findings if f.title == RateLimitConfig.TITLE_NO_RATE_LIMIT]
+
+
+@pytest.mark.asyncio
+async def test_single_transient_5xx_among_150_is_still_high():
+    findings, _ = await _scan(_flaky({40}))
+    high = _high(findings)
+    assert len(high) == 1 and high[0].severity == SeverityLevel.HIGH
+    assert "149/150" in high[0].evidence
+
+
+@pytest.mark.asyncio
+async def test_transient_connection_error_is_tolerated():
+    calls = {"n": 0}
+
+    async def handler(*a, **k):
+        calls["n"] += 1
+        if calls["n"] == 12:
+            raise httpx.ReadTimeout("slow")
+        return _resp(200)
+
+    findings, _ = await _scan(handler)
+    assert len(_high(findings)) == 1
+
+
+@pytest.mark.asyncio
+async def test_unusable_replies_at_the_tolerance_edge_are_still_high():
+    # 7 isolated errors = 4.7% of 150, within MAX_UNUSABLE_FRACTION.
+    findings, _ = await _scan(_flaky({10, 30, 50, 70, 90, 110, 130}))
+    assert len(_high(findings)) == 1
+
+
+@pytest.mark.asyncio
+async def test_ten_percent_5xx_is_inconclusive():
+    findings, _ = await _scan(_flaky(set(range(10, 151, 10))))
+    _inconclusive_info(findings)
+
+
+@pytest.mark.asyncio
+async def test_consecutive_failures_are_inconclusive():
+    findings, _ = await _scan(_flaky({20, 21, 22, 23, 24}))
+    inc = _inconclusive_info(findings)
+    assert "5 in a row" in inc[0].description
+
+
+@pytest.mark.asyncio
+async def test_503_with_retry_after_is_possible_limiter_not_unlimited():
+    calls = {"n": 0}
+
+    async def handler(*a, **k):
+        calls["n"] += 1
+        if calls["n"] == 30:
+            r = _resp(503)
+            r.headers = {"retry-after": "30"}
+            return r
+        return _resp(200)
+
+    findings, _ = await _scan(handler)
+    inc = _inconclusive_info(findings)
+    assert "Retry-After" in inc[0].description

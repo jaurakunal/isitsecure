@@ -11,7 +11,7 @@ These scanners test your live, running application by sending real HTTP requests
 - [XSS Scanner](./xss-scanner.md) · [animated](../interactive/xss.html) — Cross-site scripting (reflected, POST body, DOM-based)
 - [Active Injection Scanner](./active-injection-scanner.md) · [animated](../interactive/active-injection.html) — SQL injection, command injection, NoSQL, XXE, SSTI
 - [CSRF Scanner](./csrf-scanner.md) · [animated](../interactive/csrf.html) — Cross-site request forgery
-- [Rate Limit Scanner](./rate-limit-scanner.md) · [animated](../interactive/rate-limit.html) — Missing or bypassable rate limiting
+- [Rate Limit Scanner](./rate-limit-scanner.md) · [animated](../interactive/rate-limit.html) — Missing or bypassable rate limiting (inconclusive if requests error out)
 - [Session Scanner](./session-scanner.md) · [animated](../interactive/session.html) — Insecure token storage, cookie flags, JWT expiration
 - [GraphQL Scanner](./graphql-scanner.md) · [animated](../interactive/graphql.html) — Introspection, depth limits, batch queries
 - [SSRF Scanner](./ssrf-scanner.md) · [animated](../interactive/ssrf.html) — Server-side request forgery
