@@ -44,3 +44,10 @@ export function reflect(req: Request) {
 export async function health() {
   return fetch("https://api.internal.example.com/health");
 }
+
+// Parameterized queries: user input is only a bound value, never part of the SQL
+// string — the safe form of the db.query / knex.raw sinks.
+export function findUserParameterized(req: any, db: any, cb: any) {
+  db.query("SELECT * FROM users WHERE id = ?", [req.query.id], cb);
+  db.query("SELECT * FROM users WHERE id = $1", [req.params.id]);
+}

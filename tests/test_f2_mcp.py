@@ -20,11 +20,14 @@ async def test_mcp_fix_tool_keeps_crlf_and_writes_nothing(tmp_path, monkeypatch)
     (tmp_path / "db.js").write_bytes(b"var q = BAD;\r\nvar r = 1;\r\n")
     f = make_finding("db.js")
     sid = mcp_server._cache_report(DeepScanReport(findings=[f]), repo_path=str(tmp_path))
-    monkeypatch.setattr(mcp_server, "_maybe_llm_client", lambda: StubLLM())
+    llm = StubLLM()
+    monkeypatch.setattr(mcp_server, "_maybe_llm_client", lambda: llm)
     server = mcp_server.build_server()
     _, res = await server.call_tool("fix", {"scan_id": sid, "finding_id": f.id})
-    assert res["fixed_file"] == "var q = GOOD;\r\nvar r = 1;\r\n"
+    # The host gets the file exactly as on disk (CRLF intact) and no LLM is called.
+    assert res["file_content"] == "var q = BAD;\r\nvar r = 1;\r\n"
     assert res["applied"] is False
+    assert llm.calls == 0
     assert (tmp_path / "db.js").read_bytes() == b"var q = BAD;\r\nvar r = 1;\r\n"
 
 

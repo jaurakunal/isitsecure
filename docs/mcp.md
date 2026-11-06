@@ -47,7 +47,7 @@ would guess the thresholds. The fix is not a "grading tool" — it is putting th
 | 1 | Scan → report | MCP tool (`scan`) | findings + grade + counts |
 | 2 | Converse about meaning / priority | **Host LLM** | payload it can reason over without guessing: plain **and** technical register, priority rationale, **grade model + path-to-grade**, root-cause themes |
 | 3 | Plan the fixes | **Host LLM** | per-finding remediation + walkthroughs + fix ordering / dependency hints |
-| 4 | Run individual fixes | MCP tools (`explain`, `fix`, `verify`) | deep-dive text, a proposed diff (host applies), and re-scan verification |
+| 4 | Run individual fixes | MCP tools (`explain`, `fix`, `verify`) | deep-dive text, a fix brief (host writes + applies the patch), and re-scan verification |
 
 ## Discoverability: the agent must invoke it on its own
 
@@ -73,7 +73,7 @@ Claude Desktop), some of which also gate tools behind user approval.
 ```
 scan(path, min_severity="medium")                      → report + grade model + themes (code-only; no mode argument)
 explain(scan_id, finding_id)                           → deep dive: plain + technical + walkthrough
-fix(scan_id, finding_id)                               → return a diff + metadata; the HOST LLM applies it
+fix(scan_id, finding_id)                               → return a fix brief (finding + source + patterns); the HOST LLM writes + applies the patch
   (proposed, NOT implemented: an `apply=true` fallback — the tool takes no `apply` argument and never writes files)
 verify(scan_id)                                        → re-scan, report findings cleared + grade movement
 export(scan_id, format="markdown")                     → render html/sarif/json/markdown; the HOST writes it
@@ -100,18 +100,21 @@ scan_status(job_id)                                    → poll a DAST job; the 
   #64 added the `BUSINESS_LOGIC` category and tightened the classifier so
   payment/idempotency/race findings and error-disclosure land in the right
   bucket instead of the `auth`/`injection` catch-alls.)
-- **`fix`** *(implemented, #59).* `fix(scan_id, finding_id)` reads the finding's
-  source file and returns a **proposed patch** — a unified `diff`, the full
-  `fixed_file`, and an `explanation` — with `applied: false`. The **host LLM
-  applies it** with its own editor; the MCP does not write files (see "Who
-  applies the fix" below). Needs an LLM key. The file is read with the same
-  strict reader as the CLI and web fixes: confined to the scanned repo, never
-  `.git/`, strict UTF-8 with CRLF/LF newlines exactly as on disk (so
-  `fixed_file` never rewrites line endings or bakes in replacement characters).
-  A file that can't be read faithfully (non-UTF-8, oversize, outside the repo)
-  is refused with a clear reason instead of being fixed lossily. *Not built (and
-  not on the roadmap for this tool):* the `apply=true` safety-net fallback
-  described below stays a proposal.
+- **`fix`** *(implemented, #59; reworked to a host-does-the-work brief).*
+  `fix(scan_id, finding_id)` reads the finding's source file and returns a **fix
+  brief** — the finding (title, severity, description, guidance, line), the full
+  `file_content`, the common `fix_patterns` and `guidelines` — with
+  `applied: false`. The MCP makes **no LLM call**, so it needs **no API key**: the
+  **host LLM writes the patch and applies it** with its own editor (see "Who
+  applies the fix" below), then `verify` confirms. The CLI and web UI keep using
+  `FixGenerator`. The file is read with the same strict reader as the CLI and web
+  fixes: confined to the scanned repo, never `.git/`, strict UTF-8 with CRLF/LF
+  newlines exactly as on disk (so `file_content` never has its line endings
+  rewritten or replacement characters baked in). A file that can't be read
+  faithfully (non-UTF-8, oversize, outside the repo) is refused with a clear
+  reason instead of being fixed lossily. *Not built (and not on the roadmap for
+  this tool):* the `apply=true` safety-net fallback described below stays a
+  proposal.
 - **`verify`** *(implemented, #71).* `verify(scan_id)` re-scans the same path and
   reports which findings cleared vs. still present, the grade **before → after**,
   and a fresh `scan_id` for the new state so the loop continues. Both the
@@ -160,8 +163,8 @@ add; in-process is enough for a single session's scan → fix loop.)
 ## Who applies the fix (the central decision)
 
 Need 4 mutates the user's code — the riskiest capability here. **In the MCP
-context, `fix` returns a diff + metadata and the *host LLM* applies it. The MCP
-does not write files by default.** Reasoning:
+context, `fix` returns a brief (finding + source + patterns) and the *host LLM*
+writes and applies the patch. The MCP neither calls an LLM nor writes files.** Reasoning:
 
 1. **The host tool already has world-class edit UX** (Cursor, Claude Code) —
    diff review, apply, undo, approval gates. Writing files ourselves bypasses all
@@ -177,11 +180,14 @@ does not write files by default.** Reasoning:
    LLM adapts imports/style to the surrounding code — often better-integrated
    than pasting our diff verbatim.
 
-**The diff is a reference implementation, not a mandate.** `fix` returns a unified
-`diff`, the full `fixed_file` (so the agent *can* apply verbatim), an
-`explanation`, `applied: false`, and finding metadata (`finding_id`, `file`,
-`title`, `category`, `severity`). *Planned:* an explicit fix-pattern label,
-constraints (e.g. "preserve the public API"), and a confidence score.
+**The host writes the patch; we supply the grounding.** `fix` returns the finding
+metadata (`finding_id`, `file`, `line`, `title`, `category`, `severity`,
+`description`, `guidance`), the full `file_content`, the common `fix_patterns`
+and `guidelines`, and `applied: false`. No diff is generated: the host LLM, which
+already has the user's model and context, adapts the fix to the surrounding code.
+This is also why `fix` needs no API key over MCP. *Planned:* an explicit
+fix-pattern label, constraints (e.g. "preserve the public API"), and a confidence
+score.
 
 **Quality is preserved by `verify`, not by applying.** Whoever holds the pen,
 `verify(scan_id)` re-scans and confirms the finding is actually gone **for
@@ -193,9 +199,10 @@ success.
 
 ### Why this differs from the CLI
 
-`isitsecure fix` on the CLI has **no host LLM**, so it *must* apply the fix itself
-(safety-net backup → write → re-scan verify). The MCP **always** has a capable
-agent, so it defers the write. Same product, opposite right-answer per context —
+`isitsecure fix` on the CLI has **no host LLM**, so it *must* generate and apply the fix
+itself (`FixGenerator` + safety-net backup → write → re-scan verify; needs an LLM
+key). The MCP **always** has a capable agent, so it defers both the patch and the
+write. Same product, opposite right-answer per context —
 recorded here so the divergence is intentional, not an inconsistency.
 
 ### `apply=true` — the optional fallback (proposal only, not implemented)

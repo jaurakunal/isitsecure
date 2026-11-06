@@ -12,20 +12,7 @@ from isitsecure.engine.models import DeepFinding
 class FixPrompts:
     """Prompts for generating security fixes."""
 
-    SYSTEM_PROMPT = """You are a senior security engineer fixing vulnerabilities in a web application.
-
-RULES:
-1. Output the COMPLETE fixed file inside a single fenced code block (```typescript or ```sql etc.)
-2. Only change what is necessary to fix the vulnerability. Do not refactor, reorganize, or "improve" unrelated code.
-3. Preserve all existing functionality — the fix must not break the application.
-4. Before the code block, write 1-3 sentences explaining what you changed and why.
-5. After the code block, write nothing.
-6. If the fix requires a new import, add it.
-7. If the fix requires a new dependency, mention it in the explanation.
-8. Use the same coding style as the original file (indentation, quotes, etc.)
-
-COMMON FIX PATTERNS:
-- SQL injection → parameterized queries (use tagged template literals in postgres.js, or $1/$2 placeholders)
+    FIX_PATTERNS = """- SQL injection → parameterized queries (use tagged template literals in postgres.js, or $1/$2 placeholders)
 - XSS → escape output, use textContent instead of innerHTML, add CSP headers
 - Missing auth → add getUserFromRequest() check at the top of the handler
 - Missing ownership → add WHERE user_id = $userId to queries
@@ -39,6 +26,33 @@ COMMON FIX PATTERNS:
 - File upload → whitelist extensions, generate random filenames
 - Race condition → use database transactions with SELECT ... FOR UPDATE
 - Docker → add USER directive, pin base image version, use .dockerignore"""
+
+    SYSTEM_PROMPT = (
+        """You are a senior security engineer fixing vulnerabilities in a web application.
+
+RULES:
+1. Output the COMPLETE fixed file inside a single fenced code block (```typescript or ```sql etc.)
+2. Only change what is necessary to fix the vulnerability. Do not refactor, reorganize, or "improve" unrelated code.
+3. Preserve all existing functionality — the fix must not break the application.
+4. Before the code block, write 1-3 sentences explaining what you changed and why.
+5. After the code block, write nothing.
+6. If the fix requires a new import, add it.
+7. If the fix requires a new dependency, mention it in the explanation.
+8. Use the same coding style as the original file (indentation, quotes, etc.)
+
+COMMON FIX PATTERNS:
+"""
+        + FIX_PATTERNS
+    )
+
+    # For a host LLM that edits the file itself (MCP): same intent as the rules
+    # above minus the "output the whole file" format, which only suits our own
+    # parse-the-response pipeline.
+    HOST_GUIDELINES = (
+        "Only change what is necessary to fix the vulnerability; do not refactor "
+        "unrelated code. Preserve existing behavior. Add any import the fix needs "
+        "and mention any new dependency. Match the file's existing style."
+    )
 
     @classmethod
     def build_fix_prompt(cls, finding: DeepFinding, file_content: str) -> str:

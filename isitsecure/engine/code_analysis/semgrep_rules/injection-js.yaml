@@ -34,11 +34,17 @@ rules:
       - pattern: searchParams.get(...)
       - pattern: $U.searchParams.get(...)
       - pattern: (await $R.json())
+    # Only the query-STRING argument is the sink. A tainted value passed as a bound
+    # parameter (`db.query("... = ?", [id])`) is the safe, parameterized form, so
+    # the params/bindings/callback arguments must not trigger the rule.
     pattern-sinks:
-      - pattern: $SQL.unsafe(...)
-      - pattern: $DB.$queryRawUnsafe(...)
-      - pattern: $D.raw(...)
-      - pattern: $D.query(...)
+      - patterns:
+          - pattern-either:
+              - pattern: $SQL.unsafe($Q, ...)
+              - pattern: $DB.$queryRawUnsafe($Q, ...)
+              - pattern: $D.raw($Q, ...)
+              - pattern: $D.query($Q, ...)
+          - focus-metavariable: $Q
     pattern-sanitizers:
       - pattern: parseInt(...)
       - pattern: Number(...)
