@@ -129,6 +129,8 @@ def legacy_fingerprint(finding: DeepFinding) -> str:
     """The pre-discriminator fingerprint, as recorded in older ignore files and
     baselines. Equal to :func:`finding_fingerprint` when there is no
     discriminator."""
+    if finding.pinned_legacy_fingerprint:  # redacted export copy (#282)
+        return finding.pinned_legacy_fingerprint
     return compute_fingerprint(
         scanner_name=finding.scanner_name,
         category=finding.category,
@@ -141,6 +143,8 @@ def legacy_fingerprint(finding: DeepFinding) -> str:
 
 def finding_fingerprint(finding: DeepFinding) -> str:
     """Stable fingerprint for a ``DeepFinding`` (SAST or DAST)."""
+    if finding.pinned_fingerprint:  # redacted export copy (#282)
+        return finding.pinned_fingerprint
     return compute_fingerprint(
         scanner_name=finding.scanner_name,
         category=finding.category,

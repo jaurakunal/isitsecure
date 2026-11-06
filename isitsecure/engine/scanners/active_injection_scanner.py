@@ -34,6 +34,7 @@ from isitsecure.engine.models import (
     FindingSource,
 )
 from isitsecure.engine.shared.endpoint_prioritizer import PriorityDimension, rank
+from isitsecure.engine.shared.evidence_pair import build_evidence_pair
 from isitsecure.engine.shared.probe_capture import build_probe_capture
 from isitsecure.engine.shared.progress import emit
 from isitsecure.engine.shared.scanner_runner import ScannerTimeouts
@@ -429,6 +430,14 @@ class ActiveInjectionScanner(AuthAwareScanner):
                     baseline_response_preview=(
                         baseline_body[:InjectionConfig.INJECTION_EVIDENCE_CHARS] or None
                     ),
+                    evidence_pair=build_evidence_pair(
+                        method=endpoint.method.value, url=endpoint.url,
+                        baseline_payload=f"{param_name}={InjectionConfig.SQLI_BASELINE_VALUE}",
+                        baseline_status=baseline_resp.status_code if baseline_resp is not None else None,
+                        baseline_body=baseline_body,
+                        proof_payload=f"{param_name}={payload}",
+                        proof_status=response.status_code, proof_body=body,
+                    ),
                     probe_captures=[capture],
                 )
         return None
@@ -671,6 +680,7 @@ class ActiveInjectionScanner(AuthAwareScanner):
                 return self._build_nosql_finding(
                     endpoint, param_name, payload, body,
                     f"NoSQL backend error leaked: {m.group(0)}", control_body,
+                    proof_status=status,
                 )
         # Differential broadening oracle.
         if self._operator_broadened(status, body, control_ok, control_body):
@@ -710,6 +720,7 @@ class ActiveInjectionScanner(AuthAwareScanner):
         body: str,
         technical_detail: str,
         baseline_body: str = "",
+        proof_status: int | None = None,
     ) -> DeepFinding:
         """Build a DeepFinding for a confirmed NoSQL injection."""
         return DeepFinding(
@@ -730,6 +741,13 @@ class ActiveInjectionScanner(AuthAwareScanner):
             response_preview=body[:InjectionConfig.INJECTION_EVIDENCE_CHARS],
             baseline_response_preview=(
                 baseline_body[:InjectionConfig.INJECTION_EVIDENCE_CHARS] or None
+            ),
+            evidence_pair=build_evidence_pair(
+                method=endpoint.method.value, url=endpoint.url,
+                baseline_payload=f"{param_name}=<exact-match control>",
+                baseline_body=baseline_body,
+                proof_payload=f"{param_name}={payload}",
+                proof_status=proof_status, proof_body=body,
             ),
         )
 

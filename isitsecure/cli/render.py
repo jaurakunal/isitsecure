@@ -58,12 +58,21 @@ async def _generate_fixes(report, llm_client, repo_url: str | None) -> str:
     return exporter.export(plan)
 
 
+def _report_json(report) -> str:
+    """The JSON export: the report with evidence redacted (#282)."""
+    from isitsecure.engine.shared.redaction import redact_report
+
+    return redact_report(report).model_dump_json(indent=2)
+
+
 def _generate_sarif_report(report) -> str:
     """Generate a SARIF 2.1.0 report from a DeepScanReport."""
     from isitsecure.engine.reporting.sarif_renderer import SARIFRenderer
 
+    from isitsecure.engine.shared.redaction import redact_report
+
     renderer = SARIFRenderer()
-    return renderer.render(report)
+    return renderer.render(redact_report(report))
 
 
 def _generate_html_report(report) -> str:
@@ -71,9 +80,11 @@ def _generate_html_report(report) -> str:
     from isitsecure.engine.reporting.report_generator import ReportGenerator
     from isitsecure.engine.reporting.html_renderer import HTMLReportRenderer
 
+    from isitsecure.engine.shared.redaction import redact_report
+
     generator = ReportGenerator()
     renderer = HTMLReportRenderer()
-    report_data = generator.generate(report)
+    report_data = generator.generate(redact_report(report))
     return renderer.render(report_data)
 
 

@@ -393,6 +393,7 @@ def _trim_report(report, min_severity: str, scan_id: str) -> ScanResult:
         grade_path,
         launch_verdict,
     )
+    from isitsecure.engine.shared.redaction import redact_finding
 
     threshold = _SEVERITY_RANK.get(min_severity.lower(), _SEVERITY_RANK["medium"])
     counts = _severity_counts(report)
@@ -402,6 +403,7 @@ def _trim_report(report, min_severity: str, scan_id: str) -> ScanResult:
         sev = finding.severity.value.lower()
         if _SEVERITY_RANK.get(sev, 0) < threshold:
             continue
+        finding = redact_finding(finding)  # fingerprint is pinned to the raw finding
         explanation = explain_finding(finding)
         loc = finding.code_location
         findings_out.append(
@@ -476,6 +478,9 @@ def _finding_detail(finding, report) -> FindingDetail:
         walkthrough_for,
     )
 
+    from isitsecure.engine.shared.redaction import redact_finding
+
+    finding = redact_finding(finding)  # explain output never carries raw evidence (#282)
     explanation = explain_finding(finding)
     loc = finding.code_location
     walkthrough = walkthrough_for(finding.category)
@@ -582,7 +587,11 @@ def _read_finding_file(finding, repo_path: str | None) -> str:
 def _fix_brief(finding, file_content: str) -> FixBrief:
     """Package a finding + its source file for the host LLM to fix and apply."""
     from isitsecure.engine.fixes.prompts import FixPrompts
+    from isitsecure.engine.shared.redaction import redact_finding
 
+    # Finding text is redacted; ``file_content`` is the user's own local source and
+    # must reach the host raw so it can edit the file (#282).
+    finding = redact_finding(finding)
     loc = finding.code_location
     return {
         "finding_id": finding.id,
@@ -786,6 +795,9 @@ def _render_markdown(report) -> str:
 
 def _render_report(report, fmt: str) -> str:
     """Render a cached report in the requested format, reusing engine renderers."""
+    from isitsecure.engine.shared.redaction import redact_report
+
+    report = redact_report(report)  # exports never carry raw evidence secrets (#282)
     if fmt == "json":
         return report.model_dump_json(indent=2)
     if fmt == "markdown":

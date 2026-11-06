@@ -123,15 +123,29 @@ _KEY_RE = re.compile(
 _STRING_TOKEN_RE = re.compile(r'"(?:[^"\\]|\\.)*"|[\[\]{}]', re.DOTALL)
 _BEARER_RE = re.compile(r"(\bBearer\s+)[A-Za-z0-9._~+/=-]{8,}", re.IGNORECASE)
 _JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*")
-# userinfo of a URL embedded in text: scheme://user:pass@host
-_USERINFO_RE = re.compile(r"(\b[a-zA-Z][a-zA-Z0-9+.-]*://)[^/\s@?#]+@")
-_BARE_STOP_PLAIN = frozenset("&\r\n")
+# userinfo of a URL embedded in text: scheme://user:pass@host (scheme length is
+# bounded so a long dotted run cannot make the scan quadratic)
+_USERINFO_RE = re.compile(r"(\b[a-zA-Z][a-zA-Z0-9+.-]{0,31}://)[^/\s@?#]+@")
+# A bare value in plain text also ends at a quote: ``curl -b 'sid=abc'`` must keep
+# its closing quote (a password containing a quote leaks its tail -- best effort).
+_BARE_STOP_PLAIN = frozenset("&\r\n'\"")
 _BARE_STOP_JSON = frozenset("&\r\n,}]")
+
+
+# Metadata ABOUT a token (type, count, expiry, LLM usage ...), not the token itself.
+_NON_SECRET_KEY_RE = re.compile(
+    r"^(?:token(?:type|count|usage|expiry|expiration|expires\w*|ttl|length|limit|used|"
+    r"lifetime|status|endpoint|url|uri|name|prefix|scope|format)"
+    r"|tokens(?:used|count|total|limit|remaining)?"
+    r"|(?:max|total|prompt|completion|input|output|cached|num|remaining|used)tokens?)$"
+)
 
 
 def is_secret_key(name: str) -> bool:
     """True when a field/parameter/header name looks like it carries a secret."""
     normalised = _KEY_STRIP_RE.sub("", str(name)).casefold()
+    if _NON_SECRET_KEY_RE.match(normalised):
+        return False
     return any(word in normalised for word in _SECRET_WORDS)
 
 
@@ -236,7 +250,8 @@ def _redact_json_value(node, depth: int = 0):
         return REDACTED
     if isinstance(node, dict):
         return {
-            k: (REDACTED if is_secret_key(k) else _redact_json_value(v, depth + 1))
+            k: (REDACTED if is_secret_key(k) and not isinstance(v, bool) and v is not None
+                else _redact_json_value(v, depth + 1))
             for k, v in node.items()
         }
     if isinstance(node, list):

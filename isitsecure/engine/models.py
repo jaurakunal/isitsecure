@@ -4,7 +4,7 @@ from enum import Enum
 from typing import Optional
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, Field, PrivateAttr, computed_field
 
 from isitsecure.engine.enums import (
     EndpointCategory,
@@ -148,6 +148,30 @@ class CodeLocation(BaseModel):
     github_url: str = ""
 
 
+class EvidenceExcerpt(BaseModel):
+    """One side of a baseline-vs-proof pair: a small, already-redacted request/response excerpt."""
+
+    label: str = ""  # "baseline" | "proof"
+    method: str = ""
+    url: str = ""
+    request_payload: str = ""
+    status: int | None = None
+    body_length: int = 0  # length of the FULL response body, before the excerpt cut
+    body_excerpt: str = ""
+
+
+class EvidencePair(BaseModel):
+    """The control and the request that proved a finding, side by side (#282).
+
+    Lets a triager see WHY the finding is real: the baseline (safe value / no
+    token / own object) behaves one way and the proof request another. Both
+    sides are redacted at construction (see ``engine/shared/evidence_pair.py``)."""
+
+    baseline: EvidenceExcerpt
+    proof: EvidenceExcerpt
+    note: str = ""
+
+
 class DeepFinding(BaseModel):
     """Unified finding from any scanner (DAST or SAST).
 
@@ -189,11 +213,33 @@ class DeepFinding(BaseModel):
     # Theme grouping (filled by triage layer)
     theme_id: str = ""
 
+    # Redacted baseline-vs-proof excerpt pair (#282); None when the scanner has no control.
+    evidence_pair: EvidencePair | None = None
+
     # DAST probe captures (request/response pairs for review)
     probe_captures: list[DASTProbeCaptureEntry] = Field(default_factory=list)
 
     # Cross-reference
     related_finding_ids: list[str] = Field(default_factory=list)
+
+    # A redacted export copy masks the very text a fingerprint is derived from (the
+    # flagged ``>>>`` line, the title, the URL query); it carries the RAW finding's
+    # fingerprints instead so ignore files and baselines keep matching (#282).
+    _pinned_fingerprint: str = PrivateAttr(default="")
+    _pinned_legacy_fingerprint: str = PrivateAttr(default="")
+
+    @property
+    def pinned_fingerprint(self) -> str:
+        return self._pinned_fingerprint
+
+    @property
+    def pinned_legacy_fingerprint(self) -> str:
+        return self._pinned_legacy_fingerprint
+
+    def pin_fingerprints(self, current: str, legacy: str) -> None:
+        """Make this copy answer to the given fingerprints (see above)."""
+        self._pinned_fingerprint = current
+        self._pinned_legacy_fingerprint = legacy
 
     @computed_field  # serialized so users can copy it into `.isitsecureignore`
     @property
