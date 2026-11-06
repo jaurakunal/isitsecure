@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 
-from isitsecure.llm.protocol import LLMClientProtocol
+from isitsecure.llm.protocol import LLMClientProtocol, LLMRefusalError
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,10 @@ MODEL_ROLES = {
 # an HTTP 200 with ``stop_reason="refusal"`` and EMPTY content (benign security work can trip it),
 # which otherwise surfaces upstream as "did not return a JSON object". On a refusal we re-issue
 # the same request once on this model. Override with ANTHROPIC_FALLBACK_MODEL.
-CYBER_REFUSAL_FALLBACK_MODEL = "claude-sonnet-5"
+# The id (current Sonnet) was checked against the claude-api skill's model table.
+# Client-side retry, not the API's server-side ``fallbacks`` param: that is a beta, Claude-API-only
+# feature, while this adapter uses the plain Messages API for any model/platform the key allows.
+CYBER_REFUSAL_FALLBACK_MODEL = "claude-sonnet-5-5"
 
 WORKSPACE_ID_HEADER = "anthropic-workspace-id"
 
@@ -121,6 +124,17 @@ class AnthropicAdapter:
             logger.debug("Failed to record token usage: %s", exc)
 
     @staticmethod
+    def _refusal_category(response) -> str | None:
+        return getattr(getattr(response, "stop_details", None), "category", None)
+
+    def _text(self, response) -> str:
+        """First text block of a response; raises LLMRefusalError if the model refused
+        (a refusal carries no content)."""
+        if self._is_refusal(response):
+            raise LLMRefusalError(self._model, self._refusal_category(response))
+        return response.content[0].text
+
+    @staticmethod
     def _is_refusal(response) -> bool:
         """A classifier refusal: 200 with ``stop_reason="refusal"`` (content is empty).
         Keyed on ``stop_reason`` only — the explanation text is documented as unstable."""
@@ -133,8 +147,10 @@ class AnthropicAdapter:
         self._record_usage(response)
         if self._fallback_model and self._is_refusal(response):
             logger.warning(
-                "Anthropic safeguard refused the request on %s; retrying on fallback model %s",
+                "Anthropic safeguard refused the request on %s (category=%s); "
+                "retrying on fallback model %s",
                 self._model,
+                self._refusal_category(response),
                 self._fallback_model,
             )
             response = await self._client.messages.create(model=self._fallback_model, **kwargs)
@@ -152,7 +168,7 @@ class AnthropicAdapter:
             temperature=temperature,
             messages=[{"role": "user", "content": prompt}],
         )
-        return response.content[0].text
+        return self._text(response)
 
     async def generate_with_system(
         self,
@@ -165,7 +181,7 @@ class AnthropicAdapter:
             system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}],
         )
-        return response.content[0].text
+        return self._text(response)
 
 
 class GoogleAdapter:
