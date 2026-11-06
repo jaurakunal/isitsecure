@@ -58,6 +58,7 @@ These scanners analyze your source code without running it.
 These use AI for analysis that pattern matchers cannot perform.
 
 - [LLM Code Reviewer](./llm-code-reviewer.md) · [animated](../interactive/llm-review-and-fixes.html) — Business logic vulnerability detection
+- [LLM Business Logic Scanner](./llm-business-logic-scanner.md) — LLM-planned attack steps run against the live app; transport failures and rejected requests are inconclusive, never "safe"
 - [Semantic Rule Verifier](./semantic-rule-verifier.md) · [animated](../interactive/semantic-rule-verifier.html) — Logical errors in security rules
 - [Injection Adjudicator](../architecture.md#phase-94-injection-adjudication) · [animated](../interactive/active-injection.html) — Drops heuristic DAST injection false positives by comparing the baseline vs. injected response (no-op without an API key)
 - [AI Fix Generator](./fix-generator.md) · [animated](../interactive/llm-review-and-fixes.html) — Generates code patches for findings
