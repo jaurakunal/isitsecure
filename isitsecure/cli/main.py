@@ -303,6 +303,15 @@ def scan(
             "test, not blindly against production."
         ),
     ),
+    follow_mined_backends: bool = typer.Option(
+        False, "--follow-mined-backends",
+        help=(
+            "Also probe cross-origin API hosts found inside the app's JS "
+            "bundles (e.g. an API-gateway URL). Only use for backends you "
+            "are authorized to test; mined hosts can belong to third "
+            "parties. Without it they are reported, not probed."
+        ),
+    ),
     auth_email: Optional[str] = typer.Option(None, "--auth-email", help="Auth email/username for authenticated scanning (user A)"),
     auth_password: Optional[str] = typer.Option(None, "--auth-password", help="Auth password (user A)"),
     auth_email_b: Optional[str] = typer.Option(None, "--auth-email-b", help="Second user's email/username — enables cross-user IDOR testing"),
@@ -378,6 +387,7 @@ def scan(
         repo_ingestion_service=repo_service,
         depth=scan_depth,
         probe_writes=probe_writes,
+        follow_mined_backends=follow_mined_backends,
     )
 
     # Build credentials

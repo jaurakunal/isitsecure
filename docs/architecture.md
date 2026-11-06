@@ -33,7 +33,7 @@ Phase 11: Fix Generation         ─── AI generates code patches (separate s
 
 ### Phase 1–2: Discovery
 
-The scanner first understands your application's attack surface using **four complementary discovery strategies** (`EndpointDiscoveryScanner`), so it works on SPAs, classic server-rendered apps, and frontend-less REST APIs alike:
+The scanner first understands your application's attack surface using **several complementary discovery strategies** (`EndpointDiscoveryScanner`), so it works on SPAs, classic server-rendered apps, and frontend-less REST APIs alike:
 
 1. **Playwright** navigates to your URL and captures the rendered HTML + all loaded JavaScript bundles.
    Bundles are collected from `<script src>` **and** from `<link href="….js">` — modulepreload,
@@ -44,8 +44,9 @@ The scanner first understands your application's attack surface using **four com
 2. **Seven regex patterns** extract API endpoints from the JS code: fetch calls, axios requests, Supabase `from()` queries, route definitions, parameterized paths
 3. **OpenAPI/Swagger spec discovery** — probes 13 well-known spec locations (`/openapi.json`, `/swagger.json`, `/v3/api-docs`, `/v2/api-docs`, `/swagger/v1/swagger.json`, `/.well-known/openapi.json`, …) for each API base, parses any spec it finds, and extracts every declared endpoint with its methods, path parameters (including `{templated}` segments), and query parameters. This surfaces APIs with no crawlable frontend
 4. **HTML form/link discovery** (`html_endpoint_extractor`) — parses server-rendered pages with a stdlib `HTMLParser` to extract `<form action>` targets (with their `<input>`/`<select>`/`<textarea>` field names as parameters) and `<a href>` links that carry query parameters. This surfaces classic MVC apps that have no JS API bundle. It runs both in url-only discovery (bounded same-origin crawl) and inside the authenticated crawler after each page load
-5. **Active probing** hits common API base paths (`/api`, `/graphql`, `/rest/v1/`) to discover endpoints not visible in JS
-6. Each endpoint is categorized: `USER_DATA`, `RESOURCE_CRUD`, `AUTH`, `ADMIN`, `PAYMENT`, `FILE_ACCESS`, `PUBLIC`
+5. **Cross-origin backend mining** (`js_bundle_miner`) — a static-shell SPA often keeps its API on another host (an API-gateway origin) named only inside the bundle. The miner pulls plausible first-party backend origins out of the bundle (third-party providers, CDN/bucket hosts, IPs and hosts with no API evidence are rejected, so a mined host never widens scope to an unrelated party), resolves `(METHOD, path)` call sites including base+property URL concatenation (`this.http.post(this.server + this.host)`), and, only when the user opts in with `--follow-mined-backends`, feeds both into the inventory and the active-probe set (by default a mined origin is just logged with its evidence, never probed). It also provides SPA route mining and catch-all-200 static-shell detection helpers
+6. **Active probing** hits common API base paths (`/api`, `/graphql`, `/rest/v1/`) to discover endpoints not visible in JS
+7. Each endpoint is categorized: `USER_DATA`, `RESOURCE_CRUD`, `AUTH`, `ADMIN`, `PAYMENT`, `FILE_ACCESS`, `PUBLIC`
 
 This matters because SPAs hide their API surface in JavaScript bundles, server-rendered apps expose it only in HTML forms, and REST APIs may expose nothing but an OpenAPI spec. Traditional crawlers miss most of it.
 
@@ -559,7 +560,7 @@ isitsecure/
 │   ├── fixes/                  # AI fix gen: safety_net, safe_apply, verifier, plain_results, pr_flow, git_ops, pr_text
 │   ├── guided_dast/            # SAST → DAST test generation (6 strategies)
 │   ├── auth/                   # Auth providers (Supabase, Firebase, Browser, Token)
-│   ├── shared/                 # Rate limiter, OOB callbacks, JWT utils, request_contract (learns 400/422/415 contracts, repairs probes, reports "contract-blocked")
+│   ├── shared/                 # Rate limiter, OOB callbacks, JWT utils, request_contract (learns 400/422/415 contracts, repairs probes, reports "contract-blocked"), js_bundle_miner (cross-origin backend hosts and SPA routes from JS bundles)
 │   ├── triage/                 # LLM triage + priority calculator
 │   ├── reporting/              # Report gen (JSON, HTML) + plain_english remediation layer
 │   ├── ingestion/              # URL snapshot capture
