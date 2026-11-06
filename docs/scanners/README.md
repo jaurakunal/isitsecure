@@ -34,6 +34,7 @@ These scanners require authentication or use specialized techniques.
 - [Privilege Escalation Scanner](./privilege-escalation-scanner.md) · [animated](../interactive/privilege-escalation.html) — Admin access, role elevation
 - [Race Condition Scanner](./race-condition-scanner.md) · [animated](../interactive/race-conditions.html) — TOCTOU in concurrent requests
 - [DOM XSS Scanner](./dom-xss-scanner.md) · [animated](../interactive/dom-xss.html) — Browser-based sink detection
+- [BOLA Forge Scanner](./bola-forge-scanner.md) — Forged-ownership BOLA (owner id in the request body), `--probe-writes` only
 - [Body Param Fuzzer](./body-param-fuzzer.md) · [animated](../interactive/body-param-fuzzer.html) — Prototype pollution, type confusion
 
 ## SAST Scanners (Static Application Security Testing)
