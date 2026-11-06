@@ -142,8 +142,9 @@ def test_catch_all_static_shell_detection():
 # --- Wiring into the DAST inventory ---
 
 
-def _quiet_scanner(monkeypatch, probe_writes=False):
-    scanner = EndpointDiscoveryScanner(probe_writes=probe_writes)
+def _quiet_scanner(monkeypatch, probe_writes=False, follow=True):
+    scanner = EndpointDiscoveryScanner(
+        probe_writes=probe_writes, follow_mined_backends=follow)
     probed: list[set[str]] = []
 
     async def _record(urls, endpoints):
@@ -205,8 +206,22 @@ async def test_relative_calls_not_retargeted_to_sole_vendor_origin(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_probe_switch_disables_mined_backends(monkeypatch):
-    scanner, probed = _quiet_scanner(monkeypatch)
-    monkeypatch.setattr(scanner, "PROBE_MINED_BACKENDS", False)
-    await scanner.discover(BUNDLE, "", SHELL)
+async def test_default_reports_but_never_probes_mined_origin(monkeypatch, caplog):
+    scanner, probed = _quiet_scanner(monkeypatch, probe_writes=True, follow=False)
+    with caplog.at_level(logging.INFO):
+        eps = await scanner.discover(BUNDLE, "", SHELL)
     assert BACKEND not in probed[0]
+    # (Literal absolute URLs may still come from the pre-existing extractors.)
+    assert not any(e.source_pattern == "js_bundle_miner" for e in eps)
+    assert "not probed" in caplog.text and BACKEND in caplog.text
+
+
+def test_default_scanner_does_not_follow():
+    assert EndpointDiscoveryScanner()._follow_mined_backends is False
+
+
+def test_cli_flag_plumbed_to_scanner(monkeypatch):
+    from isitsecure.engine.factory import create_deep_security_scan_agent
+    agent = create_deep_security_scan_agent(follow_mined_backends=True)
+    assert agent._endpoint_scanner._follow_mined_backends is True
+    assert create_deep_security_scan_agent()._endpoint_scanner._follow_mined_backends is False

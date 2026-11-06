@@ -228,6 +228,7 @@ def create_deep_security_scan_agent(
     auth_provider: AuthProviderProtocol | None = None,
     depth: ScanDepth = ScanDepth.QUICK,
     probe_writes: bool = False,
+    follow_mined_backends: bool = False,
 ) -> DeepSecurityScanAgent:
     """Create a fully wired DeepSecurityScanAgent with all scanners.
 
@@ -347,7 +348,10 @@ def create_deep_security_scan_agent(
     return DeepSecurityScanAgent(
         # Required
         ingestion_service=URLIngestionService(),
-        endpoint_scanner=EndpointDiscoveryScanner(probe_writes=probe_writes),
+        endpoint_scanner=EndpointDiscoveryScanner(
+            probe_writes=probe_writes,
+            follow_mined_backends=follow_mined_backends,
+        ),
         # Scanner lists (OCP)
         dast_scanners=dast_scanners,
         sast_scanners=sast_scanners,

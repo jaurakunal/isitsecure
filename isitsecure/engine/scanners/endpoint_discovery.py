@@ -58,19 +58,22 @@ class EndpointDiscoveryScanner:
         "delete": EndpointMethod.DELETE,
     }
 
-    # Probe cross-origin API hosts mined from the bundle. One switch so a
-    # scoping/ownership policy for mined hosts has a single place to land.
-    PROBE_MINED_BACKENDS = True
-
-    def __init__(self, probe_writes: bool = False) -> None:
+    def __init__(
+        self, probe_writes: bool = False, follow_mined_backends: bool = False,
+    ) -> None:
         """
         Args:
             probe_writes: derive state-changing methods from REST shape, so
                 scanners can reach the mutation surface. Off by default: it
                 makes a scan send POST/PUT/DELETE, which writes to whatever
                 is being scanned.
+            follow_mined_backends: probe cross-origin API hosts mined from
+                the bundle and add their call sites to the inventory. Off by
+                default: a mined host can belong to a third party, so it is
+                only reported unless the user vouches for it.
         """
         self._probe_writes = probe_writes
+        self._follow_mined_backends = follow_mined_backends
 
     # Routes that are purely frontend pages, not API endpoints
     _SKIP_FRONTEND_ROUTES = {
@@ -355,12 +358,19 @@ class EndpointDiscoveryScanner:
         call sites the bundle itself ties to those origins (a base+property
         concat that resolved to an absolute URL). Relative-path calls are left
         to the same-origin extractors: nothing links them to the mined host.
-        Unsafe methods are only kept under ``probe_writes``; otherwise the
-        endpoint is inventoried as a GET.
+        Opt-in only (``follow_mined_backends``): otherwise origins are just
+        reported. Unsafe methods are only kept under ``probe_writes``;
+        otherwise the endpoint is inventoried as a GET.
         """
-        if not self.PROBE_MINED_BACKENDS:
-            return set()
         mined = mine_backend_origins(content, base_url)
+        if not self._follow_mined_backends:
+            for m in mined:
+                logger.info(
+                    "Mined backend origin %s (%s): not probed; pass "
+                    "--follow-mined-backends only for backends you are "
+                    "authorized to test", m.origin, m.evidence,
+                )
+            return set()
         origins = {m.origin for m in mined}
         for m in mined:
             logger.info(
