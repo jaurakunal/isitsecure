@@ -29,6 +29,10 @@ from isitsecure.engine.shared.html_endpoint_extractor import (
     collect_same_origin_links,
     extract_html_endpoints,
 )
+from isitsecure.engine.shared.js_bundle_miner import (
+    mine_api_calls,
+    mine_backend_origins,
+)
 from isitsecure.engine.shared.rate_limited_client import RateLimitedClient
 from isitsecure.engine.shared.progress import emit
 from isitsecure.engine.enums import EndpointCategory, EndpointMethod
@@ -97,6 +101,9 @@ class EndpointDiscoveryScanner:
 
         # Phase 2: Discover API base URLs and probe them
         api_base_urls = self._discover_api_base_urls(all_content, base_url)
+        api_base_urls |= self._mine_bundle_backends(
+            all_content, base_url, raw_endpoints
+        )
         supabase_urls = self._discover_supabase_urls(all_content)
 
         logger.info(
@@ -324,6 +331,40 @@ class EndpointDiscoveryScanner:
         urls.add(f"{parsed.scheme}://{parsed.netloc}")
 
         return urls
+
+    def _mine_bundle_backends(
+        self,
+        content: str,
+        base_url: str,
+        endpoints: dict[str, DiscoveredEndpoint],
+    ) -> set[str]:
+        """Recover a cross-origin backend referenced only inside the bundle.
+
+        A static-shell SPA's API often lives on another host (an API-gateway
+        origin) whose name the ``api.*`` pattern does not match, and whose
+        paths are assembled at runtime from a base + property. Returns the
+        plausible first-party backend origins (so they get probed) and adds the
+        method/path call sites the bundle makes -- resolved against the one
+        backend when it is unambiguous.
+        """
+        origins = mine_backend_origins(content, base_url)
+        if not origins:
+            return set()
+        sole_origin = origins[0] if len(origins) == 1 else None
+        for method, target in mine_api_calls(content):
+            if "://" not in target:
+                if not sole_origin:
+                    continue
+                target = f"{sole_origin}{target}"
+            else:
+                parsed = urlparse(target)
+                if f"{parsed.scheme}://{parsed.netloc}" not in origins:
+                    continue
+            self._add_endpoint(
+                endpoints, target, base_url,
+                self._METHOD_MAP[method.lower()], "js_bundle_miner",
+            )
+        return set(origins)
 
     def _discover_supabase_urls(self, content: str) -> set[str]:
         """Find Supabase project URLs in JS content."""

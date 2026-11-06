@@ -301,6 +301,7 @@ record to prove it could is not worth the finding.
 | Lazy-Chunk Bundle Collection | Collects JavaScript from `<link rel=modulepreload/preload/prefetch>` as well as `<script src>` — a code-split SPA ships its routes as `<link>` chunks, so a script-only sweep sees the shell and none of the API surface |
 | OpenAPI/Swagger Discovery | Probes `/openapi.json`, `/swagger.json`, `/v3/api-docs` and parses the spec into testable endpoints — finds attack surface on APIs with no crawlable frontend |
 | HTML Form/Link Discovery | Reads `<form>`/`<input>`/query-links from server-rendered pages (bounded url-only crawl + inside the authenticated crawler) — finds attack surface on classic MVC apps with no JS API bundle |
+| Cross-Origin Backend Mining | Mines JS bundles for an API host that lives on a different origin than the SPA shell (e.g. an API-gateway URL), resolving base+property URL concatenation into method/path endpoints; third-party and CDN hosts are excluded so scope never widens to unrelated parties |
 | Endpoint Prioritizer + Time Budget | Ranks likely-vulnerable endpoints first and tests within a per-scanner time budget, so high-risk paths get covered before the clock runs out |
 | SAST→DAST Feedback Loop | SAST findings generate targeted DAST tests (6 strategies: auth bypass, IDOR, injection, mass assignment, race condition, RLS bypass) |
 | Cross-Referencer | Matches DAST + SAST findings for high-confidence confirmed vulnerabilities |
