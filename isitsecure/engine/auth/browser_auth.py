@@ -31,7 +31,23 @@ def _wire_bearer(sniffed: dict[str, str]) -> str:
     """The Bearer token the app sent on the wire, or '' when none was seen."""
     auth = sniffed.get("authorization", "")
     prefix = SharedPatterns.BEARER_PREFIX
-    return auth[len(prefix):] if auth.startswith(prefix) else ""
+    tok = auth[len(prefix):] if auth.startswith(prefix) else ""
+    # A Bearer equal to the apikey is the public client key, not a session.
+    return "" if tok and tok == sniffed.get("apikey") else tok
+
+
+async def _read_token(page: object, sniffed: dict[str, str]) -> tuple[str, str]:
+    """One capture pass, most-trusted source first: original key-based storage read, then the
+    wire (the token the app really sends, preferred over any guessed storage value), then the
+    JWT-shape storage scan. Returns ``(token, source)`` or ``("", "")``."""
+    token = await BrowserLoginHelper.extract_token(page, shape_scan=False)
+    if token:
+        return token, "storage"
+    wire = _wire_bearer(sniffed)
+    if wire:
+        return wire, "wire"
+    token = await BrowserLoginHelper.extract_token(page)
+    return (token, "storage-scan") if token else ("", "")
 
 
 class BrowserAuthProvider:
@@ -39,6 +55,10 @@ class BrowserAuthProvider:
 
     Launches a headless Chromium browser, navigates to the login page,
     fills credentials via ``BrowserLoginHelper``, and extracts auth tokens.
+
+    NOTE: nothing outside ``auth/__init__`` constructs this provider yet, so the capture
+    capabilities below (wire sniff, cookie-only, ``storage_state``) are not reachable from the
+    CLI or server until a caller is wired in.
     """
 
     @property
@@ -183,12 +203,9 @@ class BrowserAuthProvider:
         ``(token, source)`` where source is "storage"/"wire", or ``("", "")`` when none.
         """
         for _ in range(BrowserCaptureConfig.POST_LOGIN_TOKEN_POLLS):
-            token = await BrowserLoginHelper.extract_token(page)
+            token, source = await _read_token(page, sniffed)
             if token:
-                return token, "storage"
-            wire = _wire_bearer(sniffed)
-            if wire:
-                return wire, "wire"
+                return token, source
             await asyncio.sleep(BrowserCaptureConfig.POST_LOGIN_TOKEN_POLL_MS / 1000)
 
         # Neither path yielded a token; the app may not have fired an authenticated request yet.
@@ -200,11 +217,7 @@ class BrowserAuthProvider:
                 "networkidle", timeout=BrowserLoginConfig.NETWORK_IDLE_TIMEOUT_MS)
         except Exception:  # noqa: BLE001,S110 — the nudge is best-effort
             pass
-        wire = _wire_bearer(sniffed)
-        if wire:
-            return wire, "wire"
-        token = await BrowserLoginHelper.extract_token(page)
-        return (token, "storage") if token else ("", "")
+        return await _read_token(page, sniffed)
 
     @staticmethod
     def _accept_cookie_only(
@@ -216,7 +229,7 @@ class BrowserAuthProvider:
         """Build headers for a token-less (cookie-only) session and warn loudly.
 
         A token-less session means JWT-forge / token-swap attacks cannot run; surface it now
-        with what WAS seen (key names only, never values) instead of a mystery anonymous scan.
+        with what WAS seen (counts only, never names or values) instead of a mystery anonymous scan.
         """
         apikey = sniffed.get("apikey", "")
         if apikey:
@@ -224,16 +237,16 @@ class BrowserAuthProvider:
         headers[SharedPatterns.HEADER_COOKIE] = "; ".join(
             f"{k}={v}" for k, v in cookie_dict.items()
         )
-        ls_keys = [
-            e.get("name") for o in (storage_state.get("origins") or [])
-            for e in (o.get("localStorage") or [])
-        ]
+        # Counts only: storage key names can embed emails / user ids.
+        ls_count = sum(
+            len(o.get("localStorage") or []) for o in (storage_state.get("origins") or [])
+        )
         logger.warning(
             "browser login: NO bearer token captured (storage or wire); accepting a "
-            "cookie-only session (cookies=%d, apikey=%s, localStorage keys=%s). JWT-based "
+            "cookie-only session (cookies=%d, apikey=%s, localStorage entries=%d). JWT-based "
             "attacks cannot run against this session. If the target is bearer-auth, capture "
             "failed (async write raced, token in IndexedDB, or incomplete login).",
-            len(cookie_dict), "yes" if apikey else "no", ls_keys or "none",
+            len(cookie_dict), "yes" if apikey else "no", ls_count,
         )
 
     async def refresh(self, session: AuthSession) -> AuthSession:

@@ -117,8 +117,8 @@ class TestExtractTokenShapeFallback:
         async def evaluate(script):
             if "Object.keys" in script:
                 return ["apptoken"]
-            if "Object.values(localStorage)" in script:
-                return [JWT]
+            if "Object.entries(localStorage)" in script:
+                return [["apptoken", JWT]]
             return None
 
         page.evaluate = evaluate
@@ -129,8 +129,8 @@ class TestExtractTokenShapeFallback:
         page = MagicMock()
 
         async def evaluate(script):
-            if "Object.values(sessionStorage)" in script:
-                return [blob]
+            if "Object.entries(sessionStorage)" in script:
+                return [["x", blob]]
             if "Object.keys" in script:
                 return []
             return None
@@ -151,7 +151,39 @@ class TestExtractTokenShapeFallback:
 
         page.evaluate = evaluate
         assert await BrowserLoginHelper.extract_token(page) == "plain-opaque-token"
-        assert not any("Object.values" in c for c in calls)
+        assert not any("Object.entries" in c for c in calls)
+
+    async def _scan(self, entries):
+        page = MagicMock()
+
+        async def evaluate(script):
+            if "Object.entries(localStorage)" in script:
+                return entries
+            return [] if "Object" in script else None
+
+        page.evaluate = evaluate
+        return await BrowserLoginHelper.extract_token(page)
+
+    async def test_shape_scan_rejects_anon_and_picks_user_over_earlier_entries(self):
+        anon = make_jwt({"role": "anon", "exp": 9999999999})
+        analytics = make_jwt({"iss": "analytics"})            # no sub/exp
+        user = make_jwt({"sub": "u1"})
+        assert await self._scan([["a", anon], ["b", analytics]]) is None
+        assert await self._scan([["a", anon], ["b", analytics], ["c", user]]) == user
+
+    async def test_shape_scan_skips_id_and_refresh_named_keys(self):
+        idt, refresh = make_jwt({"sub": "id"}), make_jwt({"sub": "rf"})
+        assert await self._scan([["id_token", idt], ["refresh_token", refresh]]) is None
+        acc = make_jwt({"sub": "acc"})
+        assert await self._scan([["id_token", idt], ["session", acc]]) == acc
+
+    async def test_hostile_blobs_are_bounded(self):
+        deep = "[" * 100000 + "]" * 100000                      # RecursionError in json.loads
+        huge = '"' + "a" * (BrowserCaptureConfig.MAX_BLOB_CHARS + 10) + '"'
+        nested = json.dumps(JWT)
+        for _ in range(BrowserCaptureConfig.MAX_JWT_SEARCH_DEPTH + 3):
+            nested = json.dumps(nested)
+        assert await self._scan([["a", deep], ["b", huge], ["c", nested]]) is None
 
     async def test_non_jwt_values_yield_none(self):
         page = MagicMock()
@@ -187,11 +219,33 @@ class TestTokenSniffer:
         cb(_Req({"authorization": "Bearer opaque-token"}))
         assert "authorization" not in sniffed
 
-    def test_first_token_wins(self):
+    def test_latest_identity_token_wins(self):
         sniffed, cb = self._attach()
         other = make_jwt({"sub": "other"})
         cb(_Req({"authorization": f"Bearer {JWT}"}))
         cb(_Req({"authorization": f"Bearer {other}"}))
+        assert sniffed["authorization"] == f"Bearer {other}"
+
+    def test_pre_login_anon_bearer_does_not_beat_post_login_user_token(self):
+        sniffed, cb = self._attach()
+        anon = make_jwt({"role": "anon", "iss": "supabase", "exp": 9999999999})
+        cb(_Req({"authorization": f"Bearer {anon}", "apikey": anon}))
+        cb(_Req({"authorization": f"Bearer {anon}"}))          # anon w/o apikey header
+        assert "authorization" not in sniffed                   # anon never accepted
+        real = make_jwt({"sub": "u1", "exp": 9999999999})
+        cb(_Req({"authorization": f"Bearer {real}", "apikey": anon}))
+        assert sniffed["authorization"] == f"Bearer {real}"
+
+    def test_bearer_equal_to_apikey_ignored(self):
+        sniffed, cb = self._attach()
+        key = make_jwt({"iss": "x"})                            # rank 0, but == apikey
+        cb(_Req({"authorization": f"Bearer {key}", "apikey": key}))
+        assert "authorization" not in sniffed
+
+    def test_sub_token_not_displaced_by_later_exp_only_token(self):
+        sniffed, cb = self._attach()
+        cb(_Req({"authorization": f"Bearer {JWT}"}))            # has sub
+        cb(_Req({"authorization": f"Bearer {make_jwt({'exp': 1})}"}))
         assert sniffed["authorization"] == f"Bearer {JWT}"
 
     def test_header_read_failure_never_raises(self):
@@ -260,6 +314,40 @@ class TestGotoLoginPage:
         page.evaluate = evaluate
         page.goto = goto
         assert await BrowserLoginHelper.goto_login_page(page, "http://x.test/app") is True
+
+    async def test_total_time_budget_bounds_navigations(self, monkeypatch):
+        monkeypatch.setattr(BrowserCaptureConfig, "LOGIN_DISCOVERY_BUDGET_S", 0.0)
+        timeouts: list[int] = []
+        visited: list[str] = []
+        page = AsyncMock()
+
+        async def evaluate(script, *args):
+            return "" if args else {"ok": False}
+
+        async def goto(url, **kw):
+            visited.append(url)
+            timeouts.append(kw["timeout"])
+
+        page.evaluate = evaluate
+        page.goto = goto
+        assert await BrowserLoginHelper.goto_login_page(page, "http://x.test/start") is False
+        assert visited == ["http://x.test/start"]   # no probes, only the restore
+
+    async def test_per_wait_timeouts_capped_by_remaining_budget(self, monkeypatch):
+        monkeypatch.setattr(BrowserCaptureConfig, "LOGIN_DISCOVERY_BUDGET_S", 2.0)
+        seen: list[int] = []
+        page = AsyncMock()
+
+        async def evaluate(script, *args):
+            return "/l" if args else {"ok": False}
+
+        async def goto(url, **kw):
+            seen.append(kw["timeout"])
+
+        page.evaluate = evaluate
+        page.goto = goto
+        await BrowserLoginHelper.goto_login_page(page, "http://x.test/start")
+        assert seen and max(seen[:-1]) <= 2000      # probes capped; last is the restore
 
     async def test_tries_common_routes_then_restores_start_url(self):
         visited: list[str] = []
@@ -389,3 +477,77 @@ class TestBrowserAuthLive:
     async def test_bare_origin_discovers_login_page(self, site):
         session = await _login(f"{site}/index.html")
         assert session.access_token == JWT
+
+
+class TestReadTokenPrecedence:
+    async def test_wire_token_preferred_over_storage_shape_scan(self):
+        from isitsecure.engine.auth.browser_auth import _read_token
+
+        stale = make_jwt({"sub": "stale-storage-user"})
+        real = make_jwt({"sub": "wire-user"})
+        page = MagicMock()
+
+        async def evaluate(script):
+            if "Object.entries(localStorage)" in script:
+                return [["whatever", stale]]
+            return [] if "Object" in script else None
+
+        page.evaluate = evaluate
+        token, source = await _read_token(page, {"authorization": f"Bearer {real}"})
+        assert (token, source) == (real, "wire")
+
+    async def test_wire_bearer_equal_to_apikey_ignored(self):
+        from isitsecure.engine.auth.browser_auth import _wire_bearer
+
+        key = make_jwt({"iss": "x"})
+        assert _wire_bearer({"authorization": f"Bearer {key}", "apikey": key}) == ""
+
+
+class TestCookieOnlyHeaders:
+    def _session(self):
+        from isitsecure.engine.auth.protocols import AuthSession
+
+        return AuthSession(
+            user_id="u", access_token="", headers={"Cookie": "sid=1"},
+            provider=AuthProvider.BROWSER,
+        )
+
+    def test_build_auth_headers_has_no_empty_bearer(self):
+        from isitsecure.engine.shared.auth_headers import build_auth_headers
+
+        headers = build_auth_headers(self._session())
+        assert "Authorization" not in headers
+        assert headers["Cookie"] == "sid=1"
+
+    def test_build_auth_headers_token_session_unchanged(self):
+        from isitsecure.engine.auth.protocols import AuthSession
+        from isitsecure.engine.shared.auth_headers import build_auth_headers
+
+        s = AuthSession(user_id="u", access_token="tok", provider=AuthProvider.BROWSER)
+        assert build_auth_headers(s)["Authorization"] == "Bearer tok"
+
+    def test_privilege_escalation_headers(self):
+        from isitsecure.engine.scanners.privilege_escalation_scanner import (
+            PrivilegeEscalationScanner,
+        )
+
+        s = self._session()
+        assert PrivilegeEscalationScanner._build_auth_headers(s) == {"Cookie": "sid=1"}
+        sup = PrivilegeEscalationScanner._build_supabase_headers(s, "k")
+        assert "Authorization" not in sup
+        assert sup["Cookie"] == "sid=1" and sup["apikey"] == "k"
+
+    async def test_idor_probe_sends_cookies_not_empty_bearer(self):
+        from isitsecure.engine.scanners.idor_scanner import IDORScanner
+
+        sent: dict = {}
+        resp = MagicMock(status_code=200, text="[]")
+
+        class Client:
+            async def request(self, method, url, **kw):
+                sent.update(kw["headers"])
+                return resp
+
+        await IDORScanner()._probe_with_session(Client(), "http://x.test/a", "GET", self._session())
+        assert "Authorization" not in sent
+        assert sent["Cookie"] == "sid=1"
