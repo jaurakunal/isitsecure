@@ -17,22 +17,28 @@ module:
 - detects the catch-all-200 static-shell pattern.
 
 Pure and network-free; the caller does any (scoped) fetching. Stdlib only.
+
+Consumers: endpoint discovery uses ``mine_backend_origins`` / ``mine_api_calls``. The
+bundle-listing, route-mining and static-shell helpers (``extract_script_srcs``,
+``prioritize_bundles``, ``mine_spa_routes``, ``is_catch_all``) are not wired into a scan
+path yet; they are kept for the authenticated-crawler follow-up (#274).
 """
 
 from __future__ import annotations
 
 import ipaddress
+import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from urllib.parse import urljoin, urlparse
+
+logger = logging.getLogger(__name__)
 
 # <script src="…"> (and module preloads) — the bundles worth fetching.
 _SCRIPT_SRC_RE = re.compile(
     r"""<(?:script[^>]+src|link[^>]+href)\s*=\s*["']([^"']+\.js)["']""", re.IGNORECASE)
 # Absolute http(s) URLs anywhere in text.
 _ABS_URL_RE = re.compile(r"""https?://[A-Za-z0-9.\-]+(?::\d+)?(?:/[A-Za-z0-9_\-./~%+]*)?""")
-# Quoted path-like strings ("/api/v1/users", `/prod/account`) assembled with a base at runtime.
-_PATH_RE = re.compile(r"""["'`](/[A-Za-z0-9_\-./{}$:]{1,120})["'`]""")
 
 # Third-party hosts (suffix match) whose presence in a bundle is NOT the app's own backend —
 # never surfaced as a scan target (probing them would hit someone else's system).
@@ -53,17 +59,23 @@ THIRD_PARTY_SUFFIXES = (
     # a tenant, not the owner, so their API is another company's system and other customers' data.
     "gohighlevel.com", "leadconnectorhq.com", "msgsndr.com", "twilio.com", "sendgrid.net",
     "hubspot.com", "hs-scripts.com", "zendesk.com", "salesforce.com", "force.com",
+    "mailchimp.com", "algolia.net", "algolianet.com", "datadoghq.com", "datadoghq.eu",
+    "launchdarkly.com", "auth0.com", "okta.com", "posthog.com", "logrocket.com",
+    "bugsnag.com", "rollbar.com", "newrelic.com", "nr-data.net", "slack.com", "mapbox.com",
+    "openai.com", "anthropic.com", "shopify.com", "myshopify.com", "firebaseio.com",
 )
 # Host labels / path shapes that mark a host as an API (as opposed to a page, CDN or bucket).
 _API_HOST_LABEL_RE = re.compile(r"^(?:api|backend|server|gateway|graphql|rest|execute-api)(?:[-\d].*)?$")
 _API_URL_PATH_RE = re.compile(r"/(?:api|rest|graphql|v\d+|prod|dev|staging)(?:/|$)", re.IGNORECASE)
+# Documentation / marketing / status hosts: their URLs mention "/api/" but are pages, not an API.
+_DOCS_HOST_RE = re.compile(
+    r"^(?:docs?|developers?|dev-docs|help|support|status|blog|www|learn|wiki|community|kb)[.\-]")
 # Object-storage / static-asset hosts: never an API even though they are cross-origin.
 _STATIC_HOST_RE = re.compile(r"(?:^|[.-])(?:s3[.-]|cdn|static|assets|media|img|images|fonts)", re.IGNORECASE)
 
 # Asset extensions a "path" string might be — not endpoints.
 _ASSET_EXT = (".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".woff",
               ".woff2", ".ttf", ".eot", ".map", ".webp", ".mp4", ".webm", ".json.map")
-MAX_PATHS = 80
 MAX_URLS = 120
 MAX_CALLS = 120
 MAX_ROUTES = 60
@@ -79,19 +91,10 @@ _MAX_BINDINGS = 8000
 _SPA_ROUTE_RE = re.compile(
     r"""(?<![A-Za-z0-9_$])path["']?\s*:\s*["'](/?[a-z0-9][A-Za-z0-9_\-./:*]{0,120})["']""")
 # Routes that would end or waste an authenticated crawl (first path segment).
-SESSION_BREAKING_ROUTES = frozenset({
+_SESSION_BREAKING_ROUTES = frozenset({
     "login", "logout", "signin", "sign-in", "signout", "sign-out", "signup", "sign-up",
     "register", "reset-password", "forgot-password",
 })
-
-
-@dataclass
-class MinedRefs:
-    """What a bundle/page mine yielded. ``api_hosts`` excludes third-party providers."""
-
-    absolute_urls: list[str] = field(default_factory=list)
-    api_hosts: list[str] = field(default_factory=list)
-    paths: list[str] = field(default_factory=list)
 
 
 def is_third_party(host: str) -> bool:
@@ -110,23 +113,31 @@ def _is_ip_or_local(host: str) -> bool:
     return True
 
 
-def is_plausible_backend(url: str) -> bool:
-    """Whether an absolute URL plausibly names the app's OWN API backend.
+def backend_evidence(url: str) -> str:
+    """Why ``url`` plausibly names the app's OWN API backend ('' if it does not).
 
     A mined host becomes a scan target, so the bar is deliberately higher than "not on the
     third-party list": the host must not be third-party/static/IP/localhost AND must carry
-    API evidence (an api-ish host label such as ``execute-api``, or an api/version/stage
-    path segment). Unrelated hosts that merely appear in a bundle (docs links, bucket
-    URLs, vendor sites) therefore never widen the scan scope."""
+    API evidence -- an api-ish host label such as ``execute-api`` ("host label"), or an
+    api/version/stage path segment ("api path"). Unrelated hosts that merely appear in a
+    bundle (docs links, bucket URLs, vendor sites) therefore never widen the scan scope."""
     parsed = urlparse(url)
     host = (parsed.hostname or "").lower()
     if not host or "." not in host or _is_ip_or_local(host):
-        return False
-    if is_third_party(host) or _STATIC_HOST_RE.search(host):
-        return False
-    if any(_API_HOST_LABEL_RE.match(label) for label in host.split(".")):
-        return True
-    return bool(_API_URL_PATH_RE.search(parsed.path or ""))
+        return ""
+    if is_third_party(host) or _STATIC_HOST_RE.search(host) or _DOCS_HOST_RE.match(host):
+        return ""
+    for label in host.split("."):
+        if _API_HOST_LABEL_RE.match(label):
+            return f"api-like host label '{label}'"
+    if _API_URL_PATH_RE.search(parsed.path or ""):
+        return f"api path segment in {parsed.path}"
+    return ""
+
+
+def is_plausible_backend(url: str) -> bool:
+    """Whether an absolute URL plausibly names the app's own API backend."""
+    return bool(backend_evidence(url))
 
 
 def extract_script_srcs(html: str, base_url: str) -> list[str]:
@@ -300,47 +311,53 @@ def mine_api_calls(text: str) -> list[tuple[str, str]]:
     return out
 
 
-def mine_api_references(text: str) -> MinedRefs:
-    """Mine ``text`` (a JS bundle or HTML) for absolute URLs, first-party API hosts and endpoint
-    path strings. Cross-origin hosts are kept (the app's backend is cross-origin) but only if
-    ``is_plausible_backend``; third-party providers are excluded."""
+def mine_absolute_urls(text: str) -> list[str]:
+    """Absolute http(s) URLs in ``text`` (a JS bundle or HTML). De-duped, bounded."""
     urls: list[str] = []
-    hosts: list[str] = []
     for match in _ABS_URL_RE.findall(text or ""):
         url = match.rstrip(".,;)")
-        host = urlparse(url).hostname or ""
-        if not host:
-            continue
-        if url not in urls and len(urls) < MAX_URLS:
+        if urlparse(url).hostname and url not in urls and len(urls) < MAX_URLS:
             urls.append(url)
-        if host not in hosts and is_plausible_backend(url):
-            hosts.append(host)
-    paths: list[str] = []
-    for raw in _PATH_RE.findall(text or ""):
-        if _is_api_path(raw) and raw not in paths and len(paths) < MAX_PATHS:
-            paths.append(raw)
-    return MinedRefs(absolute_urls=urls, api_hosts=hosts, paths=paths)
+    return urls
 
 
-def mine_backend_origins(text: str, page_url: str) -> list[str]:
-    """Distinct ``scheme://host[:port]`` origins of the app's own CROSS-ORIGIN backend(s), mined
-    from absolute URLs and call sites in ``text``. Same-origin hosts are excluded (already in
-    scope); results are plausibility-filtered and capped at ``MAX_BACKEND_HOSTS``."""
+@dataclass(frozen=True)
+class MinedOrigin:
+    """A cross-origin backend origin and the evidence that made it plausible."""
+
+    origin: str
+    evidence: str
+    score: int
+
+
+def mine_backend_origins(text: str, page_url: str) -> list[MinedOrigin]:
+    """Distinct cross-origin backend origins mined from absolute URLs and call sites in ``text``.
+
+    Same-origin hosts are excluded (already in scope) and implausible ones rejected. The
+    strongest evidence wins (an api-like host label outranks a bare path hint, and each extra
+    plausible reference to the origin adds weight); only then is the list capped at
+    ``MAX_BACKEND_HOSTS`` and the dropped origins logged -- so the cap never silently discards
+    a better candidate in favour of an earlier-seen one."""
     page_host = (urlparse(page_url).hostname or "").lower()
-    candidates = list(mine_api_references(text).absolute_urls)
-    candidates += [t for _m, t in mine_api_calls(text) if "://" in t]
-    origins: list[str] = []
-    for url in candidates:
+    urls = mine_absolute_urls(text) + [t for _m, t in mine_api_calls(text) if "://" in t]
+    found: dict[str, list] = {}   # origin -> [evidence, score]
+    for url in urls:
         parsed = urlparse(url)
         host = (parsed.hostname or "").lower()
-        if not host or host == page_host or not is_plausible_backend(url):
+        evidence = backend_evidence(url)
+        if not host or host == page_host or not evidence:
             continue
         origin = f"{parsed.scheme}://{parsed.netloc}"
-        if origin not in origins:
-            origins.append(origin)
-        if len(origins) >= MAX_BACKEND_HOSTS:
-            break
-    return origins
+        weight = 2 if evidence.startswith("api-like host") else 1
+        entry = found.setdefault(origin, [evidence, 0])
+        if weight > 1 and not entry[0].startswith("api-like host"):
+            entry[0] = evidence
+        entry[1] += weight
+    ranked = sorted(found.items(), key=lambda kv: -kv[1][1])   # stable: ties keep discovery order
+    for origin, (_ev, score) in ranked[MAX_BACKEND_HOSTS:]:
+        logger.info("js_bundle_miner: dropping backend origin %s (score %d) over cap %d",
+                    origin, score, MAX_BACKEND_HOSTS)
+    return [MinedOrigin(o, ev, sc) for o, (ev, sc) in ranked[:MAX_BACKEND_HOSTS]]
 
 
 def mine_spa_routes(text: str) -> list[str]:
@@ -359,7 +376,7 @@ def mine_spa_routes(text: str) -> list[str]:
         static = "/" + static.strip("/")
         if static == "/" or static.lower().endswith(_ASSET_EXT):
             continue
-        if static.strip("/").split("/", 1)[0].lower() in SESSION_BREAKING_ROUTES:
+        if static.strip("/").split("/", 1)[0].lower() in _SESSION_BREAKING_ROUTES:
             continue
         if static not in seen:
             seen.add(static)

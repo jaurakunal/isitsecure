@@ -30,6 +30,7 @@ from isitsecure.engine.shared.html_endpoint_extractor import (
     extract_html_endpoints,
 )
 from isitsecure.engine.shared.js_bundle_miner import (
+    is_third_party,
     mine_api_calls,
     mine_backend_origins,
 )
@@ -56,6 +57,10 @@ class EndpointDiscoveryScanner:
         "patch": EndpointMethod.PATCH,
         "delete": EndpointMethod.DELETE,
     }
+
+    # Probe cross-origin API hosts mined from the bundle. One switch so a
+    # scoping/ownership policy for mined hosts has a single place to land.
+    PROBE_MINED_BACKENDS = True
 
     def __init__(self, probe_writes: bool = False) -> None:
         """
@@ -320,9 +325,12 @@ class EndpointDiscoveryScanner:
             EndpointDiscoveryConfig.EXTERNAL_API_URL_PATTERN, content
         ):
             url = match.group(1).rstrip("/")
-            if not any(
-                domain in url
-                for domain in EndpointDiscoveryConfig.SKIP_DOMAINS
+            if not (
+                any(
+                    domain in url
+                    for domain in EndpointDiscoveryConfig.SKIP_DOMAINS
+                )
+                or is_third_party(urlparse(url).hostname or "")
             ):
                 urls.add(url)
 
@@ -344,27 +352,34 @@ class EndpointDiscoveryScanner:
         origin) whose name the ``api.*`` pattern does not match, and whose
         paths are assembled at runtime from a base + property. Returns the
         plausible first-party backend origins (so they get probed) and adds the
-        method/path call sites the bundle makes -- resolved against the one
-        backend when it is unambiguous.
+        call sites the bundle itself ties to those origins (a base+property
+        concat that resolved to an absolute URL). Relative-path calls are left
+        to the same-origin extractors: nothing links them to the mined host.
+        Unsafe methods are only kept under ``probe_writes``; otherwise the
+        endpoint is inventoried as a GET.
         """
-        origins = mine_backend_origins(content, base_url)
-        if not origins:
+        if not self.PROBE_MINED_BACKENDS:
             return set()
-        sole_origin = origins[0] if len(origins) == 1 else None
+        mined = mine_backend_origins(content, base_url)
+        origins = {m.origin for m in mined}
+        for m in mined:
+            logger.info(
+                "Probing mined backend origin %s (%s)", m.origin, m.evidence
+            )
         for method, target in mine_api_calls(content):
             if "://" not in target:
-                if not sole_origin:
-                    continue
-                target = f"{sole_origin}{target}"
-            else:
-                parsed = urlparse(target)
-                if f"{parsed.scheme}://{parsed.netloc}" not in origins:
-                    continue
+                continue
+            parsed = urlparse(target)
+            if f"{parsed.scheme}://{parsed.netloc}" not in origins:
+                continue
+            verb = method.lower()
+            if verb != "get" and not self._probe_writes:
+                verb = "get"
             self._add_endpoint(
                 endpoints, target, base_url,
-                self._METHOD_MAP[method.lower()], "js_bundle_miner",
+                self._METHOD_MAP[verb], "js_bundle_miner",
             )
-        return set(origins)
+        return origins
 
     def _discover_supabase_urls(self, content: str) -> set[str]:
         """Find Supabase project URLs in JS content."""

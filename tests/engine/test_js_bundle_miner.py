@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from isitsecure.engine.scanners.endpoint_discovery import EndpointDiscoveryScanner
@@ -11,7 +13,7 @@ from isitsecure.engine.shared.js_bundle_miner import (
     is_plausible_backend,
     is_third_party,
     mine_api_calls,
-    mine_api_references,
+    mine_absolute_urls,
     mine_backend_origins,
     mine_spa_routes,
     prioritize_bundles,
@@ -64,15 +66,37 @@ def test_plausible_backend(url):
     assert is_plausible_backend(url)
 
 
-def test_mine_references_keeps_only_first_party_backend():
-    refs = mine_api_references(BUNDLE)
-    assert refs.api_hosts == ["ab12cd34.execute-api.us-east-1.amazonaws.com"]
-
-
 def test_backend_origins_cross_origin_only():
-    assert mine_backend_origins(BUNDLE, SHELL) == [BACKEND]
+    assert [m.origin for m in mine_backend_origins(BUNDLE, SHELL)] == [BACKEND]
     # The same host is not "cross-origin" when the page itself lives there.
     assert mine_backend_origins(BUNDLE, BACKEND + "/") == []
+
+
+def test_backend_origin_carries_evidence():
+    (m,) = mine_backend_origins(BUNDLE, SHELL)
+    assert "execute-api" in m.evidence
+
+
+def test_docs_host_with_api_in_path_is_not_ranked_over_real_backend():
+    text = '"https://developers.vendor.io/docs/guide","' + BACKEND + '/prod"'
+    assert [m.origin for m in mine_backend_origins(text, SHELL)] == [BACKEND]
+
+
+def test_origin_cap_ranks_by_evidence_before_truncating(monkeypatch, caplog):
+    import isitsecure.engine.shared.js_bundle_miner as jm
+    monkeypatch.setattr(jm, "MAX_BACKEND_HOSTS", 2)
+    # Three path-hint-only hosts seen first, then a strong api-labelled host seen last.
+    text = ('"https://a.svc-one.io/v1/x","https://b.svc-two.io/v1/x","https://c.svc-three.io/v1/x",'
+            '"https://api.realbackend.io"')
+    with caplog.at_level(logging.INFO, logger=jm.logger.name):
+        origins = [m.origin for m in jm.mine_backend_origins(text, SHELL)]
+    assert origins[0] == "https://api.realbackend.io"
+    assert len(origins) == 2
+    assert "dropping backend origin" in caplog.text
+
+
+def test_absolute_urls_deduped():
+    assert mine_absolute_urls('"https://a.io/x","https://a.io/x"') == ["https://a.io/x"]
 
 
 def test_calls_resolve_base_property_concatenation():
@@ -118,30 +142,71 @@ def test_catch_all_static_shell_detection():
 # --- Wiring into the DAST inventory ---
 
 
-@pytest.mark.asyncio
-async def test_discovery_inventory_gains_cross_origin_backend(monkeypatch):
-    scanner = EndpointDiscoveryScanner()
+def _quiet_scanner(monkeypatch, probe_writes=False):
+    scanner = EndpointDiscoveryScanner(probe_writes=probe_writes)
     probed: list[set[str]] = []
 
-    async def _no_probe(urls, endpoints):
+    async def _record(urls, endpoints):
         probed.append(set(urls))
 
     async def _noop(*a, **k):
         return None
 
-    monkeypatch.setattr(scanner, "_probe_api_base_urls", _no_probe)
+    monkeypatch.setattr(scanner, "_probe_api_base_urls", _record)
     monkeypatch.setattr(scanner, "_probe_openapi_specs", _noop)
     monkeypatch.setattr(scanner, "_probe_supabase_urls", _noop)
     monkeypatch.setattr(scanner, "_discover_html_forms", _noop)
+    return scanner, probed
 
+
+@pytest.mark.asyncio
+async def test_discovery_inventory_gains_cross_origin_backend(monkeypatch):
+    scanner, probed = _quiet_scanner(monkeypatch, probe_writes=True)
     eps = await scanner.discover(BUNDLE, "<html></html>", SHELL)
 
     by_key = {(e.method.value, e.url) for e in eps}
     assert ("POST", BACKEND + "/prod/accounts") in by_key
     assert ("PUT", BACKEND + "/prod/me") in by_key
     assert BACKEND in probed[0]
-    # Third-party hosts never enter the inventory or the probe set.
-    assert not any("stripe" in e.url or "hubspot" in e.url for e in eps)
+    assert not any("stripe" in e.url for e in eps)
 
-    # The miner itself contributes only the first-party backend to the probe set.
-    assert scanner._mine_bundle_backends(BUNDLE, SHELL, {}) == {BACKEND}
+
+@pytest.mark.asyncio
+async def test_unsafe_methods_gated_on_probe_writes(monkeypatch):
+    scanner, _ = _quiet_scanner(monkeypatch, probe_writes=False)
+    eps = await scanner.discover(BUNDLE, "<html></html>", SHELL)
+    mined = [e for e in eps if e.source_pattern == "js_bundle_miner"]
+    assert mined, "mined endpoints still inventoried"
+    assert {e.method.value for e in mined} == {"GET"}
+
+
+@pytest.mark.asyncio
+async def test_third_party_api_host_not_probed(monkeypatch):
+    scanner, probed = _quiet_scanner(monkeypatch)
+    await scanner.discover('var h="https://api.hubspot.com/crm/v3";', "", SHELL)
+    assert not any("hubspot" in u for u in probed[0])
+
+
+@pytest.mark.asyncio
+async def test_docs_link_not_probed(monkeypatch):
+    scanner, probed = _quiet_scanner(monkeypatch)
+    await scanner.discover('a="https://developers.vendor.io/api/";', "", SHELL)
+    assert not any("vendor.io" in u for u in probed[0])
+
+
+@pytest.mark.asyncio
+async def test_relative_calls_not_retargeted_to_sole_vendor_origin(monkeypatch):
+    scanner, _ = _quiet_scanner(monkeypatch)
+    text = 'var v="https://api.foo.io/v1";http.get("/api/items");http.post("/api/orders",b);'
+    eps = await scanner.discover(text, "", SHELL)
+    own = [e for e in eps if e.url.startswith(SHELL)]
+    assert any(e.url == SHELL + "/api/items" for e in own)
+    assert not any(e.url.startswith("https://api.foo.io") and "/api/items" in e.url for e in eps)
+
+
+@pytest.mark.asyncio
+async def test_probe_switch_disables_mined_backends(monkeypatch):
+    scanner, probed = _quiet_scanner(monkeypatch)
+    monkeypatch.setattr(scanner, "PROBE_MINED_BACKENDS", False)
+    await scanner.discover(BUNDLE, "", SHELL)
+    assert BACKEND not in probed[0]
