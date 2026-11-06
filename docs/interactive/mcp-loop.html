@@ -185,10 +185,10 @@
         <text class="mono at-6" x="435" y="255" text-anchor="middle">fix(scan_id, finding_id)</text>
         <path id="lp6" class="wire at-6 lit-6" d="M332 260 H 538" marker-end="url(#arrL)"/>
         <path id="lp6r" class="wire ret at-6 lit-6" d="M538 274 H 332" marker-end="url(#arrL)"/>
-        <text class="mono at-6 t-info" x="435" y="286" text-anchor="middle">FixProposal · applied: false</text>
+        <text class="mono at-6 t-info" x="435" y="286" text-anchor="middle">FixBrief · applied: false</text>
 
         <!-- band 7: the host applies -->
-        <g class="node at-7 lit-7" transform="translate(236 300)"><rect width="168" height="28" rx="8" class="soft-accent"/><text x="84" y="18" text-anchor="middle">host applies the diff</text></g>
+        <g class="node at-7 lit-7" transform="translate(236 300)"><rect width="168" height="28" rx="8" class="soft-accent"/><text x="84" y="18" text-anchor="middle">host writes + applies</text></g>
         <text class="lbl at-7 noexec" x="550" y="318" text-anchor="middle">writes no files</text>
         <path class="wire at-7 accent" d="M102 314 H 232" marker-end="url(#arrL)"/>
         <text class="lbl at-7" x="166" y="309" text-anchor="middle">you review, approve, undo</text>
@@ -287,33 +287,33 @@
 
           <g class="only-6">
             <g class="mono">
-              <text x="14" y="56" class="t-info">FixProposal</text>
-              <text x="14" y="78">finding_id · file · title</text>
+              <text x="14" y="56" class="t-info">FixBrief</text>
+              <text x="14" y="78">finding_id · file · line · title</text>
               <text x="14" y="94">category · severity</text>
-              <text x="14" y="118">diff: "--- a/app/api/… +++ b/…"</text>
-              <text x="14" y="134">fixed_file: "…whole file…"</text>
-              <text x="14" y="150">explanation: "…"</text>
+              <text x="14" y="118">description · guidance</text>
+              <text x="14" y="134">fix_patterns · guidelines</text>
+              <text x="14" y="150">file_content: "…whole file…"</text>
               <text x="14" y="174" class="t-accent">applied: false</text>
-              <text x="14" y="198">next_step: "Review the diff and</text>
-              <text x="28" y="214">apply it with your editor…"</text>
+              <text x="14" y="198">next_step: "Edit the file</text>
+              <text x="28" y="214">yourself, then call verify…"</text>
             </g>
             <text class="lbl" x="14" y="246">Reads the finding's source file from</text>
-            <text class="lbl" x="14" y="262">the cached scan path. Needs an LLM</text>
-            <text class="lbl" x="14" y="278">key (ANTHROPIC_API_KEY).</text>
+            <text class="lbl" x="14" y="262">the cached scan path. No LLM call,</text>
+            <text class="lbl" x="14" y="278">so no API key is needed.</text>
           </g>
 
           <g class="only-7">
             <text class="lbl" x="14" y="56">The MCP does not write files. Why:</text>
             <text x="14" y="82"><tspan class="t-accent">1</tspan>  the host has the edit UX:</text>
-            <text class="lbl" x="30" y="98">diff review, apply, undo, approval</text>
+            <text class="lbl" x="30" y="98">edit UX: review, apply, undo, approval</text>
             <text x="14" y="122"><tspan class="t-accent">2</tspan>  single writer = coherence:</text>
             <text class="lbl" x="30" y="138">the agent's context matches disk</text>
             <text x="14" y="162"><tspan class="t-accent">3</tspan>  less scary than "the tool</text>
             <text class="lbl" x="30" y="178">rewrote 5 of your files"</text>
             <text x="14" y="202"><tspan class="t-accent">4</tspan>  applied with understanding:</text>
             <text class="lbl" x="30" y="218">imports and style adapted to fit</text>
-            <text class="lbl" x="14" y="250">The diff is a reference</text>
-            <text class="lbl" x="14" y="266">implementation, not a mandate.</text>
+            <text class="lbl" x="14" y="250">The host writes the patch;</text>
+            <text class="lbl" x="14" y="266">we supply the grounding.</text>
           </g>
 
           <g class="only-8">
@@ -357,8 +357,8 @@
       <p class="step" data-on="loopHook"><span class="n">3</span><code>scan</code> returns a typed <code>ScanResult</code>: a <code>scan_id</code>, the grade, the launch verdict, severity counts, <b><code>path_to_next_grade</code></b>, root-cause <code>themes</code> and trimmed findings with a plain-English explanation and a priority each.</p>
       <p class="step" data-on="loopHook"><span class="n">4</span>You ask <b>"what gets me to a C?"</b>. No tool runs. The LLM reads the rung for C from the payload (requires 0 critical, 0 high; clear at least 4) and answers from the grade model instead of guessing.</p>
       <p class="step" data-on="loopHook"><span class="n">5</span><code>explain(scan_id, finding_id)</code> resolves the finding from the scan cache and returns a deep dive: its own description, technical detail, evidence and vulnerable snippet, then business impact, stack-tailored remediation and a step-by-step walkthrough.</p>
-      <p class="step" data-on="loopHook"><span class="n">6</span><code>fix(scan_id, finding_id)</code> reads the finding's source file and returns a <b>proposed patch</b>: a unified <code>diff</code>, the full <code>fixed_file</code>, an <code>explanation</code>, and <code>applied: false</code>.</p>
-      <p class="step" data-on="loopHook"><span class="n">7</span><b>The host applies it</b> with its own editor, inside your normal review flow. The MCP writes no files by default; the four reasons are in the panel.</p>
+      <p class="step" data-on="loopHook"><span class="n">6</span><code>fix(scan_id, finding_id)</code> reads the finding's source file and returns a <b>fix brief</b>: the finding, the full <code>file_content</code>, common <code>fix_patterns</code>, <code>guidelines</code> and <code>applied: false</code>. It makes no LLM call, so it needs no API key.</p>
+      <p class="step" data-on="loopHook"><span class="n">7</span><b>The host writes and applies the patch</b> with its own model and editor, inside your normal review flow. The MCP writes no files by default; the four reasons are in the panel.</p>
       <p class="step" data-on="loopHook"><span class="n">8</span><code>verify(scan_id)</code> re-scans the same path and reports what cleared, what is still there, the grade before and after, and a fresh <code>scan_id</code>. <b>Only rule-based findings are verifiable</b>; LLM and DAST findings are reported as unverifiable and held constant.</p>
       <p class="step" data-on="loopHook"><span class="n">9</span><code>export(scan_id, format)</code> renders the cached scan as html, sarif, json or markdown and returns the content. The host writes the file, same stance as <code>fix</code>.</p>
     </div>
@@ -503,7 +503,7 @@
 
   <div class="scene" id="cli" data-scene data-interval="3200">
     <figure class="stage">
-      <svg viewBox="0 0 960 240" role="img" aria-label="Two lanes from one fix generator: the CLI backs up, writes and re-scans itself because it has no host LLM; the MCP returns a diff the host applies, then verify re-scans.">
+      <svg viewBox="0 0 960 240" role="img" aria-label="Two lanes from one fix generator: the CLI backs up, writes and re-scans itself because it has no host LLM; the MCP returns a brief the host turns into a patch, then verify re-scans.">
         <defs><marker id="arrK" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
         <g class="node lit-1" transform="translate(20 80)"><rect width="150" height="80" rx="10"/><text class="ttl" x="12" y="26">FixGenerator</text><text class="lbl" x="12" y="46">finding + full file</text><text class="lbl" x="12" y="62">→ fixed file + diff</text></g>
 
@@ -524,18 +524,18 @@
           <path class="wire at-3" d="M170 130 C 190 130, 190 180, 208 180" marker-end="url(#arrK)"/>
           <g class="node at-3 lit-3" transform="translate(210 154)"><rect width="150" height="52" rx="8"/><text x="12" y="22">host LLM present</text><text class="lbl" x="12" y="40">a capable writer exists</text></g>
           <path class="wire at-3" d="M360 180 H 378" marker-end="url(#arrK)"/>
-          <g class="node at-3 lit-3" transform="translate(380 154)"><rect width="160" height="52" rx="8"/><text x="12" y="22">return the diff</text><text class="lbl" x="12" y="40">applied: false</text></g>
+          <g class="node at-3 lit-3" transform="translate(380 154)"><rect width="160" height="52" rx="8"/><text x="12" y="22">return the brief</text><text class="lbl" x="12" y="40">applied: false</text></g>
           <path class="wire at-3" d="M540 180 H 558" marker-end="url(#arrK)"/>
-          <g class="node at-3 lit-3" transform="translate(560 154)"><rect width="150" height="52" rx="8" class="soft-accent"/><text x="12" y="22">host applies it</text><text class="lbl" x="12" y="40">its editor, its undo</text></g>
+          <g class="node at-3 lit-3" transform="translate(560 154)"><rect width="150" height="52" rx="8" class="soft-accent"/><text x="12" y="22">host patches it</text><text class="lbl" x="12" y="40">its editor, its undo</text></g>
           <path class="wire at-3" d="M710 180 H 728" marker-end="url(#arrK)"/>
           <g class="node at-3 lit-3" transform="translate(730 154)"><rect width="210" height="52" rx="8" class="soft-safe"/><text x="12" y="22">verify(scan_id)</text><text class="lbl" x="12" y="40">re-scan, grade before → after</text></g>
         </g>
       </svg>
     </figure>
     <div class="scene-steps">
-      <p class="step"><span class="n">1</span>Both paths start from the same <code>FixGenerator</code>: the finding plus its full source file go to the LLM, and a fixed file and unified diff come back.</p>
+      <p class="step"><span class="n">1</span>The CLI and web UI use <code>FixGenerator</code>: the finding plus its full source file go to an LLM, and a fixed file and unified diff come back. The MCP skips it.</p>
       <p class="step"><span class="n">2</span><b>The CLI has no host LLM, so it must apply the fix itself.</b> It snapshots the files it will change as a safety net (outside the repo for a file copy), chains the fixes for each file into a single atomic write (rolled back if a later write fails, and never over a file you edited meanwhile), then re-scans to confirm the findings are gone.</p>
-      <p class="step"><span class="n">3</span><b>The MCP always has a capable agent, so it defers the write.</b> It returns the diff with <code>applied: false</code>, the host applies it in your review flow, and <code>verify</code> closes the loop with the same re-scan proof.</p>
+      <p class="step"><span class="n">3</span><b>The MCP always has a capable agent, so it defers the write.</b> It returns a brief with <code>applied: false</code>, the host writes and applies the patch in your review flow, and <code>verify</code> closes the loop with the same re-scan proof.</p>
     </div>
   </div>
 </section>
@@ -549,7 +549,7 @@
       <tbody>
         <tr><td><code>scan</code></td><td><code>path</code>, <code>min_severity="medium"</code></td><td>scan_id, grade, launch verdict, counts, path_to_next_grade, themes, trimmed findings</td><td>nobody (code-only SAST, read only)</td></tr>
         <tr><td><code>explain</code></td><td><code>scan_id</code>, <code>finding_id</code></td><td>the finding's own description, technical detail, evidence, snippet; business impact; remediation; walkthrough</td><td>nobody</td></tr>
-        <tr><td><code>fix</code></td><td><code>scan_id</code>, <code>finding_id</code></td><td>unified diff, fixed_file, explanation, <code>applied: false</code></td><td><b>the host LLM</b></td></tr>
+        <tr><td><code>fix</code></td><td><code>scan_id</code>, <code>finding_id</code></td><td>finding, file_content, fix_patterns, <code>applied: false</code></td><td><b>the host LLM</b></td></tr>
         <tr><td><code>verify</code></td><td><code>scan_id</code></td><td>resolved / still present / unverifiable (a scanner that failed or did not run, or code that moved to another file, never counts as resolved), grade before → after, fresh scan_id</td><td>nobody (re-scan only)</td></tr>
         <tr><td><code>export</code></td><td><code>scan_id</code>, <code>format="markdown"</code></td><td>content as html, sarif, json or markdown, suggested filename</td><td><b>the host LLM</b></td></tr>
         <tr><td><code>scan_url</code></td><td><code>url</code>, <code>min_severity="medium"</code></td><td>job_id, status "running"</td><td>nobody</td></tr>

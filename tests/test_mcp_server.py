@@ -269,23 +269,17 @@ async def test_explain_tool_raises_on_unknown_finding(isolated_cache):
     assert "no finding" in str(exc.value).lower()
 
 
-def test_fix_proposal_maps_result_and_never_marks_applied():
-    from isitsecure.engine.fixes.fix_generator import FixResult
-
+def test_fix_brief_packages_finding_and_source_and_never_marks_applied():
     f = _finding(SeverityLevel.CRITICAL, FindingCategory.INJECTION_RISK, "SQLi", file="db.ts")
-    result = FixResult(
-        finding_id=f.id, file_path="db.ts", success=True,
-        original_code="raw", fixed_code="parameterized",
-        diff="--- a/db.ts\n+++ b/db.ts\n", explanation="Parameterized the query.",
-    )
-    p = mcp_server._fix_proposal(f, result)
-    assert p["applied"] is False                       # MCP never writes
-    assert p["diff"].startswith("--- a/db.ts")
-    assert p["fixed_file"] == "parameterized"
-    assert "Parameterized" in p["explanation"]
-    assert set(p) == {
-        "finding_id", "file", "title", "category", "severity",
-        "diff", "fixed_file", "explanation", "applied", "next_step",
+    b = mcp_server._fix_brief(f, "const q = `SELECT ${id}`;")
+    assert b["applied"] is False                       # MCP never writes
+    assert b["file"] == "db.ts" and b["file_content"].startswith("const q")
+    assert "parameterized" in b["fix_patterns"].lower()
+    assert b["guidelines"]
+    assert set(b) == {
+        "finding_id", "file", "line", "title", "category", "severity",
+        "description", "guidance", "fix_patterns", "guidelines",
+        "file_content", "applied", "next_step",
     }
 
 
@@ -322,37 +316,24 @@ def test_read_finding_file_rejects_too_large(tmp_path):
         mcp_server._read_finding_file(_f_file("big.js"), str(tmp_path))
 
 
-async def test_fix_tool_returns_proposal(isolated_cache, tmp_path, monkeypatch):
-    from isitsecure.engine.fixes import fix_generator as fg
-
+async def test_fix_tool_returns_brief_without_llm(isolated_cache, tmp_path, monkeypatch):
     (tmp_path / "db.ts").write_text("const q = `SELECT ... ${id}`;\n")
     f = _finding(SeverityLevel.CRITICAL, FindingCategory.INJECTION_RISK, "SQLi in getById", file="db.ts")
     sid = mcp_server._cache_report(_report([f]), repo_path=str(tmp_path))
 
-    async def fake_generate_fix(self, finding, content):
-        return fg.FixResult(
-            finding_id=finding.id, file_path="db.ts", success=True,
-            fixed_code="const q = db.query('... WHERE id=$1', [id]);",
-            diff="--- a/db.ts\n+++ b/db.ts\n", explanation="Parameterized the query.",
-        )
+    # The host LLM does the work: the MCP must never build an LLM client or call
+    # FixGenerator, so it works with no API key.
+    def boom(*a, **k):
+        raise AssertionError("fix must not use an LLM")
 
-    monkeypatch.setattr(fg.FixGenerator, "generate_fix", fake_generate_fix)
-    monkeypatch.setattr(mcp_server, "_maybe_llm_client", lambda: object())
+    monkeypatch.setattr(mcp_server, "_maybe_llm_client", boom)
+    from isitsecure.engine.fixes import fix_generator as fg
+    monkeypatch.setattr(fg.FixGenerator, "generate_fix", boom)
 
     server = mcp_server.build_server()
-    res = await server.call_tool("fix", {"scan_id": sid, "finding_id": f.id})
-    assert "parameterized" in str(res).lower()
-
-
-async def test_fix_tool_needs_llm_key(isolated_cache, tmp_path, monkeypatch):
-    (tmp_path / "db.ts").write_text("x")
-    f = _finding(SeverityLevel.CRITICAL, FindingCategory.INJECTION_RISK, "x", file="db.ts")
-    sid = mcp_server._cache_report(_report([f]), repo_path=str(tmp_path))
-    monkeypatch.setattr(mcp_server, "_maybe_llm_client", lambda: None)
-    server = mcp_server.build_server()
-    with pytest.raises(Exception) as exc:
-        await server.call_tool("fix", {"scan_id": sid, "finding_id": f.id})
-    assert "api key" in str(exc.value).lower() or "llm" in str(exc.value).lower()
+    _, brief = await server.call_tool("fix", {"scan_id": sid, "finding_id": f.id})
+    assert brief["finding_id"] == f.id and brief["applied"] is False
+    assert "SELECT" in brief["file_content"]
 
 
 async def test_fix_tool_unknown_scan_raises(isolated_cache):
@@ -645,10 +626,6 @@ async def test_scan_url_eviction_protects_running_jobs(isolated_cache, monkeypat
 
 
 async def test_fix_on_dast_scan_id_errors_cleanly(isolated_cache, monkeypatch):
-    # Pretend a key is configured so we reach the DAST-specific path (no source
-    # file) rather than the LLM-key check — otherwise this test's outcome would
-    # depend on whether the environment happens to have an API key (it doesn't in CI).
-    monkeypatch.setattr(mcp_server, "_maybe_llm_client", lambda: object())
     # A DAST finding has no code_location and its scan has no repo_path.
     dast = DeepFinding(
         source=FindingSource.DAST_URL, category=FindingCategory.MISSING_HEADERS,

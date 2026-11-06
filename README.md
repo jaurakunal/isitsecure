@@ -796,9 +796,12 @@ Now ask your agent to check your code. It calls the `scan` tool:
 - **`explain(scan_id, finding_id)`** — after a scan, dig into one finding: its
   specific description, the vulnerable code, and step-by-step remediation. Ask
   "explain the SQL injection one" and the agent calls it for you.
-- **`fix(scan_id, finding_id)`** — proposes a patch for one finding (a unified
-  diff + the fixed file). Your AI tool applies it with its own editor — the MCP
-  never writes files. Ask "fix the SQL injection."
+- **`fix(scan_id, finding_id)`** — hands your AI tool everything it needs to fix
+  one finding (the finding, its source file, common fix patterns). Your AI tool
+  writes and applies the patch with its own model and editor — so this needs no
+  API key, and the MCP never writes files. (The CLI and web UI have no host AI,
+  so `isitsecure fix` still generates fixes itself and needs an LLM key.) Ask
+  "fix the SQL injection."
 - **`verify(scan_id)`** — after you apply fixes, re-scans and reports what
   cleared and any grade movement (e.g. F → D). Ask "did that work?"
 - **`export(scan_id, format)`** — render the scan as HTML / SARIF / JSON /

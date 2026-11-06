@@ -104,22 +104,26 @@ class FindingDetail(TypedDict):
     walkthrough: list[str]
 
 
-class FixProposal(TypedDict):
-    """A proposed fix for one finding — the `fix` tool's output schema.
+class FixBrief(TypedDict):
+    """Everything the host LLM needs to fix one finding — the `fix` tool's output.
 
-    The MCP does NOT write files: it returns the change for the host LLM to
-    apply with its own editor (see docs/mcp.md "Who applies the fix"). Carries a
-    unified diff AND the full fixed file so the agent can apply either way.
+    The MCP makes no LLM call and writes no files: the host LLM (which already has
+    the user's model, context and editor) writes the patch and applies it, then
+    `verify` confirms. The CLI / web UI have no host LLM, so they keep generating
+    fixes themselves via FixGenerator (see docs/mcp.md "Who applies the fix").
     """
 
     finding_id: str
     file: str
+    line: int | None
     title: str
     category: str
     severity: str
-    diff: str
-    fixed_file: str
-    explanation: str
+    description: str
+    guidance: str
+    fix_patterns: str
+    guidelines: str
+    file_content: str
     applied: bool
     next_step: str
 
@@ -575,21 +579,27 @@ def _read_finding_file(finding, repo_path: str | None) -> str:
     return text
 
 
-def _fix_proposal(finding, result) -> FixProposal:
-    """Map a FixResult into the agent-facing FixProposal (the host applies it)."""
+def _fix_brief(finding, file_content: str) -> FixBrief:
+    """Package a finding + its source file for the host LLM to fix and apply."""
+    from isitsecure.engine.fixes.prompts import FixPrompts
+
+    loc = finding.code_location
     return {
         "finding_id": finding.id,
-        "file": result.file_path,
+        "file": loc.file_path if loc else "",
+        "line": loc.line_number if loc else None,
         "title": finding.title,
         "category": finding.category.value,
         "severity": finding.severity.value.lower(),
-        "diff": result.diff,
-        "fixed_file": result.fixed_code,
-        "explanation": result.explanation,
+        "description": finding.description or "",
+        "guidance": finding.remediation_guidance or "",
+        "fix_patterns": FixPrompts.FIX_PATTERNS,
+        "guidelines": FixPrompts.HOST_GUIDELINES,
+        "file_content": file_content,
         "applied": False,
         "next_step": (
-            "Review the diff and apply it with your editor (the MCP does not "
-            "write files). Then re-scan to confirm the finding is resolved."
+            "Edit the file yourself to fix this finding (the MCP makes no LLM "
+            "call and writes no files), then call verify to confirm it cleared."
         ),
     }
 
@@ -910,38 +920,23 @@ def build_server():
         return _finding_detail(finding, report)
 
     @server.tool()
-    async def fix(scan_id: str, finding_id: str) -> FixProposal:
-        """Propose a fix for one finding — returns a diff for YOU (the host) to apply.
+    async def fix(scan_id: str, finding_id: str) -> FixBrief:
+        """Get what you need to fix one finding — YOU (the host) write and apply the patch.
 
         Use after a scan when the user wants to fix a specific finding ("fix the
         SQL injection", "fix finding X", "patch this"). Pass the `scan_id` and the
-        finding's `id`. Returns a unified diff, the full fixed file, and an
-        explanation. The MCP does NOT write files — apply the change with your own
-        editor, then re-scan to confirm the finding is resolved.
+        finding's `id`. Returns the finding, its source file, common fix patterns
+        and guidelines — no API key needed. Write the minimal fix with your own
+        editor, then call `verify` to confirm the finding is resolved.
         """
         from mcp.server.fastmcp.exceptions import ToolError
 
         _, finding = _resolve_scan_and_finding(scan_id, finding_id)
-
-        llm_client = _maybe_llm_client()
-        if llm_client is None:
-            raise ToolError(
-                "Generating a fix needs an LLM API key. Set ANTHROPIC_API_KEY or "
-                "run `isitsecure setup`."
-            )
         try:
             file_content = _read_finding_file(finding, get_scan_path(scan_id))
         except ValueError as exc:
             raise ToolError(str(exc))
-
-        from isitsecure.engine.fixes.fix_generator import FixGenerator
-
-        result = await FixGenerator(llm_client).generate_fix(finding, file_content)
-        if not result.success:
-            raise ToolError(
-                f"Couldn't generate a fix: {result.error or 'unknown error'}"
-            )
-        return _fix_proposal(finding, result)
+        return _fix_brief(finding, file_content)
 
     @server.tool()
     async def verify(scan_id: str) -> VerifyResult:
