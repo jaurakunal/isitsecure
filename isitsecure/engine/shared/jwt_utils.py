@@ -64,3 +64,21 @@ def decode_jwt_header(token: str) -> dict[str, Any] | None:
         return json.loads(header_bytes)
     except Exception:
         return None
+
+
+def looks_like_jwt(value: Any) -> bool:
+    """Whether ``value`` is a JWT by SHAPE: three dot-separated base64url segments whose
+    header and payload both decode to non-empty JSON objects, regardless of storage key.
+
+    Key-name heuristics ('jwt'/'accessToken') miss apps that stash the token under an
+    arbitrary key; shape detection catches those without matching version strings,
+    hostnames or other dotted values.
+    """
+    if not isinstance(value, str) or value.count(".") != JWT_PARTS_COUNT - 1:
+        return False
+    header = decode_jwt_header(value)
+    payload = decode_jwt_payload(value)
+    return (
+        isinstance(header, dict) and bool(header)
+        and isinstance(payload, dict) and bool(payload)
+    )
