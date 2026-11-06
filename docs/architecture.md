@@ -559,7 +559,7 @@ isitsecure/
 │   ├── fixes/                  # AI fix gen: safety_net, safe_apply, verifier, plain_results, pr_flow, git_ops, pr_text
 │   ├── guided_dast/            # SAST → DAST test generation (6 strategies)
 │   ├── auth/                   # Auth providers (Supabase, Firebase, Browser, Token)
-│   ├── shared/                 # Rate limiter, OOB callbacks, JWT utils
+│   ├── shared/                 # Rate limiter, OOB callbacks, JWT utils, request_contract (learns 400/422/415 contracts, repairs probes, reports "contract-blocked")
 │   ├── triage/                 # LLM triage + priority calculator
 │   ├── reporting/              # Report gen (JSON, HTML) + plain_english remediation layer
 │   ├── ingestion/              # URL snapshot capture
