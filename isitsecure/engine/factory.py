@@ -110,6 +110,7 @@ from isitsecure.engine.scanners.file_upload_scanner import (
     FileUploadScanner,
 )
 from isitsecure.engine.scanners.graphql_scanner import GraphQLScanner
+from isitsecure.engine.scanners.bola_forge_scanner import BolaForgeScanner
 from isitsecure.engine.scanners.idor_scanner import IDORScanner
 from isitsecure.engine.scanners.jwt_scanner import JWTScanner
 from isitsecure.engine.scanners.mass_assignment_scanner import (
@@ -358,6 +359,7 @@ def create_deep_security_scan_agent(
         # Special scanners with non-standard scan() signatures
         idor_scanner=IDORScanner(probe_writes=probe_writes),
         jwt_scanner=jwt_scanner,
+        bola_forge_scanner=BolaForgeScanner(probe_writes=probe_writes),
         rls_deep_scanner=RLSDeepScanner(),
         privilege_escalation_scanner=PrivilegeEscalationScanner(),
         # LLM reviewer
