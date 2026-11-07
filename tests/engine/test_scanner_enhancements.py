@@ -323,9 +323,14 @@ class TestJWTClaimManipulation:
         payload = scanner._decode_jwt_payload(token)
 
         async def mock_get(url, **kwargs):
-            # Garbage-token negative control is rejected; the rest accepted.
+            # Negative controls (garbage, bad signature, anonymous) are
+            # rejected; the real token and forgeries are accepted.
             auth = kwargs.get("headers", {}).get("Authorization", "")
-            if "invalid.invalid.invalid" in auth:
+            if (
+                not auth
+                or "invalid.invalid.invalid" in auth
+                or auth == f"Bearer {JWTScanner._bad_signature_token(token)}"
+            ):
                 return _make_httpx_response(401, "unauthorized")
             return _make_httpx_response(200, '{"data":"admin stuff"}')
 

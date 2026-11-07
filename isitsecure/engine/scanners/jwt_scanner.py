@@ -32,7 +32,11 @@ from isitsecure.engine.shared.jwt_utils import (
     decode_jwt_payload as _shared_decode_jwt_payload,
 )
 from isitsecure.engine.shared.progress import emit
-from isitsecure.engine.shared.rate_limited_client import RateLimitedClient
+from isitsecure.engine.shared.rate_limited_client import (
+    RateLimitedClient,
+    TargetUnresponsiveError,
+)
+from isitsecure.engine.shared.target_health import TargetHealth
 from isitsecure.engine.models import (
     DeepFinding,
     DiscoveredEndpoint,
@@ -50,6 +54,10 @@ class JWTScanner:
     Takes an AuthSession (which has an access_token JWT) and a test
     endpoint URL. Manipulates JWTs using base64 + json + hmac
     (no PyJWT dependency).
+
+    Not safe for concurrent ``scan()`` calls on one instance: the control
+    cache and target-health tracker are per-scan instance state. Use one
+    instance per scan.
     """
 
     HTTP_STATUS_OK_LOWER = 200
@@ -69,6 +77,17 @@ class JWTScanner:
         # (url, token) -> {"control": resp, "baseline": resp}; reused by all
         # four forgery tests so each scan fetches the controls once.
         self._control_cache: dict[tuple[str, str], dict[str, Any]] = {}
+        # Stops sending to a wedged target; reset per scan.
+        self._health = TargetHealth()
+
+    def _new_client(self) -> RateLimitedClient:
+        return RateLimitedClient(
+            max_concurrent=1,
+            delay_seconds=SharedPatterns.DEFAULT_PROBE_DELAY,
+            timeout_seconds=JWTAttackConfig.HTTP_TIMEOUT_SECONDS,
+            user_agent=DeepScanConfig.USER_AGENT,
+            health=self._health,
+        )
 
     @property
     def scanner_name(self) -> str:
@@ -96,6 +115,7 @@ class JWTScanner:
         """
         findings: list[DeepFinding] = []
         self._control_cache = {}
+        self._health = TargetHealth()
 
         # Phase 5: Token in URL detection (no auth required)
         token_url_findings = self._check_token_in_url(endpoints)
@@ -147,6 +167,15 @@ class JWTScanner:
                 )
                 findings.extend(key_confusion_findings)
 
+        if self._health.suppressed:
+            logger.warning(
+                "JWTScanner: target stopped answering; %d request(s) not sent",
+                self._health.suppressed,
+            )
+            emit(
+                f"JWT: target unresponsive, {self._health.suppressed} "
+                "request(s) not sent"
+            )
         logger.info("JWTScanner: %d findings", len(findings))
         return findings
 
@@ -226,62 +255,97 @@ class JWTScanner:
     def _is_2xx(self, response: Any) -> bool:
         return self.HTTP_STATUS_OK_LOWER <= response.status_code < self.HTTP_STATUS_OK_UPPER
 
+    @classmethod
+    def _bad_signature_token(cls, token: str) -> str:
+        """The real token with its signature replaced: well-formed but unverifiable.
+
+        Distinct from CONTROL_TOKEN (malformed): a server that rejects garbage
+        but skips signature checks is caught by this one, and a soft-200 server
+        that ignores the token entirely accepts both.
+        """
+        parts = token.split(".")
+        if len(parts) != cls.JWT_PARTS_COUNT:
+            return cls.CONTROL_TOKEN
+        parts[cls.JWT_SIGNATURE_INDEX] = cls._b64url_encode(b"isitsecure-invalid-signature")
+        return ".".join(parts)
+
     async def _fetch_controls(
         self, client: Any, test_url: str, original_token: str
-    ) -> tuple[Any, Any]:
-        """Return (control, baseline) responses for the endpoint.
+    ) -> tuple[list[Any], Any]:
+        """Return (controls, baseline) responses for the endpoint.
 
-        control  = same request with a clearly invalid token.
+        controls = requests that MUST be rejected: a garbage token, the real
+                   token with a bad signature, and no Authorization at all.
         baseline = same request with the real captured token.
+        A control whose request failed is simply absent from the list.
         """
         cached = self._control_cache.setdefault((test_url, original_token), {})
-        for key, token in (
-            ("control", self.CONTROL_TOKEN),
-            ("baseline", original_token),
-        ):
+        # (key, Authorization header or None for the unauthenticated request)
+        plan = (
+            ("control", f"Bearer {self.CONTROL_TOKEN}"),
+            ("badsig", f"Bearer {self._bad_signature_token(original_token)}"),
+            ("unauth", None),
+            ("baseline", f"Bearer {original_token}"),
+        )
+        for key, auth in plan:
             if key in cached:
                 continue
             try:
                 cached[key] = await client.get(
-                    test_url, headers={"Authorization": f"Bearer {token}"}
+                    test_url, headers={"Authorization": auth} if auth else {}
                 )
+            except TargetUnresponsiveError:
+                # Controls missing because we stopped sending (not a one-off
+                # failure): a forgery verdict without them is unsound.
+                cached["suppressed"] = True
             except Exception as exc:  # noqa: BLE001 - degrade, don't abort
                 logger.debug("JWT %s request failed: %s", key, exc)
-        return cached.get("control"), cached.get("baseline")
+        if cached.get("suppressed"):
+            raise TargetUnresponsiveError(
+                "controls not sent: target unresponsive; skipping forgery test"
+            )
+        controls = [cached[k] for k in ("control", "badsig", "unauth") if k in cached]
+        return controls, cached.get("baseline")
 
     NO_CONTROL_CONFIDENCE_PENALTY = 0.2
 
     @staticmethod
-    def _control_status(control: Any) -> str:
-        return str(control.status_code) if control is not None else "unavailable"
+    def _control_status(controls: list[Any]) -> str:
+        if not controls:
+            return "unavailable"
+        return "/".join(str(c.status_code) for c in controls)
 
-    def _adjust(self, confidence: float, control: Any) -> float:
+    def _adjust(self, confidence: float, controls: list[Any]) -> float:
         """Lower confidence when no negative control could be obtained."""
-        if control is None:
+        if not controls:
             return round(max(0.0, confidence - self.NO_CONTROL_CONFIDENCE_PENALTY), 2)
         return confidence
 
     @staticmethod
-    def _no_control_note(control: Any) -> str:
+    def _no_control_note(controls: list[Any]) -> str:
         return (
             ""
-            if control is not None
+            if controls
             else "\nNo negative control could be obtained (request failed); "
             "a public or token-ignoring endpoint cannot be ruled out."
         )
 
-    def _forgery_accepted(self, forged: Any, control: Any, baseline: Any) -> bool:
-        """True only when the forged token is treated differently from garbage.
+    def _forgery_accepted(self, forged: Any, controls: list[Any], baseline: Any) -> bool:
+        """True only when the forged token beats EVERY negative control.
 
-        A forged 2xx counts only if the garbage-token control was NOT also
-        accepted, or (when the control was accepted too) the forged response
-        body matches the real-token baseline and differs from the control body
-        (body discrimination). Otherwise the endpoint ignores the token.
+        The controls are a garbage token, an invalid-signature token and an
+        unauthenticated request. A forged 2xx counts only if each control was
+        rejected (non-2xx), or (when a control was accepted too) the forged
+        body matches the real-token baseline and differs from that control's
+        body (body discrimination). Otherwise the endpoint ignores the token
+        (a soft-200) and nothing is proven.
         """
         if not self._is_2xx(forged):
             return False
-        if control is None:
-            return True  # no control obtainable: callers lower confidence
+        # No control obtainable: callers lower confidence.
+        return all(self._beats_control(forged, c, baseline) for c in controls)
+
+    def _beats_control(self, forged: Any, control: Any, baseline: Any) -> bool:
         if not self._is_2xx(control):
             return True
         forged_text = getattr(forged, "text", None)
@@ -324,12 +388,7 @@ class JWTScanner:
         forged_token = self._forge_alg_none_token(payload)
 
         try:
-            async with RateLimitedClient(
-                max_concurrent=1,
-                delay_seconds=SharedPatterns.DEFAULT_PROBE_DELAY,
-                timeout_seconds=JWTAttackConfig.HTTP_TIMEOUT_SECONDS,
-                user_agent=DeepScanConfig.USER_AGENT,
-            ) as client:
+            async with self._new_client() as client:
                 control, baseline = await self._fetch_controls(
                     client, test_url, original_token
                 )
@@ -348,13 +407,13 @@ class JWTScanner:
                         technical_detail=(
                             f"Sent forged JWT with alg:none to {test_url}\n"
                             f"Response status: {response.status_code}\n"
-                            f"Negative control (garbage token) -> "
+                            f"Negative controls (garbage/bad-signature/unauthenticated) -> "
                             f"{self._control_status(control)}"
                             + self._no_control_note(control)
                         ),
                         evidence=(
                             f"GET {test_url} with alg:none JWT -> "
-                            f"{response.status_code} (garbage-token control -> "
+                            f"{response.status_code} (controls garbage/badsig/unauth -> "
                             f"{self._control_status(control)})"
                         ),
                         confidence=self._adjust(JWTAttackConfig.CONFIDENCE_ALG_NONE, control),
@@ -405,13 +464,9 @@ class JWTScanner:
         test_url: str,
     ) -> DeepFinding | None:
         """Try signing JWT with common weak secrets and test acceptance."""
+        tried = 0  # candidates actually sent
         try:
-            async with RateLimitedClient(
-                max_concurrent=1,
-                delay_seconds=SharedPatterns.DEFAULT_PROBE_DELAY,
-                timeout_seconds=JWTAttackConfig.HTTP_TIMEOUT_SECONDS,
-                user_agent=DeepScanConfig.USER_AGENT,
-            ) as client:
+            async with self._new_client() as client:
                 control, baseline = await self._fetch_controls(
                     client, test_url, original_token
                 )
@@ -421,6 +476,7 @@ class JWTScanner:
                         test_url,
                         headers={"Authorization": f"Bearer {forged_token}"},
                     )
+                    tried += 1
 
                     if self._forgery_accepted(response, control, baseline):
                         secret_display = secret if secret else "<empty string>"
@@ -436,20 +492,27 @@ class JWTScanner:
                                 f"Signed JWT with secret '{secret_display}' and "
                                 f"sent to {test_url}\n"
                                 f"Response status: {response.status_code}\n"
-                                f"Negative control (garbage token) -> "
+                                f"Negative controls (garbage/bad-signature/unauthenticated) -> "
                                 f"{self._control_status(control)}"
                                 + self._no_control_note(control)
                             ),
                             evidence=(
                                 f"GET {test_url} with JWT signed by "
                                 f"'{secret_display}' -> {response.status_code} "
-                                f"(garbage-token control -> {self._control_status(control)})"
+                                f"(controls garbage/badsig/unauth -> {self._control_status(control)})"
                             ),
                             confidence=self._adjust(JWTAttackConfig.CONFIDENCE_WEAK_SECRET, control),
                             scanner_name=self.scanner_name,
                             endpoint_url=test_url,
                             http_method="GET",
                         )
+        except TargetUnresponsiveError:
+            logger.warning(
+                "JWT weak-secret test stopped: target unresponsive, %d of %d "
+                "candidate(s) not tried",
+                len(JWTAttackConfig.COMMON_WEAK_SECRETS) - tried,
+                len(JWTAttackConfig.COMMON_WEAK_SECRETS),
+            )
         except Exception as exc:
             logger.debug(
                 JWTAttackConfig.ERROR_JWT_SCAN_FAILED.format(error=str(exc))
@@ -490,12 +553,7 @@ class JWTScanner:
             return findings
 
         try:
-            async with RateLimitedClient(
-                max_concurrent=1,
-                delay_seconds=SharedPatterns.DEFAULT_PROBE_DELAY,
-                timeout_seconds=JWTAttackConfig.HTTP_TIMEOUT_SECONDS,
-                user_agent=DeepScanConfig.USER_AGENT,
-            ) as client:
+            async with self._new_client() as client:
                 # Baseline (original token must be 2xx) + negative control
                 control, baseline = await self._fetch_controls(
                     client, test_url, original_token
@@ -620,12 +678,7 @@ class JWTScanner:
         jwks_url = f"{base_url}{JWTAttackConfig.JWKS_ENDPOINT_PATH}"
 
         try:
-            async with RateLimitedClient(
-                max_concurrent=1,
-                delay_seconds=SharedPatterns.DEFAULT_PROBE_DELAY,
-                timeout_seconds=JWTAttackConfig.HTTP_TIMEOUT_SECONDS,
-                user_agent=DeepScanConfig.USER_AGENT,
-            ) as client:
+            async with self._new_client() as client:
                 # Step 1: Fetch JWKS
                 jwks_response = await client.get(jwks_url)
 

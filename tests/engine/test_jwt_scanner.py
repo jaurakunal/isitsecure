@@ -18,6 +18,7 @@ from isitsecure.engine.models import (
     FindingSource,
 )
 from isitsecure.engine.scanners.jwt_scanner import JWTScanner
+from isitsecure.engine.shared.rate_limited_client import TargetUnresponsiveError
 from isitsecure.engine.scanners.protocols import DASTScannerProtocol
 from isitsecure.engine.enums import FindingCategory, SeverityLevel
 
@@ -155,10 +156,12 @@ class TestJWTScanner:
         scanner = JWTScanner(auth_session=session, test_endpoint=endpoint.url)
 
         async def get_side_effect(url, headers=None, **kw):
-            # Garbage-token control is rejected; everything else accepted.
-            if "invalid.invalid.invalid" in (headers or {}).get("Authorization", ""):
-                return _make_response(status_code=401)
-            return _make_response(status_code=200)
+            # Controls (garbage, bad signature, anonymous) are rejected; the
+            # real token and the alg:none forgery are accepted.
+            tok = (headers or {}).get("Authorization", "").removeprefix("Bearer ")
+            if tok == token or tok.endswith("."):
+                return _make_response(status_code=200)
+            return _make_response(status_code=401)
 
         with patch(
             "isitsecure.engine.scanners.jwt_scanner.RateLimitedClient"
@@ -388,9 +391,14 @@ class TestNegativeControl:
         real = _make_jwt()
 
         def handler(tok: str):
-            if tok == "invalid.invalid.invalid":
-                return 200, '{"anonymous": true}'
-            return 200, '{"user": "u1"}'
+            hdr = tok.split(".")[0]
+            try:
+                alg = json.loads(base64.urlsafe_b64decode(hdr + "=" * (-len(hdr) % 4))).get("alg")
+            except Exception:
+                alg = None
+            if alg == "none" or tok == real:
+                return 200, '{"user": "u1"}'
+            return 200, '{"anonymous": true}'
 
         findings = await _run(_FakeServer(handler), real)
         assert JWTAttackConfig.TITLE_ALG_NONE in [f.title for f in findings]
@@ -440,6 +448,123 @@ def _rsa_jwk_and_pem():
         serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
     )
     return {"kty": "RSA", "kid": "k1", "n": b64(nums.n), "e": b64(nums.e)}, pem
+
+
+class TestInvalidSignatureAndUnauthControls:
+    @staticmethod
+    def _well_formed(tok: str) -> bool:
+        return len(tok.split(".")) == 3 and tok != "invalid.invalid.invalid"
+
+    @pytest.mark.asyncio
+    async def test_signature_ignoring_soft_200_not_reported(self) -> None:
+        """Rejects garbage and anonymous, but any well-formed token gets 200.
+
+        The old garbage-only control would call alg=none/weak-secret accepted;
+        the invalid-signature control shows the signature is never checked
+        (soft-200), so there is no proof of forgery.
+        """
+        real = _make_jwt()
+
+        def handler(tok: str):
+            return (200, "ok") if self._well_formed(tok) else (401, "no")
+
+        findings = await _run(_FakeServer(handler), real)
+        assert not [f for f in findings if f.severity == SeverityLevel.CRITICAL]
+
+    @pytest.mark.asyncio
+    async def test_unauthenticated_200_not_reported(self) -> None:
+        """Garbage is rejected but the anonymous request is served: public route."""
+        real = _make_jwt()
+
+        def handler(tok: str):
+            if tok == "invalid.invalid.invalid":
+                return 401, "no"
+            return 200, "same"
+
+        findings = await _run(_FakeServer(handler), real)
+        assert not [f for f in findings if f.severity == SeverityLevel.CRITICAL]
+
+    @pytest.mark.asyncio
+    async def test_real_alg_none_acceptor_beats_all_controls(self) -> None:
+        real = _make_jwt()
+
+        def handler(tok: str):
+            hdr = tok.split(".")[0]
+            try:
+                alg = json.loads(base64.urlsafe_b64decode(hdr + "=" * (-len(hdr) % 4))).get("alg")
+            except Exception:
+                return 401, "bad"
+            return (200, "ok") if alg == "none" or tok == real else (401, "bad")
+
+        server = _FakeServer(handler)
+        findings = await _run(server, real)
+        assert [f for f in findings if f.title == JWTAttackConfig.TITLE_ALG_NONE]
+        # controls were actually sent: anonymous and bad-signature variants
+        assert "" in server.requests
+        assert any(
+            t.split(".")[0] == real.split(".")[0] and t != real and t.count(".") == 2
+            for t in server.requests
+        )
+
+    @pytest.mark.asyncio
+    async def test_suppressed_controls_skip_forgery_tests(self) -> None:
+        """Controls not sent (target unresponsive) while a probe would land on a
+        forged request: no finding, rather than a Critical with no control."""
+        real = _make_jwt()
+
+        def handler(tok: str):
+            hdr = tok.split(".")[0]
+            try:
+                alg = json.loads(base64.urlsafe_b64decode(hdr + "=" * (-len(hdr) % 4))).get("alg")
+            except Exception:
+                alg = None
+            if tok == real or alg == "none":
+                return 200, "ok"
+            raise TargetUnresponsiveError("suppressed")
+
+        findings = await _run(_FakeServer(handler), real)
+        assert not [f for f in findings if f.severity == SeverityLevel.CRITICAL]
+
+    @pytest.mark.asyncio
+    async def test_optional_auth_personalised_body_still_reported(self) -> None:
+        """Optional-auth route (Juice Shop /rest/user/whoami shape): anonymous,
+        garbage and bad-signature callers get 200 {"user":{}}; the real token
+        gets the personalised body. alg=none accepted -> same personalised body."""
+        real = _make_jwt()
+
+        def handler(tok: str):
+            hdr = tok.split(".")[0]
+            try:
+                alg = json.loads(base64.urlsafe_b64decode(hdr + "=" * (-len(hdr) % 4))).get("alg")
+            except Exception:
+                alg = None
+            if tok == real or alg == "none":
+                return 200, '{"user": {"id": 1, "email": "a@b.c"}}'
+            return 200, '{"user": {}}'
+
+        findings = await _run(_FakeServer(handler), real)
+        assert [f for f in findings if f.title == JWTAttackConfig.TITLE_ALG_NONE]
+
+    @pytest.mark.asyncio
+    async def test_optional_auth_route_not_accepting_alg_none_not_reported(self) -> None:
+        """Same whoami shape, but the server looks tokens up (never accepts
+        alg=none): forged gets the anonymous body -> no finding."""
+        real = _make_jwt()
+
+        def handler(tok: str):
+            if tok == real:
+                return 200, '{"user": {"id": 1, "email": "a@b.c"}}'
+            return 200, '{"user": {}}'
+
+        findings = await _run(_FakeServer(handler), real)
+        assert not [f for f in findings if f.severity == SeverityLevel.CRITICAL]
+
+    def test_bad_signature_token_keeps_header_and_payload(self) -> None:
+        real = _make_jwt()
+        bad = JWTScanner._bad_signature_token(real)
+        assert bad != real
+        assert bad.split(".")[:2] == real.split(".")[:2]
+        assert JWTScanner._bad_signature_token("notajwt") == JWTScanner.CONTROL_TOKEN
 
 
 class TestKeyConfusion:

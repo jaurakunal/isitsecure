@@ -177,7 +177,12 @@ class _Srv:
     def client(self):
         async def get(url, headers=None, **kw):
             tok = (headers or {}).get("Authorization", "").removeprefix("Bearer ")
-            if tok == JWTScanner.CONTROL_TOKEN:
+            # controls: garbage, anonymous, real token with a bad signature
+            if "jwks" not in url and tok in (
+                JWTScanner.CONTROL_TOKEN,
+                "",
+                JWTScanner._bad_signature_token(_make_jwt()),
+            ):
                 self.control_calls += 1
                 if self.fail_control:
                     raise httpx.ReadTimeout("t")
@@ -226,7 +231,8 @@ class TestJwtControlsDegrade:
     async def test_controls_fetched_once_per_scan(self) -> None:
         srv = _Srv(lambda t: (401, "no"))
         await _jwt(srv)
-        assert srv.control_calls == 1
+        # garbage + bad-signature + anonymous, each once across all 4 forgery tests
+        assert srv.control_calls == 3
 
     @pytest.mark.asyncio
     async def test_normal_control_keeps_full_confidence(self) -> None:

@@ -6,8 +6,17 @@ import logging
 import httpx
 
 from isitsecure.engine.constants import RateLimitedClientConfig, SharedPatterns
+from isitsecure.engine.shared.target_health import TargetHealth
 
 logger = logging.getLogger(__name__)
+
+
+class TargetUnresponsiveError(httpx.TransportError):
+    """Raised instead of sending to a host that stopped answering.
+
+    A ``TransportError`` so scanners that already degrade on timeouts treat it
+    the same way; it ends that probe, never the scan.
+    """
 
 
 class RateLimitedClient:
@@ -25,7 +34,11 @@ class RateLimitedClient:
         user_agent: str,
         extra_headers: dict[str, str] | None = None,
         follow_redirects: bool = True,
+        health: TargetHealth | None = None,
     ) -> None:
+        # Opt-in: share one TargetHealth across a scanner's clients to stop
+        # sending into a target that has stopped answering.
+        self._health = health
         self._max_concurrent = max_concurrent
         self._delay = delay_seconds
         self._timeout = timeout_seconds
@@ -67,7 +80,22 @@ class RateLimitedClient:
                 raise RuntimeError(
                     RateLimitedClientConfig.ERROR_NOT_CONTEXT_MANAGER
                 )
-            response = await self._client.request(method, url, **kwargs)
+            health = self._health
+            if health is not None and not health.should_send(url):
+                raise TargetUnresponsiveError(
+                    f"target unresponsive, not sending: {health.host_of(url)}"
+                )
+            try:
+                response = await self._client.request(method, url, **kwargs)
+            except httpx.TransportError:
+                if health is not None and health.note_failure(url):
+                    logger.warning(
+                        "Target %s stopped answering; suppressing further requests",
+                        health.host_of(url),
+                    )
+                raise
+            if health is not None:
+                health.note_success(url)
             self._request_count += 1
             if self._delay > 0:
                 await asyncio.sleep(self._delay)
