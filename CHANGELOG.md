@@ -4,6 +4,26 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.33.0](https://github.com/jaurakunal/isitsecure/compare/v0.32.5...v0.33.0) (2026-11-07)
+
+
+### Features
+
+* **benchmarks:** repeat-run stability bar, per-class deltas, auth smoke guard ([#285](https://github.com/jaurakunal/isitsecure/issues/285)) ([bcacd0b](https://github.com/jaurakunal/isitsecure/commit/bcacd0be478ac64aea77c7db6132c7b4a6e71d69))
+* **dast:** learn request contracts and report contract-blocked probes ([#286](https://github.com/jaurakunal/isitsecure/issues/286)) ([162f747](https://github.com/jaurakunal/isitsecure/commit/162f7479e04a6e32e1ebbb78c55c5f4ab7582b07))
+* **discovery:** mine JS bundles for cross-origin backends (opt-in probing) ([#287](https://github.com/jaurakunal/isitsecure/issues/287)) ([ba385ee](https://github.com/jaurakunal/isitsecure/commit/ba385eeaa03ae6e0115f43e203ea0cfe0ea7dfb6))
+* **evidence:** redact exported evidence and attach a baseline-vs-proof pair ([#293](https://github.com/jaurakunal/isitsecure/issues/293)) ([082903c](https://github.com/jaurakunal/isitsecure/commit/082903c8aa59b24c879b67eb6f3e2580f16af06c))
+* **llm:** retry on cyber-safeguard refusal and send workspace-id header ([#284](https://github.com/jaurakunal/isitsecure/issues/284)) ([7569cb4](https://github.com/jaurakunal/isitsecure/commit/7569cb48191d607a4eb86056583ab06e5451f112))
+
+
+### Bug Fixes
+
+* **fix:** harden the remote fix-to-PR flow ([#270](https://github.com/jaurakunal/isitsecure/issues/270)) ([acc299c](https://github.com/jaurakunal/isitsecure/commit/acc299cf4657ebf39ada0139cfd41aff69ee1b25))
+* **fix:** honest verification and no-data-loss apply for the auto-fix flow ([#267](https://github.com/jaurakunal/isitsecure/issues/267)) ([cd4e820](https://github.com/jaurakunal/isitsecure/commit/cd4e820e9e5f963b5115ae419b0c7e13e47aa07e))
+* **server:** log only exception types for fix failures ([#269](https://github.com/jaurakunal/isitsecure/issues/269)) ([e0395eb](https://github.com/jaurakunal/isitsecure/commit/e0395eb3ee809a7630c043d16cc9a2d5d135c4a3))
+* **server:** log only the exception type when enriching a finding fails ([#294](https://github.com/jaurakunal/isitsecure/issues/294)) ([be28c2a](https://github.com/jaurakunal/isitsecure/commit/be28c2aff02204aee08cf1347223b24b9765504b))
+* **taint:** bound params in JS SQLi rule; feat(mcp): fix returns a brief for the host LLM ([#271](https://github.com/jaurakunal/isitsecure/issues/271)) ([6de9e59](https://github.com/jaurakunal/isitsecure/commit/6de9e5911865647c8993474f78231d51f65b4b46))
+
 ## [0.32.5](https://github.com/jaurakunal/isitsecure/compare/v0.32.4...v0.32.5) (2026-10-26)
 
 
