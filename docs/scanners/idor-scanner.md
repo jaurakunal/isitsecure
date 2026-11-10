@@ -27,6 +27,8 @@ In **authenticated mode** with two sets of credentials, the scanner performs **c
 
 Risk levels: **CONFIRMED** is reserved for the **cross-user** path (below) — it proves user B can read user A's object. An **unauthenticated** probe cannot reach CONFIRMED or LIKELY: a public catalogue (`/api/Products/{id}`) and a private record (`/api/Recycles/{id}`) both return a different object per id with no auth, and only ownership intent — invisible without credentials — separates them. So an unauthenticated swap that returns *different* data per id is at most **POSSIBLE** (a lead to verify), and an id that returns the *same* response however you change it is **SAFE** (the id is not a real object reference). Real read-IDOR comes from the authenticated cross-user pass.
 
+See also the [BOLA Forge Scanner](./bola-forge-scanner.md) for the case this scanner cannot reach: the owner id is in the request body, not the URL.
+
 ## Why It Matters
 
 IDOR is the #1 most common vulnerability in modern web APIs. It lets attackers:
