@@ -11,7 +11,7 @@ These scanners test your live, running application by sending real HTTP requests
 - [XSS Scanner](./xss-scanner.md) · [animated](../interactive/xss.html) — Cross-site scripting (reflected, POST body, DOM-based)
 - [Active Injection Scanner](./active-injection-scanner.md) · [animated](../interactive/active-injection.html) — SQL injection, command injection, NoSQL, XXE, SSTI
 - [CSRF Scanner](./csrf-scanner.md) · [animated](../interactive/csrf.html) — Cross-site request forgery
-- [Rate Limit Scanner](./rate-limit-scanner.md) · [animated](../interactive/rate-limit.html) — Missing or bypassable rate limiting
+- [Rate Limit Scanner](./rate-limit-scanner.md) · [animated](../interactive/rate-limit.html) — Missing or bypassable rate limiting (inconclusive if requests error out)
 - [Session Scanner](./session-scanner.md) · [animated](../interactive/session.html) — Insecure token storage, cookie flags, JWT expiration
 - [GraphQL Scanner](./graphql-scanner.md) · [animated](../interactive/graphql.html) — Introspection, depth limits, batch queries
 - [SSRF Scanner](./ssrf-scanner.md) · [animated](../interactive/ssrf.html) — Server-side request forgery
@@ -58,6 +58,7 @@ These scanners analyze your source code without running it.
 These use AI for analysis that pattern matchers cannot perform.
 
 - [LLM Code Reviewer](./llm-code-reviewer.md) · [animated](../interactive/llm-review-and-fixes.html) — Business logic vulnerability detection
+- [LLM Business Logic Scanner](./llm-business-logic-scanner.md) — LLM-planned attack steps run against the live app; transport failures and rejected requests are inconclusive, never "safe"
 - [Semantic Rule Verifier](./semantic-rule-verifier.md) · [animated](../interactive/semantic-rule-verifier.html) — Logical errors in security rules
 - [Injection Adjudicator](../architecture.md#phase-94-injection-adjudication) · [animated](../interactive/active-injection.html) — Drops heuristic DAST injection false positives by comparing the baseline vs. injected response (no-op without an API key)
 - [AI Fix Generator](./fix-generator.md) · [animated](../interactive/llm-review-and-fixes.html) — Generates code patches for findings
