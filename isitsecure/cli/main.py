@@ -298,7 +298,7 @@ def scan(
         False, "--probe-writes",
         help=(
             "Test the mutation surface: derive POST/PUT endpoints from REST "
-            "shape so stored XSS, mass assignment and CSRF can be reached. "
+            "shape so stored XSS, mass assignment and CSRF can be reached, and (when logged in) replay captured creates with a forged body owner id (BOLA). "
             "The scan WRITES to the target — records created, notifications "
             "possibly sent. Use on an app you own or have authorization to "
             "test, not blindly against production."

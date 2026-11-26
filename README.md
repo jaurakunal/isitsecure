@@ -40,7 +40,7 @@ Built for developers and **vibe coders** shipping web apps who need to know if t
 
 ## What It Does
 
-isitsecure runs **42 rule-based scanners by default** — up to **45 with `--depth deep`** — (plus optional AI code review) against your web app in a single command. It combines four approaches that commercial tools sell separately:
+isitsecure runs **43 rule-based scanners** (42 active by default; the 43rd, BOLA Forge, only fires with a login and `--probe-writes`) — up to **46 with `--depth deep`** — (plus optional AI code review) against your web app in a single command. It combines four approaches that commercial tools sell separately:
 
 - **SAST (Static Analysis)** — scans your source code for vulnerabilities without running it
 - **DAST (Dynamic Analysis)** — tests your live app by sending real HTTP requests
@@ -150,7 +150,7 @@ isitsecure is free and open source. The only cost is LLM API tokens for the AI-p
 | **Code-only + LLM review** | Yes | ~$5–8 |
 | **Full scan** (SAST + DAST + LLM) | Yes | ~$10–15 |
 
-Without an API key, you still get all rule-based scanners — **42 in the default `quick` depth** (16 DAST + 8 special DAST + 18 SAST), or **45 with `--depth deep`** (which adds 3 slower/aggressive DAST scanners). The LLM adds business logic review, semantic rule verification, injection false-positive adjudication (drops heuristic injection FPs by comparing the baseline vs. injected response), and intelligent triage — things no pattern matcher can do.
+Without an API key, you still get all rule-based scanners — **43 in the default `quick` depth** (16 DAST + 9 special DAST + 18 SAST; one of the special scanners, BOLA Forge, does nothing without a login and `--probe-writes`), or **46 with `--depth deep`** (which adds 3 slower/aggressive DAST scanners). The LLM adds business logic review, semantic rule verification, injection false-positive adjudication (drops heuristic injection FPs by comparing the baseline vs. injected response), and intelligent triage — things no pattern matcher can do.
 
 **Supported LLM providers:** Anthropic (Claude), Google (Gemini)
 
@@ -212,6 +212,15 @@ Measured on OWASP Juice Shop v20.1.1, url-only:
 
 † `--probe-writes` IDOR is the mutation path (unauthenticated PUT/PATCH accepted on `/api/Products`, `/api/Hints`), not the read path; unauthenticated read-IDOR is 0 because it can't be told from public data without auth — real IDOR needs the authenticated cross-user pass.
 
+With a login (`--mode authenticated`), `--probe-writes` also unlocks the
+[BOLA Forge Scanner](docs/scanners/bola-forge-scanner.md): it replays a captured
+create with the owner id in the *body* forged to another user and re-reads the
+collection to prove the record was attributed to them. It only creates records
+tagged `isitsecure-probe` and never updates or deletes. Those records are
+**not cleaned up** (two per tested endpoint, up to 5 endpoints, created under your second
+test account when you supply one): delete them manually. It skips payment, email, auth and
+order-style paths and never contacts a host other than the target.
+
 **It is off by default, and should stay off for anything you do not own.**
 The scan *writes to the target*: it creates records, and an endpoint that
 sends email or charges a card will do so. It also takes roughly 72 minutes
@@ -248,7 +257,7 @@ record to prove it could is not worth the finding.
 | SRI Scanner | External CDN scripts/styles loaded without Subresource Integrity hashes |
 | Client Exposure Scanner | Secrets in client JS — Supabase `service_role` keys, internal URLs, unreplaced env placeholders |
 
-### Special DAST Scanners (8)
+### Special DAST Scanners (9)
 
 | Scanner | What It Finds |
 |---|---|
@@ -260,6 +269,7 @@ record to prove it could is not worth the finding.
 | Race Condition Scanner | TOCTOU bugs via concurrent mutation requests |
 | DOM XSS Scanner | Playwright-based sink hooking (innerHTML, eval, location.assign) |
 | Body Param Fuzzer | Prototype pollution, type confusion, injection via JSON body fields |
+| BOLA Forge Scanner | Forged-ownership BOLA: a create whose owner id is in the request body (no id in the URL) is replayed with the owner forged to another user and the record is re-read to prove it was attributed to them. Only fires with a login **and** `--probe-writes` (it writes); inert otherwise |
 
 ### SAST Scanners (18) — Analyzes Your Code
 
@@ -694,8 +704,9 @@ Options:
   -m, --mode TEXT        Scan mode: auto|url-only|code-only|authenticated|full
   --depth TEXT           Scan depth: quick|deep [default: quick]
   --probe-writes         Test the mutation surface (stored XSS, mass
-                         assignment, CSRF). WRITES to the target — only for
-                         an app you own or are authorized to test.
+                         assignment, CSRF, forged-owner BOLA). WRITES to
+                         the target — only for an app you own or are
+                         authorized to test.
   --follow-mined-backends Also probe cross-origin API hosts mined from JS
                          bundles. Only for backends you are authorized to
                          test; off by default (hosts are reported only).

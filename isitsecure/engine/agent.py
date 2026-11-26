@@ -152,6 +152,7 @@ class DeepSecurityScanAgent:
         rls_deep_scanner=None,
         privilege_escalation_scanner=None,
         jwt_scanner=None,
+        bola_forge_scanner=None,
         # LLM reviewer (separate timeout / lifecycle)
         llm_code_reviewer=None,
         # Repo ingestion (optional)
@@ -185,6 +186,7 @@ class DeepSecurityScanAgent:
         self._rls_deep_scanner = rls_deep_scanner
         self._privilege_escalation_scanner = privilege_escalation_scanner
         self._jwt_scanner = jwt_scanner
+        self._bola_forge_scanner = bola_forge_scanner
 
         # LLM reviewer
         self._llm_code_reviewer = llm_code_reviewer
@@ -1615,6 +1617,20 @@ class DeepSecurityScanAgent:
             )
             all_findings.extend(fuzz_findings)
             names.append("body_param_fuzzer")
+
+        # Forged-ownership BOLA (owner id in the body; mutates, so --probe-writes only —
+        # the scanner itself is inert unless built with probe_writes=True)
+        if self._bola_forge_scanner and crawl_result and crawl_result.intercepted_requests:
+            bola_forge_findings = await run_scanner_safe(
+                "bola_forge",
+                self._bola_forge_scanner.scan(
+                    crawl_result.intercepted_requests, session_a, session_b,
+                    target_url=target_url,
+                ),
+                ScannerTimeouts.DEFAULT_SECONDS,
+            )
+            all_findings.extend(bola_forge_findings)
+            names.append("bola_forge")
 
         # Race condition testing (concurrent mutation replay)
         if crawl_result and crawl_result.intercepted_requests:
