@@ -12,7 +12,16 @@ from isitsecure.engine.models import InterceptedRequest
 
 
 def build_auth_headers(session: AuthSession) -> dict[str, str]:
-    """Build Authorization headers from a session."""
+    """Build Authorization headers from a session.
+
+    A cookie-only session has an empty ``access_token``; send its own headers (cookies) rather
+    than a literal ``Authorization: Bearer `` header.
+    """
+    if not session.access_token:
+        return {
+            **session.headers,
+            SharedPatterns.HEADER_CONTENT_TYPE: SharedPatterns.CONTENT_TYPE_JSON,
+        }
     return {
         SharedPatterns.HEADER_AUTHORIZATION: (
             f"{SharedPatterns.BEARER_PREFIX}{session.access_token}"

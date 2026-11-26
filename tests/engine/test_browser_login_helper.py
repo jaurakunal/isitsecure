@@ -156,6 +156,7 @@ class TestClickSubmit:
     async def test_returns_false_when_no_button_found(self):
         mock_page = AsyncMock()
         mock_page.query_selector = AsyncMock(return_value=None)
+        mock_page.evaluate = AsyncMock(return_value=False)  # structural fallback finds nothing
 
         result = await BrowserLoginHelper.click_submit(mock_page)
         assert result is False

@@ -622,6 +622,8 @@ class PrivilegeEscalationScanner:
 
     @staticmethod
     def _build_auth_headers(session: AuthSession) -> dict[str, str]:
+        if not session.access_token:   # cookie-only session: no literal "Bearer " header
+            return dict(session.headers)
         return {
             SharedPatterns.HEADER_AUTHORIZATION: (
                 f"{SharedPatterns.BEARER_PREFIX}{session.access_token}"
@@ -632,12 +634,13 @@ class PrivilegeEscalationScanner:
     def _build_supabase_headers(
         session: AuthSession, anon_key: str,
     ) -> dict[str, str]:
-        return {
-            SharedPatterns.HEADER_AUTHORIZATION: (
+        base = (
+            {SharedPatterns.HEADER_AUTHORIZATION: (
                 f"{SharedPatterns.BEARER_PREFIX}{session.access_token}"
-            ),
-            SharedPatterns.HEADER_APIKEY: anon_key,
-        }
+            )}
+            if session.access_token else dict(session.headers)
+        )
+        return {**base, SharedPatterns.HEADER_APIKEY: anon_key}
 
     @staticmethod
     def _count_json_records(body: str) -> int:
