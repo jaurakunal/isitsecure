@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.34.0](https://github.com/jaurakunal/isitsecure/compare/v0.33.0...v0.34.0) (2026-11-26)
+
+
+### Features
+
+* **auth:** robust browser login capture (wire sniff, nested JWT, cookie-only, storage_state) ([#288](https://github.com/jaurakunal/isitsecure/issues/288)) ([696f540](https://github.com/jaurakunal/isitsecure/commit/696f5402c44d3c264b2ea18109a7bc9bd393887c))
+* **scanners:** conclusive vs inconclusive verdicts; rate-limit and business-logic adoption ([#291](https://github.com/jaurakunal/isitsecure/issues/291)) ([76b7e80](https://github.com/jaurakunal/isitsecure/commit/76b7e804e83b830b7ba588df239cff681c5f4a6b))
+
 ## [0.33.0](https://github.com/jaurakunal/isitsecure/compare/v0.32.5...v0.33.0) (2026-11-10)
 
 
