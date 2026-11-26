@@ -21,7 +21,7 @@ For each captured, successful JSON `POST` (one per path, at most 5 endpoints):
 
 The write response is never used as proof. A response that echoes the forged owner while the stored record keeps the real one (reflection) is not reported, and a pre-existing victim record cannot match because it has no marker.
 
-Read endpoints tried (at most 3): captured `GET`s on the same path and the path itself, all on the target origin. A scan sends at most 9 requests per endpoint (3 verification reads, 2 writes, 4 re-reads), with no loops or retries. Because a record of ours must already be visible, an app whose crawl never showed a listing of our own records is reported as not tested rather than guessed at.
+Read endpoints tried (at most 3): captured `GET`s on the same path and the path itself, all on the target origin. A scan sends at most 9 requests per endpoint (3 verification reads, 2 writes, 4 re-reads), with no loops or retries. The cross-account check below adds reads only: at most 8 more `GET`s per identity key for the whole scan (4 endpoints, each read as both accounts), not per endpoint. Because a record of ours must already be visible, an app whose crawl never showed a listing of our own records is reported as not tested rather than guessed at.
 
 ## Modes: what each can and cannot prove
 
@@ -29,11 +29,14 @@ Read endpoints tried (at most 3): captured `GET`s on the same path and the path 
 |---|---|---|---|---|
 | **Two identities, owner-scoped read** | `--auth-email-b` | user B's matching claim | the marked record shows up in **B's** listing, which did **not** show our control record, with the field set to B | High / 0.92 |
 | **Two identities, shared listing** | `--auth-email-b` | user B's matching claim | the listing shows everyone's records (the control record was visible to B) and the forged value is distinctive: opaque id of 8+ chars or numeric id of 9+ digits | High / 0.80 |
+| **Two identities, shared listing, short id** | `--auth-email-b`, and both accounts own a record on some other endpoint | user B's matching claim | as above with a short id (`UserId: 2`), **and** the cross-account check passes (see below) | High / 0.80 |
 | **One identity** | login only | a random, same-shaped id that belongs to nobody (UUID, email, opaque string) | a fresh read returns the marked record with that synthetic owner | Medium / 0.60 |
+
+**Cross-account check (short ids on a shared listing).** A record that comes back with `UserId: 2` proves the server stored the number we sent, not that the field is the owner: `rating: 2` or `ProductId: 2` would look the same. So the scanner asks the app what the key means. It re-reads up to 4 other `GET`s captured in the crawl (those whose captured response names the key first), once as each account, and accepts the key only if **every** value account A sees under it is A's id and **every** value account B sees under it is B's id, each at least once. A field that merely equals a short user id cannot follow both callers. For example, with `GET /api/addresses` returning only the caller's own addresses, `UserId` is 1 in everything A sees and 2 in everything B sees, so a forged `UserId` on the shared feedback listing is reported. These are reads only, and the answer is reused for every endpoint in the scan.
 
 What the modes **cannot** prove:
 
-- *Shared listing with short numeric ids* (`UserId: 2`): the scanner cannot tell an owner field from an unrelated numeric field that happens to equal the id, so the result is INCONCLUSIVE and nothing is reported.
+- *Shared listing with short numeric ids and no cross-account agreement*: if no other captured endpoint shows the key following the caller (for example the second account owns nothing yet, or the app uses a different key name there), the scanner cannot tell an owner field from an unrelated numeric field, so the result is INCONCLUSIVE and nothing is reported. Give both test accounts at least one record (an address, a saved item) before scanning.
 - *One identity* proves only that the server trusts a client-chosen owner value. It does not prove that another real user can be impersonated (the server may check that the owner exists), and an owner-scoped listing hides the forged record from us, so a vulnerable app can be missed. Numeric or very short ids are never forged (any number could be a real user), so those scans stay INCONCLUSIVE.
 - Updates are out of scope: only `POST` creates are replayed, never `PUT`/`PATCH`/`DELETE`. The scanner has no knowledge of business rules beyond what the re-read shows.
 

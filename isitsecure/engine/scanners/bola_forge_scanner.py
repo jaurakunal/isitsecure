@@ -19,7 +19,10 @@ Method (control vs treatment, every proof comes from a fresh READ, never from a 
 Two modes, with different strength (see ``docs/scanners/bola-forge-scanner.md``):
 
 - TWO identities: forge to user B's id. Strongest when B's own (owner-scoped) listing shows the
-  record while the control record was NOT visible to B -- the server attributed it to B.
+  record while the control record was NOT visible to B -- the server attributed it to B. On a
+  listing everyone can see, a short numeric id (``UserId: 2``) could be an unrelated field, so
+  it is reported only when another endpoint shows that key following the caller's identity
+  (all of A's records carry A's id under it, all of B's carry B's).
 - ONE identity: forge to a synthetic, same-shaped, non-existent id (never a real third party).
   Proves only that the server persists a client-chosen owner value; reported MEDIUM.
 
@@ -68,9 +71,12 @@ class BolaForgeConfig:
     # Hard bounds. Per endpoint the probe sends at most: pre-write read verification (up to
     # MAX_READ_URLS GETs) + control write (1) + control read (1) + control read as B (1) +
     # treatment write (1) + treatment reads as A and B (2) = MAX_READ_URLS + 6 requests, of
-    # which only 2 are writes. It never loops or retries.
+    # which only 2 are writes. It never loops or retries. The short-id shared-listing case adds
+    # reads only: up to MAX_CORROBORATION_URLS GETs as each identity, once per identity key per
+    # scan (the answer is cached), so at most 2 * MAX_CORROBORATION_URLS more per key.
     MAX_ENDPOINTS = 5
     MAX_READ_URLS = 3
+    MAX_CORROBORATION_URLS = 4
     MAX_CONCURRENT = 1
     PROBE_DELAY_SECONDS = 0.3
     HTTP_TIMEOUT_SECONDS = 10
@@ -120,6 +126,7 @@ class BolaForgeConfig:
 
     CONFIDENCE_SCOPED = 0.92
     CONFIDENCE_FIELD_VALUE = 0.80
+    CONFIDENCE_CORROBORATED = 0.80
     CONFIDENCE_SYNTHETIC = 0.60
 
     TITLE_TWO = "Forged-ownership BOLA — '{field}' in {method} '{path}' is client-controlled"
@@ -145,6 +152,14 @@ class BolaForgeConfig:
         "attacker's control record"
     )
     PROOF_FIELD = "a fresh read returned the marked record with the victim's id in the field"
+    PROOF_CORROBORATED = (
+        "a fresh read returned the marked record with the victim's id in the field, and "
+        "'{field}' follows the caller's identity on '{path}'"
+    )
+    REASON_UNCORROBORATED = (
+        "listing is not owner-scoped, the id is short/numeric, and no other endpoint shows the "
+        "field following the caller's identity: it could be an unrelated field"
+    )
 
     UUID_RE = re.compile(
         r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE,
@@ -379,6 +394,15 @@ def _has_value(record: dict, key: str, value: str) -> bool:
     )
 
 
+def _key_values(listing: Any, key: str) -> set[str]:
+    """Every non-empty scalar stored under ``key`` (case-insensitive) anywhere in ``listing``."""
+    return {
+        str(v).lower() for k, v in _iter_pairs(listing)
+        if isinstance(k, str) and k.lower() == key.lower()
+        and not isinstance(v, (dict, list, bool)) and v not in (None, "")
+    }
+
+
 def _is_distinctive(value: str) -> bool:
     """Whether ``value`` is unlikely to equal an unrelated field by chance."""
     if value.isdigit():
@@ -424,6 +448,8 @@ class BolaForgeScanner:
         self._origin: tuple[str, str, int] | None = None   # the only origin we may talk to
         # Per-endpoint outcomes of the last scan (incl. INCONCLUSIVE, which is never a finding).
         self.outcomes: dict[str, ForgeOutcome] = {}
+        # Identity key (lower-case) -> path proving it follows the caller ("" = none found).
+        self._identity_key_paths: dict[str, str] = {}
 
     @property
     def scanner_name(self) -> str:
@@ -441,6 +467,7 @@ class BolaForgeScanner:
         ``target_url`` is the scan target: requests (and our credentials) go to its origin only.
         """
         self.outcomes = {}
+        self._identity_key_paths = {}
         if not self._probe_writes:
             return []                                   # mutates data: explicit opt-in only
         self._origin = origin_of(target_url or "")
@@ -531,6 +558,40 @@ class BolaForgeScanner:
             ):
                 return url
         return None
+
+    async def _identity_key_path(
+        self, client, captured, exclude_path, session_a, session_b, field,
+    ) -> str:
+        """Path of another endpoint where ``field.key`` follows the caller's identity, else "".
+
+        The same URL is read as A and as B (reads only). The key qualifies when every value A
+        sees under it is A's id and every value B sees under it is B's id, each at least once.
+        An unrelated field (``rating``, ``ProductId``) that merely equals a short user id cannot
+        track both callers, so this separates an owner key from a coincidence without any
+        field-name list. Cached per key for the scan.
+        """
+        cache_key = field.key.lower()
+        if cache_key in self._identity_key_paths:
+            return self._identity_key_paths[cache_key]
+        own, victim = {field.own.lower()}, {field.victim.lower()}
+        urls = [
+            c.url for c in sorted(                     # a preview naming the key is tried first
+                captured, key=lambda c: cache_key not in c.response_body_preview.lower(),
+            )
+            if c.method.upper() == "GET" and 200 <= c.response_status < 300
+            and origin_of(c.url) == self._origin and urlparse(c.url).path != exclude_path
+        ]
+        found = ""
+        for url in list(dict.fromkeys(urls))[: BolaForgeConfig.MAX_CORROBORATION_URLS]:
+            as_a = await self._send(client, "GET", url, session_a)
+            if not _ok(as_a) or _key_values(_json(as_a), field.key) != own:
+                continue
+            as_b = await self._send(client, "GET", url, session_b)
+            if _ok(as_b) and _key_values(_json(as_b), field.key) == victim:
+                found = urlparse(url).path
+                break
+        self._identity_key_paths[cache_key] = found
+        return found
 
     # ------------------------------------------------------------------
     # The probe
@@ -650,10 +711,19 @@ class BolaForgeScanner:
         if all(_is_distinctive(f.victim) for f in fields):
             proven.proof, proven.confidence = cfg.PROOF_FIELD, cfg.CONFIDENCE_FIELD_VALUE
             return proven
-        return _inconclusive(
-            "listing is not owner-scoped and the id is short/numeric: attribution by value "
-            "alone could be an unrelated field"
-        )
+        # Shared listing and a short id: the value alone could be an unrelated field, so every
+        # forged key must be shown to follow the caller's identity somewhere else.
+        read_path = urlparse(read_url).path
+        paths = [
+            await self._identity_key_path(client, captured, read_path, session_a, session_b, f)
+            for f in fields if not _is_distinctive(f.victim)
+        ]
+        if not all(paths):
+            return _inconclusive(cfg.REASON_UNCORROBORATED)
+        short = next(f for f in fields if not _is_distinctive(f.victim))
+        proven.proof = cfg.PROOF_CORROBORATED.format(field=short.key, path=paths[0])
+        proven.confidence = cfg.CONFIDENCE_CORROBORATED
+        return proven
 
     # ------------------------------------------------------------------
     # Reporting

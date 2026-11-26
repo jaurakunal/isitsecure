@@ -34,6 +34,7 @@ from isitsecure.engine.scanners.bola_forge_scanner import (
 
 BASE = "https://shop.example.com"
 COLLECTION = f"{BASE}/api/feedbacks"
+SIDE = f"{BASE}/api/addresses"          # a second, owner-scoped endpoint
 
 
 def _jwt(claims: dict) -> str:
@@ -57,10 +58,16 @@ def _captured(owner: str, extra: dict | None = None) -> InterceptedRequest:
 
 
 class FakeApp:
-    """Feedback collection. ``trust_body``: persist the body owner; ``reflect``: echo only."""
+    """Feedback collection. ``trust_body``: persist the body owner; ``reflect``: echo only.
+
+    ``owner_key`` is the body field the handler treats as the owner. ``side`` maps a user id to
+    the records that user sees on a second endpoint (``SIDE``), e.g. their own addresses.
+    """
 
     def __init__(self, tokens: dict[str, str], *, trust_body=False, reflect=False,
-                 scoped=True, readable=True, reject_foreign=False, preexisting=()):
+                 scoped=True, readable=True, reject_foreign=False, preexisting=(),
+                 owner_key="UserId", side=None):
+        self.owner_key, self.side = owner_key, side
         self.tokens = tokens                      # access token -> user id
         self.trust_body, self.reflect, self.scoped = trust_body, reflect, scoped
         self.readable, self.reject_foreign = readable, reject_foreign
@@ -75,18 +82,23 @@ class FakeApp:
         user = self.tokens[token]
         if not urlparse(url).path.startswith("/api/"):
             return httpx.Response(404, text="{}")
+        key = self.owner_key
+        if method == "GET" and url == SIDE:
+            if self.side is None:
+                return httpx.Response(404, text="{}")
+            return httpx.Response(200, json={"data": self.side.get(user, [])})
         if method == "POST":
             body = json.loads(kw["content"])
-            if self.reject_foreign and body["UserId"] != user:
+            if self.reject_foreign and body[key] != user:
                 return httpx.Response(403, text='{"error":"forbidden"}')
             record = {**body, "id": len(self.records) + 1,
-                      "UserId": body["UserId"] if self.trust_body else user}
+                      key: body[key] if self.trust_body else user}
             self.records.append(record)
-            shown = {**record, "UserId": body["UserId"]} if self.reflect else record
+            shown = {**record, key: body[key]} if self.reflect else record
             return httpx.Response(201, json=shown)
         if not self.readable:
             return httpx.Response(404, text="{}")
-        rows = [r for r in self.records if not self.scoped or r["UserId"] == user]
+        rows = [r for r in self.records if not self.scoped or r[key] == user]
         return httpx.Response(200, json={"status": "success", "data": rows})
 
 
@@ -146,7 +158,8 @@ async def test_vulnerable_global_listing_with_opaque_ids_is_proven_lower_confide
 
 @pytest.mark.asyncio
 async def test_global_listing_with_short_numeric_ids_is_inconclusive():
-    """'UserId == 2' on a global listing could be any unrelated numeric field."""
+    """'UserId == 2' on a global listing could be any unrelated numeric field, and nothing
+    else in the crawl shows what that key means."""
     sa, sb, tokens = _pair("1", "2")
     app = FakeApp(tokens, trust_body=True, scoped=False)
     scanner, findings = await _scan(app, sa, sb)
@@ -486,3 +499,108 @@ async def test_missing_session_is_skipped_cleanly():
     assert identity_claims(None) == {}
     _, findings = await _scan(app, None)
     assert findings == [] and app.requests == []
+
+
+# ---------------------------------------------------------------- short ids, shared listing
+
+def _own_addresses(*users: str, key: str = "UserId") -> dict[str, list[dict]]:
+    """Each user sees two address records of their own on ``SIDE``."""
+    return {u: [{"id": f"{u}{n}", key: u, "city": "x"} for n in (1, 2)] for u in users}
+
+
+async def _scan_short(app: FakeApp, sa, sb, captured=None):
+    """Short-id scan whose crawl also captured the owner-scoped ``SIDE`` listing."""
+    captured = list(captured or [_captured(sa.user_id)]) + [_get(SIDE)]
+    return await _scan(app, sa, sb, captured=captured)
+
+
+@pytest.mark.asyncio
+async def test_short_numeric_ids_are_proven_when_the_key_follows_the_caller_elsewhere():
+    """Juice Shop's forged feedback: ``UserId: 2`` in a listing everyone can read."""
+    sa, sb, tokens = _pair("1", "2")
+    app = FakeApp(tokens, trust_body=True, scoped=False, side=_own_addresses("1", "2"))
+    scanner, findings = await _scan_short(app, sa, sb)
+    assert len(findings) == 1
+    finding = findings[0]
+    assert finding.severity == SeverityLevel.HIGH
+    assert finding.confidence == BolaForgeConfig.CONFIDENCE_CORROBORATED
+    assert "/api/addresses" in finding.description and "UserId" in finding.title
+    assert scanner.outcomes[COLLECTION].status is ForgeStatus.PROVEN
+    assert len(_posts(app)) == 2                              # control + treatment, no more
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("side", [
+    None,                                                     # endpoint answers 404
+    _own_addresses("1"),                                      # the victim has no records there
+    {"1": _own_addresses("1", "2")["1"] + _own_addresses("2")["2"],     # everyone sees all:
+     "2": _own_addresses("1", "2")["1"] + _own_addresses("2")["2"]},   # the key tracks nobody
+    _own_addresses("1", "2", key="AccountId"),                # a different key follows the caller
+    {"1": [{"UserId": "1"}], "2": [{"UserId": "1"}]},         # both callers see A's id
+])
+async def test_short_numeric_ids_stay_inconclusive_without_cross_account_agreement(side):
+    sa, sb, tokens = _pair("1", "2")
+    app = FakeApp(tokens, trust_body=True, scoped=False, side=side)
+    scanner, findings = await _scan_short(app, sa, sb)
+    assert findings == []
+    outcome = scanner.outcomes[COLLECTION]
+    assert outcome.status is ForgeStatus.INCONCLUSIVE
+    assert outcome.reason == BolaForgeConfig.REASON_UNCORROBORATED
+
+
+@pytest.mark.asyncio
+async def test_data_field_equal_to_a_short_user_id_is_not_reported_as_the_owner():
+    """``rating: 1`` sent by user 1 is persisted as sent, but ``rating`` never follows the
+    caller, even though ``UserId`` does on the side endpoint."""
+    sa, sb, tokens = _pair("1", "2")
+    side = {u: [{"UserId": u, "rating": r} for r in ("1", "5")] for u in ("1", "2")}
+    app = FakeApp(tokens, trust_body=True, scoped=False, owner_key="rating", side=side)
+    body = {"rating": "1", "message": "hi there"}
+    app.records.append({**body, "id": 0})
+    scanner, findings = await _scan_short(app, sa, sb, captured=[_post("/api/feedbacks", body)])
+    assert findings == []
+    assert scanner.outcomes[COLLECTION].status is ForgeStatus.INCONCLUSIVE
+
+
+@pytest.mark.asyncio
+async def test_short_id_safe_app_is_clean_and_never_reads_the_side_endpoint():
+    sa, sb, tokens = _pair("1", "2")
+    app = FakeApp(tokens, scoped=False, side=_own_addresses("1", "2"))
+    scanner, findings = await _scan_short(app, sa, sb)
+    assert findings == []
+    assert scanner.outcomes[COLLECTION].status is ForgeStatus.NOT_VULNERABLE
+    assert ("GET", "/api/addresses") not in app.calls
+
+
+@pytest.mark.asyncio
+async def test_cross_account_check_is_cached_per_key_and_prefers_previews_naming_it():
+    """The endpoint whose captured preview names the key is read first, once for the scan."""
+    sa, sb, tokens = _pair("1", "2")
+    app = FakeApp(tokens, trust_body=True, scoped=False, side=_own_addresses("1", "2"))
+    body = {"UserId": "1", "message": "great shop"}
+    posts = [_post(f"/api/thing{i}", body) for i in range(3)]
+    noise = [
+        _get(f"{BASE}/api/other{i}") for i in range(BolaForgeConfig.MAX_CORROBORATION_URLS + 3)
+    ]
+    side = InterceptedRequest(
+        url=SIDE, method="GET", response_status=200, response_body_preview='[{"userid": "1"}]',
+    )
+    scanner, findings = await _scan(app, sa, sb, captured=posts + noise + [side])
+    assert len(findings) == 3
+    assert app.calls.count(("GET", "/api/addresses")) == 2          # as A and as B, once
+    assert not any("/api/other" in path for _, path in app.calls)
+    assert len(_posts(app)) == 2 * 3
+
+
+@pytest.mark.asyncio
+async def test_cross_account_check_reads_a_bounded_number_of_endpoints():
+    sa, sb, tokens = _pair("1", "2")
+    app = FakeApp(tokens, trust_body=True, scoped=False)
+    noise = [
+        _get(f"{BASE}/api/other{i}") for i in range(BolaForgeConfig.MAX_CORROBORATION_URLS + 3)
+    ]
+    scanner, findings = await _scan(app, sa, sb, captured=[_captured("1")] + noise)
+    assert findings == []
+    others = [c for c in app.calls if "/api/other" in c[1]]
+    assert len(others) == BolaForgeConfig.MAX_CORROBORATION_URLS      # as A only: none qualified
+    assert {method for method, _ in others} == {"GET"}
