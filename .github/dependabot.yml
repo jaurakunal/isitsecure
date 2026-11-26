@@ -17,6 +17,13 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "deps"
+    # mcp is pinned <2 on purpose: mcp 2.0.0 removed `mcp.server.fastmcp`, which
+    # `isitsecure mcp` is built on (see the pin comment in pyproject.toml). A
+    # major bump is a migration, not a version change, so it is done by hand.
+    # Minor and patch updates within 1.x are still proposed.
+    ignore:
+      - dependency-name: "mcp"
+        update-types: ["version-update:semver-major"]
 
   # GitHub Actions used in workflows
   #
